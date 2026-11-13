@@ -1,6 +1,6 @@
 /*
- * The page around the look picker. Its own colors carry a page- prefix and follow the reader's
- * light or dark setting; everything inside a frame is styled by styles.css and the chosen look.
+ * The page around the theme showcase. Its own colors carry a page- prefix and follow the reader's
+ * light or dark setting; everything inside a frame is styled by styles.css and the chosen theme.
  */
 
 :root {
@@ -84,29 +84,11 @@ body {
   gap: 28px;
 }
 
-/* ---- The picker ---- */
+/* ---- The picker, laid out as a row here ---- */
 
-.options {
-  display: grid;
+#gallery > .theme-options {
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr));
   gap: 10px;
-}
-
-.option .letter {
-  display: grid;
-  flex: none;
-  place-items: center;
-  width: 28px;
-  height: 28px;
-  border: 1px solid var(--line);
-  border-radius: 50%;
-  font-weight: 700;
-}
-
-.option[aria-pressed='true'] .letter {
-  border-color: transparent;
-  background: var(--accent);
-  color: var(--accent-ink);
 }
 
 /* ---- The two screens ---- */

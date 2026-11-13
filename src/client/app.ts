@@ -1,14 +1,15 @@
 import type { Command, HandRecord, TableConfig } from '../engine/types.ts';
 import type { TableView } from '../engine/view.ts';
-import type { ApiError, ApiResponse, Auth, TableInfo } from '../server/api.ts';
+import type { ApiError, ApiResponse, Auth } from '../server/api.ts';
 import type { Platform } from './platform.ts';
 import { controlsEl, controlsSignature } from './render/controls.ts';
 import { dialogEl, isLive } from './render/dialogs.ts';
 import type { Dialog, DialogHandlers } from './render/dialogs.ts';
 import { createFeed } from './render/feed.ts';
 import type { Feed } from './render/feed.ts';
-import { joinEl, lobbyEl, noticeEl, welcomeBackEl } from './render/lobby.ts';
+import { joinScreen, lobbyEl, noticeEl, welcomeBackEl } from './render/lobby.ts';
 import { tableEl } from './render/table.ts';
+import { createThemePicker } from './render/themePicker.ts';
 import type { Shape } from './render/table.ts';
 import { playTurnChime } from './sound.ts';
 import { DEFAULT_THEME, fontsUrl, themeById } from './themes.ts';
@@ -85,7 +86,7 @@ export class App {
   private toastTimer = 0;
 
   /**
-   * `themeHost` is the element whose look the app controls: the whole page by default, or one frame
+   * `themeHost` is the element the app sets its theme on: the whole page by default, or one frame
    * of it when several apps share a page.
    */
   constructor(root: HTMLElement, platform: Platform, themeHost: HTMLElement = document.documentElement) {
@@ -129,7 +130,7 @@ export class App {
     setInterval(() => this.tickCountdowns(), COUNTDOWN_TICK_MS);
   }
 
-  /** Switches the look and remembers it for this browser. */
+  /** Switches the theme and remembers it for this browser. */
   setTheme(id: string): void {
     this.platform.memory.set(THEME_KEY, themeById(id).id);
     this.applyTheme(id);
@@ -145,16 +146,17 @@ export class App {
     this.leaveTableScreen();
     this.platform.links.showTable(null);
 
-    const draw = (busy: boolean): void => {
-      this.mount(
-        lobbyEl(this.rememberedName(), busy, {
-          create: (name, config) => void this.createTable(name, config, draw),
-          openTable: (code) => this.openTable(code.trim().toUpperCase()),
-        }),
-      );
-    };
+    this.mount(
+      lobbyEl(this.rememberedName(), this.themePicker(), {
+        create: (name, config) => this.createTable(name, config),
+        openTable: (code) => this.openTable(code.trim().toUpperCase()),
+      }),
+    );
+  }
 
-    draw(false);
+  /** The compact theme picker for the screens before the table. */
+  private themePicker(): HTMLElement {
+    return createThemePicker(this.theme(), (id) => this.setTheme(id), true).element;
   }
 
   private openTable(tableId: string): void {
@@ -196,31 +198,29 @@ export class App {
     this.leaveTableScreen();
     this.platform.links.showTable(tableId);
 
-    let info: TableInfo | null = null;
-    const draw = (busy: boolean): void => {
-      this.mount(
-        joinEl(tableId, info, this.rememberedName(), busy, {
-          join: (name) => void this.joinTable(tableId, name, draw),
-          toLobby: () => this.showLobby(),
-        }),
-      );
-    };
+    const screen = joinScreen(tableId, this.rememberedName(), this.themePicker(), {
+      join: (name) => this.joinTable(tableId, name),
+      toLobby: () => this.showLobby(),
+    });
 
-    draw(false);
+    this.mount(screen.element);
 
     const response = await this.request({ op: 'info', tableId });
+
+    // The visitor may have gone elsewhere while the answer was on its way
+    if (!this.root.contains(screen.element)) {
+      return;
+    }
+
     if (response?.ok && response.kind === 'info') {
-      info = response.table;
-      draw(false);
+      screen.showTable(response.table);
     } else {
       this.showLobby();
       this.toast(response && !response.ok && response.code === 'not_found' ? `There is no table with the code ${tableId}.` : 'Could not reach the table. Try the link again.');
     }
   }
 
-  private async createTable(name: string, config: Partial<TableConfig>, draw: (busy: boolean) => void): Promise<void> {
-    draw(true);
-
+  private async createTable(name: string, config: Partial<TableConfig>): Promise<void> {
     const response = await this.request({ op: 'create', name, config });
     if (response?.ok && response.kind === 'joined') {
       this.platform.memory.set(NAME_KEY, response.view.you.name);
@@ -230,13 +230,10 @@ export class App {
       return;
     }
 
-    draw(false);
     this.toast(response && !response.ok ? response.error : 'Could not create the table. Check your connection and try again.');
   }
 
-  private async joinTable(tableId: string, name: string, draw: (busy: boolean) => void): Promise<void> {
-    draw(true);
-
+  private async joinTable(tableId: string, name: string): Promise<void> {
     const response = await this.request({ op: 'join', tableId, name });
     if (response?.ok && response.kind === 'joined') {
       this.platform.memory.set(NAME_KEY, response.view.you.name);
@@ -245,7 +242,6 @@ export class App {
       return;
     }
 
-    draw(false);
     this.toast(response && !response.ok ? response.error : 'Could not join the table. Check your connection and try again.');
   }
 

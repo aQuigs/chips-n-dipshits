@@ -77,7 +77,7 @@ export async function clientPage(boot: object | null): Promise<string> {
   return boot === null ? page : fill(page, BOOT_SLOT, JSON.stringify(boot).replace(/</g, '\\u003c'));
 }
 
-/** The page for choosing between looks: body content only, the form an Artifact is published from. */
+/** The page that shows off the themes: body content only, the form an Artifact is published from. */
 export async function galleryPage(): Promise<string> {
   const page = await inlinedPage({
     template: 'src/client/gallery.html',

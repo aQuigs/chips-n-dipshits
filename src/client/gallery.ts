@@ -1,12 +1,13 @@
 /*
- * A page for choosing between the looks: the real app in a laptop-sized and a phone-sized frame,
- * playing against the bots of the demo table, with a switch for the look.
+ * A page that shows off the themes: the real app in a laptop-sized and a phone-sized frame, playing
+ * against the bots of the demo table, with the theme picker above them.
  */
 import { createDemoTable } from '../demo/demoTable.ts';
 import type { DemoTable } from '../demo/demoTable.ts';
 import { App } from './app.ts';
 import type { Links, Memory, Platform } from './platform.ts';
-import { DEFAULT_THEME, THEMES } from './themes.ts';
+import { createThemePicker } from './render/themePicker.ts';
+import { DEFAULT_THEME } from './themes.ts';
 import { h } from './ui.ts';
 
 interface Size {
@@ -60,39 +61,27 @@ function start(root: HTMLElement): void {
   const apps = [laptop.screen, phone.screen].map((screen) => new App(screen, demoPlatform(demo), preview));
   apps[1]!.setSound(false);
 
-  const options = THEMES.map((theme, index) =>
-    h(
-      'button.look.option',
-      { type: 'button', 'data-theme': theme.id, 'aria-pressed': 'false', onclick: () => choose(theme.id) },
-      h('span.letter', null, String.fromCharCode(65 + index)),
-      h('span.swatch', null, h('i.felt-dot'), h('i.accent-dot'), h('i.card-dot')),
-      h('span', null, h('b', null, theme.name), h('small', null, theme.blurb)),
-    ),
-  );
-
+  const picker = createThemePicker(DEFAULT_THEME, (id) => choose(id));
   let chosen = '';
 
   function choose(id: string): void {
-    // Setting the look below is itself seen by the observer, which must not start another round
+    // Setting the theme below is itself seen by the observer, which must not start another round
     if (id === chosen) {
       return;
     }
 
     chosen = id;
+    picker.show(id);
 
     for (const app of apps) {
       app.setTheme(id);
     }
-
-    for (const option of options) {
-      option.setAttribute('aria-pressed', String(option.dataset.theme === id));
-    }
   }
 
-  // The look can also be changed from the menu inside either screen; whichever way, both screens and the picker follow
+  // The theme can also be changed from the menu inside either screen; whichever way, both screens and the picker follow
   new MutationObserver(() => choose(preview.dataset.theme ?? DEFAULT_THEME)).observe(preview, { attributes: true, attributeFilter: ['data-theme'] });
 
-  root.append(h('div.options', { role: 'group', 'aria-label': 'Looks' }, options), preview);
+  root.append(picker.element, preview);
 
   for (const app of apps) {
     app.startAt(demo.tableId, demo.you);

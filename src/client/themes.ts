@@ -1,9 +1,9 @@
-/** A look for the whole app. Its colors, type and shapes live in styles.css under [data-theme="<id>"]. */
+/** How the whole app looks. Its colors, type and shapes live in styles.css under [data-theme="<id>"]. */
 export interface Theme {
   id: string;
   name: string;
   blurb: string;
-  /** The Google Fonts families the look needs, in the form the fonts API takes. */
+  /** The Google Fonts families the theme needs, in the form the fonts API takes. */
   fonts: string[];
 }
 

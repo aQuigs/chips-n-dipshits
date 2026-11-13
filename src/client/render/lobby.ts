@@ -6,13 +6,21 @@ const NAME_LENGTH = 16;
 const CODE_LENGTH = 12;
 
 export interface LobbyHandlers {
-  create(name: string, config: Partial<TableConfig>): void;
+  /** Resolves when the attempt is over, whichever way it went. */
+  create(name: string, config: Partial<TableConfig>): Promise<void>;
   openTable(code: string): void;
 }
 
 export interface JoinHandlers {
-  join(name: string): void;
+  /** Resolves when the attempt is over, whichever way it went. */
+  join(name: string): Promise<void>;
   toLobby(): void;
+}
+
+export interface JoinScreen {
+  element: HTMLElement;
+  /** Fills in what the table is once the server has said, and lets the visitor join. */
+  showTable(info: TableInfo): void;
 }
 
 function brand(): HTMLElement {
@@ -36,23 +44,48 @@ function field(form: HTMLFormElement, name: string): HTMLInputElement {
   return form.elements.namedItem(name) as HTMLInputElement;
 }
 
+function themeSection(themePicker: HTMLElement): HTMLElement {
+  return h('section.theme-section', null, h('h2', null, 'Theme'), themePicker);
+}
+
+/**
+ * Runs a form's action with its button showing that it is under way. The form itself stays as it is,
+ * so nothing typed is lost if the attempt fails, and it can't be sent twice.
+ */
+async function whilePending(button: HTMLButtonElement, label: string, action: () => Promise<void>): Promise<void> {
+  const idle = button.textContent;
+
+  button.disabled = true;
+  button.textContent = label;
+
+  try {
+    await action();
+  } finally {
+    button.disabled = false;
+    button.textContent = idle;
+  }
+}
+
 /** The front door: start a table, or go to one with its code. */
-export function lobbyEl(rememberedName: string, busy: boolean, handlers: LobbyHandlers): HTMLElement {
+export function lobbyEl(rememberedName: string, themePicker: HTMLElement, handlers: LobbyHandlers): HTMLElement {
+  const createButton = h('button.btn.primary', { type: 'submit', 'data-action': 'create-table' }, 'Create table');
+
   const create = h(
     'form.card-panel',
     {
       onsubmit: (event: Event) => {
         event.preventDefault();
         const form = event.target as HTMLFormElement;
-        const bigBlind = Number(field(form, 'new-big-blind').value);
 
-        handlers.create(field(form, 'host-name').value, {
-          name: field(form, 'new-table-name').value,
-          smallBlind: Number(field(form, 'new-small-blind').value),
-          bigBlind,
-          minBuyIn: Number(field(form, 'new-min-buy-in').value),
-          maxBuyIn: Number(field(form, 'new-max-buy-in').value),
-        });
+        void whilePending(createButton, 'Setting up…', () =>
+          handlers.create(field(form, 'host-name').value, {
+            name: field(form, 'new-table-name').value,
+            smallBlind: Number(field(form, 'new-small-blind').value),
+            bigBlind: Number(field(form, 'new-big-blind').value),
+            minBuyIn: Number(field(form, 'new-min-buy-in').value),
+            maxBuyIn: Number(field(form, 'new-max-buy-in').value),
+          }),
+        );
       },
     },
     h('h2', null, 'Start a table'),
@@ -66,7 +99,7 @@ export function lobbyEl(rememberedName: string, busy: boolean, handlers: LobbyHa
     h('div.pair', null, numberField('new-small-blind', 'Small blind', 10), numberField('new-big-blind', 'Big blind', 20)),
     h('div.pair', null, numberField('new-min-buy-in', 'Minimum buy-in', 400), numberField('new-max-buy-in', 'Maximum buy-in', 2000)),
     h('p.note', null, 'You become the host. Clock, straddles, run it twice and the 7-2 bounty are in the table settings.'),
-    h('button.btn.primary', { type: 'submit', disabled: busy, 'data-action': 'create-table' }, busy ? 'Setting up…' : 'Create table'),
+    createButton,
   );
 
   const join = h(
@@ -85,39 +118,43 @@ export function lobbyEl(rememberedName: string, busy: boolean, handlers: LobbyHa
       h('input', { type: 'text', id: 'table-code', name: 'table-code', maxlength: CODE_LENGTH, required: true, autocapitalize: 'characters', autocomplete: 'off', placeholder: 'e.g. K7QF2M' }),
     ),
     h('p.note', null, 'Got a link from the host? Opening it brings you straight to the table.'),
-    h('button.btn', { type: 'submit', disabled: busy }, 'Find table'),
+    h('button.btn', { type: 'submit' }, 'Find table'),
   );
 
-  return h('main.lobby', null, brand(), h('div.panels', null, create, join));
+  return h('main.lobby', null, brand(), h('div.panels', null, create, join), themeSection(themePicker));
 }
 
 /** Shown to someone who opened a table link but has not picked a name there yet. */
-export function joinEl(tableId: string, info: TableInfo | null, rememberedName: string, busy: boolean, handlers: JoinHandlers): HTMLElement {
-  const about = info
-    ? h(
-        'div.about',
-        null,
-        h('h2', null, info.name),
-        h('p', null, `Blinds ${chips(info.smallBlind)}/${chips(info.bigBlind)}`),
-        h('p.note', null, info.players.length > 0 ? `At the table: ${info.players.join(', ')}` : 'Nobody is seated yet.'),
-      )
-    : h('div.about', null, h('h2', null, `Table ${tableId}`), h('p.note', null, 'Looking for the table…'));
+export function joinScreen(tableId: string, rememberedName: string, themePicker: HTMLElement, handlers: JoinHandlers): JoinScreen {
+  const about = h('div.about', null, h('h2', null, `Table ${tableId}`), h('p.note', null, 'Looking for the table…'));
+  const joinButton = h('button.btn.primary', { type: 'submit', disabled: true, 'data-action': 'join-table' }, 'Join table');
 
   const form = h(
     'form.card-panel',
     {
       onsubmit: (event: Event) => {
         event.preventDefault();
-        handlers.join(field(event.target as HTMLFormElement, 'join-name').value);
+        void whilePending(joinButton, 'Joining…', () => handlers.join(field(event.target as HTMLFormElement, 'join-name').value));
       },
     },
     about,
     nameField('join-name', rememberedName),
-    h('button.btn.primary', { type: 'submit', disabled: busy || !info, 'data-action': 'join-table' }, busy ? 'Joining…' : 'Join table'),
+    joinButton,
     h('button.link', { type: 'button', onclick: handlers.toLobby }, 'Start my own table instead'),
   );
 
-  return h('main.lobby', null, brand(), h('div.panels.single', null, form));
+  return {
+    element: h('main.lobby', null, brand(), h('div.panels.single', null, form, themeSection(themePicker))),
+
+    showTable(info) {
+      about.replaceChildren(
+        h('h2', null, info.name),
+        h('p', null, `Blinds ${chips(info.smallBlind)}/${chips(info.bigBlind)}`),
+        h('p.note', null, info.players.length > 0 ? `At the table: ${info.players.join(', ')}` : 'Nobody is seated yet.'),
+      );
+      joinButton.disabled = false;
+    },
+  };
 }
 
 /** A screen with nothing on it but a line of text, for the moment before the page knows what to show. */

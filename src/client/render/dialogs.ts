@@ -1,8 +1,9 @@
 import type { Command, HandRecord, TableConfig } from '../../engine/types.ts';
 import type { TableView } from '../../engine/view.ts';
 import { settleUp } from '../settle.ts';
-import { THEMES } from '../themes.ts';
+import { themeById } from '../themes.ts';
 import { chips, h, signedChips } from '../ui.ts';
+import { createThemePicker } from './themePicker.ts';
 
 export type Dialog =
   | { kind: 'menu' }
@@ -13,7 +14,7 @@ export type Dialog =
   | { kind: 'players' }
   | { kind: 'settings' }
   | { kind: 'invite' }
-  | { kind: 'look' }
+  | { kind: 'theme' }
   | { kind: 'setStack'; playerId: string }
   | { kind: 'confirm'; title: string; body: string; action: string; command: Command };
 
@@ -96,7 +97,7 @@ function menu(view: TableView, handlers: DialogHandlers): HTMLElement {
             handlers.close();
           })
         : null,
-      item('Look', 'look', () => handlers.open({ kind: 'look' }), 'Change how the table looks for you'),
+      item('Theme', 'theme', () => handlers.open({ kind: 'theme' }), themeById(handlers.theme()).name),
       item(handlers.soundOn() ? 'Turn sound off' : 'Turn sound on', 'sound', () => {
         handlers.setSound(!handlers.soundOn());
         handlers.open({ kind: 'menu' });
@@ -375,31 +376,12 @@ function invite(view: TableView, handlers: DialogHandlers): HTMLElement {
   );
 }
 
-function look(handlers: DialogHandlers): HTMLElement {
+function theme(handlers: DialogHandlers): HTMLElement {
   return frame(
-    'Look',
+    'Theme',
     handlers,
-    h(
-      'div.looks',
-      null,
-      THEMES.map((theme) =>
-        h(
-          'button.look',
-          {
-            type: 'button',
-            'data-theme': theme.id,
-            'aria-pressed': String(theme.id === handlers.theme()),
-            onclick: () => {
-              handlers.setTheme(theme.id);
-              handlers.open({ kind: 'look' });
-            },
-          },
-          h('span.swatch', null, h('i.felt-dot'), h('i.accent-dot'), h('i.card-dot')),
-          h('span', null, h('b', null, theme.name), h('small', null, theme.blurb)),
-        ),
-      ),
-    ),
-    h('p.note', null, 'Only changes the table for you.'),
+    createThemePicker(handlers.theme(), handlers.setTheme).element,
+    h('p.note', null, 'Changes how the table looks for you, on this device. Everyone picks their own.'),
   );
 }
 
@@ -467,8 +449,8 @@ export function dialogEl(dialog: Dialog, view: TableView, handlers: DialogHandle
       return settings(view, handlers);
     case 'invite':
       return invite(view, handlers);
-    case 'look':
-      return look(handlers);
+    case 'theme':
+      return theme(handlers);
     case 'setStack':
       return setStack(view, dialog.playerId, handlers);
     case 'confirm':

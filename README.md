@@ -8,7 +8,7 @@ No-limit hold'em for a group of friends, played in the browser. There is no serv
 - Straddles, run it twice and a seven-deuce bounty, each switched on or off per table.
 - The host approves seats and rebuys, pauses the game, changes blinds and settings, adjusts stacks, removes players and can hand the table to someone else.
 - A ledger with who pays whom to settle up, hand history, table chat with the dealer's play-by-play.
-- Four looks, chosen per player in the menu. Works on a phone held upright and on a desktop.
+- Four themes with a picker on the front page and in the menu; each player chooses their own. Works on a phone held upright and on a desktop.
 - A personal link to carry on from another device.
 
 ## House rules
@@ -48,9 +48,9 @@ The Sheet is the database. It holds every table (including the cards in play), t
 | `npm run dev` | Runs the game at <http://localhost:8787> with tables kept in memory. Open it in several windows to play against yourself. |
 | `npm test` | The rules, the request handling and the Sheet storage, against fakes. |
 | `npm run test:e2e` | Six players in real browsers through two hands. Needs `npx playwright install chromium` once. |
-| `npm run screenshots` | The same browser run, saving a picture of every screen in every look to `screenshots/`. |
+| `npm run screenshots` | The same browser run, saving a picture of every screen, and of the table in every theme, to `screenshots/`. |
 | `npm run build` | Type-checks and writes `dist/gas` (what is pushed to Apps Script) and `dist/web` (the page for any static host). |
-| `npm run gallery` | Writes `dist/gallery.html`, the look picker with the app playing against bots in the page. |
+| `npm run gallery` | Writes `dist/gallery.html`, a showcase of the themes with the app playing against bots in the page. |
 
 ## How it is put together
 
@@ -61,12 +61,12 @@ The Sheet is the database. It holds every table (including the cards in play), t
 | `src/gas` | The Apps Script side: `SheetStore` keeps tables in the Sheet with a cache in front, and `main.ts` is the web app. | server |
 | `src/client` | The page. `Transport`, `Links` and `Memory` are the interfaces between it and wherever it is hosted. | engine (types and hand names), server (request types) |
 | `src/dev` | The local server, with tables in memory. | server |
-| `src/demo` | A table with bots that runs inside a page, for the look picker. | server |
+| `src/demo` | A table with bots that runs inside a page, for the theme showcase. | server |
 
 Things worth knowing before changing it:
 
 - Nothing runs in the background. Time-based events (the action clock, the pause after a hand) happen when the next request arrives and finds a deadline has passed, so a table nobody is looking at simply waits.
 - A player's page keeps one request open with the server, which answers the moment something changes. Apps Script allows 30 requests at once per deploying account, which is plenty for one full table and tight for three.
 - A saved table carries a schema number (`STATE_SCHEMA`). Change the shape of the saved state and tables from before the change stop loading unless the code migrates them.
-- A look is a set of values for the design tokens at the top of `src/client/styles.css`, plus an entry in `src/client/themes.ts`.
+- A theme is a set of values for the design tokens at the top of `src/client/styles.css`, plus an entry in `src/client/themes.ts`.
 - Another game is a new engine module behind the same commands and views; another database is a new `TableStore`; another host for the page is a new `Transport` and `Links`.

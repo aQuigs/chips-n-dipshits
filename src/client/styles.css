@@ -1,9 +1,9 @@
 /*
- * Every color, face and shape the app uses is a token, and a look is nothing more than a set of
+ * Every color, face and shape the app uses is a token, and a theme is nothing more than a set of
  * token values under [data-theme="<id>"]. Component rules below never name a color directly.
  */
 
-/* Card Room: green felt, walnut rail, brass numbers. Also the fallback when no look is set. */
+/* Card Room: green felt, walnut rail, brass numbers. Also the fallback when no theme is set. */
 :root,
 [data-theme] {
   --bg: #0d1512;
@@ -44,7 +44,7 @@
   --display-weight: 800;
   --display-case: none;
   --display-spacing: -0.01em;
-  /* Wide display faces are set smaller so titles take the same room in every look */
+  /* Wide display faces are set smaller so titles take the same room in every theme */
   --display-scale: 1;
   --radius: 10px;
   --plate-radius: 10px;
@@ -1291,7 +1291,7 @@ p {
 }
 
 .menu-item small,
-.look small {
+.theme-option small {
   display: block;
   color: var(--muted);
   font-weight: 400;
@@ -1412,15 +1412,22 @@ p {
   white-space: pre-wrap;
 }
 
-.looks {
+/* ---- Theme picker: each option carries data-theme, so it is drawn in the colors it stands for ---- */
+
+.theme-options {
   display: grid;
   gap: 8px;
 }
 
-.look {
+.theme-options.compact {
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.theme-option {
   display: flex;
   align-items: center;
   gap: 14px;
+  min-width: 0;
   padding: 12px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -1430,9 +1437,27 @@ p {
   text-align: left;
 }
 
-.look[aria-pressed='true'] {
+.theme-option[aria-pressed='true'] {
   border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent);
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.theme-section {
+  display: grid;
+  gap: 10px;
+  width: min(100%, 760px);
+}
+
+.panels.single .theme-section {
+  width: 100%;
+}
+
+.theme-section h2 {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .swatch {

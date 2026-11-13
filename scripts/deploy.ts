@@ -74,6 +74,14 @@ if (!deployment) {
   await buildAll(deployment.url);
 }
 
+// Checked before anything is pushed: a .clasp.json from one game and a .deployment.json from another would put this code on the wrong script
+if (!existingDeployments().includes(deployment.deploymentId)) {
+  throw new Error(
+    `The linked script (.clasp.json) has no web app ${deployment.deploymentId}, which is the one on record in .deployment.json. ` +
+      'The two files are from different games; restore the pair that belongs together.',
+  );
+}
+
 clasp('push', '--force');
 clasp('update-deployment', deployment.deploymentId, '--description', `${TITLE}, deployed ${new Date().toISOString()}`);
 

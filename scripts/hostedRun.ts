@@ -13,6 +13,7 @@ import { clientPage } from './bundle.ts';
 
 const STEP_TIMEOUT_MS = 20_000;
 const SLOW_ANSWER_MS = 3000;
+const SLOW_POLL_MS = 1500;
 const MOVES = ['fold', 'check', 'call', 'raise'];
 
 // Runs in the page before anything else: google.script as Apps Script provides it, with the page told
@@ -48,6 +49,15 @@ const STAND_IN_HOST = `
 `;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function until(what: string, reached: () => boolean): Promise<void> {
+  const deadline = Date.now() + STEP_TIMEOUT_MS;
+
+  while (!reached()) {
+    assert.ok(Date.now() < deadline, `timed out waiting for ${what}`);
+    await sleep(50);
+  }
+}
 
 async function open(browser: Browser): Promise<Page> {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
@@ -133,6 +143,22 @@ try {
 
     await page.reload();
     await page.waitForSelector('.stage .table');
+    await page.context().close();
+  }
+
+  console.log('While the table cannot be reached there is a way to the lobby, and the link still works afterwards');
+  {
+    const page = await open(browser);
+    await page.route('**/api', (route) => route.abort('failed'));
+
+    await page.goto(`${server.url}?table=${tableId}&me=${hostMember}`);
+    await page.click('[data-action="leave-notice"]');
+    await page.waitForSelector('[data-action="create-table"]');
+    assert.equal(inAddress(page, 'me'), hostMember);
+
+    await page.unroute('**/api');
+    await page.reload();
+    await page.waitForSelector('[data-action="confirm-member"]');
     await page.context().close();
   }
 
@@ -260,6 +286,46 @@ try {
     assert.deepEqual(sent, ['check']);
 
     await second.unroute('**/api');
+  }
+
+  console.log("A poll's answer that the answer to a move overtook does not put the old table back");
+  {
+    let asked = 0;
+    let answered = 0;
+    let arrived = 0;
+
+    // Every poll is answered by the server as usual, and the answer then takes its time getting to the page
+    await second.route('**/api', async (route) => {
+      if ((JSON.parse(route.request().postData() ?? '{}') as { op?: string }).op !== 'poll') {
+        return route.continue();
+      }
+
+      asked += 1;
+      const response = await route.fetch();
+      answered += 1;
+      await sleep(SLOW_POLL_MS);
+      arrived += 1;
+
+      return route.fulfill({ response });
+    });
+
+    // A chat line ends the poll that was already waiting, so the next one goes by the slow road
+    await say(second, 'hmm');
+    await until('a poll on the slow road', () => asked === 1);
+
+    // The other player's line is still on its way to this page when this player checks
+    await say(first, 'go on then');
+    await until("the server's answer about the other player's line", () => answered === 1);
+    await second.click('.turn [data-action="check"]');
+    await second.waitForSelector('.turn', { state: 'detached' });
+
+    await until('that answer to arrive, after the check was answered', () => arrived === 1);
+    await sleep(300);
+    assert.equal(await second.locator('.turn').count(), 0, 'the decision already made is not back on screen');
+    await first.waitForSelector('.turn [data-action="check"]:enabled');
+
+    // A poll is still on the slow road when this ends
+    await second.unrouteAll({ behavior: 'ignoreErrors' });
   }
 
   console.log('The Apps Script-hosted page holds up');

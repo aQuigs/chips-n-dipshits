@@ -922,3 +922,20 @@ test('an action that names the decision it answers is only played on that decisi
   t.check(0);
   assert.equal(t.state.hand!.street, 'river', 'an action that names no decision is played on the open one');
 });
+
+test('an action that arrives after its hand is over is not played in the next hand', () => {
+  const t = new TestTable({ stacks: [1000, 1000] });
+  t.deal({ button: 0 });
+  const lastHand = t.view(0).hand!.turn;
+
+  t.fold(0);
+  t.finishHand();
+
+  // The same seat is first to act again, facing the first decision of a new hand
+  t.deal({ button: 0 });
+  assert.equal(t.toAct, 0);
+  assert.throws(() => t.cmd(0, { type: 'call', turn: lastHand }), /moved on/);
+
+  t.cmd(0, { type: 'call', turn: t.view(0).hand!.turn });
+  assert.equal(t.toAct, 1);
+});

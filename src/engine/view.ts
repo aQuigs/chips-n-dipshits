@@ -155,7 +155,7 @@ export function viewFor(state: TableState, playerId: string, now: number): Table
       pots: buildPots(hand.players),
       currentBet: hand.currentBet,
       toAct: hand.toAct,
-      turn: hand.turn,
+      turn: state.turn,
       deadline: hand.deadline,
       options: myTurn ? bettingOptions(state, hand, mine) : null,
       canVote: hand.stage === 'ritVote' && mine !== undefined && !mine.folded && mine.ritVote === null,

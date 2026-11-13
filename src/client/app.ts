@@ -171,8 +171,10 @@ export class App {
       }
     });
 
-    document.addEventListener('pointerdown', allowSound);
-    document.addEventListener('keydown', allowSound);
+    // A touch only counts as the visitor's own gesture once the finger lifts, which is the click
+    for (const gesture of ['pointerdown', 'click', 'keydown']) {
+      document.addEventListener(gesture, allowSound);
+    }
   }
 
   /** Switches the theme and remembers it for this browser. */
@@ -249,9 +251,14 @@ export class App {
       if (response?.ok && response.kind === 'view') {
         view = response.view;
       } else {
+        // Leaving for the lobby keeps the address, so the link is still there to come back to
         retryIn = nextRetry(retryIn);
-        this.mount(noticeEl('Could not reach the table. Trying again…'));
+        this.mount(noticeEl('Could not reach the table. Trying again…', { label: 'Go to the lobby', action: () => this.showLobby(true) }));
         await sleep(retryIn);
+
+        if (run !== this.pollRun) {
+          return;
+        }
       }
     }
 
@@ -483,13 +490,12 @@ export class App {
 
   private async poll(run: number, whole: boolean): Promise<void> {
     let retryIn = 0;
-    let passedOver = 0;
 
     while (run === this.pollRun && this.session) {
       const { tableId, auth } = this.session;
       const asked = Date.now();
-      const since = whole ? -1 : (this.view?.version ?? -1);
-      const response = await this.request({ op: 'poll', tableId, auth, since, holdMs: HOLD_MS });
+      const held = this.view?.version ?? -1;
+      const response = await this.request({ op: 'poll', tableId, auth, since: whole ? -1 : held, holdMs: HOLD_MS });
 
       if (run !== this.pollRun) {
         return;
@@ -516,24 +522,17 @@ export class App {
         this.setTurnLock('open');
       }
 
-      try {
-        if (response.kind === 'view') {
-          // A view older than the one on screen was overtaken on its way here. A second in a row means
-          // the table itself has gone back, as after a restore of the Sheet, and then the server is right
-          const drawn = this.applyView(response.view, passedOver > 0);
-          passedOver = drawn ? 0 : passedOver + 1;
-        } else if (response.kind === 'unchanged') {
-          passedOver = 0;
-          this.noteServerTime(response.now);
+      if (response.kind === 'view') {
+        // The server answered after this page already held `held`, so a version below that is no late
+        // arrival: the table itself has gone back, as after a restore of the Sheet, and the server is right.
+        // Anything from `held` up to what is showing was only overtaken by the answer to a move or a chat line
+        this.applyView(response.view, response.view.version < held);
+      } else if (response.kind === 'unchanged') {
+        this.noteServerTime(response.now);
 
-          if (Date.now() - asked < QUICK_POLL_GAP_MS) {
-            await sleep(QUICK_POLL_GAP_MS);
-          }
+        if (Date.now() - asked < QUICK_POLL_GAP_MS) {
+          await sleep(QUICK_POLL_GAP_MS);
         }
-      } catch (error) {
-        // A table that can't be drawn must not be what stops it from updating
-        console.error(error);
-        await sleep(FIRST_RETRY_MS);
       }
     }
   }
@@ -553,13 +552,13 @@ export class App {
     this.clockOffset = Math.max(...this.clockSamples);
   }
 
-  /** Puts a view on screen. Returns false for one older than what is showing, unless `evenIfOlder`. */
-  private applyView(view: TableView, evenIfOlder = false): boolean {
+  /** Puts a view on screen, unless it is no newer than what is showing and the table hasn't `wentBack`. */
+  private applyView(view: TableView, wentBack = false): void {
     const previous = this.view;
 
     // An action's answer and a poll can cross; the older picture doesn't replace the newer one
-    if (previous && view.version <= previous.version && !evenIfOlder) {
-      return false;
+    if (previous && view.version <= previous.version && !wentBack) {
+      return;
     }
 
     this.noteServerTime(view.now);
@@ -573,9 +572,12 @@ export class App {
       playTurnChime();
     }
 
-    this.drawTable();
-
-    return true;
+    // A table that can't be drawn must not be what stops it from updating
+    try {
+      this.drawTable();
+    } catch (error) {
+      console.error(error);
+    }
   }
 
   // ---- Drawing the table screen ----

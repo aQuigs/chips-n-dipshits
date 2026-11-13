@@ -151,8 +151,14 @@ export function joinScreen(tableId: string, rememberedName: string, themePicker:
 }
 
 /** A screen with nothing on it but a line of text, for the moment before the page knows what to show. */
-export function noticeEl(text: string): HTMLElement {
-  return h('main.lobby', null, brand(), h('p.note', null, text));
+export function noticeEl(text: string, wayOut?: { label: string; action(): void }): HTMLElement {
+  return h(
+    'main.lobby',
+    null,
+    brand(),
+    h('p.note', null, text),
+    wayOut ? h('button.btn', { type: 'button', 'data-action': 'leave-notice', onclick: wayOut.action }, wayOut.label) : null,
+  );
 }
 
 /**

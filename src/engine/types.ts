@@ -150,8 +150,6 @@ export interface Hand {
   /** Smallest amount a raise must add: the size of the last full bet or raise. */
   minRaise: number;
   toAct: number | null;
-  /** Counts the decisions this hand has asked for, so that an answer can say which one it is an answer to. */
-  turn: number;
   /** Last seat to bet or raise on the current street. */
   lastAggressor: number | null;
   /** When the current stage moves on by itself; null when it waits for a player indefinitely. */
@@ -188,6 +186,11 @@ export interface TableState {
   /** When the next hand is dealt while no hand is on the table. */
   nextHandAt: number | null;
   handCount: number;
+  /**
+   * Counts the decisions this table has asked of its players, so that an answer can say which one it
+   * is an answer to. It runs on from hand to hand: a late answer must not fit a decision in the next one.
+   */
+  turn: number;
   hand: Hand | null;
   feed: FeedEntry[];
   feedSeq: number;

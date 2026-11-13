@@ -149,7 +149,6 @@ export function startHand(state: TableState, ctx: Ctx): void {
     currentBet: bigBlind,
     minRaise: bigBlind,
     toAct: null,
-    turn: 0,
     lastAggressor: null,
     deadline: null,
     result: null,
@@ -240,7 +239,7 @@ function advance(state: TableState, ctx: Ctx, afterSeat: number): void {
     }
 
     hand.toAct = next.seat;
-    hand.turn += 1;
+    state.turn += 1;
     hand.deadline = actionDeadline(state, ctx.now);
     return;
   }
@@ -383,7 +382,7 @@ export function act(state: TableState, ctx: Ctx, seatIndex: number, action: Bett
     throw new GameError("It's not your turn");
   }
 
-  if (turn !== undefined && turn !== hand.turn) {
+  if (turn !== undefined && turn !== state.turn) {
     throw new GameError('The hand moved on before that arrived, so it was not played');
   }
 

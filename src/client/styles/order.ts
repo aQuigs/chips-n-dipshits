@@ -1,6 +1,7 @@
 /**
  * The app's stylesheets, in the order they are joined into the page. Later rules win over earlier
- * ones, so the tokens come first and a feature's own file goes at the end.
+ * ones, so the tokens come first and a feature's own file goes at the end. One to a line:
+ * .gitattributes joins the lines two branches add to this file.
  */
 export const STYLESHEETS = [
   'tokens.css',

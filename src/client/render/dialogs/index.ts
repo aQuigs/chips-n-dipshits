@@ -18,7 +18,7 @@ export type { DialogHandlers } from './dialog.ts';
 /**
  * Every dialog, and the things the menu does without one. A new dialog is a file in this folder and a
  * line here. Where it stands in this list is where its entry stands in the menu; one that has no
- * entry can stand anywhere.
+ * entry can stand anywhere. One to a line: .gitattributes joins the lines two branches add to this file.
  */
 const REGISTERED = [
   inviteDialog,

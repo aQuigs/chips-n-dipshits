@@ -21,8 +21,13 @@ export interface TableEffect {
   dispose?(): void;
 }
 
-/** Every effect, as a function that makes one for a table screen. A new effect is a file in effects/ and a line here. */
-const TABLE_EFFECTS: (() => TableEffect)[] = [turnChime];
+/**
+ * Every effect, as a function that makes one for a table screen. A new effect is a file in effects/
+ * and a line here, one to a line: .gitattributes joins the lines two branches add to this file.
+ */
+const TABLE_EFFECTS: (() => TableEffect)[] = [
+  turnChime,
+];
 
 /** The effects of one table screen. */
 export class TableEffects {

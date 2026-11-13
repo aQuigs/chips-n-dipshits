@@ -188,10 +188,67 @@ try {
     await page.context().close();
   }
 
+  console.log('A link to a place the host has taken away says so, and offers the table again');
+  {
+    const page = await open(browser);
+    await page.goto(`${server.url}?table=${tableId}`);
+    await page.fill('#join-name', 'Lurker');
+    await page.click('[data-action="join-table"]');
+    await page.waitForSelector('.stage .table');
+
+    const lurker = inAddress(page, 'me')!;
+
+    await host.click('[data-action="menu"]');
+    await host.click('.menu [data-action="players"]');
+    await host.click('li:has-text("Lurker") button:has-text("Remove")');
+    await host.click('[data-action="confirm"]');
+    await host.waitForSelector('.dialog', { state: 'detached' });
+
+    // The page that was open is told by the server, which is the one thing that may take a seat out of the address
+    await page.waitForSelector('#join-name');
+    assert.equal(inAddress(page, 'me'), null, 'the address no longer names the member who was removed');
+    assert.equal(await remembered(page, tableId), null);
+
+    // The link they were given still leads to the table, and says why it is asking for a name
+    const later = await open(browser);
+    await later.goto(`${server.url}?table=${tableId}&me=${lurker}`);
+    await later.waitForSelector('#join-name');
+    await later.waitForSelector('.toast:has-text("personal link no longer works")');
+    assert.equal(inAddress(later, 'me'), null);
+
+    await later.context().close();
+    await page.context().close();
+  }
+
+  console.log('A form whose answer is lost closes, and the table shows what became of it');
+  {
+    let lost = 0;
+
+    await host.route('**/api', async (route) => {
+      if ((JSON.parse(route.request().postData() ?? '{}') as { command?: { type: string } }).command?.type !== 'requestSeat') {
+        return route.continue();
+      }
+
+      // The server seats the host, and the answer never arrives
+      lost += 1;
+      await route.fetch();
+
+      return route.abort('failed');
+    });
+
+    await sit(host, 0);
+    await host.waitForSelector('.toast:has-text("Checking whether that went through")');
+
+    // Left open with its button free, the form would invite a second try at something already done
+    await host.waitForSelector('.dialog', { state: 'detached' });
+    await host.waitForSelector('.seat.me');
+    assert.equal(lost, 1, 'the request was sent once');
+
+    await host.unroute('**/api');
+  }
+
   console.log('Before the first hand the bar under the table agrees with the table');
   {
-    await sit(host, 0);
-    await host.waitForSelector('.seat.me');
     assert.match(await host.innerText('.controls .waiting'), /not started/);
 
     await host.click('.message [data-action="start"]');

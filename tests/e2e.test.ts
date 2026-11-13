@@ -14,3 +14,7 @@ test('six players get through seating, two hands, a run-it-twice and a rebuy in 
 test('served the way Apps Script serves it, the page keeps a seat through failed requests and never repeats a move', { skip, timeout: 300_000 }, () => {
   execFileSync(process.execPath, ['scripts/hostedRun.ts'], { cwd: ROOT, stdio: 'inherit' });
 });
+
+test('the screens hold up on small phones, with long chat, the largest stacks and under the keyboard', { skip, timeout: 300_000 }, () => {
+  execFileSync(process.execPath, ['scripts/screenChecks.ts'], { cwd: ROOT, stdio: 'inherit' });
+});

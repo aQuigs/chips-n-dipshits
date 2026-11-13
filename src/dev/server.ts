@@ -17,6 +17,8 @@ export interface DevServerOptions {
   port: number;
   /** Produces the game page. Called for every page load, so edits show up on refresh. */
   page: () => Promise<string>;
+  /** The game to serve. Left out, it is a fresh one on the real clock; a check passes its own to fix the cards and move time. */
+  service?: PokerService;
 }
 
 export interface DevServer {
@@ -54,23 +56,25 @@ function sleep(ms: number): Promise<void> {
  * instead of a Sheet. For trying changes and for the browser tests.
  */
 export async function startDevServer(options: DevServerOptions): Promise<DevServer> {
-  const service = new PokerService({
-    store: new MemoryStore(),
-    clock: { now: () => Date.now() },
-    rng: new ByteRng(() => [...randomBytes(RANDOM_BATCH_BYTES)]),
-  });
+  const service =
+    options.service ??
+    new PokerService({
+      store: new MemoryStore(),
+      clock: { now: () => Date.now() },
+      rng: new ByteRng(() => [...randomBytes(RANDOM_BATCH_BYTES)]),
+    });
   let closing = false;
 
   /** Holds a poll open until there is news, like the deployed script does. */
   const holdUntilNews = async (request: unknown): Promise<void> => {
-    const poll = request as { op?: unknown; tableId?: unknown; since?: unknown; holdMs?: unknown };
-    if (poll.op !== 'poll' || typeof poll.tableId !== 'string' || typeof poll.since !== 'number' || typeof poll.holdMs !== 'number') {
+    const wait = service.waitFor(request);
+    if (!wait) {
       return;
     }
 
-    const until = Date.now() + Math.min(poll.holdMs, MAX_HOLD_MS);
+    const until = Date.now() + Math.min(wait.ms, MAX_HOLD_MS);
 
-    while (!closing && Date.now() < until && !service.hasNews(poll.tableId, poll.since)) {
+    while (!closing && Date.now() < until && !service.hasNews(wait.tableId, wait.since)) {
       await sleep(HOLD_CHECK_MS);
     }
   };

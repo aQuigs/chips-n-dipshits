@@ -1,10 +1,10 @@
 import type { Command } from '../../engine/types.ts';
 import type { HandView, SeatView, TableView } from '../../engine/view.ts';
-import { chips, h, holdWhile } from '../ui.ts';
+import { chips, h, holdWhile, shortChips } from '../ui.ts';
 
 export interface ControlHandlers {
   /** Resolves once the server has answered, or failed to. */
-  send(command: Command): Promise<void>;
+  send(command: Command): Promise<unknown>;
   openRebuy(): void;
 }
 
@@ -26,11 +26,17 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 /** A button for something other than a move in the hand. It waits for its own answer before it can be pressed again. */
-function commandButton(spec: `button.${string}`, action: string, label: string, send: () => Promise<void>): HTMLButtonElement {
+function commandButton(spec: `button.${string}`, action: string, label: string, send: () => Promise<unknown>): HTMLButtonElement {
   const button = h(spec, { type: 'button', 'data-action': action }, label);
   button.addEventListener('click', () => holdWhile(button, send));
 
   return button;
+}
+
+/** What a move button says: the move and its amount as two pieces, so a narrow button breaks between them instead of cutting the amount off. */
+function moveLabel(move: string, amount: number): (HTMLElement | string)[] {
+  // The space is for whoever reads the button as text; laid out, the two pieces are spaced by the button
+  return [h('span', null, move), ' ', h('span.amount-of', { title: chips(amount) }, shortChips(amount, 'up'))];
 }
 
 /**
@@ -60,8 +66,7 @@ function turnPanel(hand: HandView, stack: number, handlers: ControlHandlers): HT
       amount.value = String(raiseTo);
     }
 
-    const verb = raiseTo === maxRaiseTo ? 'All in' : opening ? 'Bet' : 'Raise to';
-    raiseButton.textContent = `${verb} ${chips(raiseTo)}`;
+    raiseButton.replaceChildren(...moveLabel(raiseTo === maxRaiseTo ? 'All in' : opening ? 'Bet' : 'Raise to', raiseTo));
   };
 
   slider.addEventListener('input', () => choose(Number(slider.value), slider));
@@ -80,7 +85,7 @@ function turnPanel(hand: HandView, stack: number, handlers: ControlHandlers): HT
   const callLabel = callAmount >= stack ? 'Call all in' : 'Call';
   const passButton = options.canCheck
     ? h('button.btn.call', { type: 'button', 'data-action': 'check', onclick: () => void handlers.send({ type: 'check', turn }) }, 'Check')
-    : h('button.btn.call', { type: 'button', 'data-action': 'call', onclick: () => void handlers.send({ type: 'call', turn }) }, `${callLabel} ${chips(callCost)}`);
+    : h('button.btn.call', { type: 'button', 'data-action': 'call', onclick: () => void handlers.send({ type: 'call', turn }) }, moveLabel(callLabel, callCost));
 
   return h(
     'div.turn',
@@ -96,7 +101,7 @@ function turnPanel(hand: HandView, stack: number, handlers: ControlHandlers): HT
   );
 }
 
-function toggle(label: string, on: boolean, action: string, onChange: (next: boolean) => Promise<void>): HTMLElement {
+function toggle(label: string, on: boolean, action: string, onChange: (next: boolean) => Promise<unknown>): HTMLElement {
   const button = h('button.toggle', { type: 'button', role: 'switch', 'aria-checked': String(on), 'data-action': action }, h('i'), label);
   button.addEventListener('click', () => holdWhile(button, () => onChange(!on)));
 
@@ -139,7 +144,7 @@ function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandle
     main = h(
       'div.turn',
       null,
-      h('div.prompt', null, 'Everyone is all in. Run the rest of the board twice?'),
+      h('div.prompt', null, 'The betting is over. Run the rest of the board twice?'),
       h(
         'div.buttons',
         null,
@@ -149,6 +154,13 @@ function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandle
     );
   } else {
     main = h('div.waiting', null, waitingText(view, hand));
+  }
+
+  const showCards = hand?.canShow ? commandButton('button.chip-btn', 'show', 'Show my cards', () => handlers.send({ type: 'showCards' })) : null;
+
+  // On the way out, nothing else here would still take effect: the seat is gone when the hand is
+  if (seat.leaving) {
+    return h('div.controls.seated', null, h('div.waiting', null, 'You leave your seat when this hand ends'), h('div.extras', null, showCards));
   }
 
   const extras: HTMLElement[] = [];
@@ -163,8 +175,8 @@ function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandle
     extras.push(toggle('Straddle', seat.straddle, 'straddle', (on) => handlers.send({ type: 'setStraddle', on })));
   }
 
-  if (hand?.canShow) {
-    extras.push(commandButton('button.chip-btn', 'show', 'Show my cards', () => handlers.send({ type: 'showCards' })));
+  if (showCards) {
+    extras.push(showCards);
   }
 
   if (myRequest?.kind === 'rebuy') {
@@ -215,7 +227,7 @@ export function controlsSignature(view: TableView): string {
   const hand = view.hand;
 
   return JSON.stringify([
-    seat && [seat.stack, seat.pendingAdd, seat.sittingOut, seat.away, seat.straddle],
+    seat && [seat.stack, seat.pendingAdd, seat.sittingOut, seat.away, seat.straddle, seat.leaving],
     hand && [hand.number, hand.stage, hand.street, hand.toAct, hand.turn, hand.currentBet, hand.pot, hand.options, hand.canVote, hand.canShow],
     [view.running, view.nextHandAt !== null, view.handCount === 0],
     view.requests.filter((request) => request.playerId === view.you.id),

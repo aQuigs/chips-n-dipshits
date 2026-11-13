@@ -1,6 +1,6 @@
 import { evaluateHand } from '../../engine/handRank.ts';
 import type { HandView, SeatView, TableView } from '../../engine/view.ts';
-import { cardEl, chips, h } from '../ui.ts';
+import { cardEl, chips, h, shortChips } from '../ui.ts';
 
 /** Whether the table is drawn lying down (desktop, landscape) or standing up (a phone held upright). */
 export type Shape = 'wide' | 'tall';
@@ -66,7 +66,8 @@ export interface TableHandlers {
 function seatPlace(shape: Shape, slot: number): { class: string; style: Record<string, string> } {
   const [x, y, anchor] = SEAT_SPOTS[shape][slot]!;
 
-  return { class: `seat at-${anchor}`, style: { left: `${x}%`, top: `${y}%` } };
+  // As custom properties, so the stylesheet can keep a seat near an edge from hanging off it
+  return { class: `seat at-${anchor}`, style: { '--x': `${x}%`, '--y': `${y}%` } };
 }
 
 function betPlace(shape: Shape, slot: number): Record<string, string> {
@@ -180,8 +181,10 @@ function seatEl(view: TableView, seat: SeatView, slot: number, shape: Shape, clo
     'div.plate',
     null,
     h('div.name', { title: seat.name }, seat.name, view.hostId === seat.playerId ? h('span.host', { title: 'Host' }, '★') : null),
-    h('div.stack', null, chips(seat.stack), seat.pendingAdd > 0 ? h('span.pending', null, ` +${chips(seat.pendingAdd)}`) : null),
-    won > 0 ? h('div.status.won', null, `+${chips(won + bounty)}`) : status ? h('div.status', { 'data-status': status }, status) : null,
+    h('div.stack', { title: chips(seat.stack) }, shortChips(seat.stack), seat.pendingAdd > 0 ? h('span.pending', null, ` +${shortChips(seat.pendingAdd)}`) : null),
+    won > 0 ? h('div.status.won', null, `+${shortChips(won + bounty)}`) : status ? h('div.status', { 'data-status': status }, status) : null,
+    // The seconds left, for everyone: the bar under the name alone is easy to miss until the time is gone
+    timer ? h('div.status.clock', { 'data-countdown': hand!.deadline }, '') : null,
     timer,
   );
 
@@ -197,7 +200,7 @@ function seatEl(view: TableView, seat: SeatView, slot: number, shape: Shape, clo
 
   const nodes = [seatNode];
   if (seat.bet > 0) {
-    nodes.push(h('div.bet', { style: betPlace(shape, slot) }, h('i.chip'), chips(seat.bet)));
+    nodes.push(h('div.bet', { style: betPlace(shape, slot) }, h('i.chip'), shortChips(seat.bet)));
   }
 
   return nodes;
@@ -229,8 +232,16 @@ function boardEl(hand: HandView): HTMLElement {
     return h('div.board', { 'data-run': run }, slots);
   });
 
-  return h('div.boards', { class: hand.boards.length > 1 ? 'twice' : '' }, boards);
+  // Run twice, the second board only exists once the first is out. Its place is kept from the start, so the table doesn't shift when it comes
+  if (hand.runs > boards.length) {
+    boards.push(h('div.board.later', { 'data-run': boards.length }, Array.from({ length: BOARD_SIZE }, () => h('div.card.slot'))));
+  }
+
+  return h('div.boards', { class: boards.length > 1 ? 'twice' : '' }, boards);
 }
+
+// More lines than this in the middle of the table run into the seats on a phone
+const RESULT_LINES = 3;
 
 function resultLines(view: TableView, hand: HandView): string[] {
   const result = hand.result;
@@ -258,12 +269,18 @@ function resultLines(view: TableView, hand: HandView): string[] {
     }
   }
 
-  if (result.bounty) {
-    const total = sum(result.bounty.payments.map((payment) => payment.amount));
-    lines.push(`Seven-deuce! ${nameAt(result.bounty.seat)} collects a ${chips(total)} bounty`);
+  const bountyLine = result.bounty ? [`Seven-deuce! ${nameAt(result.bounty.seat)} collects a ${chips(sum(result.bounty.payments.map((payment) => payment.amount)))} bounty`] : [];
+
+  if (lines.length + bountyLine.length <= RESULT_LINES) {
+    return [...lines, ...bountyLine];
   }
 
-  return lines;
+  // Several pots or two boards say more than fits here: each winner gets one line, and the play-by-play has every pot
+  const winners = [...result.winnings].sort((a, b) => b.amount - a.amount).map((win) => `${nameAt(win.seat)} wins ${chips(win.amount)}`);
+  const room = RESULT_LINES - bountyLine.length;
+  const shown = winners.length > room ? [...winners.slice(0, room - 1), `and ${winners.length - room + 1} more win a share`] : winners;
+
+  return [...shown, ...bountyLine];
 }
 
 function messageEl(view: TableView, handlers: TableHandlers): HTMLElement | null {
@@ -304,7 +321,8 @@ function messageEl(view: TableView, handlers: TableHandlers): HTMLElement | null
 }
 
 function potEl(hand: HandView): HTMLElement | null {
-  if (hand.pot === 0) {
+  // Once the hand is over the pot has gone to the winners, and the result says who got what
+  if (hand.pot === 0 || hand.stage === 'done') {
     return null;
   }
 

@@ -89,7 +89,7 @@ export function startHand(state: TableState, ctx: Ctx): void {
     throw new Error('A hand needs at least two players');
   }
 
-  const { smallBlind, bigBlind, allowStraddle } = state.config;
+  const { smallBlind, bigBlind, allowStraddle, sevenDeuceBounty } = state.config;
   const button = state.buttonSeat === null ? eligible[ctx.rng.int(eligible.length)]! : seatsClockwiseAfter(eligible, state.buttonSeat)[0]!;
 
   // Clockwise from the button's left, so the button comes last
@@ -138,6 +138,7 @@ export function startHand(state: TableState, ctx: Ctx): void {
     sbSeat,
     bbSeat,
     straddleSeat: null,
+    bounty: sevenDeuceBounty,
     deck,
     boards: [[]],
     runs: 1,
@@ -412,15 +413,21 @@ function timeOut(state: TableState, ctx: Ctx): void {
   advance(state, ctx, player.seat);
 }
 
-/** A player gave up their seat mid-hand; if the action is on them it can't wait. */
-export function foldIfOnTheClock(state: TableState, ctx: Ctx, seatIndex: number): void {
+/** A player gave up their seat mid-hand, so nothing in the hand may wait for them. */
+export function stopWaitingFor(state: TableState, ctx: Ctx, seatIndex: number): void {
   const hand = state.hand;
-  if (!hand || hand.stage !== 'betting' || hand.toAct !== seatIndex) {
+  const player = hand ? playerAt(hand, seatIndex) : undefined;
+  if (!hand || !player) {
     return;
   }
 
-  checkOrFold(state, ctx, playerAt(hand, seatIndex)!);
-  advance(state, ctx, seatIndex);
+  if (hand.stage === 'betting' && hand.toAct === seatIndex) {
+    checkOrFold(state, ctx, player);
+    advance(state, ctx, seatIndex);
+  } else if (hand.stage === 'ritVote' && !player.folded && player.ritVote === null) {
+    narrate(state, ctx, `${player.name} left without voting, so it runs once`);
+    startRunout(state, ctx, 1);
+  }
 }
 
 function beginRunout(state: TableState, ctx: Ctx): void {
@@ -669,16 +676,10 @@ function isSevenDeuce(cards: readonly Card[]): boolean {
 /** Whoever wins a hand holding seven-deuce collects the bounty from everyone else who was dealt in. */
 function payBounty(state: TableState, ctx: Ctx, winnerSeat: number): BountyResult | null {
   const hand = state.hand!;
-  const bounty = state.config.sevenDeuceBounty;
   const winner = playerAt(hand, winnerSeat)!;
 
-  if (bounty <= 0 || !isSevenDeuce(winner.cards)) {
+  if (hand.bounty <= 0 || !isSevenDeuce(winner.cards)) {
     return null;
-  }
-
-  if (!winner.shown) {
-    winner.shown = true;
-    narrate(state, ctx, `${winner.name} shows ${prettyCards(winner.cards)}`);
   }
 
   const payments: BountyResult['payments'] = [];
@@ -690,13 +691,23 @@ function payBounty(state: TableState, ctx: Ctx, winnerSeat: number): BountyResul
     }
 
     const seat = state.seats[player.seat]!;
-    const amount = Math.min(bounty, seat.stack);
+    const amount = Math.min(hand.bounty, seat.stack);
 
     if (amount > 0) {
       seat.stack -= amount;
       total += amount;
       payments.push({ seat: player.seat, amount });
     }
+  }
+
+  // Everyone who owes it lost their last chip in the hand, so there is no bounty to announce
+  if (total === 0) {
+    return null;
+  }
+
+  if (!winner.shown) {
+    winner.shown = true;
+    narrate(state, ctx, `${winner.name} shows ${prettyCards(winner.cards)}`);
   }
 
   state.seats[winnerSeat]!.stack += total;
@@ -785,6 +796,7 @@ export function stepHand(state: TableState, ctx: Ctx): void {
       timeOut(state, ctx);
       break;
     case 'ritVote':
+      narrate(state, ctx, 'Not everyone voted in time, so it runs once');
       startRunout(state, ctx, 1);
       break;
     case 'runout':

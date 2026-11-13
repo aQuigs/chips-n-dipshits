@@ -21,6 +21,13 @@ const TABLE_ID_PATTERN = new RegExp(`^[A-Z0-9]{${TABLE_ID_LENGTH}}$`);
 const CREATE_ATTEMPTS = 5;
 const HISTORY_LIMIT = 30;
 
+/** A poll that may be kept open: until the table moves on from `since`, or for `ms` at most. */
+export interface PollWait {
+  tableId: string;
+  since: number;
+  ms: number;
+}
+
 /** A request that can't be served, with the code the caller should react to. */
 export class ApiFailure extends Error {
   readonly code: ErrorCode;
@@ -114,6 +121,37 @@ export class PokerService {
 
       if (error instanceof StoreBusyError) {
         return { ok: false, code: 'busy', error: error.message };
+      }
+
+      throw error;
+    }
+  }
+
+  /**
+   * The wait a host may give this request before handing it to `handle`, or null when it gets none.
+   * Only a poll from a member of the table is worth holding. Anyone else is answered at once, so a
+   * stranger who knows a table code can't tie up the few requests a host serves at a time.
+   */
+  waitFor(request: unknown): PollWait | null {
+    try {
+      const fields = fieldsOf(request);
+      const { op, since, holdMs } = fields;
+      if (op !== 'poll' || typeof since !== 'number' || typeof holdMs !== 'number' || !(holdMs > 0)) {
+        return null;
+      }
+
+      const tableId = tableIdOf(fields);
+      const state = this.store.read(tableId);
+      if (!state) {
+        return null;
+      }
+
+      authenticate(state, authOf(fields));
+
+      return { tableId, since, ms: holdMs };
+    } catch (error) {
+      if (error instanceof ApiFailure) {
+        return null;
       }
 
       throw error;

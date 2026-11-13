@@ -7,4 +7,5 @@ export * from './pots.ts';
 export * from './seats.ts';
 export * from './table.ts';
 export * from './types.ts';
+export * from './upgrade.ts';
 export * from './view.ts';

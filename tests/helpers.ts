@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 
 import { applyCommand, createTable, addMember, freshDeck, startHand, tick, viewFor, SEAT_COUNT } from '../src/engine/index.ts';
-import type { Card, Command, Ctx, Effect, Rng, TableConfig, TableState, TableView } from '../src/engine/index.ts';
+import type { Card, Command, Ctx, Effect, Hand, Rng, TableConfig, TableState, TableView } from '../src/engine/index.ts';
 
 /** A small repeatable generator (mulberry32); the same seed always deals the same cards. */
 export function seededRng(seed: number): Rng {
@@ -37,6 +37,24 @@ export interface TableOptions {
   stacks: number[];
   config?: Partial<TableConfig>;
   seed?: number;
+}
+
+/** Replaces the cards of a hand just dealt with the ones `options` names. */
+export function fixCards(hand: Hand, options: DealOptions): void {
+  const holes = options.holes ?? {};
+  const upcoming = [...cards(options.board ?? ''), ...cards(options.secondBoard ?? '')];
+  const given = [...Object.values(holes).flatMap(cards), ...upcoming];
+  const fixed = new Set(given);
+  assert.equal(fixed.size, given.length, 'the same card was dealt twice');
+  const spare = freshDeck().filter((card) => !fixed.has(card));
+
+  for (const player of hand.players) {
+    const hole = holes[player.seat];
+    player.cards = hole ? cards(hole) : [spare.pop()!, spare.pop()!];
+  }
+
+  // The next card is taken from the end of the deck
+  hand.deck = [...spare, ...upcoming.reverse()];
 }
 
 /** A table with a player in each of the first seats, driven directly through the engine. */
@@ -84,22 +102,7 @@ export class TestTable {
     }
 
     startHand(this.state, this.ctx());
-
-    const hand = this.state.hand!;
-    const holes = options.holes ?? {};
-    const upcoming = [...cards(options.board ?? ''), ...cards(options.secondBoard ?? '')];
-    const given = [...Object.values(holes).flatMap(cards), ...upcoming];
-    const fixed = new Set(given);
-    assert.equal(fixed.size, given.length, 'the same card was dealt twice in this test');
-    const spare = freshDeck().filter((card) => !fixed.has(card));
-
-    for (const player of hand.players) {
-      const hole = holes[player.seat];
-      player.cards = hole ? cards(hole) : [spare.pop()!, spare.pop()!];
-    }
-
-    // The next card is taken from the end of the deck
-    hand.deck = [...spare, ...upcoming.reverse()];
+    fixCards(this.state.hand!, options);
   }
 
   fold(seat: number): void {

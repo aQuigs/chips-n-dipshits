@@ -585,6 +585,8 @@ p {
   grid-area: stage;
   position: relative;
   min-height: 0;
+  /* Squeezed by an open keyboard, the seats must not spill over the bars above and below */
+  overflow: clip;
   container-type: size;
 }
 
@@ -649,6 +651,10 @@ p {
 
 .boards.twice {
   --card-w: clamp(20px, 5.4cqmin, 42px);
+}
+
+.board.later {
+  opacity: 0.45;
 }
 
 .pot {
@@ -755,11 +761,16 @@ p {
 
 /* A column that centers its children, so a label wider than the seat spills evenly to both sides */
 .seat {
+  --seat-w: clamp(66px, 20cqmin, 128px);
+
   position: absolute;
+  top: var(--y);
+  /* A seat near the side of a narrow table would otherwise hang off the screen and lose part of its stack */
+  left: clamp(var(--seat-w) / 2 + 6px, var(--x), 100% - var(--seat-w) / 2 - 6px);
   display: flex;
   flex-direction: column;
   align-items: center;
-  width: clamp(66px, 20cqmin, 128px);
+  width: var(--seat-w);
   transform: translate(-50%, -50%);
 }
 
@@ -783,7 +794,7 @@ p {
 }
 
 .seat.me {
-  width: clamp(84px, 24cqmin, 150px);
+  --seat-w: clamp(84px, 24cqmin, 150px);
 }
 
 .seat.me .hole {
@@ -818,9 +829,20 @@ p {
 }
 
 .plate .stack {
+  overflow: hidden;
   color: var(--accent);
   font-weight: 700;
   font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plate .status.clock::after {
+  content: 's';
+}
+
+.plate .status.clock:empty {
+  display: none;
 }
 
 .plate .pending {
@@ -891,7 +913,7 @@ p {
 .dealer-button {
   position: absolute;
   top: calc(var(--card-w) * 0.55);
-  right: -0.9em;
+  right: -0.35em;
   z-index: 2;
   display: grid;
   place-items: center;
@@ -949,6 +971,15 @@ p {
   color: var(--accent);
 }
 
+/* Under a finger, the things tapped most get the height a fingertip needs */
+@media (pointer: coarse) {
+  .seat.open button.plate,
+  .chip-btn,
+  .toggle {
+    min-height: 40px;
+  }
+}
+
 .seat.open.idle .plate {
   opacity: 0.4;
 }
@@ -991,7 +1022,17 @@ p {
 
   display: grid;
   gap: 8px;
+  width: 100%;
+  max-width: 880px;
+  margin-inline: auto;
   padding: 10px 12px;
+}
+
+/* The taller size buttons a finger gets make a turn that much taller */
+@media (pointer: coarse) {
+  .controls {
+    --turn-height: 146px;
+  }
 }
 
 .turn {
@@ -1021,9 +1062,19 @@ p {
 }
 
 .turn .btn {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: center;
+  justify-content: center;
+  gap: 0 0.3em;
   min-height: 50px;
-  padding: 0 8px;
+  padding: 4px 8px;
   font-size: 16px;
+  line-height: 1.15;
+}
+
+.turn .btn .amount-of {
+  font-variant-numeric: tabular-nums;
 }
 
 .sizing {
@@ -1040,7 +1091,8 @@ p {
 
 .amount {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 96px;
+  /* Wide enough for the ten digits of the largest stack a table allows */
+  grid-template-columns: minmax(0, 1fr) 132px;
   align-items: center;
   gap: 10px;
 }
@@ -1142,7 +1194,8 @@ p {
 .feed {
   grid-area: feed;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  /* Without a width of its own the column would be as wide as the newest line, and push Send off a phone */
+  grid-template: auto minmax(0, 1fr) / minmax(0, 1fr);
   min-height: 0;
   border-top: 1px solid var(--line);
   background: var(--bg);
@@ -1179,13 +1232,34 @@ p {
 
 .feed-body {
   display: none;
-  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template: minmax(0, 1fr) auto / minmax(0, 1fr);
   min-height: 0;
 }
 
 .feed.open .feed-body {
   display: grid;
   height: 38cqb;
+}
+
+/*
+ * Stacked, as on a phone held upright, an open chat takes its room from the bar under the table
+ * before it takes the table's: the bar gives up the height it keeps for a turn, and its extras go on
+ * one line. With the chat closed the bar is as tall as ever, so the table doesn't jump between turns.
+ */
+@container app ((max-width: 899.98px) and (min-height: 521px)) or (max-width: 559.98px) {
+  .app:has(.feed.open) .controls {
+    --turn-height: 0px;
+  }
+
+  .app:has(.feed.open) .extras {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .app:has(.feed.open) .extras > * {
+    flex: none;
+  }
 }
 
 .entries {
@@ -1198,6 +1272,7 @@ p {
 
 .entries li {
   padding: 2px 0;
+  overflow: hidden;
   color: var(--muted);
   overflow-wrap: anywhere;
 }
@@ -1267,6 +1342,10 @@ p {
     place-items: center;
     padding: 16px;
   }
+}
+
+.dialog:focus {
+  outline: none;
 }
 
 .dialog {

@@ -446,8 +446,44 @@ test('one no, or no answer in time, means the board runs once', () => {
 
   assert.equal(ignored.state.hand!.stage, 'runout');
   assert.equal(ignored.state.hand!.runs, 1);
+  assert.ok(ignored.feedText().includes('Not everyone voted in time, so it runs once'));
   ignored.runToResult();
   assert.deepEqual(ignored.stacks(), [1000, 0]);
+});
+
+test('a player who gives up their seat during the run-it-twice vote does not hold it up', () => {
+  const allIn = (): TestTable => {
+    const t = new TestTable({ stacks: [500, 500, 500], config: { allowRunItTwice: true } });
+    t.deal({ button: 0, holes: { 0: ACES, 1: KINGS, 2: QUEENS }, board: BOARD, secondBoard: 'Kd 4c 5h 8s Td' });
+    t.raise(0, 500);
+    t.call(1);
+    t.call(2);
+    assert.equal(t.state.hand!.stage, 'ritVote');
+
+    return t;
+  };
+
+  const stoodUp = allIn();
+  stoodUp.cmd(0, { type: 'ritVote', agree: true });
+  stoodUp.cmd(2, { type: 'standUp' });
+  assert.equal(stoodUp.state.hand!.stage, 'runout', 'nobody is left waiting for a vote that will not come');
+  assert.equal(stoodUp.state.hand!.runs, 1);
+  assert.ok(stoodUp.feedText().includes('P2 left without voting, so it runs once'));
+
+  const removed = allIn();
+  removed.cmd(0, { type: 'kick', playerId: removed.ids[1]! });
+  assert.equal(removed.state.hand!.stage, 'runout');
+  assert.equal(removed.state.hand!.runs, 1);
+
+  const votedFirst = allIn();
+  votedFirst.cmd(2, { type: 'ritVote', agree: true });
+  votedFirst.cmd(2, { type: 'standUp' });
+  assert.equal(votedFirst.state.hand!.stage, 'ritVote', 'a vote already given still counts');
+  votedFirst.cmd(0, { type: 'ritVote', agree: true });
+  votedFirst.cmd(1, { type: 'ritVote', agree: true });
+  assert.equal(votedFirst.state.hand!.runs, 2);
+  votedFirst.finishHand();
+  assertChipsConserved(votedFirst.state);
 });
 
 test('seven-deuce bounty: winning without a showdown shows the hand and collects from everyone dealt in', () => {
@@ -494,6 +530,40 @@ test('seven-deuce bounty: paid for winning a showdown, capped by what a player h
     { seat: 1, amount: 50 },
     { seat: 2, amount: 30 },
   ]);
+});
+
+test('seven-deuce bounty: none is announced when everyone who owes it has no chips left', () => {
+  const t = new TestTable({ stacks: [1000, 500], config: { sevenDeuceBounty: 50 } });
+  t.deal({ button: 0, holes: { 0: '7h 2c', 1: KINGS }, board: '7s 7d 2h 9c 4d' });
+  t.raise(0, 500);
+  t.call(1);
+  t.runToResult();
+
+  assert.equal(t.state.hand!.result!.bounty, null);
+  assert.equal(t.feedText().some((line) => line.includes('bounty')), false);
+  assert.deepEqual(t.stacks(), [1500, 0]);
+});
+
+test('seven-deuce bounty: a hand is played for the bounty it was dealt under', () => {
+  const turnedOn = new TestTable({ stacks: [1000, 1000, 1000], config: { sevenDeuceBounty: 0 } });
+  turnedOn.deal({ button: 0, holes: { 0: '7h 2c' } });
+  turnedOn.cmd(0, { type: 'updateConfig', config: { sevenDeuceBounty: 100 } });
+  turnedOn.raise(0, 60);
+  turnedOn.fold(1);
+  turnedOn.fold(2);
+
+  assert.equal(turnedOn.state.hand!.result!.bounty, null, 'nobody agreed to a bounty when this hand was dealt');
+  assert.ok(turnedOn.feedText().includes('The seven-deuce bounty is 100 from the next hand'));
+
+  const turnedOff = new TestTable({ stacks: [1000, 1000, 1000], config: { sevenDeuceBounty: 50 } });
+  turnedOff.deal({ button: 0, holes: { 0: '7h 2c' } });
+  turnedOff.cmd(0, { type: 'updateConfig', config: { sevenDeuceBounty: 0 } });
+  turnedOff.raise(0, 60);
+  turnedOff.fold(1);
+  turnedOff.fold(2);
+
+  assert.deepEqual(turnedOff.stacks(), [1130, 940, 930]);
+  assert.ok(turnedOff.feedText().includes('The seven-deuce bounty is off from the next hand'));
 });
 
 test('seven-deuce bounty: nothing for a split pot or a losing hand', () => {

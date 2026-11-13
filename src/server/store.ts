@@ -1,4 +1,4 @@
-import { nextDeadline, STATE_SCHEMA } from '../engine/index.ts';
+import { nextDeadline, upgradeState } from '../engine/index.ts';
 import type { Effect, HandRecord, TableState } from '../engine/index.ts';
 
 /** Enough about a table to tell whether a waiting player has anything new to fetch. */
@@ -49,11 +49,5 @@ export function peekOf(state: TableState): TablePeek {
 
 /** Turns saved JSON back into a table, refusing a layout this code doesn't know how to read. */
 export function restoreState(json: string): TableState {
-  const state = JSON.parse(json) as TableState;
-
-  if (state.schema !== STATE_SCHEMA) {
-    throw new Error(`Table ${state.id} was saved with schema ${state.schema}, but this code reads schema ${STATE_SCHEMA}`);
-  }
-
-  return state;
+  return upgradeState(JSON.parse(json) as TableState);
 }

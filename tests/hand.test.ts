@@ -765,3 +765,135 @@ test('a player who busts is dealt out until they rebuy, and the game waits when 
   t.wait(TIMING.startDelayMs);
   assert.equal(t.state.hand!.number, 2);
 });
+
+test('chips asked for during a hand are bought when it ends, and only as far as the maximum then allows', () => {
+  const won = new TestTable({ stacks: [2000, 2000], config: { maxBuyIn: 2000 } });
+  won.deal({ button: 0, holes: { 0: ACES, 1: KINGS }, board: BOARD });
+  won.raise(0, 2000);
+  won.call(1);
+
+  won.cmd(0, { type: 'requestRebuy', amount: 2000 });
+  won.cmd(1, { type: 'requestRebuy', amount: 2000 });
+  won.cmd(0, { type: 'approve', playerId: won.ids[1]! });
+
+  assert.deepEqual([won.state.seats[0]!.pendingAdd, won.state.seats[1]!.pendingAdd], [2000, 2000]);
+  assert.deepEqual([won.state.members[0]!.buyIn, won.state.members[1]!.buyIn], [2000, 2000], 'nothing is bought until the chips arrive');
+  assertChipsConserved(won.state);
+
+  won.finishHand();
+
+  assert.deepEqual(won.stacks(), [4000, 2000], 'the winner is over the maximum and gets none; the loser gets all of theirs');
+  assert.deepEqual([won.state.members[0]!.buyIn, won.state.members[1]!.buyIn], [2000, 4000]);
+  assert.ok(won.feedText().includes('P0 is over the table maximum, so no chips are added'));
+  assertChipsConserved(won.state);
+
+  const part = new TestTable({ stacks: [1000, 1000], config: { maxBuyIn: 2000 } });
+  part.deal({ button: 0 });
+  part.cmd(1, { type: 'requestRebuy', amount: 1000 });
+  part.cmd(0, { type: 'approve', playerId: part.ids[1]! });
+  part.fold(0);
+  part.finishHand();
+
+  assert.deepEqual(part.stacks(), [990, 2000], 'winning the blind left room for 990 of the 1,000');
+  assert.equal(part.state.members[1]!.buyIn, 1990);
+  assert.ok(part.feedText().includes('P1 adds 990, which brings them to the table maximum'));
+  assertChipsConserved(part.state);
+});
+
+test('chips still waiting when a player gives up their seat are never bought', () => {
+  const t = new TestTable({ stacks: [1000, 1000] });
+  t.deal({ button: 0 });
+
+  t.cmd(1, { type: 'requestRebuy', amount: 500 });
+  t.cmd(0, { type: 'approve', playerId: t.ids[1]! });
+  t.cmd(1, { type: 'standUp' });
+  t.fold(0);
+  t.finishHand();
+
+  assert.equal(t.state.seats[1], null);
+  assert.deepEqual({ buyIn: t.state.members[1]!.buyIn, cashOut: t.state.members[1]!.cashOut }, { buyIn: 1000, cashOut: 1010 });
+  assertChipsConserved(t.state);
+});
+
+test('changing the action clock applies to the player already being waited for', () => {
+  const on = new TestTable({ stacks: [1000, 1000, 1000] });
+  on.deal({ button: 0 });
+  assert.equal(on.state.hand!.deadline, null);
+
+  on.cmd(0, { type: 'updateConfig', config: { actionSeconds: 30 } });
+  assert.equal(on.state.hand!.deadline, on.now + 30_000 + TIMING.actionGraceMs);
+
+  on.wait(30_000 + TIMING.actionGraceMs);
+  assert.equal(on.toAct, 1, 'the player who was being waited for has now timed out');
+
+  const off = new TestTable({ stacks: [1000, 1000, 1000], config: { actionSeconds: 30 } });
+  off.deal({ button: 0 });
+
+  off.cmd(0, { type: 'updateConfig', config: { actionSeconds: 0 } });
+  assert.equal(off.state.hand!.deadline, null);
+
+  off.wait(600_000);
+  assert.equal(off.toAct, 0, 'nobody is timed out once the clock is off');
+  assert.equal(off.state.seats[0]!.away, false);
+
+  const untouched = new TestTable({ stacks: [1000, 1000, 1000], config: { actionSeconds: 30 } });
+  untouched.deal({ button: 0 });
+  const deadline = untouched.state.hand!.deadline;
+  untouched.now += 10_000;
+  untouched.cmd(0, { type: 'updateConfig', config: { sevenDeuceBounty: 5 } });
+  assert.equal(untouched.state.hand!.deadline, deadline, 'another setting does not hand the player a fresh clock');
+});
+
+test('seven-deuce bounty: a tie on the second board is not winning outright, even when one chip cannot be split', () => {
+  const t = new TestTable({
+    stacks: [100, 100, 1],
+    config: { smallBlind: 1, bigBlind: 2, allowRunItTwice: true, sevenDeuceBounty: 50 },
+  });
+  t.deal({
+    button: 0,
+    holes: { 0: 'Ac Ad', 1: '7h 2c', 2: '9c 8c' },
+    board: '7d 7s 2h Kc 4d',
+    secondBoard: 'As Ks Qs Js Ts',
+  });
+
+  t.raise(0, 100);
+  t.call(1);
+
+  for (const seat of [0, 1, 2]) {
+    t.cmd(seat, { type: 'ritVote', agree: true });
+  }
+
+  t.runToResult();
+
+  // The three-chip main pot puts one chip on the second board, where everyone plays the board
+  assert.deepEqual(t.state.hand!.result!.pots[0]!.awards, [
+    { seat: 1, amount: 2, run: 0 },
+    { seat: 1, amount: 1, run: 1 },
+  ]);
+  assert.equal(t.state.hand!.result!.bounty, null);
+  assertChipsConserved(t.state);
+});
+
+test('a raising war cannot grow the hand\'s log without end', () => {
+  const t = new TestTable({ stacks: [1_000_000, 1_000_000] });
+  t.deal({ button: 0 });
+  const log = t.state.hand!.log;
+  const opening = log[0];
+
+  const raiseTimes = (from: number, count: number): void => {
+    for (let i = from; i < from + count; i++) {
+      t.raise(i % 2, 40 + 20 * i);
+    }
+  };
+
+  raiseTimes(0, 300);
+  const settled = log.length;
+  raiseTimes(300, 200);
+
+  assert.equal(log.length, settled, 'the log has stopped growing');
+  assert.ok(settled < 300);
+  assert.equal(log[0], opening, 'the start of the hand is kept');
+  assert.equal(log.filter((line) => line.startsWith('…')).length, 1, 'one line stands in for what was left out');
+  assert.equal(log.at(-1), `P1 raises to ${(40 + 20 * 499).toLocaleString('en-US')}`);
+  assertChipsConserved(t.state);
+});

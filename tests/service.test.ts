@@ -104,6 +104,10 @@ test('bad requests come back as errors, not exceptions', () => {
   assert.equal(failure(service.handle({ op: 'create', name: '' })).code, 'invalid');
   assert.equal(failure(service.handle({ op: 'info', tableId: 'NOPE22' })).code, 'not_found');
   assert.equal(failure(service.handle({ op: 'join', tableId: 'NOPE22', name: 'Ann' })).code, 'not_found');
+  assert.equal(failure(service.handle({ op: 'info', tableId: 'X'.repeat(300) })).code, 'not_found', 'an id no table could have never reaches storage');
+  assert.equal(failure(service.handle({ op: 'info', tableId: 'ab:c/4' })).code, 'not_found');
+  assert.equal(service.hasNews('X'.repeat(300), 0), true, 'and a poll for one is answered at once');
+  assert.equal(viewOf(service.handle({ op: 'poll', tableId: ` ${tableId.toLowerCase()} `, auth: host.auth, since: -1 })).id, tableId, 'a code typed loosely still finds its table');
   assert.equal(failure(service.handle({ op: 'poll', tableId, since: 0 })).code, 'invalid');
   assert.equal(failure(service.handle({ op: 'poll', tableId, auth: { id: host.auth.id }, since: 0 })).code, 'unauthorized');
   assert.equal(failure(service.handle({ op: 'act', tableId, auth: host.auth })).code, 'invalid');

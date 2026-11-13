@@ -5,7 +5,7 @@ import { evaluateHand } from './handRank.ts';
 import type { HandValue } from './handRank.ts';
 import { buildPots, splitAmount } from './pots.ts';
 import { formatChips } from './format.ts';
-import { addFeed, clockwiseAfter, clockwiseFrom, eligibleSeats, seatsClockwiseAfter, vacateSeat } from './seats.ts';
+import { addFeed, addPendingChips, clockwiseAfter, clockwiseFrom, eligibleSeats, seatsClockwiseAfter, vacateSeat } from './seats.ts';
 import { GameError } from './types.ts';
 import type { BountyResult, Ctx, Hand, HandPlayer, HandResult, PotAward, PotResult, ShownHand, Street, TableState } from './types.ts';
 
@@ -25,6 +25,11 @@ const BOARD_SIZE = 5;
 const FLOP_SIZE = 3;
 const STRADDLE_BIG_BLINDS = 2;
 
+// A hand's log is saved with the table on every action, so a raising war can't be allowed to grow it without end
+const LOG_LIMIT = 240;
+const LOG_HEAD = 40;
+const LOG_GAP = '… a long stretch of the action is left out …';
+
 const STREET_BY_BOARD_LENGTH: Record<number, Street> = { 3: 'flop', 4: 'turn', 5: 'river' };
 const STREET_TITLES: Record<Street, string> = { preflop: 'Preflop', flop: 'Flop', turn: 'Turn', river: 'River' };
 
@@ -32,7 +37,22 @@ export type BettingAction = { type: 'fold' } | { type: 'check' } | { type: 'call
 
 function narrate(state: TableState, ctx: Ctx, text: string): void {
   addFeed(state, ctx.now, 'dealer', null, text);
-  state.hand?.log.push(text);
+
+  const log = state.hand?.log;
+  if (!log) {
+    return;
+  }
+
+  log.push(text);
+
+  // Past the limit the start and the latest lines are kept, with one line standing in for the middle
+  if (log.length > LOG_LIMIT) {
+    if (log[LOG_HEAD] === LOG_GAP) {
+      log.splice(LOG_HEAD + 1, log.length - LOG_LIMIT);
+    } else {
+      log.splice(LOG_HEAD, log.length - LOG_LIMIT + 1, LOG_GAP);
+    }
+  }
 }
 
 function playerAt(hand: Hand, seat: number): HandPlayer | undefined {
@@ -163,6 +183,15 @@ function actionDeadline(state: TableState, now: number): number | null {
   const seconds = state.config.actionSeconds;
 
   return seconds > 0 ? now + seconds * 1000 + TIMING.actionGraceMs : null;
+}
+
+/** The clock setting changed: whoever is being waited for gets the new one, counted from now. */
+export function restartActionClock(state: TableState, now: number): void {
+  const hand = state.hand;
+
+  if (hand && hand.stage === 'betting' && hand.toAct !== null) {
+    hand.deadline = actionDeadline(state, now);
+  }
 }
 
 /** Moves the hand on from the seat that just acted: to the next player, the next street, or the end. */
@@ -530,6 +559,7 @@ function settleShowdown(state: TableState, ctx: Ctx): void {
 
   const potResults: PotResult[] = [];
   const winnings = new Map<number, number>();
+  const mainPotWinners = new Set<number>();
 
   pots.forEach((pot, potIndex) => {
     const awards: PotAward[] = [];
@@ -545,6 +575,12 @@ function settleShowdown(state: TableState, ctx: Ctx): void {
 
       const best = Math.max(...pot.eligible.map((seat) => values[run]!.get(seat)!.score));
       const winners = pot.eligible.filter((seat) => values[run]!.get(seat)!.score === best);
+
+      // Taken from the hands, not the payouts: in a tie over a single chip only one player is paid
+      if (potIndex === 0) {
+        winners.forEach((seat) => mainPotWinners.add(seat));
+      }
+
       const runLabel = hand.runs > 1 ? (run === 0 ? ' on the first board' : ' on the second board') : '';
 
       for (const [seat, share] of splitAmount(amount, seatsClockwiseAfter(winners, hand.button))) {
@@ -579,7 +615,6 @@ function settleShowdown(state: TableState, ctx: Ctx): void {
   });
 
   // The bounty is for winning the hand outright: the whole main pot, on every board
-  const mainPotWinners = new Set(potResults[0]!.awards.map((award) => award.seat));
   const soleWinner = mainPotWinners.size === 1 ? [...mainPotWinners][0]! : null;
   const bounty = soleWinner === null ? null : payBounty(state, ctx, soleWinner);
 
@@ -725,11 +760,10 @@ function clearHand(state: TableState, ctx: Ctx): void {
       return;
     }
 
-    seat.stack += seat.pendingAdd;
-    seat.pendingAdd = 0;
-
     if (seat.leaving) {
       vacateSeat(state, ctx, index);
+    } else {
+      addPendingChips(state, ctx, index);
     }
   });
 }

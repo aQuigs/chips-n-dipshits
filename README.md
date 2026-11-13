@@ -24,8 +24,9 @@ The choices the code makes where poker rooms differ:
 - When the betting is over with players all in and cards to come, hands are turned face up. Run it twice needs every player still in to agree within 12 seconds.
 - A straddle is twice the big blind from the player left of the big blind, who then acts last before the flop. There is none heads-up.
 - The seven-deuce bounty is paid by every other player dealt into the hand, up to their stack, when someone holding 7-2 wins the whole main pot or wins without a showdown. The hand is shown either way.
-- A player who runs out of time checks if they can and folds if not, and sits out until they come back.
-- Standing up or being removed during a hand folds it. Chips added during a hand arrive when it ends.
+- A player who runs out of time checks if they can and folds if not, and sits out until they come back. A change to the clock applies to whoever is being waited for, counted from the change.
+- A player who stands up or is removed during a hand checks while checking is free and folds to any bet, the same as one who has timed out. Their seat is cashed out when the hand ends.
+- Chips added during a hand arrive when it ends, and only as far as the table maximum then allows, so winning the hand can make a rebuy smaller or cancel it.
 
 ## Set it up
 
@@ -67,6 +68,7 @@ Things worth knowing before changing it:
 
 - Nothing runs in the background. Time-based events (the action clock, the pause after a hand) happen when the next request arrives and finds a deadline has passed, so a table nobody is looking at simply waits.
 - A player's page keeps one request open with the server, which answers the moment something changes. Apps Script allows 30 requests at once per deploying account, which is plenty for one full table and tight for three.
+- A table's ledger entries and finished hands are written into its row in the same write as the table itself, then copied to the Ledger and Hands tabs. If the copy fails they wait in the row and go out with the table's next save, so the game never stops over it and no record is lost.
 - A saved table carries a schema number (`STATE_SCHEMA`). Change the shape of the saved state and tables from before the change stop loading unless the code migrates them.
 - A theme is a set of values for the design tokens at the top of `src/client/styles.css`, plus an entry in `src/client/themes.ts`.
 - Another game is a new engine module behind the same commands and views; another database is a new `TableStore`; another host for the page is a new `Transport` and `Links`.

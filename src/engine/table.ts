@@ -1,5 +1,5 @@
 import type { Rng } from './cards.ts';
-import { act, foldIfOnTheClock, showCards, startHand, stepHand, TIMING, voteRunItTwice } from './hand.ts';
+import { act, foldIfOnTheClock, restartActionClock, showCards, startHand, stepHand, TIMING, voteRunItTwice } from './hand.ts';
 import { formatChips } from './format.ts';
 import { addFeed, eligibleSeats, memberOf, recordLedger, seatIndexOf, vacateSeat } from './seats.ts';
 import { GameError, SEAT_COUNT, STATE_SCHEMA } from './types.ts';
@@ -225,13 +225,14 @@ function grantRebuy(state: TableState, ctx: Ctx, request: SeatRequest): void {
 
   const member = memberOf(state, request.playerId);
 
-  // Chips can't join a hand that is already being played
+  // Chips can't join a hand that is already being played, so they wait for its end and are bought then
   if (isDealtIn(state, index)) {
     seat.pendingAdd += request.amount;
-  } else {
-    seat.stack += request.amount;
+    addFeed(state, ctx.now, 'system', null, `${member.name} adds ${formatChips(request.amount)} after this hand`);
+    return;
   }
 
+  seat.stack += request.amount;
   recordLedger(state, ctx, member, 'buy-in', request.amount);
   addFeed(state, ctx.now, 'system', null, `${member.name} adds ${formatChips(request.amount)}`);
 }
@@ -455,6 +456,10 @@ function applyTo(state: TableState, ctx: Ctx, playerId: string, command: Command
             seat.straddle = false;
           }
         }
+      }
+
+      if (state.config.actionSeconds !== before.actionSeconds) {
+        restartActionClock(state, ctx.now);
       }
 
       return;

@@ -161,10 +161,10 @@ export class TestTable {
   }
 }
 
-/** Every chip ever bought is in a stack, in the pot, or cashed out. */
+/** Every chip ever bought is in a stack, in the pot, or cashed out. Chips waiting to be added are not bought yet. */
 export function assertChipsConserved(state: TableState): void {
   const hand = state.hand;
-  const inStacks = state.seats.reduce((sum, seat) => sum + (seat ? seat.stack + seat.pendingAdd : 0), 0);
+  const inStacks = state.seats.reduce((sum, seat) => sum + (seat ? seat.stack : 0), 0);
   const inPot = hand && hand.stage !== 'done' ? hand.players.reduce((sum, p) => sum + p.committed, 0) : 0;
   const bought = state.members.reduce((sum, m) => sum + m.buyIn - m.cashOut, 0);
 

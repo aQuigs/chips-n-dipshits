@@ -15,6 +15,9 @@ export interface ServiceDeps {
 }
 
 const TABLE_ID_LENGTH = 6;
+
+// Checked before an id goes anywhere near storage, which has limits on what a key may be
+const TABLE_ID_PATTERN = new RegExp(`^[A-Z0-9]{${TABLE_ID_LENGTH}}$`);
 const CREATE_ATTEMPTS = 5;
 const HISTORY_LIMIT = 30;
 
@@ -39,12 +42,24 @@ function fieldsOf(value: unknown): Fields {
   return value as Fields;
 }
 
+/** The id as tables are stored under, or null when no table could have one like it. */
+function wellFormedTableId(typed: string): string | null {
+  const id = typed.trim().toUpperCase();
+
+  return TABLE_ID_PATTERN.test(id) ? id : null;
+}
+
 function tableIdOf(request: Fields): string {
   if (typeof request.tableId !== 'string' || request.tableId.length === 0) {
     throw new ApiFailure('invalid', 'The request names no table');
   }
 
-  return request.tableId.trim().toUpperCase();
+  const id = wellFormedTableId(request.tableId);
+  if (id === null) {
+    throw noSuchTable();
+  }
+
+  return id;
 }
 
 function authOf(request: Fields): Auth {
@@ -107,7 +122,8 @@ export class PokerService {
 
   /** Whether a poll that already has version `since` of a table would get anything back. */
   hasNews(tableId: string, since: number): boolean {
-    const peek = this.store.peek(tableId.trim().toUpperCase());
+    const id = wellFormedTableId(tableId);
+    const peek = id === null ? null : this.store.peek(id);
 
     return !peek || peek.version !== since || (peek.wakeAt !== null && peek.wakeAt <= this.clock.now());
   }

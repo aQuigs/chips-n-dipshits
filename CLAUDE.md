@@ -23,4 +23,6 @@ Multiplayer no-limit hold'em whose backend is a Google Sheet with an Apps Script
 ## Google side
 
 - `src/gas/sheetStore.ts` talks to the Sheet through small interfaces, with fakes in `tests/fakes.ts`. Every write and every cache refill happens under the script lock, which is what keeps the cache from ever being older than the Sheet.
+- The fakes enforce the limits that bite (50,000 characters a cell, 100 KB a cache value, 250 characters a cache key); give them any new limit the store comes to depend on.
+- Ledger entries and hand records are saved in the table's row with the state, then copied to their tabs. Only the write of that row may fail a request.
 - `.clasp.json` and `.deployment.json` are per machine and ignored by git.

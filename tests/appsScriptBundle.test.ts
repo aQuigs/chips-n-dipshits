@@ -161,4 +161,10 @@ test('the same API answers over HTTP for a page hosted elsewhere, and bad input 
     const answer = JSON.parse(script.api(body)) as ApiResponse;
     assert.equal(answer.ok, false, body);
   }
+
+  // Longer than a cache key may be: it has to be turned away before the cache is asked
+  const endless = JSON.stringify({ op: 'poll', tableId: 'X'.repeat(300), auth: { id: 'a', token: 'b' }, since: 0, holdMs: 5000 });
+  const asked = Date.now();
+  assert.deepEqual(JSON.parse(script.api(endless)).code, 'not_found');
+  assert.ok(Date.now() - asked < 1000, 'and without being held open');
 });

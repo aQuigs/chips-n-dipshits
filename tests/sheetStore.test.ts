@@ -164,11 +164,24 @@ test('a table too long for one cell is spread over several, whatever each piece 
   save(store, state);
 
   const row = spreadsheet.getSheetByName('Tables')!.cells[1]!;
-  assert.deepEqual(row.slice(3).map((cell) => String(cell).length > 0), [true, true, true, false, false, false]);
-  assert.ok(row.slice(3).every((cell) => String(cell).length <= 50_000));
+  assert.deepEqual(row.slice(3, 9).map((cell) => String(cell).length > 0), [true, true, true, false, false, false]);
 
   cache.entries.clear();
   assert.deepEqual(anotherRun().read('ABC234'), state);
+});
+
+test('an emoji that falls where one cell ends and the next begins is kept whole', () => {
+  // The two texts differ by one character, so one of them puts the cut in the middle of an emoji
+  for (const lead of ['a', 'ab']) {
+    const { store, cache, anotherRun } = setup();
+    const state = table('ABC234');
+    state.feed.push({ seq: 1, at: 1, kind: 'chat', from: 'Host', text: lead + '🃏'.repeat(30_000) });
+
+    save(store, state);
+
+    cache.entries.clear();
+    assert.deepEqual(anotherRun().read('ABC234'), state);
+  }
 });
 
 test('a table shrinking again leaves no stale pieces behind', () => {
@@ -284,6 +297,69 @@ test('ledger entries and finished hands are appended to their own tabs', () => {
 
   const hands = spreadsheet.getSheetByName('Hands')!.cells;
   assert.deepEqual(hands[1]!.slice(1, 4), ['ABC234', 1, 'Hand #1']);
+});
+
+test('a record that cannot be copied to its tab waits in the table\'s row and goes out with the next save', () => {
+  const { store, spreadsheet, cache, anotherRun } = setup();
+  const buyIn = (amount: number): Effect => ({
+    type: 'ledger',
+    entry: { at: 1_700_000_000_000, tableId: 'ABC234', playerId: 'P1', name: 'Ann', kind: 'buy-in', amount },
+  });
+
+  save(store, table('ABC234', 1), [buyIn(100)]);
+
+  const tables = spreadsheet.getSheetByName('Tables')!;
+  const ledger = spreadsheet.getSheetByName('Ledger')!;
+  const waiting = () => tables.cells[1]!.slice(9, 12).join('');
+  const ledgerAmounts = () => ledger.cells.slice(1).map((row) => row[4]);
+  assert.equal(waiting(), '', 'nothing is left in the row once it is copied');
+
+  ledger.refusesWrites = true;
+  save(store, table('ABC234', 2), [buyIn(200), { type: 'hand', record: handRecord('ABC234', 1) }]);
+
+  assert.equal(store.read('ABC234')!.version, 2, 'the game goes on: the table itself was saved');
+  assert.deepEqual(ledgerAmounts(), [100]);
+  assert.match(waiting(), /"amount":200/, 'the buy-in is still in the row');
+  assert.doesNotMatch(waiting(), /"type":"hand"/, 'the hand was copied, so it is not');
+  assert.deepEqual(store.recentHands('ABC234', 5).map((hand) => hand.number), [1]);
+
+  // Still failing on the next save: both buy-ins wait together
+  cache.entries.clear();
+  save(anotherRun(), table('ABC234', 3), [buyIn(300)]);
+  assert.deepEqual(ledgerAmounts(), [100]);
+
+  ledger.refusesWrites = false;
+  save(anotherRun(), table('ABC234', 4));
+
+  assert.deepEqual(ledgerAmounts(), [100, 200, 300]);
+  assert.equal(waiting(), '');
+  assert.deepEqual(store.recentHands('ABC234', 5).map((hand) => hand.number), [1], 'and nothing was copied twice');
+});
+
+test('a hand with more to say than a cell holds is saved all the same, keeping the end', () => {
+  const { store } = setup();
+  const record = { ...handRecord('ABC234', 7), summary: `${'x'.repeat(80_000)}\nP1 wins 40` };
+
+  save(store, table('ABC234'), [{ type: 'hand', record }]);
+
+  const [saved] = store.recentHands('ABC234', 1);
+  assert.equal(saved!.number, 7);
+  assert.ok(saved!.summary.startsWith('…'));
+  assert.ok(saved!.summary.endsWith('P1 wins 40'));
+});
+
+test('history reaches back past other tables\' hands', () => {
+  const { store } = setup();
+  const mine: Effect[] = [1, 2].map((number) => ({ type: 'hand', record: handRecord('ABC234', number) }));
+  const theirs: Effect[] = Array.from({ length: 700 }, (_hand, index) => ({ type: 'hand', record: handRecord('XYZ789', index + 1) }));
+
+  save(store, table('ABC234'), mine);
+  save(store, table('XYZ789'), theirs.slice(0, 350));
+  save(store, table('ABC234', 2), [{ type: 'hand', record: handRecord('ABC234', 3) }]);
+  save(store, table('XYZ789', 2), theirs.slice(350));
+
+  assert.deepEqual(store.recentHands('ABC234', 30).map((hand) => hand.number), [1, 2, 3]);
+  assert.deepEqual(store.recentHands('ABC234', 2).map((hand) => hand.number), [2, 3]);
 });
 
 test('recent hands come back oldest first, for one table only, up to the limit', () => {

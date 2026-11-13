@@ -1,17 +1,23 @@
 import type { CacheLike, LockLike, RangeLike, SheetLike, SpreadsheetLike } from '../src/gas/sheetStore.ts';
 
 const TEXT_FORMAT = '@';
+const CELL_LIMIT_CHARACTERS = 50_000;
+const HALF_AN_EMOJI = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
 const CACHE_VALUE_LIMIT_BYTES = 100_000;
+const CACHE_KEY_LIMIT_CHARACTERS = 250;
 
 /**
  * A stand-in for a sheet that copies the behavior a store can get wrong: a string written to a cell
  * that isn't formatted as text is reinterpreted, as a formula if it starts with = or +, or as a number
- * if it looks like one.
+ * if it looks like one. A cell takes 50,000 characters and no more, and half an emoji does not survive
+ * being stored.
  */
 export class FakeSheet implements SheetLike {
   cells: unknown[][] = [];
   formats: string[][] = [];
   reads = 0;
+  /** Set to make every write fail, the way the service now and then does. */
+  refusesWrites = false;
 
   getLastRow(): number {
     for (let row = this.cells.length - 1; row >= 0; row--) {
@@ -50,6 +56,14 @@ export class FakeSheet implements SheetLike {
       },
 
       setValues: (values: unknown[][]): void => {
+        if (this.refusesWrites) {
+          throw new Error('Service Spreadsheets failed while accessing the document');
+        }
+
+        if (values.flat().some((value) => typeof value === 'string' && value.length > CELL_LIMIT_CHARACTERS)) {
+          throw new Error('Your input contains more than the maximum of 50000 characters in a single cell.');
+        }
+
         each(values, (r, c, i, j) => {
           (this.cells[r] ??= [])[c] = this.interpret(values[i]![j], this.formats[r]?.[c]);
         });
@@ -69,8 +83,12 @@ export class FakeSheet implements SheetLike {
   }
 
   private interpret(value: unknown, format: string | undefined): unknown {
-    if (typeof value !== 'string' || format === TEXT_FORMAT) {
+    if (typeof value !== 'string') {
       return value;
+    }
+
+    if (format === TEXT_FORMAT) {
+      return value.replace(HALF_AN_EMOJI, '\uFFFD');
     }
 
     if (/^[=+]/.test(value)) {
@@ -102,6 +120,10 @@ export class FakeCache implements CacheLike {
   failNextWrite = false;
 
   get(key: string): string | null {
+    if (key.length > CACHE_KEY_LIMIT_CHARACTERS) {
+      throw new Error('Argument too large: key');
+    }
+
     return this.entries.get(key) ?? null;
   }
 

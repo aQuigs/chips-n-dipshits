@@ -44,8 +44,28 @@ type SheetKey = 'tables' | 'ledger' | 'hands';
 
 const SHEET_NAMES: Record<SheetKey, string> = { tables: 'Tables', ledger: 'Ledger', hands: 'Hands' };
 
+// A cell holds at most 50,000 characters, so long text is spread over several
+const CHUNK_LENGTH = 40_000;
+
+// Keeps a chunk that happens to start with = or + from being read as a formula
+const CHUNK_PREFIX = '~';
+
+// A table's row: its id, when it was saved, its version, its state, and the records still to be copied out
+const STATE_CHUNKS = 6;
+const UNSAVED_CHUNKS = 3;
+const STATE_COLUMN = 4;
+const UNSAVED_COLUMN = STATE_COLUMN + STATE_CHUNKS;
+const TABLE_COLUMNS = UNSAVED_COLUMN - 1 + UNSAVED_CHUNKS;
+
 const HEADERS: Record<SheetKey, string[]> = {
-  tables: ['Table', 'Updated', 'Version', 'State (the game reads and writes these cells, so leave them alone)'],
+  tables: [
+    'Table',
+    'Updated',
+    'Version',
+    'State (the game reads and writes these cells, so leave them alone)',
+    ...Array.from({ length: STATE_CHUNKS - 1 }, () => ''),
+    'Records on their way to the Ledger and Hands tabs (normally empty)',
+  ],
   ledger: ['Time', 'Table', 'Player', 'Type', 'Chips', 'Player ID'],
   hands: ['Time', 'Table', 'Hand', 'Summary', 'Record'],
 };
@@ -53,17 +73,16 @@ const HEADERS: Record<SheetKey, string[]> = {
 const TEXT = '@';
 const TIMESTAMP = 'yyyy-mm-dd hh:mm:ss';
 const WHOLE_NUMBER = '0';
-const LEDGER_FORMATS = [TIMESTAMP, TEXT, TEXT, TEXT, WHOLE_NUMBER, TEXT];
-const HAND_FORMATS = [TIMESTAMP, TEXT, WHOLE_NUMBER, TEXT, TEXT];
 
-// A cell holds at most 50,000 characters, so a table's JSON is spread over several
-const CHUNK_LENGTH = 40_000;
-const STATE_CHUNKS = 6;
-const STATE_COLUMN = 4;
-const TABLE_COLUMNS = STATE_COLUMN - 1 + STATE_CHUNKS;
+/** Where each kind of record ends up. */
+const RECORD_SHEETS: { type: Effect['type']; sheet: SheetKey; formats: string[] }[] = [
+  { type: 'ledger', sheet: 'ledger', formats: [TIMESTAMP, TEXT, TEXT, TEXT, WHOLE_NUMBER, TEXT] },
+  { type: 'hand', sheet: 'hands', formats: [TIMESTAMP, TEXT, WHOLE_NUMBER, TEXT, TEXT] },
+];
 
-// Keeps a chunk that happens to start with = or + from being read as a formula
-const CHUNK_PREFIX = '~';
+// The engine keeps a hand's log shorter than this. Should a longer one ever arrive, its end is kept
+// rather than the hand being refused: the record must fit a cell, and it holds the summary.
+const SUMMARY_LENGTH = 30_000;
 
 // The longest the cache keeps anything
 const CACHE_SECONDS = 21_600;
@@ -76,8 +95,11 @@ const MISSING_SECONDS = 30;
 const MISSING = 'none';
 
 const LOCK_WAIT_MS = 20_000;
-const HAND_SCAN_ROWS = 300;
 const FIRST_DATA_ROW = 2;
+
+// History is read from the bottom of the Hands tab, a page at a time, and gives up this far back
+const HAND_SCAN_ROWS = 300;
+const HAND_SCAN_PAGES = 10;
 
 const stateKey = (tableId: string) => `state:${tableId}`;
 const peekKey = (tableId: string) => `peek:${tableId}`;
@@ -90,13 +112,77 @@ function utf8Bytes(text: string): number {
   return text.length + 2 * nonAscii;
 }
 
-function stateFromRow(values: unknown[]): TableState {
-  const json = values
-    .slice(STATE_COLUMN - 1)
-    .map((cell) => String(cell).slice(CHUNK_PREFIX.length))
-    .join('');
+/** Spreads text over a fixed number of cells; null when it is more than they hold. */
+function toCells(text: string, count: number): string[] | null {
+  const cells: string[] = [];
 
-  return restoreState(json);
+  for (let start = 0; start < text.length; ) {
+    let end = Math.min(start + CHUNK_LENGTH, text.length);
+
+    // The two halves of an emoji are only a character together, so they go in the same cell
+    const last = text.charCodeAt(end - 1);
+    if (end < text.length && last >= 0xd800 && last <= 0xdbff) {
+      end -= 1;
+    }
+
+    cells.push(CHUNK_PREFIX + text.slice(start, end));
+    start = end;
+  }
+
+  if (cells.length > count) {
+    return null;
+  }
+
+  while (cells.length < count) {
+    cells.push('');
+  }
+
+  return cells;
+}
+
+function fromCells(cells: unknown[]): string {
+  return cells.map((cell) => String(cell).slice(CHUNK_PREFIX.length)).join('');
+}
+
+/** The cells that hold records in a table's row until they are copied out. If they can't all fit, the oldest give way. */
+function unsavedCells(records: Effect[]): string[] {
+  for (let kept = records; ; kept = kept.slice(1)) {
+    const cells = toCells(kept.length > 0 ? JSON.stringify(kept) : '', UNSAVED_CHUNKS);
+
+    if (cells) {
+      return cells;
+    }
+
+    console.error('No room left to hold a record until it can be copied out', kept[0]);
+  }
+}
+
+interface TableRow {
+  state: TableState;
+  /** Records saved with the table that have not reached the Ledger and Hands tabs. */
+  unsaved: Effect[];
+}
+
+function parseRow(values: unknown[]): TableRow {
+  const unsaved = fromCells(values.slice(UNSAVED_COLUMN - 1, UNSAVED_COLUMN - 1 + UNSAVED_CHUNKS));
+
+  return {
+    state: restoreState(fromCells(values.slice(STATE_COLUMN - 1, STATE_COLUMN - 1 + STATE_CHUNKS))),
+    unsaved: unsaved ? (JSON.parse(unsaved) as Effect[]) : [],
+  };
+}
+
+function recordRow(record: Effect): unknown[] {
+  if (record.type === 'ledger') {
+    const { at, tableId, name, kind, amount, playerId } = record.entry;
+
+    return [new Date(at), tableId, name, kind, amount, playerId];
+  }
+
+  const hand = record.record;
+  const fitted = hand.summary.length <= SUMMARY_LENGTH ? hand : { ...hand, summary: `…${hand.summary.slice(-SUMMARY_LENGTH)}` };
+
+  return [new Date(hand.at), hand.tableId, hand.number, fitted.summary, JSON.stringify(fitted)];
 }
 
 /**
@@ -118,7 +204,7 @@ export class SheetStore implements TableStore {
       const txn = fn(found ? found.state : null);
 
       if (txn.save) {
-        this.persist(txn.save, found ? found.row : null, txn.effects);
+        this.persist(txn.save, found ? found.row : null, [...(found ? found.unsaved : []), ...txn.effects]);
       }
 
       return txn.result;
@@ -155,18 +241,20 @@ export class SheetStore implements TableStore {
 
   recentHands(tableId: string, limit: number): HandRecord[] {
     const sheet = this.sheet('hands');
-    const lastRow = sheet.getLastRow();
-    if (lastRow < FIRST_DATA_ROW) {
-      return [];
+    const found: HandRecord[] = [];
+    let lastRow = sheet.getLastRow();
+
+    // Other tables' hands are in between, so keep paging up until there are enough of this one's
+    for (let page = 0; page < HAND_SCAN_PAGES && lastRow >= FIRST_DATA_ROW && found.length < limit; page++) {
+      const firstRow = Math.max(FIRST_DATA_ROW, lastRow - HAND_SCAN_ROWS + 1);
+      const rows = sheet.getRange(firstRow, 1, lastRow - firstRow + 1, HEADERS.hands.length).getValues();
+      const mine = rows.filter((row) => String(row[1]) === tableId).map((row) => JSON.parse(String(row[4])) as HandRecord);
+
+      found.unshift(...mine);
+      lastRow = firstRow - 1;
     }
 
-    const firstRow = Math.max(FIRST_DATA_ROW, lastRow - HAND_SCAN_ROWS + 1);
-    const rows = sheet.getRange(firstRow, 1, lastRow - firstRow + 1, HEADERS.hands.length).getValues();
-
-    return rows
-      .filter((row) => String(row[1]) === tableId)
-      .slice(-limit)
-      .map((row) => JSON.parse(String(row[4])) as HandRecord);
+    return found.slice(-limit);
   }
 
   private locked<T>(work: () => T): T {
@@ -218,7 +306,7 @@ export class SheetStore implements TableStore {
     return sheet;
   }
 
-  private locate(tableId: string): { row: number; state: TableState } | null {
+  private locate(tableId: string): ({ row: number } & TableRow) | null {
     const sheet = this.sheet('tables');
     const rowAt = (row: number) => sheet.getRange(row, 1, 1, TABLE_COLUMNS).getValues()[0]!;
 
@@ -228,7 +316,7 @@ export class SheetStore implements TableStore {
       const values = rowAt(hint);
 
       if (String(values[0]) === tableId) {
-        return { row: hint, state: stateFromRow(values) };
+        return { row: hint, ...parseRow(values) };
       }
     }
 
@@ -245,20 +333,24 @@ export class SheetStore implements TableStore {
 
     const row = index + FIRST_DATA_ROW;
 
-    return { row, state: stateFromRow(rowAt(row)) };
+    return { row, ...parseRow(rowAt(row)) };
   }
 
-  private persist(state: TableState, knownRow: number | null, effects: Effect[]): void {
+  private persist(state: TableState, knownRow: number | null, records: Effect[]): void {
     let row: number;
 
     try {
-      row = this.writeTable(state, knownRow);
-      this.appendEffects(effects);
+      // One write holds the table and the records of what just happened to it, so neither is saved without the other
+      row = this.writeTable(state, knownRow, records);
       this.deps.flush();
     } catch (error) {
       // Whatever did or didn't reach the sheet, the cache must not keep serving the old table
       this.forget(state.id);
       throw error;
+    }
+
+    if (records.length > 0) {
+      this.copyOut(row, records);
     }
 
     // The save itself succeeded, so a cache that can't be refreshed is only emptied, not treated as a failure
@@ -269,21 +361,13 @@ export class SheetStore implements TableStore {
     }
   }
 
-  private writeTable(state: TableState, knownRow: number | null): number {
+  private writeTable(state: TableState, knownRow: number | null, records: Effect[]): number {
     const sheet = this.sheet('tables');
     const json = JSON.stringify(state);
+    const stateCells = toCells(json, STATE_CHUNKS);
 
-    const chunks: string[] = [];
-    for (let start = 0; start < json.length; start += CHUNK_LENGTH) {
-      chunks.push(CHUNK_PREFIX + json.slice(start, start + CHUNK_LENGTH));
-    }
-
-    if (chunks.length > STATE_CHUNKS) {
+    if (!stateCells) {
       throw new Error(`Table ${state.id} has grown to ${json.length} characters, more than its row can hold`);
-    }
-
-    while (chunks.length < STATE_CHUNKS) {
-      chunks.push('');
     }
 
     const row = knownRow ?? Math.max(sheet.getLastRow(), 1) + 1;
@@ -294,34 +378,48 @@ export class SheetStore implements TableStore {
       range.setNumberFormats([Array.from({ length: TABLE_COLUMNS }, () => TEXT)]);
     }
 
-    range.setValues([[state.id, new Date().toISOString(), String(state.version), ...chunks]]);
+    range.setValues([[state.id, new Date().toISOString(), String(state.version), ...stateCells, ...unsavedCells(records)]]);
 
     return row;
   }
 
-  private appendEffects(effects: Effect[]): void {
-    const ledger: unknown[][] = [];
-    const hands: unknown[][] = [];
+  /**
+   * Copies the records saved in a table's row to the Ledger and Hands tabs, then takes them off the
+   * row. Whatever can't be written stays there and goes out with the table's next save, so a failing
+   * write costs no record and never holds up the game.
+   */
+  private copyOut(row: number, records: Effect[]): void {
+    const waiting: Effect[] = [];
 
-    for (const effect of effects) {
-      if (effect.type === 'ledger') {
-        const { at, tableId, name, kind, amount, playerId } = effect.entry;
-        ledger.push([new Date(at), tableId, name, kind, amount, playerId]);
-      } else {
-        const { at, tableId, number, summary } = effect.record;
-        hands.push([new Date(at), tableId, number, summary, JSON.stringify(effect.record)]);
+    for (const { type, sheet, formats } of RECORD_SHEETS) {
+      const mine = records.filter((record) => record.type === type);
+      if (mine.length === 0) {
+        continue;
+      }
+
+      try {
+        this.appendRows(sheet, mine.map(recordRow), formats);
+        this.deps.flush();
+      } catch (error) {
+        console.error(error);
+        waiting.push(...mine);
       }
     }
 
-    this.appendRows('ledger', ledger, LEDGER_FORMATS);
-    this.appendRows('hands', hands, HAND_FORMATS);
-  }
-
-  private appendRows(key: SheetKey, rows: unknown[][], formats: string[]): void {
-    if (rows.length === 0) {
+    if (waiting.length === records.length) {
       return;
     }
 
+    try {
+      this.sheet('tables').getRange(row, UNSAVED_COLUMN, 1, UNSAVED_CHUNKS).setValues([unsavedCells(waiting)]);
+      this.deps.flush();
+    } catch (error) {
+      // They were copied, so the worst that can follow is that the next save copies them again
+      console.error(error);
+    }
+  }
+
+  private appendRows(key: SheetKey, rows: unknown[][], formats: string[]): void {
     const sheet = this.sheet(key);
     const range = sheet.getRange(Math.max(sheet.getLastRow(), 1) + 1, 1, rows.length, formats.length);
 

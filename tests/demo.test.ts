@@ -14,7 +14,7 @@ async function viewOf(demo: DemoTable): Promise<TableView> {
 }
 
 function chipsInPlay(view: TableView): number {
-  const stacks = view.seats.reduce((sum, seat) => sum + (seat ? seat.stack + seat.pendingAdd : 0), 0);
+  const stacks = view.seats.reduce((sum, seat) => sum + (seat ? seat.stack : 0), 0);
 
   return stacks + (view.hand && view.hand.stage !== 'done' ? view.hand.pot : 0);
 }

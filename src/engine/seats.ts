@@ -73,7 +73,35 @@ export function recordLedger(state: TableState, ctx: Ctx, member: Member, kind: 
   });
 }
 
-/** Empties a seat and cashes its chips out. */
+/**
+ * Chips asked for during a hand reach the stack when it ends, and only then are they bought: by then
+ * the hand may have left the player too rich for all of them, or any of them, to fit under the maximum.
+ */
+export function addPendingChips(state: TableState, ctx: Ctx, seatIndex: number): void {
+  const seat = state.seats[seatIndex]!;
+  const asked = seat.pendingAdd;
+  if (asked === 0) {
+    return;
+  }
+
+  const member = memberOf(state, seat.playerId);
+  const added = Math.min(asked, Math.max(0, state.config.maxBuyIn - seat.stack));
+
+  seat.pendingAdd = 0;
+
+  if (added > 0) {
+    seat.stack += added;
+    recordLedger(state, ctx, member, 'buy-in', added);
+  }
+
+  if (added === 0) {
+    addFeed(state, ctx.now, 'system', null, `${member.name} is over the table maximum, so no chips are added`);
+  } else if (added < asked) {
+    addFeed(state, ctx.now, 'system', null, `${member.name} adds ${formatChips(added)}, which brings them to the table maximum`);
+  }
+}
+
+/** Empties a seat and cashes its chips out. Chips still waiting to be added were never bought. */
 export function vacateSeat(state: TableState, ctx: Ctx, seatIndex: number): void {
   const seat = state.seats[seatIndex];
   if (!seat) {
@@ -81,7 +109,7 @@ export function vacateSeat(state: TableState, ctx: Ctx, seatIndex: number): void
   }
 
   const member = memberOf(state, seat.playerId);
-  const chips = seat.stack + seat.pendingAdd;
+  const chips = seat.stack;
 
   state.seats[seatIndex] = null;
   state.requests = state.requests.filter((request) => request.playerId !== seat.playerId);

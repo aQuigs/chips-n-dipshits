@@ -192,7 +192,7 @@ export function ledgerOf(state: TableState): LedgerRow[] {
   for (const member of state.members) {
     const seat = state.seats.find((s) => s?.playerId === member.id);
     const inPot = unsettled.find((p) => p.playerId === member.id)?.committed ?? 0;
-    const stack = seat ? seat.stack + seat.pendingAdd + inPot : 0;
+    const stack = seat ? seat.stack + inPot : 0;
 
     if (member.buyIn === 0 && member.cashOut === 0 && stack === 0) {
       continue;

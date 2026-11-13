@@ -110,6 +110,12 @@ export class App {
   private turnLock: TurnLock = 'open';
   private trouble: Trouble | null = null;
 
+  /**
+   * A member the address names whom this browser hasn't taken up as its own. The address may be the
+   * only place that seat is kept, so until it is confirmed, declined or refused, nothing else is put there.
+   */
+  private linked: Session | null = null;
+
   /** Bumped to retire the running poll loop when the table changes or is left. */
   private pollRun = 0;
   private toastTimer = 0;
@@ -197,7 +203,7 @@ export class App {
     this.leaveTableScreen();
 
     if (!keepAddress) {
-      this.platform.links.showTable(null);
+      this.pointAddress(null);
     }
 
     this.mount(
@@ -216,11 +222,20 @@ export class App {
   private openTable(tableId: string): void {
     const auth = this.rememberedSeat(tableId);
 
-    if (auth) {
+    if (this.linked?.tableId === tableId) {
+      // Reached from the lobby, this is the same question a reload of the address would ask
+      void this.confirmMember(tableId, this.linked.auth);
+    } else if (auth) {
       this.enterTable({ tableId, auth }, null);
     } else {
       void this.showJoin(tableId);
     }
+  }
+
+  /** Every change to the address goes through here, so that what it is known to name stays true. */
+  private pointAddress(tableId: string | null, auth?: Auth): void {
+    this.linked = null;
+    this.platform.links.showTable(tableId, auth);
   }
 
   /**
@@ -229,8 +244,12 @@ export class App {
    * alone until the server itself has said the link is no good; a request that merely fails is tried again.
    */
   private async confirmMember(tableId: string, auth: Auth): Promise<void> {
+    // Leaving for the lobby keeps the address, so the link is still there to come back to
+    const wayOut = { label: 'Go to the lobby', action: () => this.showLobby(true) };
+
     this.leaveTableScreen();
-    this.mount(noticeEl('Looking for your seat…'));
+    this.linked = { tableId, auth };
+    this.mount(noticeEl('Looking for your seat…', wayOut));
 
     const run = this.pollRun;
     let view: TableView | null = null;
@@ -251,9 +270,8 @@ export class App {
       if (response?.ok && response.kind === 'view') {
         view = response.view;
       } else {
-        // Leaving for the lobby keeps the address, so the link is still there to come back to
         retryIn = nextRetry(retryIn);
-        this.mount(noticeEl('Could not reach the table. Trying again…', { label: 'Go to the lobby', action: () => this.showLobby(true) }));
+        this.mount(noticeEl('Could not reach the table. Trying again…', wayOut));
         await sleep(retryIn);
 
         if (run !== this.pollRun) {
@@ -270,14 +288,17 @@ export class App {
           this.remember(tableId, auth);
           this.enterTable({ tableId, auth }, found);
         },
-        no: () => this.openTable(tableId),
+        no: () => {
+          this.linked = null;
+          this.openTable(tableId);
+        },
       }),
     );
   }
 
   private async showJoin(tableId: string): Promise<void> {
     this.leaveTableScreen();
-    this.platform.links.showTable(tableId);
+    this.pointAddress(tableId);
 
     const screen = joinScreen(tableId, this.rememberedName(), this.themePicker(), {
       join: (name) => this.joinTable(tableId, name),
@@ -340,7 +361,7 @@ export class App {
   private enterTable(session: Session, view: TableView | null): void {
     this.leaveTableScreen();
     this.session = session;
-    this.platform.links.showTable(session.tableId, session.auth);
+    this.pointAddress(session.tableId, session.auth);
 
     const feed = createFeed((text) => void this.send({ type: 'chat', text }));
     const stage = new Slot(h('div.stage'));

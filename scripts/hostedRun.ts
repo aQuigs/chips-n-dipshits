@@ -156,9 +156,15 @@ try {
     await page.waitForSelector('[data-action="create-table"]');
     assert.equal(inAddress(page, 'me'), hostMember);
 
+    // Typing the table's code in the lobby is the link's own question again, not an offer to join as someone new
+    await page.fill('#table-code', tableId);
+    await page.click('button:has-text("Find table")');
+    await page.waitForSelector('.note:has-text("Could not reach the table")');
+    assert.equal(inAddress(page, 'me'), hostMember, 'finding the same table keeps the member in the address');
+
     await page.unroute('**/api');
-    await page.reload();
     await page.waitForSelector('[data-action="confirm-member"]');
+    assert.equal(inAddress(page, 'me'), hostMember);
     await page.context().close();
   }
 

@@ -173,25 +173,37 @@ function heldCells(held: Held[]): string[] {
   }
 }
 
+function isHeld(value: unknown): value is Held {
+  const { id, record } = (value ?? {}) as Partial<Held>;
+  if (typeof id !== 'string' || typeof record !== 'object' || record === null) {
+    return false;
+  }
+
+  return record.type === 'ledger'
+    ? typeof record.entry === 'object' && record.entry !== null
+    : record.type === 'hand' && typeof record.record?.summary === 'string';
+}
+
+/** Reads the held cells of a row. Whatever in them isn't a record is left out: the table matters more than what someone did to these cells. */
 function heldFrom(text: string): Held[] {
   if (!text) {
     return [];
   }
 
+  let parsed: unknown;
   try {
-    const held: unknown = JSON.parse(text);
-
-    if (Array.isArray(held)) {
-      return held as Held[];
-    }
+    parsed = JSON.parse(text);
   } catch {
-    // Reported below
+    parsed = null;
   }
 
-  // Someone has been in these cells. The table matters more than the records that were waiting in them
-  console.error('Set aside records that could not be read', text);
+  const held = Array.isArray(parsed) ? parsed.filter(isHeld) : [];
 
-  return [];
+  if (!Array.isArray(parsed) || held.length < parsed.length) {
+    console.error('Set aside waiting records that could not be read', text);
+  }
+
+  return held;
 }
 
 interface TableRow {

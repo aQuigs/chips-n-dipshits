@@ -428,13 +428,31 @@ test('a table is still read and saved if the cells holding its waiting records w
   save(store, table('ABC234', 1), [buyIn(100)]);
   const { tables, held, ledgerAmounts } = records(spreadsheet);
 
-  tables.cells[1]![9] = '~[{"id":"ABC234:9:0","record":';
-  cache.entries.clear();
+  const spoiled = [
+    '~[{"id":"ABC234:9:0","record":',
+    '~[1]',
+    '~{"id":"ABC234:9:0"}',
+    `~${JSON.stringify([buyIn(999)])}`,
+    '~[{"id":"ABC234:9:0","record":{"type":"hand","record":{}}}]',
+  ];
 
-  assert.equal(anotherRun().read('ABC234')!.version, 1);
-  save(anotherRun(), table('ABC234', 2), [buyIn(200)]);
-  assert.deepEqual(ledgerAmounts(), [100, 200]);
-  assert.equal(held(), '');
+  spoiled.forEach((text, index) => {
+    tables.cells[1]![9] = text;
+    cache.entries.clear();
+
+    assert.equal(anotherRun().read('ABC234')!.version, index + 1, text);
+    save(anotherRun(), table('ABC234', index + 2), [buyIn(200 + index)]);
+    assert.equal(held(), '', text);
+  });
+
+  assert.deepEqual(ledgerAmounts(), [100, 200, 201, 202, 203, 204]);
+
+  // A record that is intact goes out even when its neighbor is not
+  const intact = { id: 'ABC234:50:0', record: buyIn(555) };
+  tables.cells[1]![9] = `~${JSON.stringify([7, intact])}`;
+  cache.entries.clear();
+  anotherRun().read('ABC234');
+  assert.equal(ledgerAmounts().at(-1), 555);
 });
 
 test('when more records are waiting than a row can hold, hands give way before money', () => {

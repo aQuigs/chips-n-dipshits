@@ -109,11 +109,12 @@ export async function startDevServer(options: DevServerOptions): Promise<DevServ
     });
   });
 
-  await new Promise<void>((resolve) => server.listen(options.port, resolve));
+  // This machine only: the tables here are for trying things out, not for the rest of the network
+  await new Promise<void>((resolve) => server.listen(options.port, '127.0.0.1', resolve));
   const { port } = server.address() as AddressInfo;
 
   return {
-    url: `http://localhost:${port}/`,
+    url: `http://127.0.0.1:${port}/`,
     close: () => {
       closing = true;
       server.closeAllConnections();

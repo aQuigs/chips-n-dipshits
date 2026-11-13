@@ -46,9 +46,9 @@ The Sheet is the database. It holds every table (including the cards in play), t
 
 | Command | What it does |
 | --- | --- |
-| `npm run dev` | Runs the game at <http://localhost:8787> with tables kept in memory. Open it in several windows to play against yourself. |
+| `npm run dev` | Runs the game at <http://127.0.0.1:8787> with tables kept in memory, reachable from this machine only. Open it in several windows to play against yourself. |
 | `npm test` | The rules, the request handling and the Sheet storage, against fakes. |
-| `npm run test:e2e` | Six players in real browsers through two hands. Needs `npx playwright install chromium` once. |
+| `npm run test:e2e` | Six players in real browsers through two hands, then the page served the way Apps Script serves it, with requests made to fail. Needs `npx playwright install chromium` once. |
 | `npm run screenshots` | The same browser run, saving a picture of every screen, and of the table in every theme, to `screenshots/`. |
 | `npm run build` | Type-checks and writes `dist/gas` (what is pushed to Apps Script) and `dist/web` (the page for any static host). |
 | `npm run gallery` | Writes `dist/gallery.html`, a showcase of the themes with the app playing against bots in the page. |
@@ -69,6 +69,8 @@ Things worth knowing before changing it:
 - Nothing runs in the background. Time-based events (the action clock, the pause after a hand) happen when the next request arrives and finds a deadline has passed, so a table nobody is looking at simply waits.
 - A player's page keeps one request open with the server, which answers the moment something changes. Apps Script allows 30 requests at once per deploying account, which is plenty for one full table and tight for three.
 - A table's ledger entries and finished hands are written into its row in the same write as the table itself, then copied to the Ledger and Hands tabs. If the copy fails they wait in the row and are tried again within a minute or at the table's next save, so the game never stops over it and no record is lost. Each carries an id, which is how a retry knows not to write one twice.
+- Served by Apps Script, the page sits in a frame whose storage the browser may throw away, so a player's seat is kept in the address (`?table=…&me=…`). The page only takes it out when the server has said the seat is gone, never because a request failed.
+- A request can be answered, refused, or get no answer while having been carried out. A move that gets no answer is looked up, not sent again, and every move names the decision it answers, so the server refuses one that arrives late.
 - A saved table carries a schema number (`STATE_SCHEMA`). Change the shape of the saved state and tables from before the change stop loading unless the code migrates them.
 - A theme is a set of values for the design tokens at the top of `src/client/styles.css`, plus an entry in `src/client/themes.ts`.
 - Another game is a new engine module behind the same commands and views; another database is a new `TableStore`; another host for the page is a new `Transport` and `Links`.

@@ -23,9 +23,27 @@ function clasp(...args: string[]): string {
   return output;
 }
 
+/** The web apps the linked script already has. The one at @HEAD is the script's own test address, never the one handed out. */
+function existingDeployments(): string[] {
+  const output = clasp('list-deployments', '--json');
+  const listed = JSON.parse(output.slice(output.indexOf('['), output.lastIndexOf(']') + 1)) as { deploymentId: string; versionNumber?: number }[];
+
+  return listed.filter((item) => item.versionNumber !== undefined).map((item) => item.deploymentId);
+}
+
+const linked = existsSync(`${ROOT}.clasp.json`);
 let deployment = await readDeployment();
 
-if (!existsSync(`${ROOT}.clasp.json`)) {
+// The two files are per machine and must describe the same script. Carrying on with one of them
+// missing would either strand the game's address on old code or push to a script it doesn't belong to
+if (deployment && !linked) {
+  throw new Error(
+    `This checkout has the game's address on record (.deployment.json, ${deployment.url}) but is not linked to its script: .clasp.json is missing. ` +
+      'Restore .clasp.json for that script, or delete .deployment.json to set up a new game at a new address.',
+  );
+}
+
+if (!linked) {
   console.log('No Apps Script project is linked yet, so creating a new Sheet with its script.');
   clasp('create-script', '--type', 'sheets', '--title', TITLE, '--rootDir', 'dist/gas');
 
@@ -37,7 +55,16 @@ if (!deployment) {
   // The page is told its own address, and that only exists once something is deployed
   clasp('push', '--force');
 
-  const deploymentId = DEPLOYMENT_ID.exec(clasp('create-deployment', '--description', TITLE))?.[0];
+  // A script that already has a web app keeps it. A second one would get a new address, and the links friends have would stay on old code
+  const existing = existingDeployments();
+  if (existing.length > 1) {
+    throw new Error(
+      `This script already has ${existing.length} web apps (${existing.join(', ')}). Put the one your friends use in .deployment.json as ` +
+        '{"deploymentId": "<id>", "url": "https://script.google.com/macros/s/<id>/exec"} and run this again.',
+    );
+  }
+
+  const deploymentId = existing[0] ?? DEPLOYMENT_ID.exec(clasp('create-deployment', '--description', TITLE))?.[0];
   if (!deploymentId) {
     throw new Error('clasp did not report a deployment id; run "npx clasp list-deployments" and put it in .deployment.json');
   }

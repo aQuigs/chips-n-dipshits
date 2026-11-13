@@ -4,7 +4,23 @@ const VOLUME = 0.08;
 
 let audio: AudioContext | null = null;
 
-/** Two short rising notes when the action reaches the player. Silent until the browser allows sound. */
+/**
+ * Browsers keep a page silent until the visitor has touched it, and a sound set up before then stays
+ * silent for good. Called from any tap or key press, this is what lets the chime be heard afterwards.
+ */
+export function allowSound(): void {
+  try {
+    audio ??= new AudioContext();
+
+    if (audio.state !== 'running') {
+      void audio.resume().catch(() => undefined);
+    }
+  } catch {
+    // No sound on this browser
+  }
+}
+
+/** Two short rising notes when the action reaches the player. Silent until the page has been touched. */
 export function playTurnChime(): void {
   try {
     audio ??= new AudioContext();

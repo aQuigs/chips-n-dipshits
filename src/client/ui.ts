@@ -62,6 +62,15 @@ export function h(spec: string, props?: Props | null, ...children: Child[]): HTM
   return element;
 }
 
+/** Runs what a button was pressed for, and keeps it from being pressed again until that has finished. */
+export function holdWhile(button: HTMLButtonElement, action: () => Promise<unknown>): void {
+  button.disabled = true;
+
+  void action().finally(() => {
+    button.disabled = false;
+  });
+}
+
 /**
  * A part of the screen that is rebuilt only when what it shows has changed. Rebuilding on every
  * update from the server would swallow a tap that lands mid-rebuild and wipe anything half-entered.

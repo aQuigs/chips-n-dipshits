@@ -149,6 +149,7 @@ export function startHand(state: TableState, ctx: Ctx): void {
     currentBet: bigBlind,
     minRaise: bigBlind,
     toAct: null,
+    turn: 0,
     lastAggressor: null,
     deadline: null,
     result: null,
@@ -239,6 +240,7 @@ function advance(state: TableState, ctx: Ctx, afterSeat: number): void {
     }
 
     hand.toAct = next.seat;
+    hand.turn += 1;
     hand.deadline = actionDeadline(state, ctx.now);
     return;
   }
@@ -371,11 +373,18 @@ function checkOrFold(state: TableState, ctx: Ctx, player: HandPlayer): void {
   perform(state, ctx, player, { type: canCheck ? 'check' : 'fold' });
 }
 
-/** A player's own decision when the action is on them. */
-export function act(state: TableState, ctx: Ctx, seatIndex: number, action: BettingAction): void {
+/**
+ * A player's own decision when the action is on them. `turn` is the decision they were looking at:
+ * an answer that was slow to arrive, or sent twice, must not be played on a later one they never saw.
+ */
+export function act(state: TableState, ctx: Ctx, seatIndex: number, action: BettingAction, turn?: number): void {
   const hand = state.hand;
   if (!hand || hand.stage !== 'betting' || hand.toAct !== seatIndex) {
     throw new GameError("It's not your turn");
+  }
+
+  if (turn !== undefined && turn !== hand.turn) {
+    throw new GameError('The hand moved on before that arrived, so it was not played');
   }
 
   perform(state, ctx, playerAt(hand, seatIndex)!, action);

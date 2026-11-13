@@ -200,7 +200,7 @@ export function createDemoTable(options: DemoOptions = {}): DemoTable {
     // Out of chips between hands: ask the host, who is the person at the page, for more
     const waiting = view.requests.some((request) => request.playerId === view.you.id);
     if (seat && seat.stack === 0 && seat.pendingAdd === 0 && !seat.inHand && !waiting) {
-      return { type: 'requestRebuy', amount: view.config.maxBuyIn / 2 };
+      return { type: 'requestRebuy', amount: Math.ceil(view.config.maxBuyIn / 2) };
     }
 
     return null;

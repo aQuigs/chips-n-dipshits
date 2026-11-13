@@ -65,6 +65,19 @@ function yesOrNo(value: unknown, what: string): boolean {
   return value;
 }
 
+/** The decision an action says it answers. Left out, the action is for whichever decision is open. */
+function turnOf(value: unknown): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (typeof value !== 'number' || !Number.isInteger(value)) {
+    throw new GameError('The turn must be a whole number');
+  }
+
+  return value;
+}
+
 function text(value: unknown, what: string, maxLength: number): string {
   if (typeof value !== 'string') {
     throw new GameError(`${what} is missing`);
@@ -347,12 +360,12 @@ function applyTo(state: TableState, ctx: Ctx, playerId: string, command: Command
     case 'fold':
     case 'check':
     case 'call': {
-      act(state, ctx, seatIndexOf(state, playerId), { type: command.type });
+      act(state, ctx, seatIndexOf(state, playerId), { type: command.type }, turnOf(command.turn));
       return;
     }
 
     case 'raise': {
-      act(state, ctx, seatIndexOf(state, playerId), { type: 'raise', to: command.to });
+      act(state, ctx, seatIndexOf(state, playerId), { type: 'raise', to: command.to }, turnOf(command.turn));
       return;
     }
 

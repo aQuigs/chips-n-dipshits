@@ -1,9 +1,10 @@
 import type { Command } from '../../engine/types.ts';
 import type { HandView, SeatView, TableView } from '../../engine/view.ts';
-import { chips, h } from '../ui.ts';
+import { chips, h, holdWhile } from '../ui.ts';
 
 export interface ControlHandlers {
-  send(command: Command): void;
+  /** Resolves once the server has answered, or failed to. */
+  send(command: Command): Promise<void>;
   openRebuy(): void;
 }
 
@@ -24,13 +25,25 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-/** The buttons for the player on the clock. Keeps the chosen raise size itself, so it survives until the turn changes. */
-function turnPanel(hand: HandView, stack: number, busy: boolean, handlers: ControlHandlers): HTMLElement {
+/** A button for something other than a move in the hand. It waits for its own answer before it can be pressed again. */
+function commandButton(spec: `button.${string}`, action: string, label: string, send: () => Promise<void>): HTMLButtonElement {
+  const button = h(spec, { type: 'button', 'data-action': action }, label);
+  button.addEventListener('click', () => holdWhile(button, send));
+
+  return button;
+}
+
+/**
+ * The buttons for the player on the clock. Keeps the chosen raise size itself, so it survives until
+ * the turn changes. Every move names the decision it answers, so it can't be played on a later one.
+ */
+function turnPanel(hand: HandView, stack: number, handlers: ControlHandlers): HTMLElement {
   const options = hand.options!;
   const { minRaiseTo, maxRaiseTo, callAmount, callCost } = options;
   const opening = hand.currentBet === 0;
+  const turn = hand.turn;
 
-  const raiseButton = h('button.btn.raise', { type: 'button', disabled: busy, 'data-action': 'raise' });
+  const raiseButton = h('button.btn.raise', { type: 'button', 'data-action': 'raise' });
   const slider = h('input', { type: 'range', id: 'raise-slider', min: minRaiseTo, max: maxRaiseTo, step: 1, 'aria-label': 'Bet size' });
   const amount = h('input', { type: 'number', id: 'raise-amount', min: minRaiseTo, max: maxRaiseTo, step: 1, inputmode: 'numeric', 'aria-label': 'Bet size' });
 
@@ -54,7 +67,7 @@ function turnPanel(hand: HandView, stack: number, busy: boolean, handlers: Contr
   slider.addEventListener('input', () => choose(Number(slider.value), slider));
   amount.addEventListener('input', () => choose(Number(amount.value), amount));
   amount.addEventListener('blur', () => choose(raiseTo));
-  raiseButton.addEventListener('click', () => handlers.send({ type: 'raise', to: raiseTo }));
+  raiseButton.addEventListener('click', () => void handlers.send({ type: 'raise', to: raiseTo, turn }));
   choose(minRaiseTo);
 
   const presetButtons = PRESETS.map((preset) => {
@@ -66,12 +79,8 @@ function turnPanel(hand: HandView, stack: number, busy: boolean, handlers: Contr
 
   const callLabel = callAmount >= stack ? 'Call all in' : 'Call';
   const passButton = options.canCheck
-    ? h('button.btn.call', { type: 'button', disabled: busy, 'data-action': 'check', onclick: () => handlers.send({ type: 'check' }) }, 'Check')
-    : h(
-        'button.btn.call',
-        { type: 'button', disabled: busy, 'data-action': 'call', onclick: () => handlers.send({ type: 'call' }) },
-        `${callLabel} ${chips(callCost)}`,
-      );
+    ? h('button.btn.call', { type: 'button', 'data-action': 'check', onclick: () => void handlers.send({ type: 'check', turn }) }, 'Check')
+    : h('button.btn.call', { type: 'button', 'data-action': 'call', onclick: () => void handlers.send({ type: 'call', turn }) }, `${callLabel} ${chips(callCost)}`);
 
   return h(
     'div.turn',
@@ -80,25 +89,27 @@ function turnPanel(hand: HandView, stack: number, busy: boolean, handlers: Contr
     h(
       'div.buttons',
       null,
-      h('button.btn.fold', { type: 'button', disabled: busy, 'data-action': 'fold', onclick: () => handlers.send({ type: 'fold' }) }, 'Fold'),
+      h('button.btn.fold', { type: 'button', 'data-action': 'fold', onclick: () => void handlers.send({ type: 'fold', turn }) }, 'Fold'),
       passButton,
       options.canRaise ? raiseButton : null,
     ),
   );
 }
 
-function toggle(label: string, on: boolean, action: string, onChange: (next: boolean) => void): HTMLElement {
-  return h(
-    'button.toggle',
-    { type: 'button', role: 'switch', 'aria-checked': String(on), 'data-action': action, onclick: () => onChange(!on) },
-    h('i'),
-    label,
-  );
+function toggle(label: string, on: boolean, action: string, onChange: (next: boolean) => Promise<void>): HTMLElement {
+  const button = h('button.toggle', { type: 'button', role: 'switch', 'aria-checked': String(on), 'data-action': action }, h('i'), label);
+  button.addEventListener('click', () => holdWhile(button, () => onChange(!on)));
+
+  return button;
 }
 
 function waitingText(view: TableView, hand: HandView | null): string {
   if (!hand || hand.stage === 'done') {
-    return view.running ? 'Next hand coming up' : 'The game is paused';
+    if (!view.running) {
+      return view.handCount === 0 ? 'The game has not started yet' : 'The game is paused';
+    }
+
+    return hand || view.nextHandAt !== null ? 'Next hand coming up' : 'Waiting for at least two players with chips';
   }
 
   if (hand.stage === 'betting' && hand.toAct !== null) {
@@ -116,14 +127,14 @@ function waitingText(view: TableView, hand: HandView | null): string {
   return '';
 }
 
-function seatedControls(view: TableView, seat: SeatView, busy: boolean, handlers: ControlHandlers): HTMLElement {
+function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandlers): HTMLElement {
   const hand = view.hand;
   const myRequest = view.requests.find((request) => request.playerId === view.you.id);
   const room = view.config.maxBuyIn - seat.stack - seat.pendingAdd;
 
   let main: HTMLElement;
   if (hand?.options) {
-    main = turnPanel(hand, seat.stack, busy, handlers);
+    main = turnPanel(hand, seat.stack, handlers);
   } else if (hand?.canVote) {
     main = h(
       'div.turn',
@@ -132,8 +143,8 @@ function seatedControls(view: TableView, seat: SeatView, busy: boolean, handlers
       h(
         'div.buttons',
         null,
-        h('button.btn.fold', { type: 'button', disabled: busy, 'data-action': 'rit-no', onclick: () => handlers.send({ type: 'ritVote', agree: false }) }, 'Once'),
-        h('button.btn.raise', { type: 'button', disabled: busy, 'data-action': 'rit-yes', onclick: () => handlers.send({ type: 'ritVote', agree: true }) }, 'Twice'),
+        h('button.btn.fold', { type: 'button', 'data-action': 'rit-no', onclick: () => void handlers.send({ type: 'ritVote', agree: false }) }, 'Once'),
+        h('button.btn.raise', { type: 'button', 'data-action': 'rit-yes', onclick: () => void handlers.send({ type: 'ritVote', agree: true }) }, 'Twice'),
       ),
     );
   } else {
@@ -143,7 +154,7 @@ function seatedControls(view: TableView, seat: SeatView, busy: boolean, handlers
   const extras: HTMLElement[] = [];
 
   if (seat.sittingOut || seat.away) {
-    extras.push(h('button.chip-btn.strong', { type: 'button', disabled: busy, 'data-action': 'sit-in', onclick: () => handlers.send({ type: 'sitIn' }) }, "I'm back"));
+    extras.push(commandButton('button.chip-btn.strong', 'sit-in', "I'm back", () => handlers.send({ type: 'sitIn' })));
   } else {
     extras.push(toggle('Sit out next hand', false, 'sit-out', () => handlers.send({ type: 'sitOut' })));
   }
@@ -153,16 +164,12 @@ function seatedControls(view: TableView, seat: SeatView, busy: boolean, handlers
   }
 
   if (hand?.canShow) {
-    extras.push(h('button.chip-btn', { type: 'button', disabled: busy, 'data-action': 'show', onclick: () => handlers.send({ type: 'showCards' }) }, 'Show my cards'));
+    extras.push(commandButton('button.chip-btn', 'show', 'Show my cards', () => handlers.send({ type: 'showCards' })));
   }
 
   if (myRequest?.kind === 'rebuy') {
     extras.push(
-      h(
-        'button.chip-btn',
-        { type: 'button', disabled: busy, 'data-action': 'cancel-request', onclick: () => handlers.send({ type: 'cancelRequest' }) },
-        `Rebuy of ${chips(myRequest.amount)} waiting for the host · Cancel`,
-      ),
+      commandButton('button.chip-btn', 'cancel-request', `Rebuy of ${chips(myRequest.amount)} waiting for the host · Cancel`, () => handlers.send({ type: 'cancelRequest' })),
     );
   } else if (room > 0) {
     extras.push(h('button.chip-btn', { type: 'button', class: seat.stack === 0 ? 'strong' : '', 'data-action': 'rebuy', onclick: handlers.openRebuy }, 'Add chips'));
@@ -172,11 +179,11 @@ function seatedControls(view: TableView, seat: SeatView, busy: boolean, handlers
 }
 
 /** Everything the viewer can do right now, for the bar under the table. */
-export function controlsEl(view: TableView, busy: boolean, handlers: ControlHandlers): HTMLElement {
+export function controlsEl(view: TableView, handlers: ControlHandlers): HTMLElement {
   const seat = view.you.seat === null ? null : view.seats[view.you.seat];
 
   if (seat) {
-    return seatedControls(view, seat, busy, handlers);
+    return seatedControls(view, seat, handlers);
   }
 
   const myRequest = view.requests.find((request) => request.playerId === view.you.id);
@@ -185,26 +192,32 @@ export function controlsEl(view: TableView, busy: boolean, handlers: ControlHand
       'div.controls',
       null,
       h('div.waiting', null, `Asked the host for seat ${myRequest.seat + 1} with ${chips(myRequest.amount)}`),
-      h(
-        'div.extras',
-        null,
-        h('button.chip-btn', { type: 'button', disabled: busy, 'data-action': 'cancel-request', onclick: () => handlers.send({ type: 'cancelRequest' }) }, 'Cancel request'),
-      ),
+      h('div.extras', null, commandButton('button.chip-btn', 'cancel-request', 'Cancel request', () => handlers.send({ type: 'cancelRequest' }))),
     );
   }
 
   return h('div.controls', null, h('div.waiting', null, 'You are watching. Pick an open seat to play.'));
 }
 
+/**
+ * Locks or frees the buttons that play a move, in place. Rebuilding the controls for this would throw
+ * away a bet that is being sized.
+ */
+export function lockTurn(controls: HTMLElement, locked: boolean): void {
+  for (const button of controls.querySelectorAll<HTMLButtonElement>('.turn .buttons button')) {
+    button.disabled = locked;
+  }
+}
+
 /** Changes whenever the controls need to be rebuilt; anything else leaves them, and a half-chosen bet, alone. */
-export function controlsSignature(view: TableView, busy: boolean): string {
+export function controlsSignature(view: TableView): string {
   const seat = view.you.seat === null ? null : view.seats[view.you.seat];
   const hand = view.hand;
 
   return JSON.stringify([
-    busy,
     seat && [seat.stack, seat.pendingAdd, seat.sittingOut, seat.away, seat.straddle],
-    hand && [hand.number, hand.stage, hand.street, hand.toAct, hand.currentBet, hand.pot, hand.options, hand.canVote, hand.canShow],
+    hand && [hand.number, hand.stage, hand.street, hand.toAct, hand.turn, hand.currentBet, hand.pot, hand.options, hand.canVote, hand.canShow],
+    [view.running, view.nextHandAt !== null, view.handCount === 0],
     view.requests.filter((request) => request.playerId === view.you.id),
     [view.config.allowStraddle, view.config.maxBuyIn],
   ]);

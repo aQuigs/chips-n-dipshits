@@ -3,7 +3,7 @@ import type { Card, Rng } from './cards.ts';
 export const SEAT_COUNT = 10;
 
 /** Bumped when a saved table can no longer be read by newer code without a migration. */
-export const STATE_SCHEMA = 1;
+export const STATE_SCHEMA = 2;
 
 export interface TableConfig {
   name: string;
@@ -150,6 +150,8 @@ export interface Hand {
   /** Smallest amount a raise must add: the size of the last full bet or raise. */
   minRaise: number;
   toAct: number | null;
+  /** Counts the decisions this hand has asked for, so that an answer can say which one it is an answer to. */
+  turn: number;
   /** Last seat to bet or raise on the current street. */
   lastAggressor: number | null;
   /** When the current stage moves on by itself; null when it waits for a player indefinitely. */
@@ -241,10 +243,10 @@ export type Command =
   | { type: 'sitOut' }
   | { type: 'sitIn' }
   | { type: 'setStraddle'; on: boolean }
-  | { type: 'fold' }
-  | { type: 'check' }
-  | { type: 'call' }
-  | { type: 'raise'; to: number }
+  | { type: 'fold'; turn?: number }
+  | { type: 'check'; turn?: number }
+  | { type: 'call'; turn?: number }
+  | { type: 'raise'; to: number; turn?: number }
   | { type: 'ritVote'; agree: boolean }
   | { type: 'showCards' }
   | { type: 'chat'; text: string }

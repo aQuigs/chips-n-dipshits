@@ -17,6 +17,8 @@ Multiplayer no-limit hold'em whose backend is a Google Sheet with an Apps Script
 - Every rule change comes with a test in `tests/hand.test.ts` or `tests/table.test.ts`, and `tests/simulation.test.ts` must keep passing: it plays random games and checks that no chip is ever created or lost.
 - A view sent to a player never contains another player's face-down cards, the deck, or anyone's token. `viewFor` is the only place views are built.
 - The client redraws a part of the screen only when what it shows has changed (`Slot`), so a tap or a half-typed bet survives updates from the server.
+- A request that got no answer is not a refusal. Only `unauthorized` or `not_found` may take a player's seat out of the address or the browser's memory; anything else is retried. A move (`MOVES` in `app.ts`) that got no answer is looked up with a fresh poll, never resent.
+- `npm run test:e2e` also runs `scripts/hostedRun.ts`, which puts a stand-in for Apps Script's `google.script` in the page. Changes to how the page starts, remembers a seat or sends requests need a case there.
 - Colors, fonts and radii in component CSS come from the tokens at the top of `src/client/styles.css`, never a literal.
 - Changing the shape of `TableState` means bumping `STATE_SCHEMA` and deciding what happens to saved tables.
 

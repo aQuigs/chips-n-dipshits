@@ -48,6 +48,8 @@ export interface HandView {
   pots: Pot[];
   currentBet: number;
   toAct: number | null;
+  /** Which decision of the hand this is; sent back with the player's action. */
+  turn: number;
   deadline: number | null;
   /** What the viewer may do, when the action is on them. */
   options: BettingOptions | null;
@@ -153,6 +155,7 @@ export function viewFor(state: TableState, playerId: string, now: number): Table
       pots: buildPots(hand.players),
       currentBet: hand.currentBet,
       toAct: hand.toAct,
+      turn: hand.turn,
       deadline: hand.deadline,
       options: myTurn ? bettingOptions(state, hand, mine) : null,
       canVote: hand.stage === 'ritVote' && mine !== undefined && !mine.folded && mine.ritVote === null,

@@ -30,7 +30,9 @@ export function dialogShows(dialog: Dialog, view: TableView, handlers: DialogHan
     case 'ledger':
       return view.ledger;
     case 'players':
-      return [view.requests, view.members, view.hostId, view.seats.map((seat) => seat && [seat.playerId, seat.name, seat.seat, seat.stack])];
+      // Stacks move with every bet. Redrawn that often, a button here would be gone before a tap on it landed,
+      // so during a hand the list keeps the stacks it was drawn with
+      return [view.requests, view.members, view.hostId, view.hand?.number, view.seats.map((seat) => seat && [seat.playerId, seat.name, seat.seat, view.hand ? null : seat.stack])];
     default:
       return null;
   }

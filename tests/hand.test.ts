@@ -897,3 +897,28 @@ test('a raising war cannot grow the hand\'s log without end', () => {
   assert.equal(log.at(-1), `P1 raises to ${(40 + 20 * 499).toLocaleString('en-US')}`);
   assertChipsConserved(t.state);
 });
+
+test('an action that names the decision it answers is only played on that decision', () => {
+  const t = new TestTable({ stacks: [1000, 1000] });
+  t.deal({ button: 0 });
+  const first = t.view(0).hand!.turn;
+
+  // Heads-up the button acts first before the flop and second after it
+  t.cmd(0, { type: 'call', turn: first });
+  t.check(1);
+  t.check(1);
+  assert.equal(t.toAct, 0);
+
+  // The same answer again, as a second tap or a resend would deliver it, now that it is this player's turn once more
+  assert.throws(() => t.cmd(0, { type: 'call', turn: first }), /moved on/);
+  assert.throws(() => t.cmd(0, { type: 'raise', to: 40, turn: first }), /moved on/);
+  assert.throws(() => t.cmd(0, { type: 'check', turn: 1.5 }), /whole number/);
+  assert.equal(t.toAct, 0, 'nothing was played');
+
+  t.cmd(0, { type: 'check', turn: t.view(0).hand!.turn });
+  assert.equal(t.state.hand!.street, 'turn');
+
+  t.check(1);
+  t.check(0);
+  assert.equal(t.state.hand!.street, 'river', 'an action that names no decision is played on the open one');
+});

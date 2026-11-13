@@ -155,14 +155,21 @@ export function noticeEl(text: string): HTMLElement {
   return h('main.lobby', null, brand(), h('p.note', null, text));
 }
 
-/** Shown to someone who arrived by a personal link on a browser that doesn't know them yet. */
-export function welcomeBackEl(name: string, tableName: string, handlers: { yes(): void; no(): void }): HTMLElement {
+/**
+ * Shown to someone who arrived by a personal link on a browser that doesn't know them yet.
+ * `hasOwnSeat` says this browser already sits at the table as someone else, which "no" goes back to.
+ */
+export function welcomeBackEl(name: string, tableName: string, hasOwnSeat: boolean, handlers: { yes(): void; no(): void }): HTMLElement {
+  const about = hasOwnSeat
+    ? `This link is for ${name}’s seat at ${tableName}, and this browser already has a different seat there. Saying yes switches it to ${name}’s.`
+    : `This link is for ${name}’s seat at ${tableName}.`;
+
   const panel = h(
     'div.card-panel',
     null,
-    h('div.about', null, h('h2', null, `Continue as ${name}?`), h('p.note', null, `This link is for ${name}’s seat at ${tableName}.`)),
+    h('div.about', null, h('h2', null, `Continue as ${name}?`), h('p.note', null, about)),
     h('button.btn.primary', { type: 'button', 'data-action': 'confirm-member', onclick: handlers.yes }, `Yes, I’m ${name}`),
-    h('button.btn', { type: 'button', 'data-action': 'decline-member', onclick: handlers.no }, 'No, join as someone else'),
+    h('button.btn', { type: 'button', 'data-action': 'decline-member', onclick: handlers.no }, hasOwnSeat ? 'No, back to my own seat' : 'No, join as someone else'),
   );
 
   return h('main.lobby', null, brand(), h('div.panels.single', null, panel));

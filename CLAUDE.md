@@ -6,7 +6,7 @@ Multiplayer no-limit hold'em whose backend is a Google Sheet with an Apps Script
 
 - `npm test`: unit tests, a few seconds. Run after every change.
 - `npm run build`: type-checks all three TypeScript projects (Node, client, Apps Script) and builds `dist/`.
-- `npm run test:e2e`: plays a full game in headless browsers, about a minute. Run after any change to `src/client`, then look at the pictures it leaves in `screenshots/`.
+- `npm run test:e2e`: plays a full game in headless browsers, about a minute and a half. Run after any change to `src/client`, then look at the pictures it leaves in `screenshots/`.
 - `npm run dev`: the game on localhost with tables in memory.
 - `npm run deploy`: pushes the build to Apps Script. Outward-facing: only when asked.
 - `npm run check:live`: plays a short game at the deployed address. Run after every deploy; it adds a table to the real Sheet.
@@ -21,7 +21,8 @@ Multiplayer no-limit hold'em whose backend is a Google Sheet with an Apps Script
 - A request that got no answer is not a refusal. Only `unauthorized` or `not_found` may take a player's seat out of the address or the browser's memory; anything else is retried. A move (`MOVES` in `app.ts`) that got no answer is looked up with a fresh poll, never resent.
 - `npm run test:e2e` also runs `scripts/hostedRun.ts`, which puts a stand-in for Apps Script's `google.script` in the page. Changes to how the page starts, remembers a seat or sends requests need a case there.
 - Colors, fonts and radii in component CSS come from the tokens at the top of `src/client/styles.css`, never a literal.
-- Changing the shape of `TableState` means bumping `STATE_SCHEMA` and deciding what happens to saved tables.
+- Changing the shape of `TableState` means bumping `STATE_SCHEMA` and adding the step to `upgradeState` (`src/engine/upgrade.ts`) that brings a table saved before the change forward, with a test that one still loads.
+- `scripts/rig.ts` sets up a table for a browser check with the cards fixed and a clock the check moves, and `scripts/screenChecks.ts` (run by `npm run test:e2e`) has one check per screen that has broken before. A new screen state, or a layout bug that gets fixed, gets a check there: `node scripts/screenChecks.ts "part of its name"` runs one.
 
 ## Google side
 

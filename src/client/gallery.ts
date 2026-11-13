@@ -59,7 +59,7 @@ function start(root: HTMLElement): void {
 
   // Both screens are the same player, as when someone carries on from their phone
   const apps = [laptop.screen, phone.screen].map((screen) => new App(screen, demoPlatform(demo), preview));
-  apps[1]!.setSound(false);
+  apps[1]!.prefs.set('sound', false);
 
   const picker = createThemePicker(DEFAULT_THEME, (id) => choose(id));
   let chosen = '';

@@ -57,6 +57,20 @@ function assertApart(these: Box[], those: Box[], what: string): void {
 
 const text = async (page: Page, selector: string) => ((await page.locator(selector).first().textContent()) ?? '').trim();
 
+// Run in the page: counts the notes it plays, since a check cannot listen
+const COUNT_NOTES = `(() => {
+  const make = AudioContext.prototype.createOscillator;
+
+  window.notesPlayed = 0;
+  AudioContext.prototype.createOscillator = function () {
+    window.notesPlayed += 1;
+
+    return make.call(this);
+  };
+})()`;
+
+const CHIME_NOTES = 2;
+
 type Check = [name: string, run: (rig: Rig) => Promise<void>];
 
 const CHECKS: Check[] = [
@@ -291,6 +305,91 @@ const CHECKS: Check[] = [
       await page.waitForSelector('.dialog', { state: 'detached' });
       assert.equal(await page.evaluate(`document.activeElement.dataset.action`), 'menu', 'closing a dialog loses the keyboard');
       assert.equal(await page.evaluate(`[...document.querySelectorAll('.app > *')].some((element) => element.inert)`), false, 'the page stays out of reach after the dialog is gone');
+    },
+  ],
+  [
+    'the Preferences dialog fits a phone and a desktop, keeps the keyboard, and its sound switch is kept and obeyed',
+    async (rig) => {
+      for (const screen of ['phone', 'desktop'] as const) {
+        const table = rig.table([
+          { name: 'Quigs', stack: 1000 },
+          { name: 'Stu', stack: 1000 },
+        ]);
+        const page = await table.open('Quigs', screen);
+        const press = (selector: string) => (screen === 'phone' ? page.tap(selector) : page.click(selector));
+        const notes = () => page.evaluate('window.notesPlayed') as Promise<number>;
+        const myTurnOn = (street: string) => (view: TableView) => view.hand!.street === street && view.hand!.toAct === 0;
+
+        await page.addInitScript(COUNT_NOTES);
+        await page.evaluate(COUNT_NOTES);
+
+        // Heads-up the button acts first, so the deal puts the action on this page
+        table.deal({ button: 0 });
+        await page.waitForSelector('.turn [data-action="fold"]:enabled');
+        assert.equal(await notes(), CHIME_NOTES, 'the action arriving plays the chime once');
+
+        table.act('Stu', { type: 'chat', text: 'your go' });
+        await page.waitForSelector('.entries li:has-text("your go")', { state: 'attached' });
+        assert.equal(await notes(), CHIME_NOTES, 'a view that leaves the action where it was chimes again');
+
+        await press('[data-action="menu"]');
+        assert.equal(await page.locator('.menu [data-action="sound"]').count(), 0, 'the menu still has its own sound entry');
+
+        if (screen === 'desktop') {
+          await page.focus('.menu [data-action="preferences"]');
+          await page.keyboard.press('Enter');
+        } else {
+          await press('.menu [data-action="preferences"]');
+        }
+
+        await page.waitForSelector('#pref-sound[aria-checked="true"]');
+        assert.equal(await page.evaluate(`!!document.activeElement.closest('.dialog')`), true, 'opening Preferences leaves the keyboard on the page behind it');
+        assertOnScreen(await boxes(page, '.dialog, #pref-sound'), screen, 'the Preferences dialog');
+        assert.deepEqual(await squeezed(page, '.dialog h2, #pref-sound'), [], 'a preference is cut off');
+        assert.match(await text(page, '#pref-sound'), /^Sound/);
+        await shot(page, `preferences-${screen}`);
+
+        if (screen === 'desktop') {
+          await page.focus('#pref-sound');
+          await page.keyboard.press('Space');
+          assert.equal(await page.evaluate('document.activeElement.id'), 'pref-sound', 'flipping the switch loses the keyboard');
+
+          for (let tab = 0; tab < 6; tab++) {
+            await page.keyboard.press('Tab');
+            assert.equal(await page.evaluate(`document.activeElement === document.body || !!document.activeElement.closest('.dialog')`), true, `Tab number ${tab + 1} reached the page behind the dialog`);
+          }
+        } else {
+          await press('#pref-sound');
+        }
+
+        await page.waitForSelector('#pref-sound[aria-checked="false"]');
+        assert.equal(await page.evaluate(`localStorage.getItem('cnd.sound')`), 'off');
+        await press('[data-action="close"]');
+
+        table.play(passive, myTurnOn('flop'));
+        await page.waitForSelector('.board .card[data-card]');
+        await page.waitForSelector('.turn [data-action="check"]:enabled');
+        assert.equal(await notes(), CHIME_NOTES, 'the chime plays with the sound switched off');
+
+        // A page that opens with the action on it chimes, unless the choice was kept
+        await page.reload();
+        await page.waitForSelector('.turn [data-action="check"]:enabled');
+        assert.equal(await notes(), 0, 'the sound came back on with a reload');
+
+        await press('[data-action="menu"]');
+        await press('.menu [data-action="preferences"]');
+        assert.equal(await page.getAttribute('#pref-sound', 'aria-checked'), 'false', 'the switch forgot it was off');
+        await press('#pref-sound');
+        await page.waitForSelector('#pref-sound[aria-checked="true"]');
+        await press('[data-action="close"]');
+
+        table.play(passive, myTurnOn('turn'));
+        await page.waitForSelector('.board .card[data-card]:nth-child(4)');
+        await page.waitForSelector('.turn [data-action="check"]:enabled');
+        assert.equal(await notes(), CHIME_NOTES, 'switched back on, the chime stays silent');
+
+        await page.context().close();
+      }
     },
   ],
   [

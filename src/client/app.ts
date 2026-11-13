@@ -1,19 +1,23 @@
 import type { Command, HandRecord, TableConfig } from '../engine/types.ts';
 import type { TableView } from '../engine/view.ts';
 import type { ApiError, ApiRequest, ApiResponse, Auth } from '../server/api.ts';
-import type { Platform } from './platform.ts';
-import { controlsEl, controlsSignature, lockTurn } from './render/controls.ts';
+import { TableEffects } from './effects.ts';
+import { tableChange } from './tableChange.ts';
 import { Modal } from './modal.ts';
-import { dialogEl, dialogShows } from './render/dialogs.ts';
-import type { Dialog, DialogHandlers, SendOutcome } from './render/dialogs.ts';
+import type { Platform } from './platform.ts';
+import { PREFERENCES, Preferences } from './prefs.ts';
+import type { AppPreferences } from './prefs.ts';
+import { controlsEl, controlsSignature, lockTurn } from './render/controls.ts';
+import { dialogEl, dialogShows } from './render/dialogs/index.ts';
+import type { Dialog, DialogHandlers, SendOutcome } from './render/dialogs/index.ts';
 import { createFeed } from './render/feed.ts';
 import type { Feed } from './render/feed.ts';
 import { joinScreen, lobbyEl, noticeEl, welcomeBackEl } from './render/lobby.ts';
 import { tableEl } from './render/table.ts';
 import { createThemePicker } from './render/themePicker.ts';
 import type { Shape } from './render/table.ts';
-import { allowSound, playTurnChime } from './sound.ts';
-import { DEFAULT_THEME, fontsUrl, themeById } from './themes.ts';
+import { allowSound } from './sound.ts';
+import { fontsUrl, themeById } from './themes.ts';
 import { chips, h, holdWhile, secondsUntil, Slot } from './ui.ts';
 
 // How long the server may sit on a poll before answering "nothing new"
@@ -49,8 +53,6 @@ const TOAST_MS = 4500;
 const WIDE_ASPECT = 1.15;
 
 const NAME_KEY = 'cnd.name';
-const THEME_KEY = 'cnd.theme';
-const SOUND_KEY = 'cnd.sound';
 const seatKey = (tableId: string) => `cnd.seat.${tableId}`;
 
 const FONTS_LINK_ID = 'theme-fonts';
@@ -69,6 +71,7 @@ interface TableScreen {
   overlay: Slot;
   modal: Modal;
   feed: Feed;
+  effects: TableEffects;
   shape: Shape;
   seenCards: Set<string>;
   resizeObserver: ResizeObserver;
@@ -95,6 +98,9 @@ function parseMember(value: string | null | undefined): Auth | null {
 
 /** Runs the whole page: which screen is up, the conversation with the server, and keeping the table drawn. */
 export class App {
+  /** What this viewer has chosen for themselves. */
+  readonly prefs: AppPreferences;
+
   private readonly root: HTMLElement;
   private readonly platform: Platform;
   private readonly themeHost: HTMLElement;
@@ -130,6 +136,8 @@ export class App {
     this.root = root;
     this.platform = platform;
     this.themeHost = themeHost;
+    this.prefs = new Preferences(PREFERENCES, platform.memory, root);
+    this.prefs.watch('theme', (id) => this.applyTheme(id));
 
     root.classList.add('cnd');
   }
@@ -163,7 +171,7 @@ export class App {
   }
 
   private begin(): void {
-    this.applyTheme(this.theme());
+    this.applyTheme(this.prefs.get('theme'));
     setInterval(() => this.tickCountdowns(), COUNTDOWN_TICK_MS);
 
     document.addEventListener('keydown', (event) => {
@@ -187,12 +195,7 @@ export class App {
 
   /** Switches the theme and remembers it for this browser. */
   setTheme(id: string): void {
-    this.platform.memory.set(THEME_KEY, themeById(id).id);
-    this.applyTheme(id);
-  }
-
-  setSound(on: boolean): void {
-    this.platform.memory.set(SOUND_KEY, on ? 'on' : 'off');
+    this.prefs.set('theme', themeById(id).id);
   }
 
   // ---- Screens ----
@@ -218,7 +221,7 @@ export class App {
 
   /** The compact theme picker for the screens before the table. */
   private themePicker(): HTMLElement {
-    return createThemePicker(this.theme(), (id) => this.setTheme(id), true).element;
+    return createThemePicker(this.prefs.get('theme'), (id) => this.setTheme(id), true).element;
   }
 
   private openTable(tableId: string): void {
@@ -381,6 +384,7 @@ export class App {
       overlay,
       modal: new Modal(overlay.element),
       feed,
+      effects: new TableEffects(this.prefs, stage.element),
       shape: 'wide',
       seenCards: new Set(),
       resizeObserver: new ResizeObserver(() => this.reshape()),
@@ -417,6 +421,7 @@ export class App {
   private leaveTableScreen(): void {
     this.pollRun += 1;
     this.screen?.resizeObserver.disconnect();
+    this.screen?.effects.dispose();
     this.screen = null;
     this.session = null;
     this.view = null;
@@ -596,20 +601,15 @@ export class App {
     this.noteServerTime(view.now);
     this.view = view;
 
-    const mySeat = view.you.seat;
-    const myTurn = mySeat !== null && view.hand?.stage === 'betting' && view.hand.toAct === mySeat;
-    const wasMyTurn = previous?.hand?.stage === 'betting' && previous.hand.toAct === previous.you.seat && previous.hand.number === view.hand?.number && previous.hand.street === view.hand?.street;
-
-    if (myTurn && !wasMyTurn && this.soundOn()) {
-      playTurnChime();
-    }
-
     // A table that can't be drawn must not be what stops it from updating
     try {
       this.drawTable();
     } catch (error) {
       console.error(error);
     }
+
+    // Only here, where a view has been taken up, so nothing happens twice for a view that was dropped or is drawn again
+    this.screen?.effects.run(tableChange(previous, view, Date.now() + this.clockOffset, wentBack));
   }
 
   // ---- Drawing the table screen ----
@@ -801,10 +801,7 @@ export class App {
       loadHistory: () => this.loadHistory(),
       tableLink: () => this.platform.links.tableLink(session.tableId),
       memberLink: () => this.platform.links.memberLink(session.tableId, session.auth),
-      theme: () => this.theme(),
-      setTheme: (id) => this.setTheme(id),
-      soundOn: () => this.soundOn(),
-      setSound: (on) => this.setSound(on),
+      prefs: this.prefs,
       toLobby: () => this.showLobby(true),
     };
   }
@@ -849,14 +846,6 @@ export class App {
 
   private rememberedName(): string {
     return this.platform.memory.get(NAME_KEY) ?? '';
-  }
-
-  private theme(): string {
-    return themeById(this.platform.memory.get(THEME_KEY) ?? DEFAULT_THEME).id;
-  }
-
-  private soundOn(): boolean {
-    return this.platform.memory.get(SOUND_KEY) !== 'off';
   }
 
   private applyTheme(id: string): void {

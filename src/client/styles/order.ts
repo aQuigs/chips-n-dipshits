@@ -21,4 +21,5 @@ export const STYLESHEETS = [
   'theme-picker.css',
   'toast.css',
   'motion.css',
+  'preferences.css',
 ];

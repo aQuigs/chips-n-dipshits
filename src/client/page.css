@@ -1,0 +1,17 @@
+/* The page when the app has it to itself. The app's own styles are in styles.css. */
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  overscroll-behavior: none;
+}
+
+#app {
+  height: 100%;
+  height: 100dvh;
+}

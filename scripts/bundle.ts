@@ -1,0 +1,119 @@
+import { build } from 'esbuild';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+
+import { fontsUrl, THEMES } from '../src/client/themes.ts';
+
+const ROOT = new URL('..', import.meta.url);
+const pathOf = (relative: string) => fileURLToPath(new URL(relative, ROOT));
+
+// Marks in the page template that the build, or the server at request time, fills in
+const CSS_SLOT = '/*__CSS__*/';
+const JS_SLOT = '/*__JS__*/';
+const BOOT_SLOT = '"__BOOT__"';
+const FONTS_SLOT = '__FONTS__';
+
+// The functions Apps Script calls by name have to exist at the top level of the script
+const APPS_SCRIPT_ENTRY_POINTS = `
+function doGet(event) { return CND.doGet(event); }
+function doPost(event) { return CND.doPost(event); }
+function api(body) { return CND.api(body); }
+`;
+
+async function bundle(entry: string, options: Parameters<typeof build>[0] = {}): Promise<string> {
+  const result = await build({
+    entryPoints: [pathOf(entry)],
+    bundle: true,
+    write: false,
+    format: 'iife',
+    legalComments: 'none',
+    logLevel: 'warning',
+    ...options,
+  });
+
+  return result.outputFiles![0]!.text;
+}
+
+/** Fills a slot literally; a plain string replacement would treat $ sequences in the bundle as patterns. */
+function fill(template: string, slot: string, content: string): string {
+  if (!template.includes(slot)) {
+    throw new Error(`The page template has no ${slot} slot`);
+  }
+
+  return template.replace(slot, () => content);
+}
+
+interface PageParts {
+  template: string;
+  styles: string[];
+  entry: string;
+}
+
+/** One HTML file with its styles and script written into it. */
+async function inlinedPage(parts: PageParts): Promise<string> {
+  const [template, js, ...css] = await Promise.all([
+    readFile(pathOf(parts.template), 'utf8'),
+    bundle(parts.entry, { minify: true, target: 'es2020' }),
+    ...parts.styles.map((path) => readFile(pathOf(path), 'utf8')),
+  ]);
+
+  // Inside a script element the closing tag ends the script wherever it appears, even in a string
+  const inlineJs = js.replace(/<\/script/gi, '<\\/script');
+
+  return fill(fill(template, CSS_SLOT, css.join('\n')), JS_SLOT, inlineJs);
+}
+
+/**
+ * The whole game page as one HTML file, since Apps Script serves a single file.
+ * Pass the settings the page should start with, or null to leave that slot for the server to fill per request.
+ */
+export async function clientPage(boot: object | null): Promise<string> {
+  const page = await inlinedPage({
+    template: 'src/client/index.html',
+    styles: ['src/client/page.css', 'src/client/styles.css'],
+    entry: 'src/client/main.ts',
+  });
+
+  return boot === null ? page : fill(page, BOOT_SLOT, JSON.stringify(boot).replace(/</g, '\\u003c'));
+}
+
+/** The page for choosing between looks: body content only, the form an Artifact is published from. */
+export async function galleryPage(): Promise<string> {
+  const page = await inlinedPage({
+    template: 'src/client/gallery.html',
+    styles: ['src/client/styles.css', 'src/client/gallery.css'],
+    entry: 'src/client/gallery.ts',
+  });
+
+  return fill(page, FONTS_SLOT, fontsUrl(THEMES).replace(/&/g, '&amp;'));
+}
+
+/** The server side as one script for Apps Script, which has no modules. */
+export function appsScriptCode(webAppUrl: string): Promise<string> {
+  return bundle('src/gas/main.ts', {
+    globalName: 'CND',
+    // Apps Script's engine is older than a browser's, so newer syntax is rewritten
+    target: 'es2019',
+    define: { WEB_APP_URL: JSON.stringify(webAppUrl) },
+    footer: { js: APPS_SCRIPT_ENTRY_POINTS },
+  });
+}
+
+/** Writes dist/gas (what gets pushed to Apps Script) and dist/web (the same page for any static host or the dev server). */
+export async function buildAll(webAppUrl: string): Promise<void> {
+  await Promise.all([mkdir(pathOf('dist/gas'), { recursive: true }), mkdir(pathOf('dist/web'), { recursive: true })]);
+
+  const [gasPage, webPage, code, manifest] = await Promise.all([
+    clientPage(null),
+    clientPage({}),
+    appsScriptCode(webAppUrl),
+    readFile(pathOf('src/gas/appsscript.json'), 'utf8'),
+  ]);
+
+  await Promise.all([
+    writeFile(pathOf('dist/gas/index.html'), gasPage),
+    writeFile(pathOf('dist/gas/Code.js'), code),
+    writeFile(pathOf('dist/gas/appsscript.json'), manifest),
+    writeFile(pathOf('dist/web/index.html'), webPage),
+  ]);
+}

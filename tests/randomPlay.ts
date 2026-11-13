@@ -28,7 +28,14 @@ function seatOwnerIndex(t: TestTable, seat: number): number {
   return t.ids.indexOf(t.state.seats[seat]!.playerId);
 }
 
-/** One thing a player or the host does around the game itself, picked at random. Player 0 is the host. */
+/** The host or one of the co-hosts, picked at random, as an index into the table's player list. */
+function someoneRunningTheGame(t: TestTable, rng: Rng): number {
+  const ids = [t.state.hostId, ...t.state.cohostIds];
+
+  return t.ids.indexOf(ids[rng.int(ids.length)]!);
+}
+
+/** One thing a player or someone running the game does around the game itself, picked at random. */
 export interface Fuzz {
   t: TestTable;
   rng: Rng;
@@ -50,18 +57,18 @@ export const FUZZ_COMMANDS: ((fuzz: Fuzz) => void)[] = [
     const { minBuyIn, maxBuyIn } = t.state.config;
 
     attempt(t, who, { type: 'requestSeat', seat: rng.int(SEAT_COUNT), buyIn: minBuyIn + rng.int(Math.min(maxBuyIn - minBuyIn, 1500) + 1) });
-    attempt(t, 0, { type: 'approve', playerId });
+    attempt(t, someoneRunningTheGame(t, rng), { type: 'approve', playerId });
   },
 
   ({ t, rng, who, playerId }) => {
     attempt(t, who, { type: 'requestRebuy', amount: 1 + rng.int(1000) });
-    attempt(t, 0, { type: chance(rng, 80) ? 'approve' : 'deny', playerId });
+    attempt(t, someoneRunningTheGame(t, rng), { type: chance(rng, 80) ? 'approve' : 'deny', playerId });
   },
 
   ({ t, rng, who }) => attempt(t, who, { type: 'setStraddle', on: chance(rng, 50) }),
   ({ t, who }) => attempt(t, who, { type: 'showCards' }),
-  ({ t, rng, playerId }) => attempt(t, 0, { type: 'setStack', playerId, stack: rng.int(2000) }),
-  ({ t, playerId }) => attempt(t, 0, { type: 'kick', playerId }),
+  ({ t, rng, playerId }) => attempt(t, someoneRunningTheGame(t, rng), { type: 'setStack', playerId, stack: rng.int(2000) }),
+  ({ t, rng, playerId }) => attempt(t, someoneRunningTheGame(t, rng), { type: 'kick', playerId }),
   ({ t, rng, who }) => attempt(t, who, { type: 'ritVote', agree: chance(rng, 70) }),
 
   ({ t, rng }) => {
@@ -69,7 +76,15 @@ export const FUZZ_COMMANDS: ((fuzz: Fuzz) => void)[] = [
     const one = CONFIG_KEYS[rng.int(CONFIG_KEYS.length)]!;
 
     // Every setting at once, or one by itself, which the settings already in force may not allow
-    attempt(t, 0, { type: 'updateConfig', config: chance(rng, 50) ? config : { [one]: config[one] } });
+    attempt(t, someoneRunningTheGame(t, rng), { type: 'updateConfig', config: chance(rng, 50) ? config : { [one]: config[one] } });
+  },
+
+  // Sent by anyone, so the simulation also sees those who may not name co-hosts being refused
+  ({ t, rng, playerId }) => attempt(t, chance(rng, 70) ? t.ids.indexOf(t.state.hostId) : rng.int(t.ids.length), { type: 'setCohost', playerId, on: chance(rng, 60) }),
+  ({ t, rng, playerId }) => {
+    if (chance(rng, 20)) {
+      attempt(t, t.ids.indexOf(t.state.hostId), { type: 'transferHost', playerId });
+    }
   },
 
   ({ t }) => {

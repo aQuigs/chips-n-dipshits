@@ -64,11 +64,6 @@
   white-space: nowrap;
 }
 
-.plate .host {
-  margin-left: 0.3em;
-  color: var(--accent);
-}
-
 .plate .stack {
   overflow: hidden;
   color: var(--accent);

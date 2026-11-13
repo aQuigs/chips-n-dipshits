@@ -1,6 +1,8 @@
 import { evaluateHand } from '../../engine/handRank.ts';
 import type { HandView, SeatView, TableView } from '../../engine/view.ts';
 import { cardEl, chips, h, shortChips } from '../ui.ts';
+import { hostOrCohost } from './dialogs/dialog.ts';
+import { roleMark } from './roles.ts';
 
 /** Whether the table is drawn lying down (desktop, landscape) or standing up (a phone held upright). */
 export type Shape = 'wide' | 'tall';
@@ -180,7 +182,7 @@ function seatEl(view: TableView, seat: SeatView, slot: number, shape: Shape, clo
   const plate = h(
     'div.plate',
     null,
-    h('div.name', { title: seat.name }, seat.name, view.hostId === seat.playerId ? h('span.host', { title: 'Host' }, '★') : null),
+    h('div.name', { title: seat.name }, h('span', null, seat.name), roleMark(view, seat.playerId)),
     h('div.stack', { title: chips(seat.stack) }, shortChips(seat.stack), seat.pendingAdd > 0 ? h('span.pending', null, ` +${shortChips(seat.pendingAdd)}`) : null),
     won > 0 ? h('div.status.won', null, `+${shortChips(won + bounty)}`) : status ? h('div.status', { 'data-status': status }, status) : null,
     // The seconds left, for everyone: the bar under the name alone is easy to miss until the time is gone
@@ -305,7 +307,7 @@ function messageEl(view: TableView, handlers: TableHandlers): HTMLElement | null
   }
 
   if (!view.running) {
-    if (view.you.isHost) {
+    if (hostOrCohost(view)) {
       return h(
         'div.message',
         null,

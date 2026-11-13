@@ -2,6 +2,8 @@ import { bettingOptions } from './betting.ts';
 import type { BettingOptions } from './betting.ts';
 import type { Card } from './cards.ts';
 import type { HandEvent } from './events.ts';
+import { reaches, roleOf } from './hosts.ts';
+import type { Role } from './hosts.ts';
 import { buildPots } from './pots.ts';
 import type { Pot } from './pots.ts';
 import { memberOf, seatIndexOf } from './seats.ts';
@@ -88,15 +90,17 @@ export interface TableView {
   now: number;
   config: TableConfig;
   hostId: string;
+  cohostIds: string[];
   running: boolean;
   nextHandAt: number | null;
   /** Hands dealt at this table so far. */
   handCount: number;
-  you: { id: string; name: string; isHost: boolean; seat: number | null };
+  /** `role` says which of the host's powers the viewer has: whether a command needs them is its handler's `by`. */
+  you: { id: string; name: string; role: Role; seat: number | null };
   seats: (SeatView | null)[];
   hand: HandView | null;
   feed: FeedEntry[];
-  /** Requests waiting on the host: all of them for the host, only their own for everyone else. */
+  /** Requests waiting on the host: all of them for the host and co-hosts, only their own for everyone else. */
   requests: RequestView[];
   ledger: LedgerRow[];
   members: { id: string; name: string }[];
@@ -106,7 +110,7 @@ export interface TableView {
 export function viewFor(state: TableState, playerId: string, now: number): TableView {
   const me = memberOf(state, playerId);
   const mySeat = seatIndexOf(state, playerId);
-  const isHost = state.hostId === playerId;
+  const role = roleOf(state, playerId);
   const hand = state.hand;
 
   const seats = state.seats.map((seat, index): SeatView | null => {
@@ -168,7 +172,8 @@ export function viewFor(state: TableState, playerId: string, now: number): Table
     };
   }
 
-  const visibleRequests = state.requests.filter((request) => isHost || request.playerId === playerId);
+  const approves = reaches(role, 'host or cohost');
+  const visibleRequests = state.requests.filter((request) => approves || request.playerId === playerId);
 
   return {
     id: state.id,
@@ -176,10 +181,11 @@ export function viewFor(state: TableState, playerId: string, now: number): Table
     now,
     config: state.config,
     hostId: state.hostId,
+    cohostIds: state.cohostIds,
     running: state.running,
     nextHandAt: state.nextHandAt,
     handCount: state.handCount,
-    you: { id: me.id, name: me.name, isHost, seat: mySeat >= 0 ? mySeat : null },
+    you: { id: me.id, name: me.name, role, seat: mySeat >= 0 ? mySeat : null },
     seats,
     hand: handView,
     feed: state.feed,

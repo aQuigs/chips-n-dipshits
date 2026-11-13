@@ -7,6 +7,7 @@ No-limit hold'em for a group of friends, played in the browser. There is no serv
 - Cash game for up to 10 players: blinds, side pots, all-ins, showdown with show or muck, an action clock, sitting out, rebuys.
 - Straddles, run it twice and a seven-deuce bounty, each switched on or off per table.
 - The host approves seats and rebuys, pauses the game, changes blinds and settings, adjusts stacks, removes players and can hand the table to someone else.
+- The host can name co-hosts, who can do all of that too except name co-hosts, hand the table over or remove the host. The host has a ★ by their name and co-hosts a ☆.
 - A ledger with who pays whom to settle up, hand history, table chat with the dealer's play-by-play.
 - Four themes with a picker on the front page and in the menu; each player chooses their own. Works on a phone, upright or sideways, and on a desktop.
 - A personal link to carry on from another device.
@@ -30,6 +31,7 @@ The choices the code makes where poker rooms differ:
 - Chips added during a hand arrive when it ends, and only as far as the table maximum then allows, so winning the hand can make a rebuy smaller or cancel it.
 - A request for a seat that can no longer be granted, because the seat went to someone else or the buy-in limits changed, is dropped and the player is told to ask again.
 - The host can take someone who never bought in off the table altogether, which is also how room is made at a full table.
+- With a co-host named, the game carries on when the host's phone dies: the co-host approves players, pauses and adjusts stacks in their place. A co-host needn't be seated and stays one after standing up. Handing the table over makes the old host a co-host.
 - A name that reads like one already at the table is refused: another alphabet's look-alike letters, a capital I for a small l, a zero for an o.
 
 ## Set it up
@@ -81,7 +83,7 @@ Things worth knowing before changing it:
 - A request can be answered, refused, or get no answer while having been carried out. A move that gets no answer is looked up, not sent again, and every move names the decision it answers, so the server refuses one that arrives late. A poll's answer older than what the page held when it asked means the table itself went back, as after restoring the Sheet, and is followed; one merely older than what is showing was overtaken and is dropped.
 - A saved table carries a schema number (`STATE_SCHEMA`), and `upgradeState` brings one saved by older code forward a step at a time when it is read, then fills in any field added since from `SAVED_DEFAULTS`. A field that is only added needs just its default there; change the shape any other way without adding a step and tables from before the change stop loading.
 - A table setting is one entry in the registry in `src/engine/config.ts`: its default, its limits and its field in the settings form all come from that entry.
-- A command is a handler in `src/engine/commands/`, in the module for who may send it, which is where its permission check is declared.
+- A command is a handler in `src/engine/commands/`, in the module for who may send it, which is where its permission check is declared: `by: 'host or cohost'` for running the game, `by: 'host alone'` for deciding who runs it.
 - A hand keeps a list of events beside its narration (`src/engine/events.ts`): what was posted, bet, dealt, shown and won, in order, never a face-down card. `replayHand` plays a hand back from them alone.
 - A theme is a set of values for the design tokens in `src/client/styles/tokens.css`, plus an entry in `src/client/themes.ts`.
 - The page's styles are one file per part of the screen in `src/client/styles/`, joined in the order `order.ts` lists them; a new part adds its file and a line there.

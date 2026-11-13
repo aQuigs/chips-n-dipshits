@@ -4,7 +4,7 @@
  */
 import assert from 'node:assert/strict';
 
-import { FEED_LIMIT, LIMITS, replayHand, viewFor } from '../src/engine/index.ts';
+import { FEED_LIMIT, LIMITS, reaches, replayHand, viewFor } from '../src/engine/index.ts';
 import type { Effect, FeedEntry, HandRecord, TableState } from '../src/engine/index.ts';
 import { CACHE_VALUE_BYTES, utf8Bytes } from '../src/gas/sheetStore.ts';
 import { restoreState } from '../src/server/store.ts';
@@ -42,6 +42,16 @@ export function assertChipsConserved(state: TableState): void {
   for (const player of state.hand?.players ?? []) {
     assert.ok(player.bet >= 0 && player.committed >= player.bet, 'a bet is out of range');
   }
+}
+
+/** The host is a member and never a co-host, and every co-host is a member, listed once. */
+export function assertRolesHold(state: TableState): void {
+  const members = new Set(state.members.map((member) => member.id));
+
+  assert.ok(members.has(state.hostId), 'the host is not at the table');
+  assert.ok(!state.cohostIds.includes(state.hostId), 'the host is listed as a co-host');
+  assert.equal(new Set(state.cohostIds).size, state.cohostIds.length, 'a co-host is listed twice');
+  assert.ok(state.cohostIds.every((id) => members.has(id)), 'a co-host is no longer at the table');
 }
 
 /** The table comes back from being saved exactly as it was. */
@@ -101,6 +111,14 @@ export function assertViewsKeepSecrets(state: TableState, now: number): void {
       assert.deepEqual(seen, allowed ? player.cards : [null, null], 'a view shows the wrong cards');
     }
 
+    // Requests waiting on the host are for the host and co-hosts to see; anyone else sees only their own
+    const approves = reaches(view.you.role, 'host or cohost');
+    assert.deepEqual(
+      view.requests.map((request) => request.playerId),
+      state.requests.filter((request) => approves || request.playerId === viewer.id).map((request) => request.playerId),
+      `${viewer.name} sees the wrong requests`,
+    );
+
     const options = view.hand?.options;
     if (options) {
       assert.equal(hand!.toAct, view.you.seat);
@@ -143,6 +161,7 @@ export function assertFitsTheStore(state: TableState): void {
 /** Everything above, for a table as it stands at `now`. */
 export function assertInvariants(state: TableState, now: number): void {
   assertChipsConserved(state);
+  assertRolesHold(state);
   assertSurvivesSaving(state);
   assertViewsKeepSecrets(state, now);
   assertFitsTheStore(state);

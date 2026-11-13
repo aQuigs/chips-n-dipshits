@@ -1,7 +1,7 @@
 import type { TableView } from '../../../engine/view.ts';
 import { chips, h } from '../../ui.ts';
 import { numberField, numberOf } from '../forms.ts';
-import { frame, submit } from './dialog.ts';
+import { frame, hostOrCohost, submit } from './dialog.ts';
 import type { DialogHandlers, DialogKind } from './dialog.ts';
 
 function sit(view: TableView, seat: number, handlers: DialogHandlers): HTMLElement {
@@ -17,7 +17,7 @@ function sit(view: TableView, seat: number, handlers: DialogHandlers): HTMLEleme
         onsubmit: (event: Event) => submit(event, handlers, { type: 'requestSeat', seat, buyIn: numberOf(event.target as HTMLFormElement, 'buy-in') }, handlers.close),
       },
       numberField('buy-in', 'Buy-in', suggested, minBuyIn, maxBuyIn, `From ${chips(minBuyIn)} to ${chips(maxBuyIn)} chips`),
-      view.you.isHost ? null : h('p.note', null, 'The host approves seats, so you sit down once they say yes.'),
+      hostOrCohost(view) ? null : h('p.note', null, 'The host approves seats, so you sit down once they say yes.'),
       h('button.btn.primary', { type: 'submit', 'data-action': 'confirm-sit' }, 'Sit down'),
     ),
   );

@@ -1,0 +1,24 @@
+/* The marks for the host and co-hosts, which a long name never pushes out of sight. */
+.plate .name {
+  display: flex;
+  justify-content: center;
+}
+
+.plate .name > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.host,
+.cohost {
+  flex: none;
+  margin-left: 0.3em;
+}
+
+.host {
+  color: var(--accent);
+}
+
+.cohost {
+  color: var(--muted);
+}

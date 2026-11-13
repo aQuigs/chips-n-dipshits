@@ -1,3 +1,4 @@
+import type { HostLevel } from '../hosts.ts';
 import type { Command, Ctx, Member, Seat, TableState } from '../types.ts';
 
 export type CommandType = Command['type'];
@@ -21,8 +22,9 @@ export interface SeatedCall<T extends CommandType> extends Call<T> {
  * What a command does, and who may send it, which is checked before `run` is called:
  * member: anyone at the table.
  * seat: a player with a seat, which `run` is handed.
- * host: the host.
+ * host or cohost: the host or any co-host; what running the game takes.
+ * host alone: the host and nobody else; what decides who runs the game.
  */
 export type Handler<T extends CommandType> =
-  | { by: 'member' | 'host'; run: (call: Call<T>) => void }
+  | { by: 'member' | HostLevel; run: (call: Call<T>) => void }
   | { by: 'seat'; run: (call: SeatedCall<T>) => void };

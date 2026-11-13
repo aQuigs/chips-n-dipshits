@@ -1,3 +1,4 @@
+import { reaches } from '../../../engine/hosts.ts';
 import type { Command, HandRecord } from '../../../engine/types.ts';
 import type { TableView } from '../../../engine/view.ts';
 import type { SendOutcome } from '../../connection.ts';
@@ -21,14 +22,17 @@ export interface DialogHandlers {
 /** A dialog's line in the menu. */
 export interface MenuEntry {
   label: string;
-  /** Who gets to see it: `everyone`, `theHost`, `seated`, or a rule of its own. */
+  /** Who gets to see it: `everyone`, `hostOrCohost`, `hostAlone`, `seated`, or a rule of its own. */
   who(view: TableView): boolean;
   /** The small print under the label. */
   note?(view: TableView, handlers: DialogHandlers): string;
 }
 
 export const everyone = (): boolean => true;
-export const theHost = (view: TableView): boolean => view.you.isHost;
+/** The viewer may send what a handler declares `by: 'host or cohost'`. */
+export const hostOrCohost = (view: TableView): boolean => reaches(view.you.role, 'host or cohost');
+/** The viewer may send what a handler declares `by: 'host alone'`. */
+export const hostAlone = (view: TableView): boolean => reaches(view.you.role, 'host alone');
 export const seated = (view: TableView): boolean => view.you.seat !== null;
 
 /**

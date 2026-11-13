@@ -51,7 +51,7 @@ export interface Seat {
 
 export type RequestKind = 'seat' | 'rebuy';
 
-/** Something a player asked for that the host has to approve. */
+/** Something a player asked for that the host or a co-host has to approve. */
 export interface SeatRequest {
   playerId: string;
   kind: RequestKind;
@@ -185,6 +185,8 @@ export interface TableState {
   createdAt: number;
   config: TableConfig;
   hostId: string;
+  /** Members the host has given the host's powers, apart from naming co-hosts and handing over the table. Never the host. */
+  cohostIds: string[];
   members: Member[];
   seats: (Seat | null)[];
   requests: SeatRequest[];
@@ -270,7 +272,8 @@ export type Command =
   | { type: 'kick'; playerId: string }
   | { type: 'setStack'; playerId: string; stack: number }
   | { type: 'updateConfig'; config: Partial<TableConfig> }
-  | { type: 'transferHost'; playerId: string };
+  | { type: 'transferHost'; playerId: string }
+  | { type: 'setCohost'; playerId: string; on: boolean };
 
 /** A rule was broken or a request made no sense; the message is shown to the player. */
 export class GameError extends Error {

@@ -69,7 +69,7 @@ test('creating a table makes the creator its host and hands back their credentia
 
   assert.match(response.view.id, /^[A-Z2-9]{6}$/);
   assert.equal(response.view.version, 1);
-  assert.deepEqual(response.view.you, { id: response.auth.id, name: 'Quigs', isHost: true, seat: null });
+  assert.deepEqual(response.view.you, { id: response.auth.id, name: 'Quigs', role: 'host', seat: null });
   assert.equal(response.view.config.bigBlind, 2);
   assert.equal(store.read(response.view.id)!.members[0]!.token, response.auth.token);
 });
@@ -82,7 +82,7 @@ test('anyone with the table id can look it up and join under a free name', () =>
   assert.deepEqual(info, { ok: true, kind: 'info', table: { id: tableId, name: "Chips n' Dipshits", smallBlind: 10, bigBlind: 20, players: [] } });
 
   const ann = joined(service.handle({ op: 'join', tableId: ` ${tableId.toLowerCase()} `, name: 'Ann' }));
-  assert.equal(ann.view.you.isHost, false);
+  assert.equal(ann.view.you.role, 'member');
   assert.equal(ann.view.version, 2);
 
   assert.deepEqual(failure(service.handle({ op: 'join', tableId, name: 'ann' })), {
@@ -179,7 +179,7 @@ test('a command that breaks a rule changes nothing', () => {
   const { tableId, store, act } = seatedTable();
   const before = store.read(tableId)!;
 
-  assert.deepEqual(failure(act(1, { type: 'start' })), { ok: false, code: 'invalid', error: 'Only the host can do that' });
+  assert.deepEqual(failure(act(1, { type: 'start' })), { ok: false, code: 'invalid', error: 'Only the host or a co-host can do that' });
   assert.deepEqual(store.read(tableId), before);
 });
 

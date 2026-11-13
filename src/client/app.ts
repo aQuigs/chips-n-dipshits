@@ -10,6 +10,7 @@ import type { Platform } from './platform.ts';
 import { PREFERENCES, Preferences } from './prefs.ts';
 import type { AppPreferences } from './prefs.ts';
 import { controlsEl, controlsSignature, lockTurn } from './render/controls.ts';
+import { hostOrCohost } from './render/dialogs/dialog.ts';
 import { dialogEl, dialogShows } from './render/dialogs/index.ts';
 import type { Dialog, DialogHandlers } from './render/dialogs/index.ts';
 import { createFeed } from './render/feed.ts';
@@ -478,7 +479,7 @@ export class App {
   }
 
   private drawTopbar(screen: TableScreen, view: TableView): void {
-    const waiting = view.you.isHost ? view.requests.length : 0;
+    const waiting = hostOrCohost(view) ? view.requests.length : 0;
     let state = '';
 
     if (view.hand) {
@@ -498,7 +499,7 @@ export class App {
   }
 
   private drawBanners(screen: TableScreen, view: TableView): void {
-    const requests = view.you.isHost ? view.requests : [];
+    const requests = hostOrCohost(view) ? view.requests : [];
 
     const trouble = this.table?.trouble ?? null;
 
@@ -521,7 +522,7 @@ export class App {
 
   private drawStage(screen: TableScreen, view: TableView): void {
     const myRequest = view.requests.find((request) => request.playerId === view.you.id);
-    const shows = [screen.shape, view.you, view.hostId, view.running, view.nextHandAt, view.config.actionSeconds, view.seats, view.hand, myRequest];
+    const shows = [screen.shape, view.you, view.hostId, view.cohostIds, view.running, view.nextHandAt, view.config.actionSeconds, view.seats, view.hand, myRequest];
 
     screen.stage.draw(shows, () => {
       const table = tableEl(view, screen.shape, this.clock.offset, {

@@ -1,0 +1,767 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+
+import { TIMING } from '../src/engine/index.ts';
+import type { Effect, HandRecord } from '../src/engine/index.ts';
+import { assertChipsConserved, TestTable } from './helpers.ts';
+
+const BOARD = '2c 7d 9h Jc 3s';
+const ACES = 'As Ah';
+const KINGS = 'Ks Kh';
+const QUEENS = 'Qs Qh';
+
+function handRecords(effects: Effect[]): HandRecord[] {
+  return effects.flatMap((effect) => (effect.type === 'hand' ? [effect.record] : []));
+}
+
+function options(t: TestTable, seat: number) {
+  const found = t.view(seat).hand?.options;
+  assert.ok(found, `seat ${seat} should be on the clock`);
+
+  return found;
+}
+
+function checkAround(t: TestTable, seats: number[], streets: number): void {
+  for (let street = 0; street < streets; street++) {
+    for (const seat of seats) {
+      t.check(seat);
+    }
+  }
+}
+
+test('three-handed: blinds sit left of the button and the button acts first before the flop', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 1000] });
+  t.deal({ button: 0 });
+  const hand = t.state.hand!;
+
+  assert.deepEqual([hand.button, hand.sbSeat, hand.bbSeat], [0, 1, 2]);
+  assert.deepEqual(t.stacks(), [1000, 990, 980]);
+  assert.equal(t.toAct, 0);
+
+  t.call(0);
+  assert.equal(t.toAct, 1);
+  t.call(1);
+  assert.equal(t.toAct, 2, 'the big blind gets the option');
+  t.check(2);
+
+  assert.equal(hand.street, 'flop');
+  assert.equal(hand.boards[0]!.length, 3);
+  assert.equal(t.toAct, 1, 'the small blind acts first after the flop');
+  assertChipsConserved(t.state);
+});
+
+test('heads-up: the button posts the small blind, acts first before the flop and last after it', () => {
+  const t = new TestTable({ stacks: [1000, 1000] });
+  t.deal({ button: 0 });
+  const hand = t.state.hand!;
+
+  assert.deepEqual([hand.sbSeat, hand.bbSeat], [0, 1]);
+  assert.deepEqual(t.stacks(), [990, 980]);
+  assert.equal(t.toAct, 0);
+
+  t.call(0);
+  assert.equal(t.toAct, 1);
+  t.check(1);
+
+  assert.equal(hand.street, 'flop');
+  assert.equal(t.toAct, 1);
+});
+
+test('everyone folds to the big blind, who wins the blinds without showing', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 1000] });
+  t.deal({ button: 0 });
+
+  t.fold(0);
+  t.fold(1);
+
+  const hand = t.state.hand!;
+  assert.equal(hand.stage, 'done');
+  assert.equal(hand.result!.uncontested, true);
+  assert.deepEqual(hand.result!.winnings, [{ seat: 2, amount: 20 }]);
+  assert.deepEqual(t.stacks(), [1000, 990, 1010]);
+  assert.ok(t.feedText().includes('Uncalled bet of 10 returned to P2'));
+  assert.deepEqual(t.view(0).seats[2]!.cards, [null, null]);
+  assertChipsConserved(t.state);
+});
+
+test('the big blind may raise when the action is limped around', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 1000] });
+  t.deal({ button: 0 });
+
+  t.call(0);
+  t.call(1);
+  t.raise(2, 60);
+
+  assert.equal(t.state.hand!.street, 'preflop');
+  assert.equal(t.state.hand!.currentBet, 60);
+  assert.equal(t.toAct, 0);
+});
+
+test('a raise before the flop must at least double the big blind, and a re-raise must match the last raise', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 1000] });
+  t.deal({ button: 0 });
+
+  assert.equal(options(t, 0).minRaiseTo, 40);
+  assert.throws(() => t.raise(0, 39), /between 40 and 1000/);
+  t.raise(0, 60);
+
+  assert.deepEqual(
+    { call: options(t, 1).callAmount, min: options(t, 1).minRaiseTo, max: options(t, 1).maxRaiseTo },
+    { call: 50, min: 100, max: 1000 },
+  );
+  assert.throws(() => t.raise(1, 99), /between 100 and 1000/);
+  t.raise(1, 100);
+
+  assert.equal(options(t, 2).callAmount, 80);
+  assert.equal(options(t, 2).minRaiseTo, 140);
+});
+
+test('a bet after the flop must be at least the big blind, and a raise must double it', () => {
+  const t = new TestTable({ stacks: [1000, 1000] });
+  t.deal({ button: 0 });
+  t.call(0);
+  t.check(1);
+
+  assert.equal(options(t, 1).minRaiseTo, 20);
+  assert.throws(() => t.raise(1, 19), /between 20 and 980/);
+  t.raise(1, 50);
+
+  assert.ok(t.feedText().includes('P1 bets 50'));
+  assert.equal(options(t, 0).callAmount, 50);
+  assert.equal(options(t, 0).minRaiseTo, 100);
+});
+
+test('rejects actions that are out of turn or impossible', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 1000] });
+  t.deal({ button: 0 });
+
+  assert.throws(() => t.call(1), /not your turn/);
+  assert.throws(() => t.check(0), /can't check/);
+
+  t.call(0);
+  t.call(1);
+  assert.throws(() => t.call(2), /nothing to call/);
+  assert.throws(() => t.raise(2, 25.5), /between 40 and 1000/);
+});
+
+test('an all-in for less than a full raise does not let players who already acted raise again', () => {
+  const t = new TestTable({ stacks: [170, 1000, 1000] });
+  t.deal({ button: 0 });
+  t.call(0);
+  t.call(1);
+  t.check(2);
+
+  t.raise(1, 100);
+  t.call(2);
+
+  assert.deepEqual({ min: options(t, 0).minRaiseTo, max: options(t, 0).maxRaiseTo }, { min: 150, max: 150 });
+  t.raise(0, 150);
+  assert.ok(t.feedText().includes('P0 raises to 150 and is all in'));
+
+  assert.equal(options(t, 1).canRaise, false);
+  assert.equal(options(t, 1).callAmount, 50);
+  assert.throws(() => t.raise(1, 400), /can't raise/);
+  t.call(1);
+
+  assert.equal(options(t, 2).canRaise, false);
+  t.call(2);
+
+  assert.equal(t.state.hand!.street, 'turn');
+  assertChipsConserved(t.state);
+});
+
+test('short all-ins that add up to a full raise reopen the betting, but only for players facing that much', () => {
+  // The Tournament Directors Association's own example: A bets 100, B is all in for 125, C calls,
+  // D is all in for 200, E calls. A faces a full raise of 100 and may raise; C faces 75 and may not.
+  const t = new TestTable({ stacks: [1000, 145, 1000, 220, 1000] });
+  t.deal({ button: 4 });
+  for (const seat of [2, 3, 4, 0]) {
+    t.call(seat);
+  }
+  t.check(1);
+  assert.equal(t.state.hand!.street, 'flop');
+
+  t.raise(0, 100);
+  t.raise(1, 125);
+  t.call(2);
+  t.raise(3, 200);
+  t.call(4);
+
+  assert.equal(t.toAct, 0);
+  assert.deepEqual(
+    { canRaise: options(t, 0).canRaise, call: options(t, 0).callAmount, min: options(t, 0).minRaiseTo },
+    { canRaise: true, call: 100, min: 300 },
+  );
+  t.call(0);
+
+  assert.equal(t.toAct, 2);
+  assert.deepEqual({ canRaise: options(t, 2).canRaise, call: options(t, 2).callAmount }, { canRaise: false, call: 75 });
+  t.call(2);
+
+  assert.equal(t.state.hand!.street, 'turn');
+  assertChipsConserved(t.state);
+});
+
+test('a player who has not acted yet may raise over a short all-in', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 170] });
+  t.deal({ button: 0 });
+  t.call(0);
+  t.call(1);
+  t.check(2);
+
+  t.raise(1, 100);
+  t.raise(2, 150);
+
+  assert.deepEqual({ canRaise: options(t, 0).canRaise, min: options(t, 0).minRaiseTo }, { canRaise: true, min: 250 });
+  t.raise(0, 250);
+
+  assert.equal(options(t, 1).canRaise, true, 'the original bettor now faces a full raise');
+  assert.equal(options(t, 1).minRaiseTo, 350);
+});
+
+test('nobody can raise when every opponent is already all in', () => {
+  const t = new TestTable({ stacks: [100, 1000] });
+  t.deal({ button: 0 });
+  t.raise(0, 100);
+
+  assert.deepEqual({ canRaise: options(t, 1).canRaise, call: options(t, 1).callAmount }, { canRaise: false, call: 80 });
+});
+
+test('side pots: each all-in player can only win what they could match', () => {
+  const t = new TestTable({ stacks: [100, 300, 500] });
+  t.deal({ button: 0, holes: { 0: ACES, 1: KINGS, 2: QUEENS }, board: BOARD });
+
+  t.raise(0, 100);
+  t.raise(1, 300);
+  t.call(2);
+
+  assert.equal(t.state.hand!.stage, 'runout');
+  t.runToResult();
+
+  const result = t.state.hand!.result!;
+  assert.deepEqual(result.pots.map((pot) => [pot.amount, pot.eligible]), [[300, [0, 1, 2]], [400, [1, 2]]]);
+  assert.deepEqual(t.stacks(), [300, 400, 200]);
+  assertChipsConserved(t.state);
+});
+
+test('the part of an all-in that nobody could call comes back', () => {
+  const t = new TestTable({ stacks: [100, 300, 500] });
+  t.deal({ button: 0, holes: { 0: ACES, 1: KINGS, 2: QUEENS }, board: BOARD });
+
+  t.raise(0, 100);
+  t.call(1);
+  t.raise(2, 500);
+  t.call(1);
+
+  assert.ok(t.feedText().includes('Uncalled bet of 200 returned to P2'));
+  t.runToResult();
+  assert.deepEqual(t.stacks(), [300, 400, 200]);
+});
+
+test('a split pot gives the odd chip to the first winner left of the button', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 1000], config: { smallBlind: 5, bigBlind: 20 } });
+  t.deal({ button: 0, holes: { 0: 'As Kd', 2: 'Ac Kh' }, board: BOARD });
+
+  t.call(0);
+  t.fold(1);
+  t.check(2);
+  checkAround(t, [2, 0], 3);
+
+  assert.equal(t.state.hand!.stage, 'done');
+  assert.deepEqual(t.stacks(), [1002, 995, 1003]);
+  assertChipsConserved(t.state);
+});
+
+test('showdown: the last player to bet on the river shows first, and a beaten hand mucks', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 1000] });
+  t.deal({ button: 0, holes: { 0: ACES, 1: QUEENS, 2: KINGS }, board: BOARD });
+  t.call(0);
+  t.call(1);
+  t.check(2);
+  checkAround(t, [1, 2, 0], 2);
+
+  t.check(1);
+  t.raise(2, 40);
+  t.call(0);
+  t.call(1);
+
+  const feed = t.feedText();
+  const shows = feed.filter((line) => line.includes('shows') || line.includes('mucks'));
+  assert.deepEqual(shows, ['P2 shows K♠ K♥ (Pair of Kings)', 'P0 shows A♠ A♥ (Pair of Aces)', 'P1 mucks']);
+  assert.ok(feed.includes('P0 wins 180 with Pair of Aces'));
+  assert.deepEqual(t.stacks(), [1120, 940, 940]);
+
+  const seenByLoser = t.view(2).seats;
+  assert.deepEqual(seenByLoser[0]!.cards, ['As', 'Ah']);
+  assert.deepEqual(seenByLoser[1]!.cards, [null, null], 'a mucked hand stays face down for everyone else');
+  assert.deepEqual(t.view(1).seats[1]!.cards, ['Qs', 'Qh'], 'but its owner still sees it');
+
+  t.finishHand();
+  const record = handRecords(t.effects)[0]!;
+  assert.deepEqual(record.players.map((p) => p.cards), [['As', 'Ah'], null, ['Ks', 'Kh']]);
+  assert.deepEqual(record.players.map((p) => p.endStack - p.startStack), [120, -60, -60]);
+});
+
+test('showdown after a checked river starts left of the button', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 1000] });
+  t.deal({ button: 0, holes: { 0: ACES, 1: KINGS, 2: QUEENS }, board: BOARD });
+  t.call(0);
+  t.call(1);
+  t.check(2);
+  checkAround(t, [1, 2, 0], 3);
+
+  const shows = t.feedText().filter((line) => line.includes('shows') || line.includes('mucks'));
+  assert.deepEqual(shows, ['P1 shows K♠ K♥ (Pair of Kings)', 'P2 mucks', 'P0 shows A♠ A♥ (Pair of Aces)']);
+});
+
+test('a hand that loses the main pot still shows when it can win a side pot', () => {
+  const t = new TestTable({ stacks: [100, 1000, 1000] });
+  t.deal({ button: 2, holes: { 0: ACES, 1: KINGS, 2: QUEENS }, board: BOARD });
+
+  t.call(2);
+  t.raise(0, 100);
+  t.call(1);
+  t.call(2);
+
+  t.raise(1, 50);
+  t.call(2);
+  checkAround(t, [1, 2], 2);
+
+  const shows = t.feedText().filter((line) => line.includes('shows') || line.includes('mucks'));
+  assert.deepEqual(shows, ['P0 shows A♠ A♥ (Pair of Aces)', 'P1 shows K♠ K♥ (Pair of Kings)', 'P2 mucks']);
+  assert.ok(t.feedText().includes('P0 wins 300 from the main pot with Pair of Aces'));
+  assert.ok(t.feedText().includes('P1 wins 100 from side pot 1 with Pair of Kings'));
+  assert.deepEqual(t.stacks(), [300, 950, 850]);
+  assertChipsConserved(t.state);
+});
+
+test('a winner who was not called may show afterward, and so may anyone who folded', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 1000] });
+  t.deal({ button: 0, holes: { 2: ACES } });
+  t.fold(0);
+
+  assert.throws(() => t.cmd(0, { type: 'showCards' }), /once the hand is over/);
+  t.fold(1);
+
+  assert.equal(t.view(2).hand!.canShow, true);
+  t.cmd(2, { type: 'showCards' });
+
+  assert.deepEqual(t.view(0).seats[2]!.cards, ['As', 'Ah']);
+  assert.ok(t.feedText().includes('P2 shows A♠ A♥'));
+  assert.throws(() => t.cmd(2, { type: 'showCards' }), /already showing/);
+
+  t.cmd(0, { type: 'showCards' });
+  assert.equal(t.view(1).seats[0]!.shown, true);
+});
+
+test('all in before the flop: hands turn face up and the board comes one street at a time', () => {
+  const t = new TestTable({ stacks: [500, 500] });
+  t.deal({ button: 0, holes: { 0: ACES, 1: KINGS }, board: BOARD });
+
+  t.raise(0, 500);
+  t.call(1);
+
+  const hand = t.state.hand!;
+  assert.equal(hand.stage, 'runout');
+  assert.deepEqual(t.view(1).seats[0]!.cards, ['As', 'Ah']);
+  assert.equal(hand.boards[0]!.length, 0);
+
+  t.wait(TIMING.runoutStepMs);
+  assert.equal(hand.boards[0]!.length, 3);
+  t.wait(TIMING.runoutStepMs);
+  assert.equal(hand.boards[0]!.length, 4);
+  assert.equal(hand.stage, 'runout');
+  t.wait(TIMING.runoutStepMs);
+
+  assert.equal(hand.stage, 'done');
+  assert.deepEqual(hand.boards[0], BOARD.split(' '));
+  assert.deepEqual(t.stacks(), [1000, 0]);
+  assertChipsConserved(t.state);
+});
+
+test('run it twice: each board plays for half the pot and the first board gets the odd chip', () => {
+  const t = new TestTable({ stacks: [500, 500, 500], config: { smallBlind: 5, bigBlind: 20, allowRunItTwice: true } });
+  t.deal({ button: 0, holes: { 0: ACES, 2: KINGS }, board: BOARD, secondBoard: 'Kd 4c 5h 8s Td' });
+
+  t.raise(0, 500);
+  t.fold(1);
+  t.call(2);
+
+  const hand = t.state.hand!;
+  assert.equal(hand.stage, 'ritVote');
+  assert.equal(t.view(0).hand!.canVote, true);
+  assert.equal(t.view(1).hand!.canVote, false, 'a folded player has no vote');
+
+  t.cmd(0, { type: 'ritVote', agree: true });
+  assert.equal(hand.stage, 'ritVote');
+  assert.throws(() => t.cmd(0, { type: 'ritVote', agree: true }), /already voted/);
+  t.cmd(2, { type: 'ritVote', agree: true });
+
+  assert.equal(hand.stage, 'runout');
+  assert.equal(hand.runs, 2);
+  t.runToResult();
+
+  assert.deepEqual(hand.boards, [BOARD.split(' '), 'Kd 4c 5h 8s Td'.split(' ')]);
+  assert.deepEqual(hand.result!.pots[0]!.awards, [
+    { seat: 0, amount: 503, run: 0 },
+    { seat: 2, amount: 502, run: 1 },
+  ]);
+  assert.deepEqual(t.stacks(), [503, 495, 502]);
+  assertChipsConserved(t.state);
+});
+
+test('run it twice from the flop keeps the flop and deals a second turn and river', () => {
+  const t = new TestTable({ stacks: [500, 500], config: { allowRunItTwice: true } });
+  t.deal({ button: 0, holes: { 0: ACES, 1: KINGS }, board: BOARD, secondBoard: 'Kd Kc' });
+  t.call(0);
+  t.check(1);
+
+  t.raise(1, 480);
+  t.call(0);
+  t.cmd(0, { type: 'ritVote', agree: true });
+  t.cmd(1, { type: 'ritVote', agree: true });
+  t.runToResult();
+
+  const hand = t.state.hand!;
+  assert.deepEqual(hand.boards, [BOARD.split(' '), ['2c', '7d', '9h', 'Kd', 'Kc']]);
+  assert.deepEqual(t.stacks(), [500, 500]);
+});
+
+test('one no, or no answer in time, means the board runs once', () => {
+  const declined = new TestTable({ stacks: [500, 500], config: { allowRunItTwice: true } });
+  declined.deal({ button: 0, holes: { 0: ACES, 1: KINGS }, board: BOARD });
+  declined.raise(0, 500);
+  declined.call(1);
+  declined.cmd(1, { type: 'ritVote', agree: false });
+
+  assert.equal(declined.state.hand!.stage, 'runout');
+  assert.equal(declined.state.hand!.runs, 1);
+
+  const ignored = new TestTable({ stacks: [500, 500], config: { allowRunItTwice: true } });
+  ignored.deal({ button: 0, holes: { 0: ACES, 1: KINGS }, board: BOARD });
+  ignored.raise(0, 500);
+  ignored.call(1);
+  ignored.cmd(0, { type: 'ritVote', agree: true });
+  ignored.wait(TIMING.ritVoteMs);
+
+  assert.equal(ignored.state.hand!.stage, 'runout');
+  assert.equal(ignored.state.hand!.runs, 1);
+  ignored.runToResult();
+  assert.deepEqual(ignored.stacks(), [1000, 0]);
+});
+
+test('seven-deuce bounty: winning without a showdown shows the hand and collects from everyone dealt in', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 1000], config: { sevenDeuceBounty: 50 } });
+  t.deal({ button: 0, holes: { 0: '7h 2c' } });
+
+  t.raise(0, 60);
+  t.fold(1);
+  t.fold(2);
+
+  assert.deepEqual(t.state.hand!.result!.bounty, {
+    seat: 0,
+    payments: [
+      { seat: 1, amount: 50 },
+      { seat: 2, amount: 50 },
+    ],
+  });
+  assert.deepEqual(t.stacks(), [1130, 940, 930]);
+  assert.deepEqual(t.view(1).seats[0]!.cards, ['7h', '2c']);
+  assertChipsConserved(t.state);
+});
+
+test('seven-deuce bounty: paid for winning a showdown, capped by what a player has left', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 110], config: { sevenDeuceBounty: 50 } });
+  t.deal({ button: 0, holes: { 0: '7h 2c', 1: ACES }, board: '7d 7s 2h Kc 4d' });
+
+  t.raise(0, 100);
+  t.call(1);
+  t.fold(2);
+  checkAround(t, [1, 0], 3);
+
+  assert.deepEqual(t.state.hand!.result!.bounty!.payments, [
+    { seat: 1, amount: 50 },
+    { seat: 2, amount: 50 },
+  ]);
+  assert.deepEqual(t.stacks(), [1000 + 100 + 20 + 100, 1000 - 100 - 50, 110 - 20 - 50]);
+
+  const broke = new TestTable({ stacks: [1000, 1000, 50], config: { sevenDeuceBounty: 50 } });
+  broke.deal({ button: 0, holes: { 0: '7h 2c' } });
+  broke.raise(0, 60);
+  broke.fold(1);
+  broke.fold(2);
+  assert.deepEqual(broke.state.hand!.result!.bounty!.payments, [
+    { seat: 1, amount: 50 },
+    { seat: 2, amount: 30 },
+  ]);
+});
+
+test('seven-deuce bounty: nothing for a split pot or a losing hand', () => {
+  const split = new TestTable({ stacks: [1000, 1000], config: { sevenDeuceBounty: 50 } });
+  split.deal({ button: 0, holes: { 0: '7h 2c', 1: '8h 3c' }, board: 'As Ks Qs Js Ts' });
+  split.call(0);
+  split.check(1);
+  checkAround(split, [1, 0], 3);
+  assert.equal(split.state.hand!.result!.bounty, null);
+  assert.deepEqual(split.stacks(), [1000, 1000]);
+
+  const lost = new TestTable({ stacks: [1000, 1000], config: { sevenDeuceBounty: 50 } });
+  lost.deal({ button: 0, holes: { 0: '7h 2c', 1: ACES }, board: 'Kc 9d 5h Jc 3s' });
+  lost.call(0);
+  lost.check(1);
+  checkAround(lost, [1, 0], 3);
+  assert.equal(lost.state.hand!.result!.bounty, null);
+  assert.deepEqual(lost.stacks(), [980, 1020]);
+});
+
+test('a straddle is a third blind: action starts to its left and the straddler acts last', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 1000, 1000] });
+  t.cmd(3, { type: 'setStraddle', on: true });
+  t.deal({ button: 0 });
+  const hand = t.state.hand!;
+
+  assert.equal(hand.straddleSeat, 3);
+  assert.equal(hand.currentBet, 40);
+  assert.deepEqual(t.stacks(), [1000, 990, 980, 960]);
+  assert.equal(t.toAct, 0);
+
+  assert.equal(options(t, 0).minRaiseTo, 80);
+  t.call(0);
+  t.call(1);
+  t.call(2);
+
+  assert.equal(t.toAct, 3);
+  assert.deepEqual({ canCheck: options(t, 3).canCheck, canRaise: options(t, 3).canRaise }, { canCheck: true, canRaise: true });
+  t.check(3);
+  assert.equal(hand.street, 'flop');
+  assert.equal(hand.minRaise, 20, 'bets after the flop go back to the big blind');
+});
+
+test('three-handed the button is under the gun and may straddle; heads-up nobody can', () => {
+  const three = new TestTable({ stacks: [1000, 1000, 1000] });
+  three.cmd(0, { type: 'setStraddle', on: true });
+  three.deal({ button: 0 });
+  assert.equal(three.state.hand!.straddleSeat, 0);
+  assert.equal(three.toAct, 1);
+
+  const two = new TestTable({ stacks: [1000, 1000] });
+  two.cmd(0, { type: 'setStraddle', on: true });
+  two.cmd(1, { type: 'setStraddle', on: true });
+  two.deal({ button: 0 });
+  assert.equal(two.state.hand!.straddleSeat, null);
+});
+
+test('a straddle is skipped when the player cannot cover it or the table turned it off', () => {
+  const short = new TestTable({ stacks: [1000, 1000, 1000, 39] });
+  short.cmd(3, { type: 'setStraddle', on: true });
+  short.deal({ button: 0 });
+  assert.equal(short.state.hand!.straddleSeat, null);
+
+  const off = new TestTable({ stacks: [1000, 1000, 1000, 1000], config: { allowStraddle: false } });
+  assert.throws(() => off.cmd(3, { type: 'setStraddle', on: true }), /turned off/);
+});
+
+test('running out of time folds a player facing a bet and marks them away', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 1000], config: { actionSeconds: 10 } });
+  t.deal({ button: 0 });
+  assert.equal(t.state.hand!.deadline, t.now + 10_000 + TIMING.actionGraceMs);
+
+  t.wait(10_000 + TIMING.actionGraceMs - 1);
+  assert.equal(t.toAct, 0, 'not yet');
+  t.wait(1);
+
+  assert.equal(t.toAct, 1);
+  assert.ok(t.feedText().includes('P0 ran out of time'));
+  assert.ok(t.feedText().includes('P0 folds'));
+  assert.deepEqual({ away: t.state.seats[0]!.away, sittingOut: t.state.seats[0]!.sittingOut }, { away: true, sittingOut: true });
+});
+
+test('running out of time checks when checking is free, and an away player is then skipped instantly', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 1000], config: { actionSeconds: 10 } });
+  t.deal({ button: 0 });
+  t.call(0);
+  t.call(1);
+  t.wait(12_000);
+
+  assert.equal(t.state.hand!.street, 'flop');
+  assert.ok(t.feedText().includes('P2 checks'));
+
+  t.check(1);
+  assert.equal(t.toAct, 0, 'the away player checked without being waited for');
+
+  t.raise(0, 40);
+  t.call(1);
+  assert.equal(t.state.hand!.players.find((p) => p.seat === 2)!.folded, true, 'and folds as soon as there is a bet');
+});
+
+test('an away player who acts or sits back in is no longer away', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 1000], config: { actionSeconds: 10 } });
+  t.deal({ button: 0 });
+  t.wait(12_000);
+  assert.equal(t.state.seats[0]!.away, true);
+
+  t.cmd(0, { type: 'sitIn' });
+  assert.deepEqual({ away: t.state.seats[0]!.away, sittingOut: t.state.seats[0]!.sittingOut }, { away: false, sittingOut: false });
+});
+
+test('standing up on your turn folds at once, and the seat is cashed out when the hand ends', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 1000] });
+  t.deal({ button: 0 });
+
+  t.cmd(0, { type: 'standUp' });
+  assert.equal(t.toAct, 1);
+  assert.notEqual(t.state.seats[0], null, 'the seat is held until the hand is over');
+
+  t.fold(1);
+  t.finishHand();
+
+  assert.equal(t.state.seats[0], null);
+  assert.equal(t.state.members[0]!.cashOut, 1000);
+  assert.ok(t.effects.some((e) => e.type === 'ledger' && e.entry.kind === 'cash-out' && e.entry.amount === -1000));
+  assertChipsConserved(t.state);
+});
+
+test('standing up out of turn checks or folds when the action arrives', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 1000] });
+  t.deal({ button: 0 });
+
+  t.cmd(2, { type: 'standUp' });
+  assert.equal(t.toAct, 0);
+  t.call(0);
+  t.call(1);
+
+  assert.equal(t.state.hand!.street, 'flop', 'the big blind checked its option automatically');
+  t.raise(1, 40);
+  assert.equal(t.toAct, 0, 'and folded to the bet without being waited for');
+  assert.equal(t.state.hand!.players.find((p) => p.seat === 2)!.folded, true);
+});
+
+test('standing up between hands frees the seat immediately', () => {
+  const t = new TestTable({ stacks: [1000, 1000] });
+  t.cmd(1, { type: 'standUp' });
+
+  assert.equal(t.state.seats[1], null);
+  assert.equal(t.state.members[1]!.cashOut, 1000);
+});
+
+test('a big blind that cannot cover the blind is all in, and callers still owe the full blind', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 15] });
+  t.deal({ button: 0 });
+
+  assert.equal(options(t, 0).callAmount, 20);
+  t.call(0);
+  assert.equal(options(t, 1).callAmount, 10);
+  t.call(1);
+
+  const hand = t.state.hand!;
+  assert.equal(hand.street, 'flop');
+  assert.deepEqual(t.view(0).hand!.pots, [
+    { amount: 45, eligible: [0, 1, 2] },
+    { amount: 10, eligible: [0, 1] },
+  ]);
+});
+
+test('heads-up against a short big blind, the call only costs what the blind can cover', () => {
+  const t = new TestTable({ stacks: [1000, 15] });
+  t.deal({ button: 0, holes: { 0: ACES, 1: KINGS }, board: BOARD });
+
+  assert.deepEqual({ call: options(t, 0).callAmount, cost: options(t, 0).callCost }, { call: 10, cost: 5 });
+  t.call(0);
+
+  assert.ok(t.feedText().includes('Uncalled bet of 5 returned to P0'));
+  assert.equal(t.state.hand!.stage, 'runout');
+  t.runToResult();
+  assert.deepEqual(t.stacks(), [1015, 0]);
+});
+
+test('a small blind that is all in for less than the big blind leaves nothing to decide', () => {
+  const t = new TestTable({ stacks: [5, 1000] });
+  t.deal({ button: 0, holes: { 0: ACES, 1: KINGS }, board: BOARD });
+
+  const hand = t.state.hand!;
+  assert.equal(hand.stage, 'runout');
+  assert.equal(hand.toAct, null);
+  assert.ok(t.feedText().includes('Uncalled bet of 15 returned to P1'));
+
+  t.runToResult();
+  assert.deepEqual(t.stacks(), [10, 995]);
+});
+
+test('chips approved during a hand wait for the hand to end', () => {
+  const t = new TestTable({ stacks: [1000, 1000] });
+  t.deal({ button: 0 });
+
+  t.cmd(1, { type: 'requestRebuy', amount: 500 });
+  t.cmd(0, { type: 'approve', playerId: t.ids[1]! });
+
+  assert.deepEqual({ stack: t.state.seats[1]!.stack, pending: t.state.seats[1]!.pendingAdd }, { stack: 980, pending: 500 });
+  assertChipsConserved(t.state);
+
+  t.fold(0);
+  t.finishHand();
+
+  assert.deepEqual(t.stacks(), [990, 1510]);
+  assertChipsConserved(t.state);
+});
+
+test('the button moves to the next player who is playing', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 1000, 1000] });
+  t.deal({ button: 0 });
+  t.fold(3);
+  t.fold(0);
+  t.fold(1);
+  t.finishHand();
+
+  t.cmd(1, { type: 'sitOut' });
+  t.deal();
+
+  const hand = t.state.hand!;
+  assert.deepEqual([hand.button, hand.sbSeat, hand.bbSeat], [2, 3, 0]);
+  assert.deepEqual(hand.players.map((p) => p.seat), [0, 2, 3]);
+});
+
+test('with the game running, hands follow each other by themselves', () => {
+  const t = new TestTable({ stacks: [1000, 1000] });
+  t.cmd(0, { type: 'start' });
+  assert.equal(t.state.nextHandAt, t.now + TIMING.startDelayMs);
+
+  t.wait(TIMING.startDelayMs);
+  assert.equal(t.state.hand!.number, 1);
+
+  t.fold(t.toAct!);
+  t.wait(TIMING.uncontestedPauseMs);
+  assert.equal(t.state.hand!.number, 2);
+  assert.equal(handRecords(t.effects).length, 1);
+
+  t.cmd(0, { type: 'pause' });
+  t.fold(t.toAct!);
+  t.wait(TIMING.uncontestedPauseMs);
+  assert.equal(t.state.hand, null);
+  assert.equal(t.state.nextHandAt, null);
+});
+
+test('a player who busts is dealt out until they rebuy, and the game waits when one player is left', () => {
+  const t = new TestTable({ stacks: [500, 500] });
+  t.cmd(0, { type: 'start' });
+  t.wait(TIMING.startDelayMs);
+
+  const button = t.state.hand!.button;
+  t.state.hand!.players[0]!.cards = ACES.split(' ');
+  t.state.hand!.players[1]!.cards = KINGS.split(' ');
+  t.state.hand!.deck = [...t.state.hand!.deck.filter((c) => ![...ACES.split(' '), ...KINGS.split(' '), ...BOARD.split(' ')].includes(c)), ...BOARD.split(' ').reverse()];
+
+  t.raise(button, 500);
+  t.call(1 - button);
+  t.finishHand();
+
+  assert.deepEqual(t.stacks(), [1000, 0]);
+  assert.equal(t.state.hand, null);
+  assert.equal(t.state.nextHandAt, null);
+
+  t.cmd(1, { type: 'requestRebuy', amount: 500 });
+  t.cmd(0, { type: 'approve', playerId: t.ids[1]! });
+  assert.equal(t.state.nextHandAt, t.now + TIMING.startDelayMs);
+
+  t.wait(TIMING.startDelayMs);
+  assert.equal(t.state.hand!.number, 2);
+});

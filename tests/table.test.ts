@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { addMember, createTable, DEFAULT_CONFIG, ledgerOf, viewFor } from '../src/engine/index.ts';
+import { addMember, createTable, DEFAULT_CONFIG, ledgerOf, STATE_SCHEMA, viewFor } from '../src/engine/index.ts';
 import type { Ctx, Effect } from '../src/engine/index.ts';
+import { restoreState } from '../src/server/store.ts';
 import { assertChipsConserved, seededRng, TestTable } from './helpers.ts';
 
 function freshCtx(): Ctx {
@@ -26,9 +27,9 @@ test('table settings that make no sense are rejected', () => {
   const create = (config: unknown) => () => createTable('ABC123', 'Quigs', config, freshCtx());
 
   assert.throws(create({ smallBlind: 0 }), /small blind/);
-  assert.throws(create({ smallBlind: 20, bigBlind: 10 }), /big blind/);
+  assert.throws(create({ smallBlind: 20, bigBlind: 10 }), /big blind can't be smaller than the small blind/);
   assert.throws(create({ smallBlind: 1.5 }), /whole number/);
-  assert.throws(create({ minBuyIn: 500, maxBuyIn: 100 }), /maximum buy-in/);
+  assert.throws(create({ minBuyIn: 500, maxBuyIn: 100 }), /maximum buy-in can't be smaller than the minimum/);
   assert.throws(create({ actionSeconds: 2 }), /action clock/);
   assert.throws(create({ allowStraddle: 'yes' }), /Straddles/);
   assert.throws(create({ name: '' }), /table name/);
@@ -87,13 +88,25 @@ test('seat requests are checked against the seat and the buy-in limits', () => {
   assert.throws(() => t.cmd(1, { type: 'requestSeat', seat: 3, buyIn: 2001 }), /buy-in/);
   assert.throws(() => t.cmd(0, { type: 'requestSeat', seat: 3, buyIn: 500 }), /already have a seat/);
 
+});
+
+test('a seat given to one player turns away everyone else who had asked for it', () => {
+  const t = new TestTable({ stacks: [1000], config: { minBuyIn: 100, maxBuyIn: 2000 } });
+  t.ids.push(addMember(t.state, 'Ann', t.ctx()).id, addMember(t.state, 'Bob', t.ctx()).id, addMember(t.state, 'Cy', t.ctx()).id);
+
   t.cmd(1, { type: 'requestSeat', seat: 3, buyIn: 500 });
   t.cmd(2, { type: 'requestSeat', seat: 3, buyIn: 500 });
+  t.cmd(3, { type: 'requestSeat', seat: 4, buyIn: 500 });
   t.cmd(0, { type: 'approve', playerId: t.ids[1]! });
 
-  assert.throws(() => t.cmd(0, { type: 'approve', playerId: t.ids[2]! }), /taken/);
-  t.cmd(0, { type: 'deny', playerId: t.ids[2]! });
-  assert.equal(t.state.requests.length, 0);
+  assert.deepEqual(
+    t.state.requests.map((request) => request.playerId),
+    [t.ids[3]],
+    'only the request for another seat is left',
+  );
+  assert.ok(t.feedText().includes('Seat 4 is taken, so Bob needs to pick another'));
+  assert.equal(t.view(2).requests.length, 0, 'Bob is free to ask for another seat');
+  assert.throws(() => t.cmd(0, { type: 'approve', playerId: t.ids[2]! }), /gone/);
 });
 
 test('a player can withdraw their own request', () => {
@@ -134,6 +147,53 @@ test('rebuys respect the maximum buy-in', () => {
 
   assert.equal(t.state.seats[1]!.stack, 1500);
   assert.throws(() => t.cmd(1, { type: 'requestRebuy', amount: 1 }), /maximum buy-in/);
+});
+
+test('a request that stopped fitting is cut down or dropped, never left for the host to fail on', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 1000], config: { minBuyIn: 100, maxBuyIn: 2000 } });
+  t.ids.push(addMember(t.state, 'Ann', t.ctx()).id, addMember(t.state, 'Bob', t.ctx()).id);
+
+  // The maximum came down after these two asked
+  t.cmd(1, { type: 'requestRebuy', amount: 1000 });
+  t.cmd(2, { type: 'requestRebuy', amount: 1000 });
+  t.cmd(0, { type: 'updateConfig', config: { maxBuyIn: 1500 } });
+  t.cmd(0, { type: 'approve', playerId: t.ids[1]! });
+  assert.equal(t.state.seats[1]!.stack, 1500, 'the rebuy is cut down to what still fits');
+
+  t.cmd(0, { type: 'updateConfig', config: { maxBuyIn: 1000 } });
+  t.cmd(0, { type: 'approve', playerId: t.ids[2]! });
+  assert.equal(t.state.seats[2]!.stack, 1000);
+  assert.equal(t.feedText().at(-1), 'P2 is at the table maximum, so no chips are added');
+  assert.equal(t.state.requests.length, 0);
+
+  // A seat request is the player's own money, so one outside the new limits is theirs to make again
+  t.cmd(3, { type: 'requestSeat', seat: 5, buyIn: 600 });
+  t.cmd(4, { type: 'requestSeat', seat: 6, buyIn: 900 });
+  t.cmd(0, { type: 'updateConfig', config: { minBuyIn: 800 } });
+
+  assert.deepEqual(
+    t.state.requests.map((request) => request.playerId),
+    [t.ids[4]],
+  );
+  assert.ok(t.feedText().includes("Ann asked to sit down with 600, which the new buy-in limits don't allow"));
+  assertChipsConserved(t.state);
+});
+
+test('the table is told when the host turns a request down', () => {
+  const t = new TestTable({ stacks: [1000, 1000] });
+  t.ids.push(addMember(t.state, 'Ann', t.ctx()).id);
+
+  t.cmd(2, { type: 'requestSeat', seat: 5, buyIn: 600 });
+  t.cmd(0, { type: 'deny', playerId: t.ids[2]! });
+  assert.equal(t.feedText().at(-1), "The host turned down Ann's request for a seat");
+
+  t.cmd(1, { type: 'requestRebuy', amount: 100 });
+  t.cmd(0, { type: 'deny', playerId: t.ids[1]! });
+  assert.equal(t.feedText().at(-1), "The host turned down P1's request for chips");
+
+  const lines = t.feedText().length;
+  t.cmd(0, { type: 'deny', playerId: t.ids[1]! });
+  assert.equal(t.feedText().length, lines, 'there was nothing left to turn down');
 
   t.cmd(0, { type: 'requestRebuy', amount: 250 });
   assert.equal(t.state.seats[0]!.stack, 1250, "the host's own rebuy needs no approval");
@@ -169,7 +229,32 @@ test('kicking a player cashes them out', () => {
 
   assert.equal(t.state.seats[1], null);
   assert.equal(t.state.members[1]!.cashOut, 1000);
+  assert.ok(t.feedText().includes('The host removed P1 from their seat'));
   assertChipsConserved(t.state);
+
+  t.cmd(0, { type: 'kick', playerId: t.ids[1]! });
+  assert.equal(t.state.members.length, 2, 'someone with a line in the ledger stays a member');
+});
+
+test('removing someone who never played frees their name and their place at the table', () => {
+  const t = new TestTable({ stacks: [1000, 1000] });
+  t.ids.push(addMember(t.state, 'Ann', t.ctx()).id);
+  t.cmd(2, { type: 'requestSeat', seat: 5, buyIn: 600 });
+
+  t.cmd(0, { type: 'kick', playerId: t.ids[2]! });
+
+  assert.deepEqual(
+    t.state.members.map((member) => member.name),
+    ['P0', 'P1'],
+  );
+  assert.equal(t.state.requests.length, 0);
+  assert.throws(() => t.view(2), /not part of this table/);
+  assert.equal(addMember(t.state, 'Ann', t.ctx()).name, 'Ann');
+
+  t.cmd(0, { type: 'standUp' });
+  t.cmd(0, { type: 'kick', playerId: t.ids[0]! });
+  assert.equal(t.state.hostId, t.ids[0], 'the host is never removed from their own table');
+  assert.equal(t.state.members.some((member) => member.id === t.ids[0]), true);
 });
 
 test('new blinds apply from the next hand', () => {
@@ -225,6 +310,10 @@ test('chat lands in the feed, which keeps only the latest entries', () => {
     { kind: t.state.feed.at(-1)!.kind, from: t.state.feed.at(-1)!.from, text: t.state.feed.at(-1)!.text },
     { kind: 'chat', from: 'P1', text: 'nice hand' },
   );
+
+  t.cmd(1, { type: 'chat', text: 'a\u0000b \u202Eevil\u2066 \u{1F468}\u200D\u{1F469}\u200D\u{1F467}' });
+  assert.equal(t.state.feed.at(-1)!.text, 'ab evil \u{1F468}\u200D\u{1F469}\u200D\u{1F467}', 'control and text-reversing characters are dropped, joined emoji are kept');
+  assert.throws(() => t.cmd(1, { type: 'chat', text: '\u202E\u0007' }), /message/);
 
   assert.throws(() => t.cmd(1, { type: 'chat', text: '   ' }), /message/);
   assert.throws(() => t.cmd(1, { type: 'chat', text: 'x'.repeat(201) }), /message/);
@@ -308,4 +397,21 @@ test('only the player on the clock is told their options', () => {
   assert.notEqual(t.view(0).hand!.options, null);
   assert.equal(t.view(1).hand!.options, null);
   assert.equal(t.view(2).hand!.options, null);
+});
+
+test('a table saved by the version before this one is brought up to date, and an unknown version is refused', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 1000], config: { sevenDeuceBounty: 50 } });
+  t.deal({ button: 0, holes: { 0: '7h 2c' } });
+
+  const saved = JSON.parse(JSON.stringify(t.state)) as { schema: number; hand: { bounty?: number } };
+  saved.schema = 2;
+  delete saved.hand.bounty;
+
+  assert.deepEqual(restoreState(JSON.stringify(saved)), t.state, 'the hand on the table keeps the bounty it would have paid');
+
+  saved.schema = 1;
+  assert.throws(() => restoreState(JSON.stringify(saved)), /schema 1/);
+
+  saved.schema = STATE_SCHEMA + 1;
+  assert.throws(() => restoreState(JSON.stringify(saved)), new RegExp(`schema ${STATE_SCHEMA + 1}`));
 });

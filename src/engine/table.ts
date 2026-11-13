@@ -1,5 +1,5 @@
 import type { Rng } from './cards.ts';
-import { act, foldIfOnTheClock, restartActionClock, showCards, startHand, stepHand, TIMING, voteRunItTwice } from './hand.ts';
+import { act, restartActionClock, showCards, startHand, stepHand, stopWaitingFor, TIMING, voteRunItTwice } from './hand.ts';
 import { formatChips } from './format.ts';
 import { addFeed, eligibleSeats, memberOf, recordLedger, seatIndexOf, vacateSeat } from './seats.ts';
 import { GameError, SEAT_COUNT, STATE_SCHEMA } from './types.ts';
@@ -78,12 +78,15 @@ function turnOf(value: unknown): number | undefined {
   return value;
 }
 
+/** Control characters, and the marks that reorder text: one of those in a chat line can make the rest of it read backward. */
+const UNPRINTABLE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/g;
+
 function text(value: unknown, what: string, maxLength: number): string {
   if (typeof value !== 'string') {
     throw new GameError(`${what} is missing`);
   }
 
-  const trimmed = value.trim().replace(/\s+/g, ' ');
+  const trimmed = value.replace(UNPRINTABLE, '').trim().replace(/\s+/g, ' ');
   if (trimmed.length === 0 || trimmed.length > maxLength) {
     throw new GameError(`${what} must be 1 to ${maxLength} characters`);
   }
@@ -107,9 +110,16 @@ export function validatedConfig(input: unknown, current: TableConfig): TableConf
   const pick = <K extends keyof TableConfig>(key: K): unknown => (given[key] === undefined ? current[key] : given[key]);
 
   const smallBlind = wholeNumber(pick('smallBlind'), 'The small blind', 1);
-  const bigBlind = wholeNumber(pick('bigBlind'), 'The big blind', smallBlind);
+  const bigBlind = wholeNumber(pick('bigBlind'), 'The big blind', 1);
+  if (bigBlind < smallBlind) {
+    throw new GameError("The big blind can't be smaller than the small blind");
+  }
+
   const minBuyIn = wholeNumber(pick('minBuyIn'), 'The minimum buy-in', 1);
-  const maxBuyIn = wholeNumber(pick('maxBuyIn'), 'The maximum buy-in', minBuyIn);
+  const maxBuyIn = wholeNumber(pick('maxBuyIn'), 'The maximum buy-in', 1);
+  if (maxBuyIn < minBuyIn) {
+    throw new GameError("The maximum buy-in can't be smaller than the minimum");
+  }
 
   const actionSeconds = wholeNumber(pick('actionSeconds'), 'The action clock', 0, LIMITS.maxActionSeconds);
   if (actionSeconds !== 0 && actionSeconds < LIMITS.minActionSeconds) {
@@ -233,22 +243,25 @@ function grantRebuy(state: TableState, ctx: Ctx, request: SeatRequest): void {
     throw new GameError('They no longer have a seat');
   }
 
-  if (seat.stack + seat.pendingAdd + request.amount > state.config.maxBuyIn) {
-    throw new GameError(`That would put them over the maximum buy-in of ${state.config.maxBuyIn}`);
-  }
-
   const member = memberOf(state, request.playerId);
 
-  // Chips can't join a hand that is already being played, so they wait for its end and are bought then
-  if (isDealtIn(state, index)) {
-    seat.pendingAdd += request.amount;
-    addFeed(state, ctx.now, 'system', null, `${member.name} adds ${formatChips(request.amount)} after this hand`);
+  // The stack or the maximum may have changed since they asked. Refusing would leave a request nobody can approve.
+  const amount = Math.min(request.amount, state.config.maxBuyIn - seat.stack - seat.pendingAdd);
+  if (amount < 1) {
+    addFeed(state, ctx.now, 'system', null, `${member.name} is at the table maximum, so no chips are added`);
     return;
   }
 
-  seat.stack += request.amount;
-  recordLedger(state, ctx, member, 'buy-in', request.amount);
-  addFeed(state, ctx.now, 'system', null, `${member.name} adds ${formatChips(request.amount)}`);
+  // Chips can't join a hand that is already being played, so they wait for its end and are bought then
+  if (isDealtIn(state, index)) {
+    seat.pendingAdd += amount;
+    addFeed(state, ctx.now, 'system', null, `${member.name} adds ${formatChips(amount)} after this hand`);
+    return;
+  }
+
+  seat.stack += amount;
+  recordLedger(state, ctx, member, 'buy-in', amount);
+  addFeed(state, ctx.now, 'system', null, `${member.name} adds ${formatChips(amount)}`);
 }
 
 function grant(state: TableState, ctx: Ctx, request: SeatRequest): void {
@@ -259,6 +272,26 @@ function grant(state: TableState, ctx: Ctx, request: SeatRequest): void {
   }
 
   state.requests = state.requests.filter((r) => r.playerId !== request.playerId);
+
+  if (request.kind === 'seat') {
+    turnAway(
+      state,
+      ctx,
+      (r) => r.kind === 'seat' && r.seat === request.seat,
+      (name) => `Seat ${request.seat + 1} is taken, so ${name} needs to pick another`,
+    );
+  }
+}
+
+/** Drops the requests that can no longer be granted and says why, so none is left that the host could only fail to approve. */
+function turnAway(state: TableState, ctx: Ctx, hopeless: (request: SeatRequest) => boolean, why: (name: string, request: SeatRequest) => string): void {
+  const dropped = state.requests.filter(hopeless);
+
+  for (const request of dropped) {
+    addFeed(state, ctx.now, 'system', null, why(memberOf(state, request.playerId).name, request));
+  }
+
+  state.requests = state.requests.filter((r) => !dropped.includes(r));
 }
 
 /** Files a request for the host, who doesn't need to approve their own. */
@@ -284,7 +317,7 @@ function leaveSeat(state: TableState, ctx: Ctx, seatIndex: number): void {
 
   seat.leaving = true;
   state.requests = state.requests.filter((r) => r.playerId !== seat.playerId);
-  foldIfOnTheClock(state, ctx, seatIndex);
+  stopWaitingFor(state, ctx, seatIndex);
 }
 
 function applyTo(state: TableState, ctx: Ctx, playerId: string, command: Command): void {
@@ -418,17 +451,29 @@ function applyTo(state: TableState, ctx: Ctx, playerId: string, command: Command
 
     case 'deny': {
       requireHost(state, playerId);
-      state.requests = state.requests.filter((r) => r.playerId !== command.playerId);
+      turnAway(
+        state,
+        ctx,
+        (r) => r.playerId === command.playerId,
+        (name, r) => (r.kind === 'seat' ? `The host turned down ${name}'s request for a seat` : `The host turned down ${name}'s request for chips`),
+      );
       return;
     }
 
     case 'kick': {
       requireHost(state, playerId);
-      const index = seatIndexOf(state, memberOf(state, command.playerId).id);
+      const target = memberOf(state, command.playerId);
+      const index = seatIndexOf(state, target.id);
 
-      state.requests = state.requests.filter((r) => r.playerId !== command.playerId);
+      state.requests = state.requests.filter((r) => r.playerId !== target.id);
+
       if (index >= 0) {
+        addFeed(state, ctx.now, 'system', null, `The host removed ${target.name} from their seat`);
         leaveSeat(state, ctx, index);
+      } else if (target.id !== state.hostId && target.buyIn === 0 && target.cashOut === 0) {
+        // Someone who never played has no line in the ledger to be kept for, so their name and their place at the table are freed
+        state.members = state.members.filter((m) => m !== target);
+        addFeed(state, ctx.now, 'system', null, `The host removed ${target.name} from the table`);
       }
 
       return;
@@ -463,10 +508,24 @@ function applyTo(state: TableState, ctx: Ctx, playerId: string, command: Command
       const before = state.config;
       state.config = validatedConfig(command.config, before);
 
+      const when = state.hand ? ' from the next hand' : '';
+
       if (state.config.smallBlind !== before.smallBlind || state.config.bigBlind !== before.bigBlind) {
-        const when = state.hand ? ' from the next hand' : '';
         addFeed(state, ctx.now, 'system', null, `Blinds are ${formatChips(state.config.smallBlind)}/${formatChips(state.config.bigBlind)}${when}`);
       }
+
+      if (state.config.sevenDeuceBounty !== before.sevenDeuceBounty) {
+        const bounty = state.config.sevenDeuceBounty;
+        addFeed(state, ctx.now, 'system', null, bounty > 0 ? `The seven-deuce bounty is ${formatChips(bounty)}${when}` : `The seven-deuce bounty is off${when}`);
+      }
+
+      const { minBuyIn, maxBuyIn } = state.config;
+      turnAway(
+        state,
+        ctx,
+        (r) => r.kind === 'seat' && (r.amount < minBuyIn || r.amount > maxBuyIn),
+        (name, r) => `${name} asked to sit down with ${formatChips(r.amount)}, which the new buy-in limits don't allow`,
+      );
 
       if (!state.config.allowStraddle) {
         for (const seat of state.seats) {

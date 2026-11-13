@@ -30,6 +30,11 @@ function assertViewsKeepSecrets(t: TestTable): void {
   const hand = t.state.hand;
 
   t.ids.forEach((playerId, viewerIndex) => {
+    // The host may have removed someone who never played, and they have no view of the table anymore
+    if (!t.state.members.some((member) => member.id === playerId)) {
+      return;
+    }
+
     const view = viewFor(t.state, playerId, t.now);
     const json = JSON.stringify(view);
     assert.ok(!json.includes('"deck"') && !json.includes('"token"'), 'a view leaked the deck or a token');

@@ -3,7 +3,7 @@ import type { Card, Rng } from './cards.ts';
 export const SEAT_COUNT = 10;
 
 /** Bumped when a saved table can no longer be read by newer code without a migration. */
-export const STATE_SCHEMA = 2;
+export const STATE_SCHEMA = 3;
 
 export interface TableConfig {
   name: string;
@@ -132,6 +132,8 @@ export interface Hand {
   sbSeat: number;
   bbSeat: number;
   straddleSeat: number | null;
+  /** The seven-deuce bounty this hand was dealt under; like the blinds, a new setting waits for the next hand. */
+  bounty: number;
   /** Undealt cards; the next card comes off the end. */
   deck: Card[];
   /** One board, or two when the hand is run twice. */

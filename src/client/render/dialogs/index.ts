@@ -13,7 +13,7 @@ import { settingsDialog } from './settings.ts';
 import { sitDialog } from './sit.ts';
 import { themeDialog } from './theme.ts';
 
-export type { DialogHandlers, SendOutcome } from './dialog.ts';
+export type { DialogHandlers } from './dialog.ts';
 
 /**
  * Every dialog, and the things the menu does without one. A new dialog is a file in this folder and a

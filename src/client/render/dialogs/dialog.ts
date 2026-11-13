@@ -1,15 +1,9 @@
 import type { Command, HandRecord } from '../../../engine/types.ts';
 import type { TableView } from '../../../engine/view.ts';
+import type { SendOutcome } from '../../connection.ts';
 import type { AppPreferences } from '../../prefs.ts';
 import { h, holdWhile } from '../../ui.ts';
 import type { Dialog } from './index.ts';
-
-/**
- * taken: the table carried the command out.
- * refused: it did not, and has said why (or the command was never sent).
- * unanswered: no answer came back, so it may or may not have been carried out.
- */
-export type SendOutcome = 'taken' | 'refused' | 'unanswered';
 
 export interface DialogHandlers {
   /** Resolves to whether the table took the command. */

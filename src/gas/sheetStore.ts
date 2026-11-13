@@ -50,12 +50,12 @@ const CHUNK_LENGTH = 40_000;
 // Keeps a chunk that happens to start with = or + from being read as a formula
 const CHUNK_PREFIX = '~';
 
-// A table's row: its id, when it was saved, its version, its state, and the records still to be copied out
+// A table's row: its id, when it was saved, its version, its state, and the records held until they are copied out
 const STATE_CHUNKS = 6;
-const UNSAVED_CHUNKS = 3;
+const HELD_CHUNKS = 3;
 const STATE_COLUMN = 4;
-const UNSAVED_COLUMN = STATE_COLUMN + STATE_CHUNKS;
-const TABLE_COLUMNS = UNSAVED_COLUMN - 1 + UNSAVED_CHUNKS;
+const HELD_COLUMN = STATE_COLUMN + STATE_CHUNKS;
+const TABLE_COLUMNS = HELD_COLUMN - 1 + HELD_CHUNKS;
 
 const HEADERS: Record<SheetKey, string[]> = {
   tables: [
@@ -66,18 +66,18 @@ const HEADERS: Record<SheetKey, string[]> = {
     ...Array.from({ length: STATE_CHUNKS - 1 }, () => ''),
     'Records on their way to the Ledger and Hands tabs (normally empty)',
   ],
-  ledger: ['Time', 'Table', 'Player', 'Type', 'Chips', 'Player ID'],
-  hands: ['Time', 'Table', 'Hand', 'Summary', 'Record'],
+  ledger: ['Time', 'Table', 'Player', 'Type', 'Chips', 'Player ID', 'Record ID'],
+  hands: ['Time', 'Table', 'Hand', 'Summary', 'Record', 'Record ID'],
 };
 
 const TEXT = '@';
 const TIMESTAMP = 'yyyy-mm-dd hh:mm:ss';
 const WHOLE_NUMBER = '0';
 
-/** Where each kind of record ends up. */
+/** Where each kind of record ends up. The record's id is always the last column. */
 const RECORD_SHEETS: { type: Effect['type']; sheet: SheetKey; formats: string[] }[] = [
-  { type: 'ledger', sheet: 'ledger', formats: [TIMESTAMP, TEXT, TEXT, TEXT, WHOLE_NUMBER, TEXT] },
-  { type: 'hand', sheet: 'hands', formats: [TIMESTAMP, TEXT, WHOLE_NUMBER, TEXT, TEXT] },
+  { type: 'ledger', sheet: 'ledger', formats: [TIMESTAMP, TEXT, TEXT, TEXT, WHOLE_NUMBER, TEXT, TEXT] },
+  { type: 'hand', sheet: 'hands', formats: [TIMESTAMP, TEXT, WHOLE_NUMBER, TEXT, TEXT, TEXT] },
 ];
 
 // The engine keeps a hand's log shorter than this. Should a longer one ever arrive, its end is kept
@@ -86,6 +86,13 @@ const SUMMARY_LENGTH = 30_000;
 
 // The longest the cache keeps anything
 const CACHE_SECONDS = 21_600;
+
+// While records wait in a table's row its cache entries live only this long, so that before long a
+// reader goes to the sheet and the copy is tried again, even if nobody at the table ever acts again
+const RETRY_SECONDS = 60;
+
+// How far up a tab a record being retried is looked for, in case it did arrive the first time
+const RETRY_SCAN_ROWS = 500;
 
 // The cache takes 100 KB per key; leave headroom
 const CACHE_VALUE_BYTES = 95_000;
@@ -144,45 +151,73 @@ function fromCells(cells: unknown[]): string {
   return cells.map((cell) => String(cell).slice(CHUNK_PREFIX.length)).join('');
 }
 
-/** The cells that hold records in a table's row until they are copied out. If they can't all fit, the oldest give way. */
-function unsavedCells(records: Effect[]): string[] {
-  for (let kept = records; ; kept = kept.slice(1)) {
-    const cells = toCells(kept.length > 0 ? JSON.stringify(kept) : '', UNSAVED_CHUNKS);
+/** A ledger entry or finished hand on its way to its tab. The id is how a retry tells that it already arrived. */
+interface Held {
+  id: string;
+  record: Effect;
+}
 
+/** The cells that keep records in a table's row until they are copied out. If they can't all fit, hands give way before money, oldest first. */
+function heldCells(held: Held[]): string[] {
+  for (let kept = held; ; ) {
+    const cells = toCells(kept.length > 0 ? JSON.stringify(kept) : '', HELD_CHUNKS);
     if (cells) {
       return cells;
     }
 
-    console.error('No room left to hold a record until it can be copied out', kept[0]);
+    const oldestHand = kept.findIndex((item) => item.record.type === 'hand');
+    const dropped = Math.max(oldestHand, 0);
+
+    console.error('No room left to hold a record until it can be copied out', kept[dropped]);
+    kept = kept.filter((_item, index) => index !== dropped);
   }
+}
+
+function heldFrom(text: string): Held[] {
+  if (!text) {
+    return [];
+  }
+
+  try {
+    const held: unknown = JSON.parse(text);
+
+    if (Array.isArray(held)) {
+      return held as Held[];
+    }
+  } catch {
+    // Reported below
+  }
+
+  // Someone has been in these cells. The table matters more than the records that were waiting in them
+  console.error('Set aside records that could not be read', text);
+
+  return [];
 }
 
 interface TableRow {
   state: TableState;
   /** Records saved with the table that have not reached the Ledger and Hands tabs. */
-  unsaved: Effect[];
+  held: Held[];
 }
 
 function parseRow(values: unknown[]): TableRow {
-  const unsaved = fromCells(values.slice(UNSAVED_COLUMN - 1, UNSAVED_COLUMN - 1 + UNSAVED_CHUNKS));
-
   return {
     state: restoreState(fromCells(values.slice(STATE_COLUMN - 1, STATE_COLUMN - 1 + STATE_CHUNKS))),
-    unsaved: unsaved ? (JSON.parse(unsaved) as Effect[]) : [],
+    held: heldFrom(fromCells(values.slice(HELD_COLUMN - 1, HELD_COLUMN - 1 + HELD_CHUNKS))),
   };
 }
 
-function recordRow(record: Effect): unknown[] {
+function recordRow({ id, record }: Held): unknown[] {
   if (record.type === 'ledger') {
     const { at, tableId, name, kind, amount, playerId } = record.entry;
 
-    return [new Date(at), tableId, name, kind, amount, playerId];
+    return [new Date(at), tableId, name, kind, amount, playerId, id];
   }
 
   const hand = record.record;
   const fitted = hand.summary.length <= SUMMARY_LENGTH ? hand : { ...hand, summary: `…${hand.summary.slice(-SUMMARY_LENGTH)}` };
 
-  return [new Date(hand.at), hand.tableId, hand.number, fitted.summary, JSON.stringify(fitted)];
+  return [new Date(hand.at), hand.tableId, hand.number, fitted.summary, JSON.stringify(fitted), id];
 }
 
 /**
@@ -202,9 +237,15 @@ export class SheetStore implements TableStore {
     return this.locked(() => {
       const found = this.locate(tableId);
       const txn = fn(found ? found.state : null);
+      const save = txn.save;
 
-      if (txn.save) {
-        this.persist(txn.save, found ? found.row : null, [...(found ? found.unsaved : []), ...txn.effects]);
+      if (save) {
+        // A table's version changes with every save, which makes these ids one of a kind
+        const fresh = txn.effects.map((record, index) => ({ id: `${save.id}:${save.version}:${index}`, record }));
+
+        this.persist(save, found ? found.row : null, found ? found.held : [], fresh);
+      } else if (found && found.held.length > 0) {
+        this.copyOut(found.row, found.held, true);
       }
 
       return txn.result;
@@ -254,7 +295,8 @@ export class SheetStore implements TableStore {
       lastRow = firstRow - 1;
     }
 
-    return found.slice(-limit);
+    // A hand that had to wait in its table's row sits below later ones
+    return found.sort((a, b) => a.number - b.number).slice(-limit);
   }
 
   private locked<T>(work: () => T): T {
@@ -274,6 +316,13 @@ export class SheetStore implements TableStore {
   /** Reads a table from the sheet into the cache. Under the lock, so a write can't slip in between the two. */
   private reload(tableId: string): TableState | null {
     return this.locked(() => {
+      // When a table's cache entries run out, every player's poll arrives here at once; the first one refills them.
+      // Both entries must be back, or whichever is missing would send its readers here again and again
+      const refilled = this.deps.cache.get(stateKey(tableId));
+      if (refilled && this.deps.cache.get(peekKey(tableId))) {
+        return restoreState(refilled);
+      }
+
       const found = this.locate(tableId);
 
       if (!found) {
@@ -281,7 +330,8 @@ export class SheetStore implements TableStore {
         return null;
       }
 
-      this.remember(found.state, found.row);
+      const settled = found.held.length === 0 || this.copyOut(found.row, found.held, true);
+      this.remember(found.state, found.row, settled);
 
       return found.state;
     });
@@ -336,12 +386,13 @@ export class SheetStore implements TableStore {
     return { row, ...parseRow(rowAt(row)) };
   }
 
-  private persist(state: TableState, knownRow: number | null, records: Effect[]): void {
+  private persist(state: TableState, knownRow: number | null, leftOver: Held[], fresh: Held[]): void {
+    const held = [...leftOver, ...fresh];
     let row: number;
 
     try {
       // One write holds the table and the records of what just happened to it, so neither is saved without the other
-      row = this.writeTable(state, knownRow, records);
+      row = this.writeTable(state, knownRow, held);
       this.deps.flush();
     } catch (error) {
       // Whatever did or didn't reach the sheet, the cache must not keep serving the old table
@@ -349,19 +400,17 @@ export class SheetStore implements TableStore {
       throw error;
     }
 
-    if (records.length > 0) {
-      this.copyOut(row, records);
-    }
+    const settled = held.length === 0 || this.copyOut(row, held, leftOver.length > 0);
 
     // The save itself succeeded, so a cache that can't be refreshed is only emptied, not treated as a failure
     try {
-      this.remember(state, row);
+      this.remember(state, row, settled);
     } catch {
       this.forget(state.id);
     }
   }
 
-  private writeTable(state: TableState, knownRow: number | null, records: Effect[]): number {
+  private writeTable(state: TableState, knownRow: number | null, held: Held[]): number {
     const sheet = this.sheet('tables');
     const json = JSON.stringify(state);
     const stateCells = toCells(json, STATE_CHUNKS);
@@ -378,27 +427,32 @@ export class SheetStore implements TableStore {
       range.setNumberFormats([Array.from({ length: TABLE_COLUMNS }, () => TEXT)]);
     }
 
-    range.setValues([[state.id, new Date().toISOString(), String(state.version), ...stateCells, ...unsavedCells(records)]]);
+    range.setValues([[state.id, new Date().toISOString(), String(state.version), ...stateCells, ...heldCells(held)]]);
 
     return row;
   }
 
   /**
-   * Copies the records saved in a table's row to the Ledger and Hands tabs, then takes them off the
-   * row. Whatever can't be written stays there and goes out with the table's next save, so a failing
-   * write costs no record and never holds up the game.
+   * Copies the records held in a table's row to the Ledger and Hands tabs, then takes them off the
+   * row. Whatever can't be written stays held and is tried again the next time the row is read, so a
+   * failing write costs no record and never holds up the game. Returns whether the row is now clear.
+   *
+   * `retrying` says some of these were tried before. A write that reported failure may have landed all
+   * the same, so those are looked for in their tab first and not written twice.
    */
-  private copyOut(row: number, records: Effect[]): void {
-    const waiting: Effect[] = [];
+  private copyOut(row: number, held: Held[], retrying: boolean): boolean {
+    const waiting: Held[] = [];
 
     for (const { type, sheet, formats } of RECORD_SHEETS) {
-      const mine = records.filter((record) => record.type === type);
+      const mine = held.filter((item) => item.record.type === type);
       if (mine.length === 0) {
         continue;
       }
 
       try {
-        this.appendRows(sheet, mine.map(recordRow), formats);
+        const arrived = retrying ? this.recentIds(sheet, formats.length) : new Set<string>();
+
+        this.appendRows(sheet, mine.filter((item) => !arrived.has(item.id)).map(recordRow), formats);
         this.deps.flush();
       } catch (error) {
         console.error(error);
@@ -406,20 +460,42 @@ export class SheetStore implements TableStore {
       }
     }
 
-    if (waiting.length === records.length) {
-      return;
+    if (waiting.length === held.length) {
+      return false;
     }
 
     try {
-      this.sheet('tables').getRange(row, UNSAVED_COLUMN, 1, UNSAVED_CHUNKS).setValues([unsavedCells(waiting)]);
+      this.sheet('tables').getRange(row, HELD_COLUMN, 1, HELD_CHUNKS).setValues([heldCells(waiting)]);
       this.deps.flush();
     } catch (error) {
-      // They were copied, so the worst that can follow is that the next save copies them again
+      // The row still lists what was copied; the retry will find those in their tabs and only clear the list
       console.error(error);
+
+      return false;
     }
+
+    return waiting.length === 0;
+  }
+
+  /** The ids of the records at the bottom of a tab. */
+  private recentIds(key: SheetKey, idColumn: number): Set<string> {
+    const sheet = this.sheet(key);
+    const lastRow = sheet.getLastRow();
+    if (lastRow < FIRST_DATA_ROW) {
+      return new Set();
+    }
+
+    const firstRow = Math.max(FIRST_DATA_ROW, lastRow - RETRY_SCAN_ROWS + 1);
+    const ids = sheet.getRange(firstRow, idColumn, lastRow - firstRow + 1, 1).getValues();
+
+    return new Set(ids.map((row) => String(row[0])));
   }
 
   private appendRows(key: SheetKey, rows: unknown[][], formats: string[]): void {
+    if (rows.length === 0) {
+      return;
+    }
+
     const sheet = this.sheet(key);
     const range = sheet.getRange(Math.max(sheet.getLastRow(), 1) + 1, 1, rows.length, formats.length);
 
@@ -427,7 +503,8 @@ export class SheetStore implements TableStore {
     range.setValues(rows);
   }
 
-  private remember(state: TableState, row: number): void {
+  /** `settled` is false while records wait in the table's row, which keeps the cache from hiding them for long. */
+  private remember(state: TableState, row: number, settled: boolean): void {
     const json = JSON.stringify(state);
     const entries: Record<string, string> = {
       [peekKey(state.id)]: JSON.stringify(peekOf(state)),
@@ -440,7 +517,7 @@ export class SheetStore implements TableStore {
       this.deps.cache.remove(stateKey(state.id));
     }
 
-    this.deps.cache.putAll(entries, CACHE_SECONDS);
+    this.deps.cache.putAll(entries, settled ? CACHE_SECONDS : RETRY_SECONDS);
   }
 
   private forget(tableId: string): void {

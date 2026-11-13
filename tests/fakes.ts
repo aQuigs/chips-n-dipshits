@@ -16,8 +16,16 @@ export class FakeSheet implements SheetLike {
   cells: unknown[][] = [];
   formats: string[][] = [];
   reads = 0;
-  /** Set to make every write fail, the way the service now and then does. */
-  refusesWrites = false;
+  private writesAllowed = Infinity;
+
+  /** Makes writes fail, the way the service now and then does, once `count` more have gone through. */
+  refuseWritesAfter(count: number): void {
+    this.writesAllowed = count;
+  }
+
+  acceptWrites(): void {
+    this.writesAllowed = Infinity;
+  }
 
   getLastRow(): number {
     for (let row = this.cells.length - 1; row >= 0; row--) {
@@ -56,9 +64,11 @@ export class FakeSheet implements SheetLike {
       },
 
       setValues: (values: unknown[][]): void => {
-        if (this.refusesWrites) {
+        if (this.writesAllowed <= 0) {
           throw new Error('Service Spreadsheets failed while accessing the document');
         }
+
+        this.writesAllowed -= 1;
 
         if (values.flat().some((value) => typeof value === 'string' && value.length > CELL_LIMIT_CHARACTERS)) {
           throw new Error('Your input contains more than the maximum of 50000 characters in a single cell.');
@@ -117,6 +127,8 @@ export class FakeSpreadsheet implements SpreadsheetLike {
 /** A cache that refuses oversized values the way the real one does, and can be emptied to act out an eviction. */
 export class FakeCache implements CacheLike {
   entries = new Map<string, string>();
+  /** How long each key was last asked to be kept. Nothing expires by itself; a test empties `entries` to act that out. */
+  seconds = new Map<string, number>();
   failNextWrite = false;
 
   get(key: string): string | null {
@@ -127,11 +139,11 @@ export class FakeCache implements CacheLike {
     return this.entries.get(key) ?? null;
   }
 
-  put(key: string, value: string): void {
-    this.putAll({ [key]: value });
+  put(key: string, value: string, expirationInSeconds: number): void {
+    this.putAll({ [key]: value }, expirationInSeconds);
   }
 
-  putAll(values: Record<string, string>): void {
+  putAll(values: Record<string, string>, expirationInSeconds: number): void {
     if (this.failNextWrite) {
       this.failNextWrite = false;
       throw new Error('The cache is unavailable');
@@ -143,6 +155,7 @@ export class FakeCache implements CacheLike {
       }
 
       this.entries.set(key, value);
+      this.seconds.set(key, expirationInSeconds);
     }
   }
 

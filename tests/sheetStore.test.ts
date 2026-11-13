@@ -13,7 +13,7 @@ function setup() {
   const cache = new FakeCache();
   const lock = new FakeLock();
   const counts = { opens: 0, flushes: 0 };
-  let failFlush = false;
+  let failingFlush = 0;
 
   const store = new SheetStore({
     spreadsheet: () => {
@@ -25,17 +25,36 @@ function setup() {
     flush: () => {
       counts.flushes += 1;
 
-      if (failFlush) {
-        failFlush = false;
+      if (counts.flushes === failingFlush) {
         throw new Error('Service Spreadsheets failed');
       }
     },
   });
 
+  /** Makes the nth flush from now report failure. What was written before it stays written, as with a reply that got lost. */
+  const failFlush = (nth: number) => (failingFlush = counts.flushes + nth);
+
   /** A second store over the same sheet and cache, as a separate script run would have. */
   const anotherRun = () => new SheetStore({ spreadsheet: () => spreadsheet, cache, lock, flush: () => {} });
 
-  return { store, spreadsheet, cache, lock, counts, anotherRun, failNextFlush: () => (failFlush = true) };
+  return { store, spreadsheet, cache, lock, counts, anotherRun, failFlush, failNextFlush: () => failFlush(1) };
+}
+
+function buyIn(amount: number): Effect {
+  return { type: 'ledger', entry: { at: 1_700_000_000_000, tableId: 'ABC234', playerId: 'P1', name: 'Ann', kind: 'buy-in', amount } };
+}
+
+/** What a test needs to see of one table's records: those still held in its row, and those that reached the Ledger tab. */
+function records(spreadsheet: FakeSpreadsheet) {
+  const tables = spreadsheet.getSheetByName('Tables')!;
+  const ledger = spreadsheet.getSheetByName('Ledger')!;
+
+  return {
+    tables,
+    ledger,
+    held: () => tables.cells[1]!.slice(9, 12).join(''),
+    ledgerAmounts: () => ledger.cells.slice(1).map((row) => row[4]),
+  };
 }
 
 function table(id: string, version = 1): TableState {
@@ -246,6 +265,22 @@ test('if the cache cannot be written after a save, the save still counts and the
   assert.equal(store.read('ABC234')!.version, 2, 'the sheet has the new save and the next read finds it');
 });
 
+test('a cache that lost only one of a table\'s entries gets both back from the sheet', () => {
+  const { store, cache, spreadsheet } = setup();
+  save(store, table('ABC234', 3));
+  const tables = spreadsheet.getSheetByName('Tables')!;
+
+  cache.entries.delete('peek:ABC234');
+  const readsBefore = tables.reads;
+  assert.deepEqual(store.peek('ABC234'), { version: 3, wakeAt: null });
+  assert.ok(tables.reads > readsBefore, 'the sheet was read');
+  assert.notEqual(cache.get('peek:ABC234'), null, 'so the next peek is answered by the cache');
+
+  const readsAfter = tables.reads;
+  store.peek('ABC234');
+  assert.equal(tables.reads, readsAfter);
+});
+
 test('a missing table is remembered briefly, and creating it clears that', () => {
   const { store, cache, counts } = setup();
 
@@ -288,10 +323,10 @@ test('ledger entries and finished hands are appended to their own tabs', () => {
   save(store, table('ABC234'), effects);
 
   const ledger = spreadsheet.getSheetByName('Ledger')!.cells;
-  assert.deepEqual(ledger[0], ['Time', 'Table', 'Player', 'Type', 'Chips', 'Player ID']);
+  assert.deepEqual(ledger[0], ['Time', 'Table', 'Player', 'Type', 'Chips', 'Player ID', 'Record ID']);
   assert.deepEqual(ledger.slice(1).map((row) => row.slice(1)), [
-    ['ABC234', '12', 'buy-in', 500, 'P1'],
-    ['ABC234', '12', 'cash-out', -650, 'P1'],
+    ['ABC234', '12', 'buy-in', 500, 'P1', 'ABC234:1:0'],
+    ['ABC234', '12', 'cash-out', -650, 'P1', 'ABC234:1:2'],
   ]);
   assert.ok(ledger[1]![0] instanceof Date);
 
@@ -301,26 +336,18 @@ test('ledger entries and finished hands are appended to their own tabs', () => {
 
 test('a record that cannot be copied to its tab waits in the table\'s row and goes out with the next save', () => {
   const { store, spreadsheet, cache, anotherRun } = setup();
-  const buyIn = (amount: number): Effect => ({
-    type: 'ledger',
-    entry: { at: 1_700_000_000_000, tableId: 'ABC234', playerId: 'P1', name: 'Ann', kind: 'buy-in', amount },
-  });
-
   save(store, table('ABC234', 1), [buyIn(100)]);
 
-  const tables = spreadsheet.getSheetByName('Tables')!;
-  const ledger = spreadsheet.getSheetByName('Ledger')!;
-  const waiting = () => tables.cells[1]!.slice(9, 12).join('');
-  const ledgerAmounts = () => ledger.cells.slice(1).map((row) => row[4]);
-  assert.equal(waiting(), '', 'nothing is left in the row once it is copied');
+  const { ledger, held, ledgerAmounts } = records(spreadsheet);
+  assert.equal(held(), '', 'nothing is left in the row once it is copied');
 
-  ledger.refusesWrites = true;
+  ledger.refuseWritesAfter(0);
   save(store, table('ABC234', 2), [buyIn(200), { type: 'hand', record: handRecord('ABC234', 1) }]);
 
   assert.equal(store.read('ABC234')!.version, 2, 'the game goes on: the table itself was saved');
   assert.deepEqual(ledgerAmounts(), [100]);
-  assert.match(waiting(), /"amount":200/, 'the buy-in is still in the row');
-  assert.doesNotMatch(waiting(), /"type":"hand"/, 'the hand was copied, so it is not');
+  assert.match(held(), /"amount":200/, 'the buy-in is still in the row');
+  assert.doesNotMatch(held(), /"type":"hand"/, 'the hand was copied, so it is not');
   assert.deepEqual(store.recentHands('ABC234', 5).map((hand) => hand.number), [1]);
 
   // Still failing on the next save: both buy-ins wait together
@@ -328,12 +355,102 @@ test('a record that cannot be copied to its tab waits in the table\'s row and go
   save(anotherRun(), table('ABC234', 3), [buyIn(300)]);
   assert.deepEqual(ledgerAmounts(), [100]);
 
-  ledger.refusesWrites = false;
+  ledger.acceptWrites();
   save(anotherRun(), table('ABC234', 4));
 
   assert.deepEqual(ledgerAmounts(), [100, 200, 300]);
-  assert.equal(waiting(), '');
+  assert.equal(held(), '');
   assert.deepEqual(store.recentHands('ABC234', 5).map((hand) => hand.number), [1], 'and nothing was copied twice');
+});
+
+test('a copy that landed although it reported failure is not made a second time', () => {
+  const { store, spreadsheet, failFlush } = setup();
+  save(store, table('ABC234', 1), [buyIn(100)]);
+  const { tables, held, ledgerAmounts } = records(spreadsheet);
+
+  // The table row is flushed first, then the Ledger rows: the reply to the second is the one that gets lost
+  failFlush(2);
+  save(store, table('ABC234', 2), [buyIn(500)]);
+  assert.deepEqual(ledgerAmounts(), [100, 500]);
+  assert.match(held(), /"amount":500/, 'for all the store knows, it still has to be copied');
+
+  save(store, table('ABC234', 3));
+  assert.deepEqual(ledgerAmounts(), [100, 500]);
+  assert.equal(held(), '');
+
+  // The other way to get there: the copy is fine, but the row can't be cleared of it afterwards
+  tables.refuseWritesAfter(1);
+  save(store, table('ABC234', 4), [buyIn(700)]);
+  assert.deepEqual(ledgerAmounts(), [100, 500, 700]);
+  assert.match(held(), /"amount":700/);
+
+  tables.acceptWrites();
+  save(store, table('ABC234', 5), [buyIn(900)]);
+  assert.deepEqual(ledgerAmounts(), [100, 500, 700, 900]);
+  assert.equal(held(), '');
+});
+
+test('records left waiting by a table\'s last save are copied without anyone having to act again', () => {
+  const { store, spreadsheet, cache, anotherRun } = setup();
+  save(store, table('ABC234', 1), [buyIn(100)]);
+  const { ledger, held, ledgerAmounts } = records(spreadsheet);
+  const settledFor = cache.seconds.get('state:ABC234')!;
+
+  ledger.refuseWritesAfter(0);
+  save(store, table('ABC234', 2), [buyIn(-100)]);
+  assert.ok(cache.seconds.get('state:ABC234')! <= 60, 'the cache is told to let go soon, so that a reader comes back to the sheet');
+  assert.ok(cache.seconds.get('peek:ABC234')! <= 60);
+
+  // A reader that finds the cache empty retries, here while the tab is still failing
+  cache.entries.clear();
+  assert.equal(anotherRun().peek('ABC234')!.version, 2);
+  assert.deepEqual(ledgerAmounts(), [100]);
+  assert.ok(cache.seconds.get('peek:ABC234')! <= 60);
+
+  ledger.acceptWrites();
+  cache.entries.clear();
+  assert.equal(anotherRun().read('ABC234')!.version, 2);
+  assert.deepEqual(ledgerAmounts(), [100, -100]);
+  assert.equal(held(), '');
+  assert.equal(cache.seconds.get('state:ABC234'), settledFor, 'and the cache keeps the table as long as usual again');
+
+  // A request that changes nothing does the same when it comes first
+  ledger.refuseWritesAfter(0);
+  save(store, table('ABC234', 3), [buyIn(250)]);
+  ledger.acceptWrites();
+  anotherRun().transact('ABC234', () => ({ save: null, effects: [], result: null }));
+  assert.deepEqual(ledgerAmounts(), [100, -100, 250]);
+  assert.equal(held(), '');
+});
+
+test('a table is still read and saved if the cells holding its waiting records were tampered with', () => {
+  const { store, spreadsheet, cache, anotherRun } = setup();
+  save(store, table('ABC234', 1), [buyIn(100)]);
+  const { tables, held, ledgerAmounts } = records(spreadsheet);
+
+  tables.cells[1]![9] = '~[{"id":"ABC234:9:0","record":';
+  cache.entries.clear();
+
+  assert.equal(anotherRun().read('ABC234')!.version, 1);
+  save(anotherRun(), table('ABC234', 2), [buyIn(200)]);
+  assert.deepEqual(ledgerAmounts(), [100, 200]);
+  assert.equal(held(), '');
+});
+
+test('when more records are waiting than a row can hold, hands give way before money', () => {
+  const { store, spreadsheet } = setup();
+  const longHand = (number: number): Effect => ({ type: 'hand', record: { ...handRecord('ABC234', number), summary: 'x'.repeat(29_000) } });
+
+  save(store, table('ABC234', 1), [buyIn(100), longHand(1)]);
+  const { ledger, held } = records(spreadsheet);
+
+  ledger.refuseWritesAfter(0);
+  spreadsheet.getSheetByName('Hands')!.refuseWritesAfter(0);
+  save(store, table('ABC234', 2), [buyIn(200), longHand(2), longHand(3), longHand(4), longHand(5), longHand(6)]);
+
+  assert.match(held(), /"amount":200/);
+  assert.doesNotMatch(held(), /"number":2,/, 'the oldest hand was let go');
+  assert.match(held(), /"number":6,/);
 });
 
 test('a hand with more to say than a cell holds is saved all the same, keeping the end', () => {

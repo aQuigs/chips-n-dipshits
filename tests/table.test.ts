@@ -140,6 +140,14 @@ test('rebuys respect the maximum buy-in', () => {
   assertChipsConserved(t.state);
 });
 
+test('a player on their way out cannot ask for chips that would never be added', () => {
+  const t = new TestTable({ stacks: [1000, 1000] });
+  t.deal({ button: 0 });
+
+  t.cmd(0, { type: 'standUp' });
+  assert.throws(() => t.cmd(0, { type: 'requestRebuy', amount: 500 }), /giving up your seat/);
+});
+
 test('the host can correct a stack between hands, and the ledger records the difference', () => {
   const t = new TestTable({ stacks: [1000, 1000] });
 

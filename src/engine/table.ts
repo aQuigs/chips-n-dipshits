@@ -296,6 +296,10 @@ function applyTo(state: TableState, ctx: Ctx, playerId: string, command: Command
 
     case 'requestRebuy': {
       const { seat, index } = requireSeat(state, playerId);
+      if (seat.leaving) {
+        throw new GameError('You are giving up your seat when this hand ends');
+      }
+
       const room = state.config.maxBuyIn - seat.stack - seat.pendingAdd;
       if (room < 1) {
         throw new GameError(`You already have the maximum buy-in of ${state.config.maxBuyIn}`);

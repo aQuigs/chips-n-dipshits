@@ -77,6 +77,7 @@ function handRecord(tableId: string, number: number): HandRecord {
     boards: [[]],
     players: [],
     result: { uncontested: true, pots: [], winnings: [], hands: [], bounty: null },
+    events: [],
   };
 }
 
@@ -481,6 +482,28 @@ test('a hand with more to say than a cell holds is saved all the same, keeping t
   assert.equal(saved!.number, 7);
   assert.ok(saved!.summary.startsWith('…'));
   assert.ok(saved!.summary.endsWith('P1 wins 40'));
+});
+
+test('a hand saved before records kept events is served with none', () => {
+  const { store, spreadsheet } = setup();
+  save(store, table('ABC234'), [{ type: 'hand', record: handRecord('ABC234', 1) }]);
+
+  const row = spreadsheet.getSheetByName('Hands')!.cells[1]!;
+  const { events: _events, ...asOnceSaved } = handRecord('ABC234', 1);
+  row[4] = JSON.stringify(asOnceSaved);
+
+  assert.deepEqual(store.recentHands('ABC234', 1), [handRecord('ABC234', 1)]);
+});
+
+test('a record whose events would not fit its cell is saved without them', () => {
+  const { store } = setup();
+  const events: HandRecord['events'] = Array.from({ length: 6000 }, () => ['fold', 3]);
+  const record = { ...handRecord('ABC234', 7), events };
+  assert.ok(JSON.stringify(record).length > 50_000);
+
+  save(store, table('ABC234'), [{ type: 'hand', record }]);
+
+  assert.deepEqual(store.recentHands('ABC234', 1), [handRecord('ABC234', 7)]);
 });
 
 test('history reaches back past other tables\' hands', () => {

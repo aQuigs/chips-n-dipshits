@@ -1,7 +1,9 @@
+import { CONFIG_KEYS, CONFIG_SPECS, DEFAULT_CONFIG } from '../../engine/config.ts';
 import type { TableConfig } from '../../engine/types.ts';
 import type { TableInfo } from '../../server/api.ts';
 import { chips, h } from '../ui.ts';
-import { inputOf, numberField, numberOf } from './forms.ts';
+import { configForm } from './configForm.ts';
+import { inputOf } from './forms.ts';
 
 const NAME_LENGTH = 16;
 const CODE_LENGTH = 12;
@@ -63,6 +65,9 @@ async function whilePending(button: HTMLButtonElement, label: string, action: ()
 export function lobbyEl(rememberedName: string, themePicker: HTMLElement, handlers: LobbyHandlers): HTMLElement {
   const createButton = h('button.btn.primary', { type: 'submit', 'data-action': 'create-table' }, 'Create table');
 
+  // The table's name starts out with the apostrophe the page's own title has
+  const settings = configForm(CONFIG_KEYS.filter((key) => CONFIG_SPECS[key].atCreate), { ...DEFAULT_CONFIG, name: 'Chips n’ Dipshits' }, 'new-table-');
+
   const create = h(
     'form.card-panel',
     {
@@ -70,27 +75,12 @@ export function lobbyEl(rememberedName: string, themePicker: HTMLElement, handle
         event.preventDefault();
         const form = event.target as HTMLFormElement;
 
-        void whilePending(createButton, 'Setting up…', () =>
-          handlers.create(inputOf(form, 'host-name').value, {
-            name: inputOf(form, 'new-table-name').value,
-            smallBlind: numberOf(form, 'new-small-blind'),
-            bigBlind: numberOf(form, 'new-big-blind'),
-            minBuyIn: numberOf(form, 'new-min-buy-in'),
-            maxBuyIn: numberOf(form, 'new-max-buy-in'),
-          }),
-        );
+        void whilePending(createButton, 'Setting up…', () => handlers.create(inputOf(form, 'host-name').value, settings.read(form)));
       },
     },
     h('h2', null, 'Start a table'),
     nameField('host-name', rememberedName),
-    h(
-      'label.field',
-      { for: 'new-table-name' },
-      h('span', null, 'Table name'),
-      h('input', { type: 'text', id: 'new-table-name', name: 'new-table-name', value: 'Chips n’ Dipshits', maxlength: 40, required: true }),
-    ),
-    h('div.pair', null, numberField('new-small-blind', 'Small blind', 10, 1), numberField('new-big-blind', 'Big blind', 20, 1)),
-    h('div.pair', null, numberField('new-min-buy-in', 'Minimum buy-in', 400, 1), numberField('new-max-buy-in', 'Maximum buy-in', 2000, 1)),
+    settings.rows,
     h('p.note', null, 'You become the host. Clock, straddles, run it twice and the 7-2 bounty are in the table settings.'),
     createButton,
   );

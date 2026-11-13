@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 
 import { applyCommand, createTable, addMember, freshDeck, startHand, tick, viewFor, SEAT_COUNT } from '../src/engine/index.ts';
-import type { Card, Command, Ctx, Effect, Hand, Rng, TableConfig, TableState, TableView } from '../src/engine/index.ts';
+import type { Card, Command, Ctx, Effect, Hand, HandRecord, Rng, TableConfig, TableState, TableView } from '../src/engine/index.ts';
 
 /** A small repeatable generator (mulberry32); the same seed always deals the same cards. */
 export function seededRng(seed: number): Rng {
@@ -37,6 +37,12 @@ export interface TableOptions {
   stacks: number[];
   config?: Partial<TableConfig>;
   seed?: number;
+  /** What the players are called, by seat; P0, P1 and so on when left out. */
+  names?: string[];
+}
+
+export function handRecords(effects: Effect[]): HandRecord[] {
+  return effects.flatMap((effect) => (effect.type === 'hand' ? [effect.record] : []));
 }
 
 /** Replaces the cards of a hand just dealt with the ones `options` names. */
@@ -63,19 +69,20 @@ export class TestTable {
   now = 1_000_000;
   rng: Rng;
   effects: Effect[] = [];
-  /** Player id by seat. */
+  /** Player id by the seat they were first given; for a table taken over with `adopt`, in the order they joined. */
   ids: string[] = [];
 
   constructor(options: TableOptions) {
     this.rng = seededRng(options.seed ?? 1);
 
     const config = { minBuyIn: 1, maxBuyIn: 1_000_000, actionSeconds: 0, allowRunItTwice: false, ...options.config };
-    const { state, host } = createTable('TEST01', 'P0', config, this.ctx());
+    const name = (seat: number) => options.names?.[seat] ?? `P${seat}`;
+    const { state, host } = createTable('TEST01', name(0), config, this.ctx());
     this.state = state;
     this.ids.push(host.id);
 
     for (let seat = 1; seat < options.stacks.length; seat++) {
-      this.ids.push(addMember(state, `P${seat}`, this.ctx()).id);
+      this.ids.push(addMember(state, name(seat), this.ctx()).id);
     }
 
     options.stacks.forEach((stack, seat) => {
@@ -85,6 +92,17 @@ export class TestTable {
         this.cmd(0, { type: 'approve', playerId: this.ids[seat]! });
       }
     });
+  }
+
+  /** Takes over a table that already exists, such as one read back from a save. The host comes first among its players. */
+  static adopt(state: TableState): TestTable {
+    const t = new TestTable({ stacks: [] });
+
+    t.state = state;
+    t.ids = [state.hostId, ...state.members.map((member) => member.id).filter((id) => id !== state.hostId)];
+    t.now = Math.max(state.createdAt, ...state.feed.map((entry) => entry.at));
+
+    return t;
   }
 
   ctx(): Ctx {
@@ -161,25 +179,5 @@ export class TestTable {
 
   feedText(): string[] {
     return this.state.feed.map((entry) => entry.text);
-  }
-}
-
-/** Every chip ever bought is in a stack, in the pot, or cashed out. Chips waiting to be added are not bought yet. */
-export function assertChipsConserved(state: TableState): void {
-  const hand = state.hand;
-  const inStacks = state.seats.reduce((sum, seat) => sum + (seat ? seat.stack : 0), 0);
-  const inPot = hand && hand.stage !== 'done' ? hand.players.reduce((sum, p) => sum + p.committed, 0) : 0;
-  const bought = state.members.reduce((sum, m) => sum + m.buyIn - m.cashOut, 0);
-
-  assert.equal(inStacks + inPot, bought, 'chips on the table should equal chips bought minus chips cashed out');
-
-  for (const seat of state.seats) {
-    if (seat) {
-      assert.ok(seat.stack >= 0, 'a stack went negative');
-    }
-  }
-
-  for (const player of hand?.players ?? []) {
-    assert.ok(player.bet >= 0 && player.committed >= player.bet, 'a bet is out of range');
   }
 }

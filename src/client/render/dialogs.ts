@@ -1,9 +1,11 @@
-import type { Command, HandRecord, TableConfig } from '../../engine/types.ts';
+import { CONFIG_KEYS } from '../../engine/config.ts';
+import type { Command, HandRecord } from '../../engine/types.ts';
 import type { TableView } from '../../engine/view.ts';
 import { settleUp } from '../settle.ts';
 import { themeById } from '../themes.ts';
 import { chips, h, holdWhile, signedChips } from '../ui.ts';
-import { checkField, inputOf, numberField, numberOf } from './forms.ts';
+import { configForm } from './configForm.ts';
+import { numberField, numberOf } from './forms.ts';
 import { createThemePicker } from './themePicker.ts';
 
 export type Dialog =
@@ -345,7 +347,7 @@ function players(view: TableView, handlers: DialogHandlers): HTMLElement {
 }
 
 function settings(view: TableView, handlers: DialogHandlers): HTMLElement {
-  const config = view.config;
+  const fields = configForm(CONFIG_KEYS, view.config, 'table-');
 
   return frame(
     'Table settings',
@@ -353,31 +355,9 @@ function settings(view: TableView, handlers: DialogHandlers): HTMLElement {
     h(
       'form',
       {
-        onsubmit: (event: Event) => {
-          const form = event.target as HTMLFormElement;
-
-          const next: TableConfig = {
-            name: inputOf(form, 'table-name').value,
-            smallBlind: numberOf(form, 'small-blind'),
-            bigBlind: numberOf(form, 'big-blind'),
-            minBuyIn: numberOf(form, 'min-buy-in'),
-            maxBuyIn: numberOf(form, 'max-buy-in'),
-            actionSeconds: numberOf(form, 'action-seconds'),
-            allowStraddle: inputOf(form, 'allow-straddle').checked,
-            allowRunItTwice: inputOf(form, 'allow-rit').checked,
-            sevenDeuceBounty: numberOf(form, 'bounty'),
-          };
-
-          submit(event, handlers, { type: 'updateConfig', config: next }, handlers.close);
-        },
+        onsubmit: (event: Event) => submit(event, handlers, { type: 'updateConfig', config: fields.read(event.target as HTMLFormElement) }, handlers.close),
       },
-      h('label.field', { for: 'table-name' }, h('span', null, 'Table name'), h('input', { type: 'text', id: 'table-name', name: 'table-name', value: config.name, maxlength: 40, required: true })),
-      h('div.pair', null, numberField('small-blind', 'Small blind', config.smallBlind, 1), numberField('big-blind', 'Big blind', config.bigBlind, 1)),
-      h('div.pair', null, numberField('min-buy-in', 'Minimum buy-in', config.minBuyIn, 1), numberField('max-buy-in', 'Maximum buy-in', config.maxBuyIn, 1)),
-      numberField('action-seconds', 'Seconds to act', config.actionSeconds, 0, 300, '0 turns the clock off'),
-      numberField('bounty', 'Seven-deuce bounty', config.sevenDeuceBounty, 0, undefined, 'Paid by everyone dealt in to whoever wins with 7-2. 0 turns it off'),
-      checkField('allow-straddle', 'Allow straddles', config.allowStraddle),
-      checkField('allow-rit', 'Offer run it twice when everyone is all in', config.allowRunItTwice),
+      fields.rows,
       h('p.note', null, 'New blinds and a new bounty apply from the next hand.'),
       h('button.btn.primary', { type: 'submit', 'data-action': 'save-settings' }, 'Save'),
     ),

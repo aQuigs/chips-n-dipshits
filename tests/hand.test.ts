@@ -2,17 +2,13 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { TIMING } from '../src/engine/index.ts';
-import type { Effect, HandRecord } from '../src/engine/index.ts';
-import { assertChipsConserved, TestTable } from './helpers.ts';
+import { handRecords, TestTable } from './helpers.ts';
+import { assertChipsConserved } from './invariants.ts';
 
 const BOARD = '2c 7d 9h Jc 3s';
 const ACES = 'As Ah';
 const KINGS = 'Ks Kh';
 const QUEENS = 'Qs Qh';
-
-function handRecords(effects: Effect[]): HandRecord[] {
-  return effects.flatMap((effect) => (effect.type === 'hand' ? [effect.record] : []));
-}
 
 function options(t: TestTable, seat: number) {
   const found = t.view(seat).hand?.options;

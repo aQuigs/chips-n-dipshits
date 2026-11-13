@@ -1,5 +1,7 @@
 export * from './betting.ts';
 export * from './cards.ts';
+export * from './config.ts';
+export * from './events.ts';
 export * from './format.ts';
 export * from './hand.ts';
 export * from './handRank.ts';
@@ -8,4 +10,5 @@ export * from './seats.ts';
 export * from './table.ts';
 export * from './types.ts';
 export * from './upgrade.ts';
+export * from './validate.ts';
 export * from './view.ts';

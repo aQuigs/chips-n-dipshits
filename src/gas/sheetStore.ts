@@ -1,3 +1,4 @@
+import { upgradeRecord } from '../engine/index.ts';
 import type { Effect, HandRecord, TableState } from '../engine/index.ts';
 import { peekOf, restoreState, StoreBusyError } from '../server/store.ts';
 import type { TablePeek, TableStore, Txn } from '../server/store.ts';
@@ -45,6 +46,7 @@ type SheetKey = 'tables' | 'ledger' | 'hands';
 const SHEET_NAMES: Record<SheetKey, string> = { tables: 'Tables', ledger: 'Ledger', hands: 'Hands' };
 
 // A cell holds at most 50,000 characters, so long text is spread over several
+const CELL_LENGTH = 50_000;
 const CHUNK_LENGTH = 40_000;
 
 // Keeps a chunk that happens to start with = or + from being read as a formula
@@ -94,8 +96,8 @@ const RETRY_SECONDS = 60;
 // How far up a tab a record being retried is looked for, in case it did arrive the first time
 const RETRY_SCAN_ROWS = 500;
 
-// The cache takes 100 KB per key; leave headroom
-const CACHE_VALUE_BYTES = 95_000;
+// The cache takes 100 KB per key; leave headroom. A table past this is still saved, but every poll then reads it from the sheet under the lock
+export const CACHE_VALUE_BYTES = 95_000;
 
 // How long to remember that a table doesn't exist, so a mistyped link doesn't hit the sheet on every poll
 const MISSING_SECONDS = 30;
@@ -113,7 +115,7 @@ const peekKey = (tableId: string) => `peek:${tableId}`;
 const rowKey = (tableId: string) => `row:${tableId}`;
 
 /** An upper bound on the UTF-8 size of a string whose characters all fit in one UTF-16 unit or pair. */
-function utf8Bytes(text: string): number {
+export function utf8Bytes(text: string): number {
   const nonAscii = text.replace(/[\x00-\x7f]/g, '').length;
 
   return text.length + 2 * nonAscii;
@@ -228,8 +230,16 @@ function recordRow({ id, record }: Held): unknown[] {
 
   const hand = record.record;
   const fitted = hand.summary.length <= SUMMARY_LENGTH ? hand : { ...hand, summary: `…${hand.summary.slice(-SUMMARY_LENGTH)}` };
+  let json = JSON.stringify(fitted);
 
-  return [new Date(hand.at), hand.tableId, hand.number, fitted.summary, JSON.stringify(fitted), id];
+  // The engine keeps a hand's events far shorter than this as well. A record too long for its cell would be
+  // refused every time it is tried, so it goes without its events rather than never arriving
+  if (json.length > CELL_LENGTH) {
+    console.error('A hand record too long for its cell was saved without its events', hand.tableId, hand.number);
+    json = JSON.stringify({ ...fitted, events: [] });
+  }
+
+  return [new Date(hand.at), hand.tableId, hand.number, fitted.summary, json, id];
 }
 
 /**
@@ -301,7 +311,7 @@ export class SheetStore implements TableStore {
     for (let page = 0; page < HAND_SCAN_PAGES && lastRow >= FIRST_DATA_ROW && found.length < limit; page++) {
       const firstRow = Math.max(FIRST_DATA_ROW, lastRow - HAND_SCAN_ROWS + 1);
       const rows = sheet.getRange(firstRow, 1, lastRow - firstRow + 1, HEADERS.hands.length).getValues();
-      const mine = rows.filter((row) => String(row[1]) === tableId).map((row) => JSON.parse(String(row[4])) as HandRecord);
+      const mine = rows.filter((row) => String(row[1]) === tableId).map((row) => upgradeRecord(JSON.parse(String(row[4])) as HandRecord));
 
       found.unshift(...mine);
       lastRow = firstRow - 1;

@@ -1,6 +1,7 @@
 import { bettingOptions } from './betting.ts';
 import type { BettingOptions } from './betting.ts';
 import type { Card } from './cards.ts';
+import type { HandEvent } from './events.ts';
 import { buildPots } from './pots.ts';
 import type { Pot } from './pots.ts';
 import { memberOf, seatIndexOf } from './seats.ts';
@@ -58,6 +59,8 @@ export interface HandView {
   /** The viewer may turn their cards face up. */
   canShow: boolean;
   result: HandResult | null;
+  /** Everything that has happened in the hand so far, in order. The same for every viewer: it holds no face-down card. */
+  events: HandEvent[];
 }
 
 export interface RequestView {
@@ -161,6 +164,7 @@ export function viewFor(state: TableState, playerId: string, now: number): Table
       canVote: hand.stage === 'ritVote' && mine !== undefined && !mine.folded && mine.ritVote === null,
       canShow: hand.stage === 'done' && mine !== undefined && !mine.shown,
       result: hand.result,
+      events: hand.events,
     };
   }
 

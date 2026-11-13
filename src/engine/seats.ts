@@ -2,7 +2,7 @@ import { formatChips } from './format.ts';
 import { GameError, SEAT_COUNT } from './types.ts';
 import type { Ctx, FeedKind, LedgerKind, Member, TableState } from './types.ts';
 
-const FEED_LIMIT = 60;
+export const FEED_LIMIT = 60;
 
 /** Steps clockwise from one seat to another; 0 when they are the same seat. */
 function stepsClockwise(from: number, to: number): number {
@@ -42,6 +42,16 @@ export function memberOf(state: TableState, playerId: string): Member {
   const member = state.members.find((m) => m.id === playerId);
   if (!member) {
     throw new GameError('You are not part of this table');
+  }
+
+  return member;
+}
+
+/** The member a host's command is about, who may have been removed since the host's screen was drawn. */
+export function memberNamed(state: TableState, playerId: string): Member {
+  const member = state.members.find((m) => m.id === playerId);
+  if (!member) {
+    throw new GameError('That player is no longer at the table');
   }
 
   return member;

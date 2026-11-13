@@ -1,8 +1,12 @@
 import type { Card, Rng } from './cards.ts';
+import type { HandEvent } from './events.ts';
 
 export const SEAT_COUNT = 10;
 
-/** Bumped when a saved table can no longer be read by newer code without a migration. */
+/**
+ * Bumped when the shape of a saved table changes (a field renamed, retyped or removed), together with a
+ * step in `upgradeState`. A field that is only added gets a default in `SAVED_DEFAULTS` instead.
+ */
 export const STATE_SCHEMA = 3;
 
 export interface TableConfig {
@@ -158,6 +162,8 @@ export interface Hand {
   deadline: number | null;
   result: HandResult | null;
   log: string[];
+  /** The same story as the log, as data. Empty for a hand that can't be followed from its start. */
+  events: HandEvent[];
 }
 
 export type FeedKind = 'chat' | 'dealer' | 'system';
@@ -228,6 +234,8 @@ export interface HandRecord {
   boards: Card[][];
   players: HandRecordPlayer[];
   result: HandResult;
+  /** Everything that happened, in order; empty when the hand can't be followed from its start. */
+  events: HandEvent[];
 }
 
 /** Things that happened which belong in the permanent record, outside the table state. */

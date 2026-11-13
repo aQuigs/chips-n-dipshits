@@ -17,6 +17,7 @@ import { MemoryStore } from '../src/server/memoryStore.ts';
 import { PokerService } from '../src/server/service.ts';
 import { fixCards, seededRng } from '../tests/helpers.ts';
 import type { DealOptions } from '../tests/helpers.ts';
+import { assertInvariants } from '../tests/invariants.ts';
 import { clientPage } from './bundle.ts';
 
 const STEP_TIMEOUT_MS = 15_000;
@@ -79,10 +80,11 @@ export class RigTable {
     this.seats.set(seat, name);
   }
 
-  /** Does what a player's page would send, and fails the check if the table refuses it. */
+  /** Does what a player's page would send, and fails the check if the table refuses it or it leaves the table in a state no table may be in. */
   act(name: string, command: Command): TableView {
     const answer = this.tryAct(name, command);
     assert.ok(answer.ok && answer.kind === 'view', `${name} ${JSON.stringify(command)}: ${JSON.stringify(answer)}`);
+    assertInvariants(this.rig.store.read(this.id)!, this.rig.now());
 
     return answer.view;
   }

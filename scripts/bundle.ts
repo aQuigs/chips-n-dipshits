@@ -43,6 +43,29 @@ function fill(template: string, slot: string, content: string): string {
   return template.replace(slot, () => content);
 }
 
+/**
+ * Apps Script takes what it reads as comments out of a page's scripts before serving it, and it reads
+ * them like a browser from before template literals: the // of an address in backticks was a comment
+ * to it, and in a minified script the rest of the line is the rest of the program. So the script is
+ * shipped with nothing in it that looks like the start of a comment. A backslash before the second
+ * character changes nothing in a string, a template or a character class, the only places minified
+ * code has these pairs, as long as the first slash isn't itself escaped.
+ */
+function withoutCommentOpeners(js: string): string {
+  const safe = js.replace(/(?<!\\)\/(?=[/*])/g, '/\\');
+  const left = /\/[/*]/.exec(safe);
+
+  if (left) {
+    // What is left is an escaped slash followed by / or *, which only a regular expression literal produces
+    throw new Error(
+      `The page's script has "${safe.slice(Math.max(0, left.index - 30), left.index + 10)}", which Apps Script would cut off as a comment. ` +
+        'Write that regular expression with [/] in place of \\/.',
+    );
+  }
+
+  return safe;
+}
+
 interface PageParts {
   template: string;
   styles: string[];
@@ -58,7 +81,7 @@ async function inlinedPage(parts: PageParts): Promise<string> {
   ]);
 
   // Inside a script element the closing tag ends the script wherever it appears, even in a string
-  const inlineJs = js.replace(/<\/script/gi, '<\\/script');
+  const inlineJs = withoutCommentOpeners(js).replace(/<\/script/gi, '<\\/script');
 
   return fill(fill(template, CSS_SLOT, css.join('\n')), JS_SLOT, inlineJs);
 }

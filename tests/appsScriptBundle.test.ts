@@ -14,13 +14,47 @@ import { FakeCache, FakeLock, FakeSpreadsheet } from './fakes.ts';
 
 const DEPLOYED_AT = 'https://script.example/macros/s/abc/exec';
 
+/**
+ * What Apps Script does to a script in a page it serves: it takes out comments, reading the code the
+ * way a browser from before template literals and without a notion of regular expressions would.
+ * Only quoted strings are safe from it.
+ */
+function withoutWhatReadsAsComments(js: string): string {
+  let kept = '';
+  let quote: string | null = null;
+
+  for (let at = 0; at < js.length; at++) {
+    const char = js[at]!;
+    const pair = js.slice(at, at + 2);
+
+    if (quote) {
+      kept += char === '\\' ? pair : char;
+      at += char === '\\' ? 1 : 0;
+      quote = char === quote || char === '\n' ? null : quote;
+    } else if (pair === '//') {
+      const lineEnd = js.indexOf('\n', at);
+      at = lineEnd === -1 ? js.length : lineEnd - 1;
+    } else if (pair === '/*') {
+      const end = js.indexOf('*/', at + 2);
+      at = end === -1 ? js.length : end + 1;
+    } else {
+      quote = char === '"' || char === "'" ? char : null;
+      kept += char;
+    }
+  }
+
+  return kept;
+}
+
+const SCRIPT_ELEMENT = /(<script[^>]*>)([\s\S]*?)(<\/script>)/g;
+
 class FakeHtmlOutput {
   title = '';
   meta: Record<string, string> = {};
   private readonly content: string;
 
   constructor(content: string) {
-    this.content = content;
+    this.content = content.replace(SCRIPT_ELEMENT, (_, open: string, js: string, close: string) => open + withoutWhatReadsAsComments(js) + close);
   }
 
   getContent(): string {
@@ -132,6 +166,16 @@ test('a held poll gives up after the time it was asked to wait', async () => {
 
   assert.ok(response.ok && response.kind === 'unchanged');
   assert.ok(waited >= 600 && waited < 3000, `waited ${waited} ms`);
+});
+
+test("the page's script reaches the browser whole, although Apps Script takes out what it reads as comments", async () => {
+  const appScript = (html: string) => [...html.matchAll(SCRIPT_ELEMENT)].map((found) => found[2]!).sort((a, b) => b.length - a.length)[0]!;
+
+  const script = await deploy();
+  const served = appScript(script.doGet({}).getContent());
+
+  assert.equal(served.length, appScript(await clientPage(null)).length, 'nothing was cut out of it');
+  assert.doesNotThrow(() => new vm.Script(served));
 });
 
 test('the served page is told its address and the table in the link, and nothing else from the link', async () => {

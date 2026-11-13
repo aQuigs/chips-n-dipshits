@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { tableChange } from '../src/client/tableChange.ts';
 import type { TableChange } from '../src/client/tableChange.ts';
-import type { TableView } from '../src/engine/index.ts';
+import type { HandEvent, TableView } from '../src/engine/index.ts';
 import { TestTable } from './helpers.ts';
 
 /** The view as it reaches a page: a copy, where the engine's own shares the table's feed. */
@@ -23,6 +23,8 @@ class Page {
 }
 
 const texts = (feed: { text: string }[]) => feed.map((entry) => entry.text);
+
+const kinds = (events: HandEvent[]) => events.map((event) => event[0]);
 
 function chattyTable(): TestTable {
   const table = new TestTable({ stacks: [1000, 1000] });
@@ -128,4 +130,125 @@ test('a view that was slow to arrive is judged by when it arrives, not by when t
   const view = seenBy(table, 0);
 
   assert.deepEqual(tableChange(before, view, view.now + 45_000).feed, []);
+});
+
+/** Heads-up with the button on seat 0, who is first to act before the flop. */
+function dealtTable(): TestTable {
+  const table = new TestTable({ stacks: [1000, 1000] });
+
+  table.deal({ button: 0 });
+
+  return table;
+}
+
+test('the events a view adds to its hand are handed out once, however many it brings', () => {
+  const table = dealtTable();
+  const page = new Page();
+
+  page.arrive(table);
+
+  table.call(0);
+  assert.deepEqual(kinds(page.arrive(table).events), ['call']);
+
+  // The check that closes the round, and the flop it brings
+  table.check(1);
+  assert.deepEqual(kinds(page.arrive(table).events), ['check', 'street']);
+
+  // The table changed and the hand did not
+  table.cmd(1, { type: 'chat', text: 'nice flop' });
+  assert.deepEqual(page.arrive(table).events, []);
+});
+
+test('a move made after a long quiet spell is happening now, so it is news like any other', () => {
+  const table = new TestTable({ stacks: [1000, 1000], config: { actionSeconds: 0 } });
+  const page = new Page();
+
+  table.deal({ button: 0 });
+  page.arrive(table);
+
+  table.wait(25_000);
+  table.call(0);
+
+  const change = page.arrive(table);
+  assert.deepEqual(kinds(change.events), ['call']);
+  assert.equal(change.feed.length, 1);
+});
+
+test('the first view, and a table that went back, bring no events however far the hand has got', () => {
+  const table = dealtTable();
+  const page = new Page();
+  const saved = structuredClone(table.state);
+
+  table.call(0);
+  assert.ok(table.view(0).hand!.events.length > 0);
+  assert.deepEqual(page.arrive(table).events, []);
+
+  table.state = saved;
+  table.raise(0, 60);
+  assert.deepEqual(page.arrive(table, true).events, []);
+
+  table.call(1);
+  assert.deepEqual(kinds(page.arrive(table).events), ['call', 'street']);
+});
+
+test('a view that brings a line the viewer missed is catching them up, and none of its events are news', () => {
+  const table = new TestTable({ stacks: [1000, 1000], config: { actionSeconds: 0 } });
+  const page = new Page();
+
+  table.deal({ button: 0 });
+  page.arrive(table);
+
+  // The phone sleeps through the call, and wakes just as the check brings the flop
+  table.call(0);
+  table.wait(60_000);
+  table.check(1);
+
+  const woke = page.arrive(table);
+  assert.deepEqual(woke.events, []);
+  assert.ok(woke.feed.length > 0, 'the lines that are only moments old are still news');
+
+  // From here the page is up to date again
+  table.check(1);
+  assert.deepEqual(kinds(page.arrive(table).events), ['check']);
+});
+
+test('a view that was slow to arrive brings no events, though no line in it says so', () => {
+  const table = dealtTable();
+  const before = seenBy(table, 0);
+
+  table.call(0);
+  const view = seenBy(table, 0);
+  view.feed = before.feed;
+
+  assert.deepEqual(kinds(tableChange(before, view, view.now).events), ['call']);
+  assert.deepEqual(tableChange(before, view, view.now + 45_000).events, []);
+});
+
+test('a hand that began since the view before is news from its start', () => {
+  const table = dealtTable();
+  const page = new Page();
+
+  page.arrive(table);
+  table.fold(0);
+  const lastHand = page.arrive(table).view.hand!;
+
+  // The next view the page gets is already the next hand, whose list is shorter than the one it had
+  table.finishHand();
+  table.deal({ button: 1 });
+
+  const { events, view } = page.arrive(table);
+  assert.ok(view.hand!.events.length < lastHand.events.length);
+  assert.equal(events[0]![0], 'start');
+  assert.deepEqual(events, view.hand!.events);
+});
+
+test('a hand whose events were given up on brings none, where its shorter list would look like a new one', () => {
+  const table = dealtTable();
+  const before = seenBy(table, 0);
+
+  table.call(0);
+  const view = seenBy(table, 0);
+  view.hand!.events = [];
+
+  assert.deepEqual(tableChange(before, view, view.now).events, []);
 });

@@ -87,5 +87,5 @@ Things worth knowing before changing it:
 - The page's styles are one file per part of the screen in `src/client/styles/`, joined in the order `order.ts` lists them; a new part adds its file and a line there.
 - Each dialog is a file in `src/client/render/dialogs/`, with its line in the menu declared beside it, and `index.ts` lists them in the order the menu shows them.
 - What a player sets for themselves, such as sound, is an entry in `src/client/prefs.ts`. The Preferences dialog is drawn from those entries, and each choice is kept in the player's browser.
-- What happens on the page when the table changes, such as the chime when it is your turn, is an effect in `src/client/effects/`, listed in `effects.ts`. Each is handed the table as it was and as it is, with the lines that are new picked out, so none has to keep track of what it has already done.
+- What happens on the page when the table changes, such as the chime when it is your turn, is an effect in `src/client/effects/`, listed in `effects.ts`. Each is handed the table as it was and as it is, with the hand's events and the lines that are new picked out, so none has to keep track of what it has already done.
 - Another game is a new engine module behind the same commands and views; another database is a new `TableStore`; another host for the page is a new `Transport` and `Links`.

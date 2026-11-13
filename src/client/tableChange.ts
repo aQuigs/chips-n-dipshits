@@ -1,7 +1,8 @@
+import type { HandEvent } from '../engine/events.ts';
 import type { FeedEntry } from '../engine/types.ts';
 import type { TableView } from '../engine/view.ts';
 
-// Older than this when it reaches the page, a line is something the viewer missed, as while their phone slept, not something happening
+// Older than this when it reaches the page, a thing is something the viewer missed, as while their phone slept, not something happening
 const FRESH_MS = 10_000;
 
 /** What a view that has just been put on screen brought with it. */
@@ -14,6 +15,12 @@ export interface TableChange {
    * None for the first view, whose lines were all said before the viewer got here.
    */
   feed: FeedEntry[];
+  /**
+   * What has just happened in the hand on the table: its events past those the view before had, or
+   * all of them when the hand began since. None when the view is catching the viewer up, which is
+   * the first view and any view that brought something they missed.
+   */
+  events: HandEvent[];
 }
 
 /**
@@ -26,12 +33,29 @@ export interface TableChange {
  * the view is news.
  */
 export function tableChange(before: TableView | null, view: TableView, now: number, wentBack = false): TableChange {
-  return { before, view, feed: before && !wentBack ? newLines(before, view, now) : [] };
-}
+  if (!before || wentBack) {
+    return { before, view, feed: [], events: [] };
+  }
 
-function newLines(before: TableView, view: TableView, now: number): FeedEntry[] {
   // A line is known by its number and its time together: a table put back to an earlier state numbers its next lines like ones it had
   const known = new Map(before.feed.map((entry) => [entry.seq, entry.at]));
+  const lines = view.feed.filter((entry) => known.get(entry.seq) !== entry.at);
+  const feed = lines.filter((entry) => now - entry.at <= FRESH_MS);
 
-  return view.feed.filter((entry) => known.get(entry.seq) !== entry.at && now - entry.at <= FRESH_MS);
+  // Events carry no time of their own. A line that is already old, or a view that is, says this view
+  // holds things the viewer missed, and its events cannot be told apart from those
+  const caughtUp = feed.length === lines.length && now - view.now <= FRESH_MS;
+
+  return { before, view, feed, events: caughtUp ? newEvents(before, view) : [] };
+}
+
+function newEvents(before: TableView, view: TableView): HandEvent[] {
+  if (!view.hand) {
+    return [];
+  }
+
+  // A hand that outgrows what is recorded has its list emptied for good, which leaves nothing past what was had
+  const had = before.hand?.number === view.hand.number ? before.hand.events.length : 0;
+
+  return view.hand.events.slice(had);
 }

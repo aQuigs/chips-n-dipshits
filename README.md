@@ -8,7 +8,7 @@ No-limit hold'em for a group of friends, played in the browser. There is no serv
 - Straddles, run it twice and a seven-deuce bounty, each switched on or off per table.
 - The host approves seats and rebuys, pauses the game, changes blinds and settings, adjusts stacks, removes players and can hand the table to someone else.
 - A ledger with who pays whom to settle up, hand history, table chat with the dealer's play-by-play.
-- Four themes with a picker on the front page and in the menu; each player chooses their own. Works on a phone held upright and on a desktop.
+- Four themes with a picker on the front page and in the menu; each player chooses their own. Works on a phone, upright or sideways, and on a desktop.
 - A personal link to carry on from another device.
 
 ## House rules

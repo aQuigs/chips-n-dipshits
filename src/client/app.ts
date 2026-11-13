@@ -1,9 +1,9 @@
 import type { Command, HandRecord, TableConfig } from '../engine/types.ts';
 import type { TableView } from '../engine/view.ts';
-import type { ApiError, ApiResponse, Auth } from '../server/api.ts';
+import type { ApiError, ApiRequest, ApiResponse, Auth } from '../server/api.ts';
 import type { Platform } from './platform.ts';
 import { controlsEl, controlsSignature } from './render/controls.ts';
-import { dialogEl, isLive } from './render/dialogs.ts';
+import { dialogEl, dialogShows } from './render/dialogs.ts';
 import type { Dialog, DialogHandlers } from './render/dialogs.ts';
 import { createFeed } from './render/feed.ts';
 import type { Feed } from './render/feed.ts';
@@ -20,6 +20,9 @@ const HOLD_MS = 20_000;
 
 // A server that can't hold a poll answers at once, so those are spaced out instead
 const QUICK_POLL_GAP_MS = 1200;
+
+// Longer than any answer takes. Past this a request is taken for lost, as happens when a phone sleeps mid-request
+const REQUEST_TIMEOUT_MS = 30_000;
 
 const FIRST_RETRY_MS = 1000;
 const MAX_RETRY_MS = 10_000;
@@ -47,7 +50,7 @@ interface TableScreen {
   banners: Slot;
   stage: Slot;
   controls: Slot;
-  overlay: HTMLElement;
+  overlay: Slot;
   feed: Feed;
   shape: Shape;
   seenCards: Set<string>;
@@ -75,6 +78,7 @@ export class App {
   private view: TableView | null = null;
   private screen: TableScreen | null = null;
   private dialog: Dialog | null = null;
+  private dialogOpens = 0;
 
   /** Server time minus this device's time, so countdowns agree with the server's clock. */
   private clockOffset = 0;
@@ -128,6 +132,19 @@ export class App {
   private begin(): void {
     this.applyTheme(this.theme());
     setInterval(() => this.tickCountdowns(), COUNTDOWN_TICK_MS);
+
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && this.dialog) {
+        this.closeDialog();
+      }
+    });
+
+    // A phone that was asleep comes back with a request that may never be answered
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden && this.session) {
+        this.restartPolling();
+      }
+    });
   }
 
   /** Switches the theme and remembers it for this browser. */
@@ -257,21 +274,21 @@ export class App {
       banners: new Slot(h('div.banners')),
       stage,
       controls: new Slot(h('div.controls-slot')),
-      overlay: h('div.overlay', { hidden: true }),
+      overlay: new Slot(h('div.overlay', { hidden: true })),
       feed,
       shape: 'wide',
       seenCards: new Set(),
       resizeObserver: new ResizeObserver(() => this.reshape()),
     };
 
-    screen.overlay.addEventListener('click', (event) => {
-      if (event.target === screen.overlay) {
+    screen.overlay.element.addEventListener('click', (event) => {
+      if (event.target === screen.overlay.element) {
         this.closeDialog();
       }
     });
 
     this.screen = screen;
-    this.mount(h('div.app', null, screen.topbar.element, screen.banners.element, stage.element, screen.controls.element, feed.element, screen.overlay));
+    this.mount(h('div.app', null, screen.topbar.element, screen.banners.element, stage.element, screen.controls.element, feed.element, screen.overlay.element));
     screen.resizeObserver.observe(stage.element);
 
     if (view) {
@@ -280,6 +297,11 @@ export class App {
       stage.element.appendChild(h('div.loading', null, 'Finding your seat…'));
     }
 
+    this.restartPolling();
+  }
+
+  /** Retires the request that is waiting on the server and asks afresh, so the table is current right away. */
+  private restartPolling(): void {
     this.pollRun += 1;
     void this.poll(this.pollRun);
   }
@@ -300,12 +322,20 @@ export class App {
 
   // ---- Talking to the server ----
 
-  /** One request; null when the server could not be reached at all. */
-  private async request(request: Parameters<Platform['transport']['send']>[0]): Promise<ApiResponse | null> {
+  /** One request; null when the server could not be reached, or took so long that the request must be lost. */
+  private async request(request: ApiRequest): Promise<ApiResponse | null> {
+    const patience = REQUEST_TIMEOUT_MS + (request.op === 'poll' ? (request.holdMs ?? 0) : 0);
+    let timer = 0;
+    const lost = new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), patience);
+    });
+
     try {
-      return await this.platform.transport.send(request);
+      return await Promise.race([this.platform.transport.send(request), lost]);
     } catch {
       return null;
+    } finally {
+      clearTimeout(timer);
     }
   }
 
@@ -433,9 +463,7 @@ export class App {
     this.drawControls(screen, view);
     screen.feed.update(view.feed);
 
-    if (this.dialog && isLive(this.dialog)) {
-      this.drawDialog();
-    }
+    this.drawDialog();
   }
 
   private drawControls(screen: TableScreen, view: TableView): void {
@@ -562,6 +590,7 @@ export class App {
 
   private openDialog(dialog: Dialog): void {
     this.dialog = dialog;
+    this.dialogOpens += 1;
     this.drawDialog();
   }
 
@@ -576,14 +605,19 @@ export class App {
       return;
     }
 
-    if (!this.dialog || !this.view) {
-      screen.overlay.hidden = true;
-      screen.overlay.replaceChildren();
+    const dialog = this.dialog;
+    const view = this.view;
+
+    screen.overlay.element.hidden = !dialog || !view;
+
+    if (!dialog || !view) {
+      screen.overlay.draw(null, () => null);
       return;
     }
 
-    screen.overlay.hidden = false;
-    screen.overlay.replaceChildren(dialogEl(this.dialog, this.view, this.dialogHandlers()));
+    // Opening a dialog always draws it; after that only a change in what it shows does
+    const handlers = this.dialogHandlers();
+    screen.overlay.draw([this.dialogOpens, dialogShows(dialog, view, handlers)], () => dialogEl(dialog, view, handlers));
   }
 
   private dialogHandlers(): DialogHandlers {
@@ -632,7 +666,7 @@ export class App {
     this.toastEl.hidden = false;
 
     clearTimeout(this.toastTimer);
-    this.toastTimer = setTimeout(() => (this.toastEl.hidden = true), TOAST_MS) as unknown as number;
+    this.toastTimer = setTimeout(() => (this.toastEl.hidden = true), TOAST_MS);
   }
 
   private remember(tableId: string, auth: Auth): void {

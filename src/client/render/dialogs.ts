@@ -18,11 +18,21 @@ export type Dialog =
   | { kind: 'setStack'; playerId: string }
   | { kind: 'confirm'; title: string; body: string; action: string; command: Command };
 
-/** Dialogs that show live table data, and so are redrawn when it changes. The rest hold a form someone may be filling in. */
-const LIVE_DIALOGS = new Set<Dialog['kind']>(['menu', 'ledger', 'players']);
-
-export function isLive(dialog: Dialog): boolean {
-  return LIVE_DIALOGS.has(dialog.kind);
+/**
+ * What a dialog's content depends on. A dialog showing live table data is redrawn when this changes;
+ * the rest hold a form someone may be filling in, and are drawn once.
+ */
+export function dialogShows(dialog: Dialog, view: TableView, handlers: DialogHandlers): unknown {
+  switch (dialog.kind) {
+    case 'menu':
+      return [view.config, view.you, view.running, view.requests.length, handlers.soundOn(), handlers.theme()];
+    case 'ledger':
+      return view.ledger;
+    case 'players':
+      return [view.requests, view.members, view.hostId, view.seats.map((seat) => seat && [seat.playerId, seat.name, seat.seat, seat.stack])];
+    default:
+      return null;
+  }
 }
 
 export interface DialogHandlers {

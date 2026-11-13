@@ -345,14 +345,21 @@ function copyRow(id: string, label: string, value: string, handlers: DialogHandl
   const button = h('button.btn.small.primary', { type: 'button' }, 'Copy');
 
   button.addEventListener('click', async () => {
-    const copied = await handlers.copy(value);
+    let copied = await handlers.copy(value);
 
+    // A page inside someone else's frame is often refused the clipboard; copying the selection still works there
     if (!copied) {
       input.focus();
       input.select();
+
+      try {
+        copied = document.execCommand('copy');
+      } catch {
+        copied = false;
+      }
     }
 
-    button.textContent = copied ? 'Copied' : 'Press Ctrl+C';
+    button.textContent = copied ? 'Copied' : 'Copy it from the box';
   });
 
   return h('div.field', null, h('label', { for: id }, label), h('div.copy', null, input, button), warning ? h('small', null, warning) : null);

@@ -14,7 +14,8 @@
     "test:e2e": "E2E=1 node --test tests/e2e.test.ts",
     "screenshots": "node scripts/screenshots.ts",
     "gallery": "node scripts/gallery.ts",
-    "deploy": "npm run build && node scripts/deploy.ts"
+    "deploy": "npm run build && node scripts/deploy.ts",
+    "check:live": "node scripts/liveCheck.ts"
   },
   "devDependencies": {
     "@google/clasp": "^3.4.1",

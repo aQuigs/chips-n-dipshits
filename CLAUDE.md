@@ -9,6 +9,7 @@ Multiplayer no-limit hold'em whose backend is a Google Sheet with an Apps Script
 - `npm run test:e2e`: plays a full game in headless browsers, about a minute. Run after any change to `src/client`, then look at the pictures it leaves in `screenshots/`.
 - `npm run dev`: the game on localhost with tables in memory.
 - `npm run deploy`: pushes the build to Apps Script. Outward-facing: only when asked.
+- `npm run check:live`: plays a short game at the deployed address. Run after every deploy; it adds a table to the real Sheet.
 
 ## How the code is written
 

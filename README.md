@@ -36,7 +36,10 @@ You need Node 24 or newer and a Google account.
 2. `npx clasp login`, and sign in with the Google account that should own the Sheet.
 3. Switch on the Apps Script API at <https://script.google.com/home/usersettings>.
 4. `npm run deploy`. The first run creates a Sheet named "Chips n' Dipshits" with its script and prints the game's address.
-5. Open that address once while signed in as the owner and approve the permission prompt. From then on anyone with the address can play, without a Google account.
+5. Open that address once while signed in as the owner and approve the permission prompt (Google warns that it hasn't verified the app, which is normal for a script of your own: Advanced, then go on). From then on anyone with the address can play, without a Google account. Until then visitors get "Access Denied".
+6. `npm run check:live` plays a short two-player game at the address and times each step.
+
+With several Google accounts signed in to one browser, Google tends to send these steps to the wrong one. A private window with only the owner's account avoids that.
 
 `npm run deploy` is also how an update goes live; the address stays the same.
 
@@ -52,6 +55,7 @@ The Sheet is the database. It holds every table (including the cards in play), t
 | `npm run screenshots` | The same browser run, saving a picture of every screen, and of the table in every theme, to `screenshots/`. |
 | `npm run build` | Type-checks and writes `dist/gas` (what is pushed to Apps Script) and `dist/web` (the page for any static host). |
 | `npm run gallery` | Writes `dist/gallery.html`, a showcase of the themes with the app playing against bots in the page. |
+| `npm run check:live` | Plays a short game at the deployed address in real browsers and checks the page Google serves is the one that was built. Leaves one small table in the Sheet. |
 
 ## How it is put together
 

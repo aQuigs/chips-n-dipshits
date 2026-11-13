@@ -3,6 +3,7 @@ import type { TableView } from '../../engine/view.ts';
 import { settleUp } from '../settle.ts';
 import { themeById } from '../themes.ts';
 import { chips, h, signedChips } from '../ui.ts';
+import { checkField, inputOf, numberField, numberOf } from './forms.ts';
 import { createThemePicker } from './themePicker.ts';
 
 export type Dialog =
@@ -57,24 +58,6 @@ function frame(title: string, handlers: DialogHandlers, ...body: (HTMLElement | 
     h('header', null, h('h2', null, title), h('button.icon', { type: 'button', 'aria-label': 'Close', 'data-action': 'close', onclick: handlers.close }, '✕')),
     h('div.dialog-body', null, body),
   );
-}
-
-function numberField(id: string, label: string, value: number, min: number, max?: number, hint?: string): HTMLElement {
-  return h(
-    'label.field',
-    { for: id },
-    h('span', null, label),
-    h('input', { type: 'number', id, name: id, value, min, max, step: 1, inputmode: 'numeric', required: true }),
-    hint ? h('small', null, hint) : null,
-  );
-}
-
-function checkField(id: string, label: string, checked: boolean): HTMLElement {
-  return h('label.check', { for: id }, h('input', { type: 'checkbox', id, name: id, checked }), h('span', null, label));
-}
-
-function valueOf(form: HTMLFormElement, name: string): number {
-  return Number((form.elements.namedItem(name) as HTMLInputElement).value);
 }
 
 function menu(view: TableView, handlers: DialogHandlers): HTMLElement {
@@ -140,7 +123,7 @@ function sit(view: TableView, seat: number, handlers: DialogHandlers): HTMLEleme
       {
         onsubmit: (event: Event) => {
           event.preventDefault();
-          handlers.send({ type: 'requestSeat', seat, buyIn: valueOf(event.target as HTMLFormElement, 'buy-in') });
+          handlers.send({ type: 'requestSeat', seat, buyIn: numberOf(event.target as HTMLFormElement, 'buy-in') });
           handlers.close();
         },
       },
@@ -163,7 +146,7 @@ function rebuy(view: TableView, handlers: DialogHandlers): HTMLElement {
       {
         onsubmit: (event: Event) => {
           event.preventDefault();
-          handlers.send({ type: 'requestRebuy', amount: valueOf(event.target as HTMLFormElement, 'rebuy-amount') });
+          handlers.send({ type: 'requestRebuy', amount: numberOf(event.target as HTMLFormElement, 'rebuy-amount') });
           handlers.close();
         },
       },
@@ -327,18 +310,17 @@ function settings(view: TableView, handlers: DialogHandlers): HTMLElement {
         onsubmit: (event: Event) => {
           event.preventDefault();
           const form = event.target as HTMLFormElement;
-          const checked = (name: string) => (form.elements.namedItem(name) as HTMLInputElement).checked;
 
           const next: TableConfig = {
-            name: (form.elements.namedItem('table-name') as HTMLInputElement).value,
-            smallBlind: valueOf(form, 'small-blind'),
-            bigBlind: valueOf(form, 'big-blind'),
-            minBuyIn: valueOf(form, 'min-buy-in'),
-            maxBuyIn: valueOf(form, 'max-buy-in'),
-            actionSeconds: valueOf(form, 'action-seconds'),
-            allowStraddle: checked('allow-straddle'),
-            allowRunItTwice: checked('allow-rit'),
-            sevenDeuceBounty: valueOf(form, 'bounty'),
+            name: inputOf(form, 'table-name').value,
+            smallBlind: numberOf(form, 'small-blind'),
+            bigBlind: numberOf(form, 'big-blind'),
+            minBuyIn: numberOf(form, 'min-buy-in'),
+            maxBuyIn: numberOf(form, 'max-buy-in'),
+            actionSeconds: numberOf(form, 'action-seconds'),
+            allowStraddle: inputOf(form, 'allow-straddle').checked,
+            allowRunItTwice: inputOf(form, 'allow-rit').checked,
+            sevenDeuceBounty: numberOf(form, 'bounty'),
           };
 
           handlers.send({ type: 'updateConfig', config: next });
@@ -406,7 +388,7 @@ function setStack(view: TableView, playerId: string, handlers: DialogHandlers): 
       {
         onsubmit: (event: Event) => {
           event.preventDefault();
-          handlers.send({ type: 'setStack', playerId, stack: valueOf(event.target as HTMLFormElement, 'new-stack') });
+          handlers.send({ type: 'setStack', playerId, stack: numberOf(event.target as HTMLFormElement, 'new-stack') });
           handlers.open({ kind: 'players' });
         },
       },

@@ -1,6 +1,7 @@
 import type { TableConfig } from '../../engine/types.ts';
 import type { TableInfo } from '../../server/api.ts';
 import { chips, h } from '../ui.ts';
+import { inputOf, numberField, numberOf } from './forms.ts';
 
 const NAME_LENGTH = 16;
 const CODE_LENGTH = 12;
@@ -34,14 +35,6 @@ function nameField(id: string, value: string): HTMLElement {
     h('span', null, 'Your name'),
     h('input', { type: 'text', id, name: id, value, maxlength: NAME_LENGTH, required: true, autocomplete: 'nickname', placeholder: 'What the table calls you' }),
   );
-}
-
-function numberField(id: string, label: string, value: number): HTMLElement {
-  return h('label.field', { for: id }, h('span', null, label), h('input', { type: 'number', id, name: id, value, min: 1, step: 1, inputmode: 'numeric', required: true }));
-}
-
-function field(form: HTMLFormElement, name: string): HTMLInputElement {
-  return form.elements.namedItem(name) as HTMLInputElement;
 }
 
 function themeSection(themePicker: HTMLElement): HTMLElement {
@@ -78,12 +71,12 @@ export function lobbyEl(rememberedName: string, themePicker: HTMLElement, handle
         const form = event.target as HTMLFormElement;
 
         void whilePending(createButton, 'Setting up…', () =>
-          handlers.create(field(form, 'host-name').value, {
-            name: field(form, 'new-table-name').value,
-            smallBlind: Number(field(form, 'new-small-blind').value),
-            bigBlind: Number(field(form, 'new-big-blind').value),
-            minBuyIn: Number(field(form, 'new-min-buy-in').value),
-            maxBuyIn: Number(field(form, 'new-max-buy-in').value),
+          handlers.create(inputOf(form, 'host-name').value, {
+            name: inputOf(form, 'new-table-name').value,
+            smallBlind: numberOf(form, 'new-small-blind'),
+            bigBlind: numberOf(form, 'new-big-blind'),
+            minBuyIn: numberOf(form, 'new-min-buy-in'),
+            maxBuyIn: numberOf(form, 'new-max-buy-in'),
           }),
         );
       },
@@ -96,8 +89,8 @@ export function lobbyEl(rememberedName: string, themePicker: HTMLElement, handle
       h('span', null, 'Table name'),
       h('input', { type: 'text', id: 'new-table-name', name: 'new-table-name', value: 'Chips n’ Dipshits', maxlength: 40, required: true }),
     ),
-    h('div.pair', null, numberField('new-small-blind', 'Small blind', 10), numberField('new-big-blind', 'Big blind', 20)),
-    h('div.pair', null, numberField('new-min-buy-in', 'Minimum buy-in', 400), numberField('new-max-buy-in', 'Maximum buy-in', 2000)),
+    h('div.pair', null, numberField('new-small-blind', 'Small blind', 10, 1), numberField('new-big-blind', 'Big blind', 20, 1)),
+    h('div.pair', null, numberField('new-min-buy-in', 'Minimum buy-in', 400, 1), numberField('new-max-buy-in', 'Maximum buy-in', 2000, 1)),
     h('p.note', null, 'You become the host. Clock, straddles, run it twice and the 7-2 bounty are in the table settings.'),
     createButton,
   );
@@ -107,7 +100,7 @@ export function lobbyEl(rememberedName: string, themePicker: HTMLElement, handle
     {
       onsubmit: (event: Event) => {
         event.preventDefault();
-        handlers.openTable(field(event.target as HTMLFormElement, 'table-code').value);
+        handlers.openTable(inputOf(event.target as HTMLFormElement, 'table-code').value);
       },
     },
     h('h2', null, 'Join a table'),
@@ -134,7 +127,7 @@ export function joinScreen(tableId: string, rememberedName: string, themePicker:
     {
       onsubmit: (event: Event) => {
         event.preventDefault();
-        void whilePending(joinButton, 'Joining…', () => handlers.join(field(event.target as HTMLFormElement, 'join-name').value));
+        void whilePending(joinButton, 'Joining…', () => handlers.join(inputOf(event.target as HTMLFormElement, 'join-name').value));
       },
     },
     about,

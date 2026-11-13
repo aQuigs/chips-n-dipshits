@@ -6,7 +6,6 @@ import type { AddressInfo } from 'node:net';
 import { ByteRng } from '../server/byteRng.ts';
 import { MemoryStore } from '../server/memoryStore.ts';
 import { PokerService } from '../server/service.ts';
-import type { Clock } from '../server/service.ts';
 
 const MAX_HOLD_MS = 25_000;
 const HOLD_CHECK_MS = 50;
@@ -18,13 +17,10 @@ export interface DevServerOptions {
   port: number;
   /** Produces the game page. Called for every page load, so edits show up on refresh. */
   page: () => Promise<string>;
-  clock?: Clock;
 }
 
 export interface DevServer {
   url: string;
-  service: PokerService;
-  store: MemoryStore;
   close(): Promise<void>;
 }
 
@@ -58,9 +54,11 @@ function sleep(ms: number): Promise<void> {
  * instead of a Sheet. For trying changes and for the browser tests.
  */
 export async function startDevServer(options: DevServerOptions): Promise<DevServer> {
-  const store = new MemoryStore();
-  const clock = options.clock ?? { now: () => Date.now() };
-  const service = new PokerService({ store, clock, rng: new ByteRng(() => [...randomBytes(RANDOM_BATCH_BYTES)]) });
+  const service = new PokerService({
+    store: new MemoryStore(),
+    clock: { now: () => Date.now() },
+    rng: new ByteRng(() => [...randomBytes(RANDOM_BATCH_BYTES)]),
+  });
   let closing = false;
 
   /** Holds a poll open until there is news, like the deployed script does. */
@@ -116,8 +114,6 @@ export async function startDevServer(options: DevServerOptions): Promise<DevServ
 
   return {
     url: `http://localhost:${port}/`,
-    service,
-    store,
     close: () => {
       closing = true;
       server.closeAllConnections();

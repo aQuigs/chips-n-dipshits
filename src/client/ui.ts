@@ -97,9 +97,9 @@ const SUIT_SYMBOLS: Record<string, string> = { c: '♣', d: '♦', h: '♥', s: 
 const RANK_LABELS: Record<number, string> = { 10: '10', 11: 'J', 12: 'Q', 13: 'K', 14: 'A' };
 
 /** A playing card, face up, or face down when given null. */
-export function cardEl(card: Card | null, extraClass = ''): HTMLElement {
+export function cardEl(card: Card | null): HTMLElement {
   if (card === null) {
-    return h('div', { class: `card back ${extraClass}`, 'aria-label': 'Face-down card' });
+    return h('div.card.back', { 'aria-label': 'Face-down card' });
   }
 
   const rank = rankOf(card);
@@ -108,7 +108,7 @@ export function cardEl(card: Card | null, extraClass = ''): HTMLElement {
 
   return h(
     'div',
-    { class: `card suit-${suit} ${extraClass}`, 'aria-label': `${label}${SUIT_SYMBOLS[suit]}`, 'data-card': card },
+    { class: `card suit-${suit}`, 'aria-label': `${label}${SUIT_SYMBOLS[suit]}`, 'data-card': card },
     h('span.rank', null, label),
     h('span.pip', null, SUIT_SYMBOLS[suit]),
   );

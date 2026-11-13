@@ -99,13 +99,16 @@ export function appsScriptCode(webAppUrl: string): Promise<string> {
   });
 }
 
-/** Writes dist/gas (what gets pushed to Apps Script) and dist/web (the same page for any static host or the dev server). */
+/**
+ * Writes dist/gas (what gets pushed to Apps Script) and dist/web: the same page for any static host,
+ * pointed at the deployed script once there is one.
+ */
 export async function buildAll(webAppUrl: string): Promise<void> {
   await Promise.all([mkdir(pathOf('dist/gas'), { recursive: true }), mkdir(pathOf('dist/web'), { recursive: true })]);
 
   const [gasPage, webPage, code, manifest] = await Promise.all([
     clientPage(null),
-    clientPage({}),
+    clientPage(webAppUrl ? { api: webAppUrl } : {}),
     appsScriptCode(webAppUrl),
     readFile(pathOf('src/gas/appsscript.json'), 'utf8'),
   ]);

@@ -486,7 +486,7 @@ p {
   overflow: hidden;
 }
 
-@container app (min-width: 900px) {
+@container app (min-width: 900px) and (min-height: 521px) {
   .app {
     grid-template:
       'top top' auto
@@ -1051,7 +1051,7 @@ p {
   accent-color: var(--accent);
 }
 
-@container app (min-width: 640px) {
+@container app (min-width: 640px) and (min-height: 521px) {
   .controls {
     --turn-height: 98px;
   }
@@ -1095,6 +1095,46 @@ p {
 
 .prompt {
   color: var(--text);
+}
+
+/* ---- A wide, short box, as on a phone held sideways: the controls stand beside the table ---- */
+
+@container app (min-width: 560px) and (max-height: 520px) {
+  .app {
+    grid-template:
+      'top top' auto
+      'banners banners' auto
+      'stage controls' minmax(0, 1fr)
+      'feed controls' auto / minmax(0, 1fr) minmax(240px, 32%);
+  }
+
+  .topbar {
+    padding-block: 4px;
+  }
+
+  .controls-slot {
+    border-top: 0;
+    border-left: 1px solid var(--line);
+    overflow-y: auto;
+  }
+
+  /* Beside the table, the bar's height no longer moves it, so nothing needs reserving */
+  .controls {
+    --turn-height: 0px;
+  }
+
+  .turn .buttons {
+    grid-auto-flow: row;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .turn .buttons .raise {
+    grid-column: 1 / -1;
+  }
+
+  .turn .btn {
+    min-height: 44px;
+  }
 }
 
 /* ---- Chat and play-by-play ---- */
@@ -1190,7 +1230,7 @@ p {
   min-height: 36px;
 }
 
-@container app (min-width: 900px) {
+@container app (min-width: 900px) and (min-height: 521px) {
   .feed {
     border-top: 0;
     border-left: 1px solid var(--line);

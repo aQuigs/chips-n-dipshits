@@ -3,8 +3,9 @@ import type { TableView } from '../engine/view.ts';
 import type { ApiError, ApiRequest, ApiResponse, Auth } from '../server/api.ts';
 import type { Platform } from './platform.ts';
 import { controlsEl, controlsSignature, lockTurn } from './render/controls.ts';
+import { Modal } from './modal.ts';
 import { dialogEl, dialogShows } from './render/dialogs.ts';
-import type { Dialog, DialogHandlers } from './render/dialogs.ts';
+import type { Dialog, DialogHandlers, SendOutcome } from './render/dialogs.ts';
 import { createFeed } from './render/feed.ts';
 import type { Feed } from './render/feed.ts';
 import { joinScreen, lobbyEl, noticeEl, welcomeBackEl } from './render/lobby.ts';
@@ -66,6 +67,7 @@ interface TableScreen {
   stage: Slot;
   controls: Slot;
   overlay: Slot;
+  modal: Modal;
   feed: Feed;
   shape: Shape;
   seenCards: Set<string>;
@@ -264,6 +266,11 @@ export class App {
       if (isRefusal(response)) {
         // A personal link that no longer works is still a link to the table
         void this.showJoin(tableId);
+
+        if (response.code === 'unauthorized') {
+          this.toast('That personal link no longer works here. Join again to play.');
+        }
+
         return;
       }
 
@@ -365,12 +372,14 @@ export class App {
 
     const feed = createFeed((text) => void this.send({ type: 'chat', text }));
     const stage = new Slot(h('div.stage'));
+    const overlay = new Slot(h('div.overlay', { hidden: true }));
     const screen: TableScreen = {
       topbar: new Slot(h('header.topbar')),
       banners: new Slot(h('div.banners')),
       stage,
       controls: new Slot(h('div.controls-slot')),
-      overlay: new Slot(h('div.overlay', { hidden: true })),
+      overlay,
+      modal: new Modal(overlay.element),
       feed,
       shape: 'wide',
       seenCards: new Set(),
@@ -439,10 +448,10 @@ export class App {
     }
   }
 
-  private async send(command: Command): Promise<void> {
+  private async send(command: Command): Promise<SendOutcome> {
     const session = this.session;
     if (!session) {
-      return;
+      return 'refused';
     }
 
     const move = MOVES.has(command.type);
@@ -450,7 +459,7 @@ export class App {
     if (move) {
       // A second tap while the first move is on its way would be a second move
       if (this.turnLock !== 'open') {
-        return;
+        return 'refused';
       }
 
       this.setTurnLock('sent');
@@ -459,18 +468,18 @@ export class App {
     const response = await this.request({ op: 'act', tableId: session.tableId, auth: session.auth, command });
 
     if (session !== this.session) {
-      return;
+      return 'unanswered';
     }
 
     if (!response) {
-      // It may have been played all the same. Rather than invite a second try on a guess, ask the table what happened
+      // It may have been carried out all the same. Rather than invite a second try on a guess, ask the table what happened
       if (move) {
         this.setTurnLock('unanswered');
       }
 
-      this.toast(move ? 'No answer from the table. Checking whether that was played…' : 'No answer from the table. Check your connection.');
+      this.toast(`No answer from the table. Checking whether that ${move ? 'was played' : 'went through'}…`);
       this.restartPolling(true);
-      return;
+      return 'unanswered';
     }
 
     if (move) {
@@ -482,6 +491,8 @@ export class App {
     } else if (response.kind === 'view') {
       this.applyView(response.view);
     }
+
+    return response.ok ? 'taken' : 'refused';
   }
 
   private fail(error: ApiError): void {
@@ -769,19 +780,21 @@ export class App {
 
     if (!dialog || !view) {
       screen.overlay.draw(null, () => null);
+      screen.modal.update(false);
       return;
     }
 
     // Opening a dialog always draws it; after that only a change in what it shows does
     const handlers = this.dialogHandlers();
     screen.overlay.draw([this.dialogOpens, dialogShows(dialog, view, handlers)], () => dialogEl(dialog, view, handlers));
+    screen.modal.update(true);
   }
 
   private dialogHandlers(): DialogHandlers {
     const session = this.session!;
 
     return {
-      send: (command) => void this.send(command),
+      send: (command) => this.send(command),
       open: (dialog) => this.openDialog(dialog),
       close: () => this.closeDialog(),
       copy: (text) => this.copy(text),

@@ -81,12 +81,46 @@ function turnOf(value: unknown): number | undefined {
 /** Control characters, and the marks that reorder text: one of those in a chat line can make the rest of it read backward. */
 const UNPRINTABLE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/g;
 
+/** More accents stacked on one letter than any language writes; a long enough stack draws over the lines around it. */
+const STACKED_MARKS = /(\p{M}{3})\p{M}+/gu;
+
+/**
+ * An invisible joiner after an accent, which would let one tall stack be written as many short ones.
+ * The marks that pick an emoji's style are left out: an emoji made of several needs the joiner after one.
+ */
+const JOINER_IN_STACK = /((?![\uFE00-\uFE0F])\p{M})\p{Cf}+/gu;
+
+/**
+ * Letters of other alphabets drawn like a Latin one, each followed by the letter it passes for.
+ * Cyrillic and Greek are the two that are on every keyboard and stand in for Latin letter by letter;
+ * this is not Unicode's whole list of look-alikes.
+ */
+const LOOKALIKE_PAIRS = [
+  '\u0410A\u0412B\u0415E\u0401E\u041AK\u041CM\u041DH\u041EO\u0420P\u0421C\u0422T\u0423Y\u0425X\u0405S\u0406I\u0408J\u0430a\u0432b\u0435e\u0451e\u043Ak\u043Cm\u043Dh\u043Eo\u0440p\u0441c\u0442t\u0443y\u0445x\u0455s\u0456i\u0458j\u0433r\u043Fn',
+  '\u0391A\u0392B\u0395E\u0396Z\u0397H\u0399I\u039AK\u039CM\u039DN\u039FO\u03A1P\u03A4T\u03A5Y\u03A7X\u03B1a\u03B2b\u03B5e\u03B7n\u03B9i\u03BAk\u03BCu\u03BDv\u03BFo\u03C1p\u03C4t\u03C5u\u03C7x',
+].join('');
+const LOOKALIKES = new Map<string, string>();
+for (let index = 0; index < LOOKALIKE_PAIRS.length; index += 2) {
+  LOOKALIKES.set(LOOKALIKE_PAIRS[index]!, LOOKALIKE_PAIRS[index + 1]!);
+}
+
+/**
+ * What a name comes down to when read at a glance: two names with the same skeleton can't be told
+ * apart at the table or in who pays whom. Besides other alphabets, a capital I, a small l and a 1 are
+ * one stroke in most fonts ("Big AI" for "Big Al"), and so are O and 0.
+ */
+function skeleton(name: string): string {
+  const latin = [...name.normalize('NFKC')].map((letter) => LOOKALIKES.get(letter) ?? letter).join('');
+
+  return latin.replace(/[I1]/g, 'l').replace(/0/g, 'o').toLowerCase();
+}
+
 function text(value: unknown, what: string, maxLength: number): string {
   if (typeof value !== 'string') {
     throw new GameError(`${what} is missing`);
   }
 
-  const trimmed = value.replace(UNPRINTABLE, '').trim().replace(/\s+/g, ' ');
+  const trimmed = value.replace(UNPRINTABLE, '').replace(JOINER_IN_STACK, '$1').replace(STACKED_MARKS, '$1').trim().replace(/\s+/g, ' ');
   if (trimmed.length === 0 || trimmed.length > maxLength) {
     throw new GameError(`${what} must be 1 to ${maxLength} characters`);
   }
@@ -99,6 +133,12 @@ function playerName(value: unknown): string {
 
   if (!NAME_PATTERN.test(name)) {
     throw new GameError('Names start with a letter or number and use only letters, numbers, spaces and . _ - \' ! ?');
+  }
+
+  // One letter borrowed from another alphabet is how a name is made to read as someone else's, and
+  // no list of look-alikes covers every alphabet there is
+  if (/\p{Script=Latin}/u.test(name) && /(?!\p{Script=Latin})\p{L}/u.test(name)) {
+    throw new GameError('Names use one alphabet, not a mix');
   }
 
   return name;
@@ -142,12 +182,17 @@ export function validatedConfig(input: unknown, current: TableConfig): TableConf
 function newMember(state: TableState, rawName: unknown, rng: Rng): Member {
   const name = playerName(rawName);
 
-  if (state.members.some((m) => m.name.toLowerCase() === name.toLowerCase())) {
-    throw new GameError(`Someone at this table is already called ${name}`);
+  const taken = state.members.find((m) => skeleton(m.name) === skeleton(name));
+  if (taken) {
+    throw new GameError(
+      taken.name.toLowerCase() === name.toLowerCase()
+        ? `Someone at this table is already called ${name}`
+        : `That name reads too much like ${taken.name}, who is already at this table`,
+    );
   }
 
   if (state.members.length >= LIMITS.members) {
-    throw new GameError('This table is full');
+    throw new GameError('This table is full. The host can make room by removing someone who is only watching');
   }
 
   const member: Member = {
@@ -193,6 +238,16 @@ export function createTable(id: string, hostName: unknown, configInput: unknown,
 export function addMember(state: TableState, name: unknown, ctx: Ctx): Member {
   const member = newMember(state, name, ctx.rng);
   addFeed(state, ctx.now, 'system', null, `${member.name} joined`);
+
+  return member;
+}
+
+/** The member a host's command is about, who may have been removed since the host's screen was drawn. */
+function memberNamed(state: TableState, playerId: string): Member {
+  const member = state.members.find((m) => m.id === playerId);
+  if (!member) {
+    throw new GameError('That player is no longer at the table');
+  }
 
   return member;
 }
@@ -462,7 +517,7 @@ function applyTo(state: TableState, ctx: Ctx, playerId: string, command: Command
 
     case 'kick': {
       requireHost(state, playerId);
-      const target = memberOf(state, command.playerId);
+      const target = memberNamed(state, command.playerId);
       const index = seatIndexOf(state, target.id);
 
       state.requests = state.requests.filter((r) => r.playerId !== target.id);
@@ -481,7 +536,7 @@ function applyTo(state: TableState, ctx: Ctx, playerId: string, command: Command
 
     case 'setStack': {
       requireHost(state, playerId);
-      const target = memberOf(state, command.playerId);
+      const target = memberNamed(state, command.playerId);
       const index = seatIndexOf(state, target.id);
       const seat = state.seats[index];
       if (!seat) {
@@ -544,7 +599,7 @@ function applyTo(state: TableState, ctx: Ctx, playerId: string, command: Command
 
     case 'transferHost': {
       requireHost(state, playerId);
-      const target = memberOf(state, command.playerId);
+      const target = memberNamed(state, command.playerId);
 
       state.hostId = target.id;
       addFeed(state, ctx.now, 'system', null, `${target.name} is now the host`);

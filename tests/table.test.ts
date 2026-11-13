@@ -50,6 +50,49 @@ test('names are unique at a table and cannot look like a spreadsheet formula', (
   assert.equal(addMember(state, "Big Al's 2nd", ctx).name, "Big Al's 2nd");
 });
 
+test('a name that reads like one already at the table is refused', () => {
+  const ctx = freshCtx();
+  const { state } = createTable('ABC123', 'Quigs', {}, ctx);
+
+  addMember(state, 'Alice', ctx);
+  addMember(state, 'TOM', ctx);
+  addMember(state, 'Big Al', ctx);
+  addMember(state, 'Bob', ctx);
+
+  assert.throws(() => addMember(state, 'alice', ctx), /already called alice/);
+  assert.throws(() => addMember(state, '\u0410lice', ctx), /one alphabet/, 'a Cyrillic A in a Latin name');
+  assert.throws(() => addMember(state, '\u13AAlice', ctx), /one alphabet/, 'a Cherokee letter in a Latin name');
+  assert.throws(() => addMember(state, '\u0422\u041E\u041C', ctx), /reads too much like TOM/, 'TOM written all in Cyrillic');
+  assert.throws(() => addMember(state, '\u03A4\u039F\u039C', ctx), /reads too much like TOM/, 'TOM written all in Greek');
+  assert.throws(() => addMember(state, 'Big AI', ctx), /reads too much like Big Al/, 'a capital I for a small l');
+  assert.throws(() => addMember(state, 'B0b', ctx), /reads too much like Bob/, 'a zero for an o');
+  assert.throws(() => addMember(state, '\uFF22ob', ctx), /reads too much like Bob/, 'a full-width B');
+
+  // Names that only share an alphabet with nobody are as welcome as any
+  for (const name of ['\u0410\u043D\u043D\u0430', '\u039D\u03AF\u03BA\u03BF\u03C2', '\u4F60\u597D', 'Zo\u00EB', 'Tim', 'Al']) {
+    assert.equal(addMember(state, name, ctx).name, name);
+  }
+});
+
+test('a full table turns a newcomer away until the host takes someone who is only watching off it', () => {
+  const t = new TestTable({ stacks: [1000, 1000] });
+  const watchers: string[] = [];
+
+  while (t.state.members.length < 60) {
+    watchers.push(addMember(t.state, `Watcher ${watchers.length}`, t.ctx()).id);
+  }
+
+  // Nobody already here loses their place to whoever comes next, however often they try
+  assert.throws(() => addMember(t.state, 'Late', t.ctx()), /full.*host can make room/);
+  assert.equal(t.state.members.length, 60);
+
+  t.cmd(0, { type: 'kick', playerId: watchers[0]! });
+  assert.equal(addMember(t.state, 'Late', t.ctx()).name, 'Late');
+
+  // Removed since the host's screen was drawn: the message is about them, not about the host
+  assert.throws(() => t.cmd(0, { type: 'kick', playerId: watchers[0]! }), /no longer at the table/);
+});
+
 test('a seat request waits for the host, who is the only other person to see it', () => {
   const t = new TestTable({ stacks: [1000], config: { minBuyIn: 100, maxBuyIn: 2000 } });
   const ann = addMember(t.state, 'Ann', t.ctx());
@@ -87,7 +130,6 @@ test('seat requests are checked against the seat and the buy-in limits', () => {
   assert.throws(() => t.cmd(1, { type: 'requestSeat', seat: 3, buyIn: 99 }), /buy-in/);
   assert.throws(() => t.cmd(1, { type: 'requestSeat', seat: 3, buyIn: 2001 }), /buy-in/);
   assert.throws(() => t.cmd(0, { type: 'requestSeat', seat: 3, buyIn: 500 }), /already have a seat/);
-
 });
 
 test('a seat given to one player turns away everyone else who had asked for it', () => {
@@ -314,6 +356,17 @@ test('chat lands in the feed, which keeps only the latest entries', () => {
   t.cmd(1, { type: 'chat', text: 'a\u0000b \u202Eevil\u2066 \u{1F468}\u200D\u{1F469}\u200D\u{1F467}' });
   assert.equal(t.state.feed.at(-1)!.text, 'ab evil \u{1F468}\u200D\u{1F469}\u200D\u{1F467}', 'control and text-reversing characters are dropped, joined emoji are kept');
   assert.throws(() => t.cmd(1, { type: 'chat', text: '\u202E\u0007' }), /message/);
+
+  t.cmd(1, { type: 'chat', text: `Z${'\u0301'.repeat(40)}algo and cafe\u0301` });
+  assert.equal(t.state.feed.at(-1)!.text, 'Z\u0301\u0301\u0301algo and cafe\u0301', 'a tower of accents is cut down to what a language would write');
+
+  // Invisible joiners between the accents would otherwise pass the same tower off as many short ones
+  t.cmd(1, { type: 'chat', text: `a${'\u0301\u0301\u0301\u200D'.repeat(30)}h` });
+  assert.equal(t.state.feed.at(-1)!.text, 'a\u0301\u0301\u0301h');
+
+  // An emoji built from several keeps the joiner that holds it together
+  t.cmd(1, { type: 'chat', text: 'gg \u{1F3F3}\uFE0F\u200D\u{1F308}' });
+  assert.equal(t.state.feed.at(-1)!.text, 'gg \u{1F3F3}\uFE0F\u200D\u{1F308}');
 
   assert.throws(() => t.cmd(1, { type: 'chat', text: '   ' }), /message/);
   assert.throws(() => t.cmd(1, { type: 'chat', text: 'x'.repeat(201) }), /message/);

@@ -131,6 +131,33 @@ test('a wrong token is refused everywhere a token is needed', () => {
   assert.equal(service.handle({ op: 'poll', tableId, auth: host.auth, since: 0 }).ok, true);
 });
 
+test('only a poll from a member of the table is kept waiting for news', () => {
+  const { service } = setup();
+  const host = joined(service.handle({ op: 'create', name: 'Quigs' }));
+  const tableId = host.view.id;
+  const poll = { op: 'poll', tableId, auth: host.auth, since: 1, holdMs: 20_000 };
+
+  assert.deepEqual(service.waitFor(poll), { tableId, since: 1, ms: 20_000 });
+  assert.deepEqual(service.waitFor({ ...poll, tableId: tableId.toLowerCase() })?.tableId, tableId, 'the wait is for the table as it is stored');
+
+  // Each of these gets its answer, or its refusal, at once: holding it would spend a request slot on a stranger
+  for (const [why, request] of Object.entries({
+    'a wrong token': { ...poll, auth: { id: host.auth.id, token: 'WRONGTOKEN' } },
+    'someone who never joined': { ...poll, auth: { id: 'NOBODY12', token: host.auth.token } },
+    'no credentials': { ...poll, auth: undefined },
+    'a table that is not there': { ...poll, tableId: 'NOPE22' },
+    'no table': { ...poll, tableId: undefined },
+    'a poll that does not ask to wait': { ...poll, holdMs: undefined },
+    'a wait of nothing': { ...poll, holdMs: 0 },
+    'a wait that is not a number': { ...poll, holdMs: Number.NaN },
+    'another kind of request': { ...poll, op: 'history' },
+    'nothing at all': null,
+    'a list': [poll],
+  })) {
+    assert.equal(service.waitFor(request), null, why);
+  }
+});
+
 test('a poll returns the table only when it has changed', () => {
   const { service, clock } = setup();
   const host = joined(service.handle({ op: 'create', name: 'Quigs' }));

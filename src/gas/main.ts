@@ -89,14 +89,14 @@ export function doPost(event: GoogleAppsScript.Events.DoPost): GoogleAppsScript.
 
 /** Keeps a poll open until there is something to send back, so players see changes without hammering the script. */
 function holdUntilNews(request: unknown): void {
-  const poll = request as { op?: unknown; tableId?: unknown; since?: unknown; holdMs?: unknown };
-  if (poll.op !== 'poll' || typeof poll.tableId !== 'string' || typeof poll.since !== 'number' || typeof poll.holdMs !== 'number') {
+  const wait = service().waitFor(request);
+  if (!wait) {
     return;
   }
 
-  const until = Date.now() + Math.min(poll.holdMs, MAX_HOLD_MS);
+  const until = Date.now() + Math.min(wait.ms, MAX_HOLD_MS);
 
-  while (Date.now() < until && !service().hasNews(poll.tableId, poll.since)) {
+  while (Date.now() < until && !service().hasNews(wait.tableId, wait.since)) {
     Utilities.sleep(HOLD_CHECK_MS);
   }
 }
@@ -106,9 +106,7 @@ export function api(body: string): string {
   try {
     const request: unknown = JSON.parse(body);
 
-    if (typeof request === 'object' && request !== null) {
-      holdUntilNews(request);
-    }
+    holdUntilNews(request);
 
     return JSON.stringify(service().handle(request));
   } catch (error) {

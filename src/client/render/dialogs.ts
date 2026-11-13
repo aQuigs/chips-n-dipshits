@@ -2,7 +2,7 @@ import type { Command, HandRecord, TableConfig } from '../../engine/types.ts';
 import type { TableView } from '../../engine/view.ts';
 import { settleUp } from '../settle.ts';
 import { themeById } from '../themes.ts';
-import { chips, h, signedChips } from '../ui.ts';
+import { chips, h, holdWhile, signedChips } from '../ui.ts';
 import { checkField, inputOf, numberField, numberOf } from './forms.ts';
 import { createThemePicker } from './themePicker.ts';
 
@@ -38,8 +38,16 @@ export function dialogShows(dialog: Dialog, view: TableView, handlers: DialogHan
   }
 }
 
+/**
+ * taken: the table carried the command out.
+ * refused: it did not, and has said why (or the command was never sent).
+ * unanswered: no answer came back, so it may or may not have been carried out.
+ */
+export type SendOutcome = 'taken' | 'refused' | 'unanswered';
+
 export interface DialogHandlers {
-  send(command: Command): void;
+  /** Resolves to whether the table took the command. */
+  send(command: Command): Promise<SendOutcome>;
   open(dialog: Dialog): void;
   close(): void;
   copy(text: string): Promise<boolean>;
@@ -56,10 +64,29 @@ export interface DialogHandlers {
 function frame(title: string, handlers: DialogHandlers, ...body: (HTMLElement | null)[]): HTMLElement {
   return h(
     'div.dialog',
-    { role: 'dialog', 'aria-modal': 'true', 'aria-label': title },
+    // Focusable by script only: opening a dialog puts the keyboard here, not on the page behind it
+    { role: 'dialog', 'aria-modal': 'true', 'aria-label': title, tabindex: -1 },
     h('header', null, h('h2', null, title), h('button.icon', { type: 'button', 'aria-label': 'Close', 'data-action': 'close', onclick: handlers.close }, '✕')),
     h('div.dialog-body', null, body),
   );
+}
+
+/**
+ * Sends what a form asks for. A refusal leaves the form as it was typed, with the reason in a toast,
+ * instead of costing the player their entries. With no answer the table may have taken it all the
+ * same, so the form moves on rather than invite a second try: the host adding chips twice would get them twice.
+ */
+function submit(event: Event, handlers: DialogHandlers, command: Command, then: () => void): void {
+  event.preventDefault();
+
+  const button = (event.target as HTMLFormElement).querySelector<HTMLButtonElement>('button[type="submit"]')!;
+
+  holdWhile(button, async () => {
+    // If the dialog was closed while the answer was on its way, there is nothing left to move on from
+    if ((await handlers.send(command)) !== 'refused' && button.isConnected) {
+      then();
+    }
+  });
 }
 
 function menu(view: TableView, handlers: DialogHandlers): HTMLElement {
@@ -82,13 +109,13 @@ function menu(view: TableView, handlers: DialogHandlers): HTMLElement {
       view.you.isHost ? item('Table settings', 'settings', () => handlers.open({ kind: 'settings' }), `Blinds ${chips(view.config.smallBlind)}/${chips(view.config.bigBlind)}`) : null,
       view.you.isHost && view.running
         ? item('Pause the game', 'pause', () => {
-            handlers.send({ type: 'pause' });
+            void handlers.send({ type: 'pause' });
             handlers.close();
           }, 'No new hands until you resume')
         : null,
       view.you.isHost && !view.running
         ? item('Start the game', 'start', () => {
-            handlers.send({ type: 'start' });
+            void handlers.send({ type: 'start' });
             handlers.close();
           })
         : null,
@@ -123,11 +150,7 @@ function sit(view: TableView, seat: number, handlers: DialogHandlers): HTMLEleme
     h(
       'form',
       {
-        onsubmit: (event: Event) => {
-          event.preventDefault();
-          handlers.send({ type: 'requestSeat', seat, buyIn: numberOf(event.target as HTMLFormElement, 'buy-in') });
-          handlers.close();
-        },
+        onsubmit: (event: Event) => submit(event, handlers, { type: 'requestSeat', seat, buyIn: numberOf(event.target as HTMLFormElement, 'buy-in') }, handlers.close),
       },
       numberField('buy-in', 'Buy-in', suggested, minBuyIn, maxBuyIn, `From ${chips(minBuyIn)} to ${chips(maxBuyIn)} chips`),
       view.you.isHost ? null : h('p.note', null, 'The host approves seats, so you sit down once they say yes.'),
@@ -146,11 +169,7 @@ function rebuy(view: TableView, handlers: DialogHandlers): HTMLElement {
     h(
       'form',
       {
-        onsubmit: (event: Event) => {
-          event.preventDefault();
-          handlers.send({ type: 'requestRebuy', amount: numberOf(event.target as HTMLFormElement, 'rebuy-amount') });
-          handlers.close();
-        },
+        onsubmit: (event: Event) => submit(event, handlers, { type: 'requestRebuy', amount: numberOf(event.target as HTMLFormElement, 'rebuy-amount') }, handlers.close),
       },
       numberField('rebuy-amount', 'Chips to add', room, 1, room, `Up to ${chips(room)}, which brings you to the table maximum`),
       h('p.note', null, view.you.isHost ? 'Chips arrive when the current hand is over.' : 'The host approves it, and the chips arrive when the current hand is over.'),
@@ -209,7 +228,13 @@ function history(handlers: DialogHandlers): HTMLElement {
         ...(hands.length === 0
           ? [h('p.note', null, 'No finished hands yet.')]
           : [...hands].reverse().map((hand) => {
-              const winners = hand.result.winnings.map((win) => `${hand.players.find((p) => p.seat === win.seat)?.name ?? '?'} +${chips(win.amount)}`);
+              const bounty = hand.result.bounty;
+              const collected = bounty ? bounty.payments.reduce((sum, payment) => sum + payment.amount, 0) : 0;
+              const winners = hand.result.winnings.map((win) => {
+                const withBounty = win.amount + (bounty?.seat === win.seat ? collected : 0);
+
+                return `${hand.players.find((p) => p.seat === win.seat)?.name ?? '?'} +${chips(withBounty)}`;
+              });
 
               return h('details', null, h('summary', null, `Hand #${hand.number}`, h('small', null, winners.join(', '))), h('pre', null, hand.summary));
             })),
@@ -230,8 +255,8 @@ function players(view: TableView, handlers: DialogHandlers): HTMLElement {
       h(
         'span.row-actions',
         null,
-        h('button.btn.small.primary', { type: 'button', 'data-action': 'approve', onclick: () => handlers.send({ type: 'approve', playerId: request.playerId }) }, 'Approve'),
-        h('button.btn.small', { type: 'button', 'data-action': 'deny', onclick: () => handlers.send({ type: 'deny', playerId: request.playerId }) }, 'Deny'),
+        h('button.btn.small.primary', { type: 'button', 'data-action': 'approve', onclick: () => void handlers.send({ type: 'approve', playerId: request.playerId }) }, 'Approve'),
+        h('button.btn.small', { type: 'button', 'data-action': 'deny', onclick: () => void handlers.send({ type: 'deny', playerId: request.playerId }) }, 'Deny'),
       ),
     ),
   );
@@ -289,13 +314,32 @@ function players(view: TableView, handlers: DialogHandlers): HTMLElement {
 
   const watching = view.members.filter((member) => !seatedIds.has(member.id) && member.id !== view.you.id);
 
+  // Only someone with no line in the ledger can be taken off the table altogether
+  const played = new Set(view.ledger.map((row) => row.playerId));
+  const removeWatcher = (playerId: string, name: string) =>
+    h(
+      'button.btn.small',
+      {
+        type: 'button',
+        onclick: () =>
+          handlers.open({
+            kind: 'confirm',
+            title: `Remove ${name}?`,
+            body: 'They have not played here, so they are taken off the table and their name is free again. They can join again from the link.',
+            action: 'Remove',
+            command: { type: 'kick', playerId },
+          }),
+      },
+      'Remove',
+    );
+
   return frame(
     'Players',
     handlers,
     requests.length > 0 ? h('section', null, h('h3', null, 'Waiting for you'), h('ul.rows', null, requests)) : null,
     h('section', null, h('h3', null, 'Seated'), seated.length > 0 ? h('ul.rows', null, seated) : h('p.note', null, 'Nobody is seated yet.')),
     watching.length > 0
-      ? h('section', null, h('h3', null, 'Watching'), h('ul.rows', null, watching.map((member) => h('li', null, h('span', null, h('b', null, member.name)), h('span.row-actions', null, makeHost(member.id, member.name))))))
+      ? h('section', null, h('h3', null, 'Watching'), h('ul.rows', null, watching.map((member) => h('li', null, h('span', null, h('b', null, member.name)), h('span.row-actions', null, makeHost(member.id, member.name), played.has(member.id) ? null : removeWatcher(member.id, member.name))))))
       : null,
   );
 }
@@ -310,7 +354,6 @@ function settings(view: TableView, handlers: DialogHandlers): HTMLElement {
       'form',
       {
         onsubmit: (event: Event) => {
-          event.preventDefault();
           const form = event.target as HTMLFormElement;
 
           const next: TableConfig = {
@@ -325,8 +368,7 @@ function settings(view: TableView, handlers: DialogHandlers): HTMLElement {
             sevenDeuceBounty: numberOf(form, 'bounty'),
           };
 
-          handlers.send({ type: 'updateConfig', config: next });
-          handlers.close();
+          submit(event, handlers, { type: 'updateConfig', config: next }, handlers.close);
         },
       },
       h('label.field', { for: 'table-name' }, h('span', null, 'Table name'), h('input', { type: 'text', id: 'table-name', name: 'table-name', value: config.name, maxlength: 40, required: true })),
@@ -336,7 +378,7 @@ function settings(view: TableView, handlers: DialogHandlers): HTMLElement {
       numberField('bounty', 'Seven-deuce bounty', config.sevenDeuceBounty, 0, undefined, 'Paid by everyone dealt in to whoever wins with 7-2. 0 turns it off'),
       checkField('allow-straddle', 'Allow straddles', config.allowStraddle),
       checkField('allow-rit', 'Offer run it twice when everyone is all in', config.allowRunItTwice),
-      h('p.note', null, 'New blinds apply from the next hand.'),
+      h('p.note', null, 'New blinds and a new bounty apply from the next hand.'),
       h('button.btn.primary', { type: 'submit', 'data-action': 'save-settings' }, 'Save'),
     ),
   );
@@ -395,13 +437,10 @@ function setStack(view: TableView, playerId: string, handlers: DialogHandlers): 
     h(
       'form',
       {
-        onsubmit: (event: Event) => {
-          event.preventDefault();
-          handlers.send({ type: 'setStack', playerId, stack: numberOf(event.target as HTMLFormElement, 'new-stack') });
-          handlers.open({ kind: 'players' });
-        },
+        onsubmit: (event: Event) =>
+          submit(event, handlers, { type: 'setStack', playerId, stack: numberOf(event.target as HTMLFormElement, 'new-stack') }, () => handlers.open({ kind: 'players' })),
       },
-      numberField('new-stack', 'Chips', seat?.stack ?? 0, 0, undefined, 'The ledger records the difference as an adjustment. Only works between hands.'),
+      numberField('new-stack', 'Chips', seat?.stack ?? 0, 0, undefined, 'The difference counts as chips bought or cashed out, so the ledger still adds up. Only works between hands.'),
       h('button.btn.primary', { type: 'submit' }, 'Set stack'),
     ),
   );
@@ -422,7 +461,7 @@ function confirm(dialog: Extract<Dialog, { kind: 'confirm' }>, handlers: DialogH
           type: 'button',
           'data-action': 'confirm',
           onclick: () => {
-            handlers.send(dialog.command);
+            void handlers.send(dialog.command);
             handlers.close();
           },
         },

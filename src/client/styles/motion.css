@@ -1,0 +1,6 @@
+@media (prefers-reduced-motion: reduce) {
+  .card.fresh,
+  .plate .status.won {
+    animation: none;
+  }
+}

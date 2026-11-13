@@ -1,11 +1,14 @@
 import { build } from 'esbuild';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
+import { STYLESHEETS } from '../src/client/styles/order.ts';
 import { fontsUrl, THEMES } from '../src/client/themes.ts';
 
 const ROOT = new URL('..', import.meta.url);
 const pathOf = (relative: string) => fileURLToPath(new URL(relative, ROOT));
+
+const STYLES_DIR = 'src/client/styles/';
 
 // Marks in the page template that the build, or the server at request time, fills in
 const CSS_SLOT = '/*__CSS__*/';
@@ -66,6 +69,26 @@ function withoutCommentOpeners(js: string): string {
   return safe;
 }
 
+/**
+ * The app's stylesheets in the order they are listed. A stylesheet left off the list would be missing
+ * from the page without anything saying so, which is how a feature ships unstyled, and one listed twice
+ * would override whatever stands between its two places. Either stops the build.
+ */
+async function appStyles(): Promise<string[]> {
+  const unlisted = (await readdir(pathOf(STYLES_DIR))).filter((name) => name.endsWith('.css') && !STYLESHEETS.includes(name));
+  const twice = STYLESHEETS.filter((name, index) => STYLESHEETS.indexOf(name) !== index);
+
+  if (unlisted.length > 0) {
+    throw new Error(`${unlisted.join(', ')} in ${STYLES_DIR} is not in the page: add it to STYLESHEETS in ${STYLES_DIR}order.ts`);
+  }
+
+  if (twice.length > 0) {
+    throw new Error(`${twice.join(', ')} is in STYLESHEETS (${STYLES_DIR}order.ts) twice`);
+  }
+
+  return STYLESHEETS.map((name) => `${STYLES_DIR}${name}`);
+}
+
 interface PageParts {
   template: string;
   styles: string[];
@@ -93,7 +116,7 @@ async function inlinedPage(parts: PageParts): Promise<string> {
 export async function clientPage(boot: object | null): Promise<string> {
   const page = await inlinedPage({
     template: 'src/client/index.html',
-    styles: ['src/client/page.css', 'src/client/styles.css'],
+    styles: ['src/client/page.css', ...(await appStyles())],
     entry: 'src/client/main.ts',
   });
 
@@ -104,7 +127,7 @@ export async function clientPage(boot: object | null): Promise<string> {
 export async function galleryPage(): Promise<string> {
   const page = await inlinedPage({
     template: 'src/client/gallery.html',
-    styles: ['src/client/styles.css', 'src/client/gallery.css'],
+    styles: [...(await appStyles()), 'src/client/gallery.css'],
     entry: 'src/client/gallery.ts',
   });
 

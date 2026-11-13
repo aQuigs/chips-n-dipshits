@@ -1,0 +1,112 @@
+/* ---- The table ---- */
+
+.stage {
+  grid-area: stage;
+  position: relative;
+  min-height: 0;
+  /* Squeezed by an open keyboard, the seats must not spill over the bars above and below */
+  overflow: clip;
+  container-type: size;
+}
+
+.loading {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  color: var(--muted);
+}
+
+.table {
+  --card-w: clamp(24px, 6.6cqmin, 50px);
+
+  position: absolute;
+  inset: 0;
+  font-size: clamp(10px, 2.5cqmin, 14px);
+  user-select: none;
+}
+
+.felt {
+  position: absolute;
+  inset: 17% 9%;
+  border: var(--rail-width) solid var(--rail);
+  border-radius: 9999px;
+  background: var(--felt);
+  box-shadow:
+    0 0 0 2px var(--rail-edge),
+    var(--felt-glow);
+}
+
+.table.tall .felt {
+  inset: 12% 15%;
+}
+
+.center {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: grid;
+  justify-items: center;
+  gap: 1.4cqmin;
+  width: 58%;
+  color: var(--felt-ink);
+  text-align: center;
+  transform: translate(-50%, -50%);
+}
+
+.table.tall .center {
+  width: 52%;
+}
+
+.boards {
+  display: grid;
+  gap: 1cqmin;
+}
+
+.board {
+  display: flex;
+  justify-content: center;
+  gap: 0.8cqmin;
+}
+
+.boards.twice {
+  --card-w: clamp(20px, 5.4cqmin, 42px);
+}
+
+.board.later {
+  opacity: 0.45;
+}
+
+.pot {
+  font-size: 1.25em;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.pot .label {
+  margin-right: 0.5em;
+  color: var(--felt-muted);
+  font-size: 0.75em;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.sidepots {
+  color: var(--felt-muted);
+  font-size: 0.7em;
+  font-weight: 500;
+}
+
+.message {
+  display: grid;
+  justify-items: center;
+  gap: 0.8em;
+  font-size: 1.05em;
+  font-weight: 600;
+  text-wrap: balance;
+}
+
+.message.result {
+  gap: 0.2em;
+  color: var(--felt-win);
+}

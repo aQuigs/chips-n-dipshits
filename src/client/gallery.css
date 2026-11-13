@@ -1,6 +1,6 @@
 /*
  * The page around the theme showcase. Its own colors carry a page- prefix and follow the reader's
- * light or dark setting; everything inside a frame is styled by styles.css and the chosen theme.
+ * light or dark setting; everything inside a frame is styled by styles/ and the chosen theme.
  */
 
 :root {

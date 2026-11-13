@@ -1,0 +1,50 @@
+.scroll-x {
+  overflow-x: auto;
+}
+
+.ledger {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.ledger th,
+.ledger td {
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--line);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.ledger th {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.ledger th:first-child,
+.ledger td:first-child {
+  text-align: left;
+}
+
+.ledger .up {
+  color: var(--good);
+  font-weight: 700;
+}
+
+.ledger .down {
+  color: var(--bad);
+  font-weight: 700;
+}
+
+.settle {
+  display: grid;
+  gap: 8px;
+}
+
+.settle ul {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-left: 18px;
+}

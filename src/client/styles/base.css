@@ -1,0 +1,53 @@
+/* ---- The app's box ---- */
+
+/*
+ * The element the app is mounted in, which must be given a height. The layout answers to this box,
+ * not the window, so the app lays itself out correctly wherever it is put; dialogs and toasts stay
+ * inside it for the same reason.
+ */
+.cnd {
+  position: relative;
+  container: app / size;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.4 var(--font-ui);
+  -webkit-text-size-adjust: 100%;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+button,
+input {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}

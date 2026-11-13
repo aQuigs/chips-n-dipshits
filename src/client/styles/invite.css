@@ -1,0 +1,14 @@
+.copy {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.copy .btn {
+  min-height: 44px;
+}
+
+.code {
+  font-size: 1.15em;
+  letter-spacing: 0.12em;
+}

@@ -1,0 +1,65 @@
+/* ---- Lobby ---- */
+
+.lobby {
+  display: grid;
+  align-content: start;
+  justify-items: center;
+  gap: 28px;
+  height: 100%;
+  padding: 40px 16px 32px;
+  overflow-y: auto;
+}
+
+.brand {
+  text-align: center;
+}
+
+.brand h1 {
+  font: var(--display-weight) calc(clamp(34px, 9cqi, 64px) * var(--display-scale)) / 1 var(--font-display);
+  letter-spacing: var(--display-spacing);
+  text-transform: var(--display-case);
+  text-wrap: balance;
+}
+
+.brand h1 em {
+  font-style: normal;
+  color: var(--accent);
+}
+
+.brand p {
+  margin-top: 10px;
+  color: var(--muted);
+}
+
+.panels {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+  gap: 16px;
+  width: min(100%, 760px);
+  align-items: start;
+}
+
+.panels.single {
+  width: min(100%, 400px);
+}
+
+.card-panel {
+  display: grid;
+  gap: 14px;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: calc(var(--radius) + 4px);
+  background: var(--panel);
+}
+
+.card-panel h2,
+.dialog h2 {
+  font: var(--display-weight) calc(20px * var(--display-scale)) / 1.2 var(--font-display);
+  letter-spacing: var(--display-spacing);
+  text-transform: var(--display-case);
+}
+
+.about {
+  display: grid;
+  gap: 4px;
+}

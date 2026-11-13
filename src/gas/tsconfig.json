@@ -1,0 +1,9 @@
+{
+  // The code that runs inside Apps Script: no DOM and no Node, only the Apps Script globals.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2022"],
+    "types": ["google-apps-script"]
+  },
+  "include": ["."]
+}

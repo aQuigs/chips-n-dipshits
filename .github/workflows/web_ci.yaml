@@ -1,0 +1,57 @@
+# Shared workflow: sync-common keeps every repo's copy identical to the original in the tooling checkout; edit the original only.
+name: web-ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Pick the Node version
+        # A repo that pins a version keeps it in .nvmrc; the rest track the current LTS.
+        run: |
+          if [ -f .nvmrc ]; then
+            echo "NODE_VERSION=$(cat .nvmrc)" >> "$GITHUB_ENV"
+          else
+            echo "NODE_VERSION=lts/*" >> "$GITHUB_ENV"
+          fi
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install the dependencies
+        run: npm ci
+
+      - name: Install the Playwright browser
+        # A test runner that drives a real browser needs it downloaded; a repo without Playwright has nothing to install.
+        run: |
+          if [ -x node_modules/.bin/playwright ]; then
+            npx playwright install --with-deps chromium
+          fi
+
+      - name: Run the tests
+        run: npm test
+
+      - name: Build
+        # --if-present keeps this green for a repo that serves its sources without a build step.
+        run: npm run build --if-present
+
+      - name: Check the build left the tree clean
+        # A file the build rewrites or creates inside the tree belongs in the commit; otherwise every local build shows a stray diff.
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            git status --short
+            echo "::error::The build changed or created files that are not committed"
+            exit 1
+          fi

@@ -1,0 +1,33 @@
+# Shared workflow: sync-common keeps every repo's copy identical to the original in the tooling checkout; edit the original only.
+name: run-pre-commit-checks
+run-name: Running pre-commit checks against all files
+on: [push]
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  pre-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 'lts/*'
+
+      - name: Install markdownlint
+        run: npm install -g markdownlint-cli
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.x'
+
+      - name: Run the pre-commit hooks
+        uses: pre-commit/action@v3.0.1
+        with:
+          # A hook another workflow already runs declares stages: [pre-commit] in the repo's config, which leaves it out of the manual stage and so out of this job.
+          extra_args: --all-files --hook-stage manual

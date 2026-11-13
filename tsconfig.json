@@ -1,0 +1,9 @@
+{
+  // Everything that runs on Node: the engine, the service, the dev server, the scripts and the tests.
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2022"],
+    "types": ["node"]
+  },
+  "include": ["src/engine", "src/server", "src/dev", "src/demo", "scripts", "tests"]
+}

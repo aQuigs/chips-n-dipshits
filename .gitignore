@@ -1,0 +1,23 @@
+node_modules/
+dist/
+screenshots/
+*.log
+
+# OS
+.DS_Store
+
+# Secrets that must never be committed
+.env
+.env.*
+*.pem
+
+# clasp: the link to the deployed Apps Script project and the login are per machine
+.clasp.json
+.clasprc.json
+
+# Claude Code: rules are shared; these are per machine
+.claude/worktrees/
+.claude/settings.local.json
+
+# Where this machine deployed the game
+.deployment.json

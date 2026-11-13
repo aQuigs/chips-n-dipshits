@@ -1,0 +1,9 @@
+{
+  // The page that runs in the browser: DOM, no Node.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": []
+  },
+  "include": ["."]
+}

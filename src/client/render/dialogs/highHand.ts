@@ -2,7 +2,7 @@ import { formatAmount } from '../../../engine/amounts.ts';
 import { midSentence } from '../../../engine/handNames.ts';
 import type { TableView } from '../../../engine/view.ts';
 import { namesOf } from '../../tonightText.ts';
-import { h } from '../../ui.ts';
+import { h, holdWhile } from '../../ui.ts';
 import { hostOrCohost } from '../roles.ts';
 import { frame } from './dialog.ts';
 import type { DialogHandlers, DialogKind } from './dialog.ts';
@@ -22,10 +22,15 @@ function payHighHand(view: TableView, handlers: DialogHandlers): HTMLElement {
 
   const total = formatAmount(due.total, config);
   const holderGone = next !== null && !next.playerIds.some((id) => due.playerIds.includes(id));
-  const pay = () => {
-    // The hand and the collectors shown here go with it, so a payout that has changed since is refused rather than made
-    void handlers.send({ type: 'payHighHand', hand: due.hand, to: due.playerIds });
-    handlers.close();
+  const pay = (event: Event) => {
+    const button = event.currentTarget as HTMLButtonElement;
+
+    holdWhile(button, async () => {
+      // The hand and the collectors shown here go with it, so a payout that has changed since is refused, and the dialog stays to show what is due now
+      if ((await handlers.send({ type: 'payHighHand', hand: due.hand, to: due.playerIds })) !== 'refused' && button.isConnected) {
+        handlers.close();
+      }
+    });
   };
 
   return frame(

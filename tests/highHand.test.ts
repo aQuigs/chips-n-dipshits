@@ -71,7 +71,7 @@ test('a better hand takes the high hand and the table is told; one as good shown
   assertInvariants(t.state, t.now);
 });
 
-test('the high hand is the best hand on either board of two, and is the holder’s best hand in Tonight', () => {
+test('the high hand is the best hand on any board the hand was run on, and is the holder’s best hand in Tonight', () => {
   const t = table([1000, 1000, 1000], { bombPotBoards: 'two' });
   t.cmd(0, { type: 'setBombPot', on: true });
 
@@ -232,7 +232,8 @@ test('paid out early by the host or a co-host, between hands, the high hand is p
   t.cmd(1, pay(t, 1, [0]));
   assert.equal(lines(t).at(-1), 'Co-host Lee paid out the high hand. Dana collects the high-hand bonus: 5 from everyone else seated, 15 in all');
   assert.equal(nextHighHand(highHand(t)), null);
-  assert.throws(cmd(t, 1, pay(t, 1, [0])), { message: 'No hand has been shown down since the high hand was paid' });
+  // The host tapping Pay on the same figures as the co-host, a moment later, pays nothing more
+  assert.throws(cmd(t, 0, pay(t, 1, [0])), { message: 'No hand has been shown down since the high hand was paid' });
 
   // Not during a hand, when the chips are in play
   t.deal({ button: 0 });

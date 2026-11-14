@@ -1,4 +1,5 @@
 import { formatAmount } from '../../../engine/amounts.ts';
+import { boardsDealt, bombPotOf } from '../../../engine/bombPots.ts';
 import { hostOrCohost } from '../roles.ts';
 import type { MenuAction } from './menu.ts';
 
@@ -8,7 +9,7 @@ export const callBombPot: MenuAction = {
   menu: {
     label: 'Bomb pot next hand',
     who: (view) => hostOrCohost(view) && view.nextBombPot === null,
-    note: (view) => `${formatAmount(view.config.bombPotAmount, view.config)} each, no blinds, starts on the flop`,
+    note: (view) => `${formatAmount(view.config.bombPotAmount, view.config)} each, no blinds, starts on ${boardsDealt(bombPotOf(view.config)) > 1 ? 'two flops' : 'the flop'}`,
   },
   pick(handlers) {
     void handlers.send({ type: 'setBombPot', on: true });

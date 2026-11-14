@@ -310,7 +310,7 @@ try {
     await act(page, 'rit-yes');
   }
 
-  await host.page.waitForSelector('.boards.twice');
+  await host.page.waitForSelector('.table[data-boards="2"]');
   await host.page.waitForSelector('.message.result');
   await phone.page.waitForSelector('.message.result');
   await shot(host.page, '12-ran-twice-desktop');

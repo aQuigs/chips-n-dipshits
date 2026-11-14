@@ -13,7 +13,8 @@ export type Shape = 'wide' | 'tall';
 type Anchor = 'top' | 'middle' | 'bottom';
 
 type SeatSpot = [x: number, y: number, anchor: Anchor];
-type Spot = [x: number, y: number, besideTheMiddle?: true];
+/** A bet's place. One above or below the middle says how many rows of bets lie between it and the middle. */
+type Spot = [x: number, y: number, rowsOut?: number];
 
 // Where each seat sits, in percent of the stage, going clockwise from the viewer at the bottom
 const SEAT_SPOTS: Record<Shape, SeatSpot[]> = {
@@ -43,11 +44,12 @@ const SEAT_SPOTS: Record<Shape, SeatSpot[]> = {
   ],
 };
 
-// Where each seat's bet sits: between the seat and the middle, clear of the board. A standing table has no
-// room for a bet between a side seat and the board, so those bets go just above and below the middle.
+// Where each seat's bet sits: between the seat and the middle, clear of the boards. A standing table has no
+// room for a bet between a side seat and the boards, so those bets go just above and below the middle, and
+// the bets of the seats next to them a row further out.
 const BET_SPOTS: Record<Shape, Spot[]> = {
   wide: [[50, 70], [33, 70], [22, 59], [22, 41], [33, 30], [50, 30], [67, 30], [78, 41], [78, 59], [67, 70]],
-  tall: [[50, 73], [33, 71], [33, 59, true], [33, 41, true], [33, 28], [50, 24], [67, 28], [67, 41, true], [67, 59, true], [67, 71]],
+  tall: [[50, 73], [33, 71, 1], [33, 59, 0], [33, 41, 0], [33, 28, 1], [50, 24], [67, 28, 1], [67, 41, 0], [67, 59, 0], [67, 71, 1]],
 };
 
 const BOARD_SIZE = 5;
@@ -78,14 +80,14 @@ function seatPlace(shape: Shape, slot: number): { class: string; style: Record<s
 }
 
 function betPlace(shape: Shape, slot: number): Record<string, string> {
-  const [x, y, besideTheMiddle] = BET_SPOTS[shape][slot]!;
+  const [x, y, rowsOut] = BET_SPOTS[shape][slot]!;
 
-  if (!besideTheMiddle) {
+  if (rowsOut === undefined) {
     return { left: `${x}%`, top: `${y}%` };
   }
 
-  // The board and the pot keep their size on a short table, where a share of its height stops clearing them
-  const fromTheMiddle = `max(${Math.abs(y - 50)}%, var(--center-reach))`;
+  // The boards and the pot keep their size on a short table, where a share of its height stops clearing them
+  const fromTheMiddle = `max(${Math.abs(y - 50)}%, var(--center-reach) + ${rowsOut} * var(--bet-row))`;
 
   return { left: `${x}%`, top: `calc(50% ${y < 50 ? '-' : '+'} ${fromTheMiddle})` };
 }
@@ -134,22 +136,29 @@ function shownLabel(seat: SeatView, hand: HandView): string | null {
   return hand.result?.hands.find((entry) => entry.seat === seat.seat)?.name ?? null;
 }
 
+/** A hand's name with what follows its kind set apart, so that where a line has no room for it the kind can stand alone. */
+function nameEl(name: string): HTMLElement {
+  const [kind, ...ranks] = name.split(', ');
+
+  return h('span.name', null, kind, ranks.length > 0 ? h('span.detail', null, `, ${ranks.join(', ')}`) : null);
+}
+
 /**
  * What the viewer's cards make, a line per board, with room in each line for one more short figure.
  * Drawn whether or not the player wants it, so the preference only has to hide it.
  */
 function hintEl(holding: Holding): HTMLElement {
-  const twice = holding.reads.length > 1;
+  const perBoard = holding.reads.length > 1;
 
   return h(
     'div.tag.hint',
-    null,
+    { class: perBoard ? 'per-board' : '' },
     holding.reads.map((read, run) =>
       h(
         'div.read',
         null,
-        twice ? h('span.run', { 'aria-label': `Board ${run + 1}:` }, String(run + 1)) : null,
-        h('span.name', null, read.name),
+        perBoard ? h('span.run', { 'aria-label': `Board ${run + 1}:` }, String(run + 1)) : null,
+        nameEl(read.name),
         run === 0 && holding.bounty ? h('span.bounty', null, 'Bounty hand') : null,
       ),
     ),
@@ -187,7 +196,7 @@ function seatEl(view: TableView, seat: SeatView, slot: number, shape: Shape, clo
   const won = sum(result?.winnings.filter((win) => win.seat === seat.seat).map((win) => win.amount) ?? []);
   const bounty = result?.bounty?.seat === seat.seat ? sum(result.bounty.payments.map((payment) => payment.amount)) : 0;
   const status = statusOf(seat, hand);
-  // A seat makes a hand per board when run twice, and once it is over the result in the middle names them: on a phone it needs the room
+  // A seat makes a hand per board on more than one, and once it is over the result in the middle names them: on a phone it needs the room
   const middleNamesHands = hand?.stage === 'done' && hand.boards.length > 1;
   const label = hand?.stage === 'done' && !middleNamesHands ? shownLabel(seat, hand) : null;
   const holding = isMe ? (hand?.holding ?? null) : null;
@@ -289,11 +298,14 @@ function boardEl(hand: HandView): HTMLElement {
     boards.push(h('div.board.later', { 'data-run': boards.length }, Array.from({ length: BOARD_SIZE }, () => h('div.card.slot'))));
   }
 
-  return h('div.boards', { class: boards.length > 1 ? 'twice' : '' }, boards);
+  return h('div.boards', null, boards);
 }
 
 // More lines than this in the middle of the table run into the seats on a phone
 const RESULT_LINES = 3;
+
+// A board's line has room for this many winners with what each took there
+const WINNERS_ON_A_LINE = 2;
 
 function resultLines(view: TableView, hand: HandView): string[] {
   const result = hand.result;
@@ -302,8 +314,10 @@ function resultLines(view: TableView, hand: HandView): string[] {
   }
 
   const nameAt = (seat: number) => view.seats[seat]?.name ?? 'Someone';
+  const amountOf = (chips: number) => formatAmount(chips, view.config);
   const runs = hand.boards.length;
   const lines: string[] = [];
+  let fits = true;
 
   for (let run = 0; run < runs; run++) {
     const wonHere = new Map<number, number>();
@@ -313,21 +327,29 @@ function resultLines(view: TableView, hand: HandView): string[] {
       }
     }
 
+    const board = runs > 1 ? `Board ${run + 1}: ` : '';
+
+    // One of several boards keeps to a line: winners who split it, of a tie or of a side pot, are named with what each took and not their hands
+    if (runs > 1 && wonHere.size > 1) {
+      fits &&= wonHere.size <= WINNERS_ON_A_LINE;
+      lines.push(`${board}${[...wonHere].map(([seat, amount]) => `${nameAt(seat)} +${amountOf(amount)}`).join(', ')}`);
+      continue;
+    }
+
     for (const [seat, amount] of wonHere) {
       const made = result.hands.find((shown) => shown.seat === seat && shown.run === run)?.name;
-      const board = runs > 1 ? `Board ${run + 1}: ` : '';
 
-      lines.push(`${board}${nameAt(seat)} wins ${formatAmount(amount, view.config)}${made ? ` with ${midSentence(made)}` : ''}`);
+      lines.push(`${board}${nameAt(seat)} wins ${amountOf(amount)}${made ? ` with ${midSentence(made)}` : ''}`);
     }
   }
 
-  const bountyLine = result.bounty ? [`Seven-deuce! ${nameAt(result.bounty.seat)} collects a ${formatAmount(sum(result.bounty.payments.map((payment) => payment.amount)), view.config)} bounty`] : [];
+  const bountyLine = result.bounty ? [`Seven-deuce! ${nameAt(result.bounty.seat)} collects a ${amountOf(sum(result.bounty.payments.map((payment) => payment.amount)))} bounty`] : [];
 
-  if (lines.length + bountyLine.length <= RESULT_LINES) {
+  if (fits && lines.length + bountyLine.length <= RESULT_LINES) {
     return [...lines, ...bountyLine];
   }
 
-  // Several pots or two boards say more than fits here: each winner gets one line, and the play-by-play has every pot
+  // Several pots say more than fits here: each winner gets one line, and the play-by-play has every pot
   const winners = [...result.winnings].sort((a, b) => b.amount - a.amount).map((win) => `${nameAt(win.seat)} wins ${formatAmount(win.amount, view.config)}`);
   const room = RESULT_LINES - bountyLine.length;
   const shown = winners.length > room ? [...winners.slice(0, room - 1), `and ${winners.length - room + 1} more win a share`] : winners;
@@ -407,7 +429,8 @@ export function tableEl(view: TableView, shape: Shape, clockOffset: number, hand
 
   return h(
     'div',
-    { class: `table ${shape}${movable ? ' movable' : ''}` },
+    // How many boards the hand is played on, from its first card: the size of their cards and how far the bets stand off follow it
+    { class: `table ${shape}${movable ? ' movable' : ''}`, 'data-boards': hand?.runs ?? 1 },
     h('div.felt'),
     h('div.center', null, hand ? boardEl(hand) : null, hand ? potEl(view.config, hand) : null, messageEl(view, handlers)),
     nodes,

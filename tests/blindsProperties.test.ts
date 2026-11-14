@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { addMember, eligibleSeats, SEAT_COUNT, seatsClockwiseAfter } from '../src/engine/index.ts';
+import { eligibleSeats, owes, SEAT_COUNT, seatsClockwiseAfter } from '../src/engine/index.ts';
 import type { BlindSeats, Post, Rng, Seat } from '../src/engine/index.ts';
 import { seededRng, TestTable } from './helpers.ts';
 import { assertBlindsHold, assertChipsConserved, assertHandRecordsHold, assertInvariants } from './invariants.ts';
@@ -16,18 +16,8 @@ const TABLES = Number(process.env.SIM_TABLES ?? 60);
 const HANDS_PER_TABLE = 60;
 const BLINDS: Post[] = ['small blind', 'big blind'];
 
-const playerIn = (t: TestTable, seat: number) => t.ids.indexOf(t.state.seats[seat]!.playerId);
 const seated = (t: TestTable) => t.state.seats.flatMap((seat, index) => (seat ? [index] : []));
 const pick = <T>(rng: Rng, from: readonly T[]) => from[rng.int(from.length)];
-const owes = (seat: Seat) => seat.owesBigBlind || seat.owesSmallBlind;
-
-function foldOut(t: TestTable): void {
-  while (t.state.hand?.stage === 'betting') {
-    t.fold(playerIn(t, t.toAct!));
-  }
-
-  t.finishHand();
-}
 
 /** A table of two to ten players in random seats, before its first hand. */
 function randomTable(rng: Rng, seed: number): TestTable {
@@ -45,15 +35,15 @@ function randomTable(rng: Rng, seed: number): TestTable {
   return t;
 }
 
-/** What can happen between two hands. Each says whether it moved a player, which lets the button or a blind stay with them. */
-const BETWEEN_HANDS: ((t: TestTable, rng: Rng) => string | void)[] = [
-  (t, rng) => t.cmd(playerIn(t, pick(rng, seated(t))!), { type: 'sitOut' }),
-  (t, rng) => t.cmd(playerIn(t, pick(rng, seated(t))!), { type: 'sitIn' }),
-  (t, rng) => t.cmd(playerIn(t, pick(rng, seated(t))!), { type: 'comeIn', post: chance(rng, 60) }),
+/** What can happen between two hands. */
+const BETWEEN_HANDS: ((t: TestTable, rng: Rng) => void)[] = [
+  (t, rng) => t.cmd(t.playerIn(pick(rng, seated(t))!), { type: 'sitOut' }),
+  (t, rng) => t.cmd(t.playerIn(pick(rng, seated(t))!), { type: 'sitIn' }),
+  (t, rng) => t.cmd(t.playerIn(pick(rng, seated(t))!), { type: 'comeIn', post: chance(rng, 60) }),
   (t, rng) => {
     // Everyone who is out or owes comes back or chooses again, so that tables fill up and missed blinds get posted
     for (const seat of seated(t).filter((index) => t.state.seats[index]!.sittingOut || owes(t.state.seats[index]!))) {
-      t.cmd(playerIn(t, seat), { type: 'comeIn', post: chance(rng, 60) });
+      t.cmd(t.playerIn(seat), { type: 'comeIn', post: chance(rng, 60) });
     }
   },
   (t, rng) => t.cmd(0, { type: 'setStack', playerId: t.state.seats[pick(rng, seated(t))!]!.playerId, stack: chance(rng, 50) ? 0 : chance(rng, 30) ? 1 + rng.int(40) : 2000 }),
@@ -61,10 +51,7 @@ const BETWEEN_HANDS: ((t: TestTable, rng: Rng) => string | void)[] = [
     const open = t.state.seats.flatMap((seat, index) => (seat ? [] : [index]));
 
     if (open.length > 0 && t.ids.length < 30) {
-      const player = t.ids.push(addMember(t.state, `N${t.ids.length}`, t.ctx()).id) - 1;
-
-      t.cmd(player, { type: 'requestSeat', seat: pick(rng, open)!, buyIn: 2000 });
-      t.cmd(0, { type: 'approve', playerId: t.ids[player]! });
+      t.sitDown(`N${t.ids.length}`, pick(rng, open)!, 2000);
     }
   },
   (t, rng) => {
@@ -72,7 +59,7 @@ const BETWEEN_HANDS: ((t: TestTable, rng: Rng) => string | void)[] = [
     const others = seated(t).filter((seat) => t.state.seats[seat]!.playerId !== t.state.hostId);
 
     if (others.length > 1) {
-      t.cmd(playerIn(t, pick(rng, others)!), { type: 'standUp' });
+      t.cmd(t.playerIn(pick(rng, others)!), { type: 'standUp' });
     }
   },
   (t, rng) => {
@@ -81,8 +68,6 @@ const BETWEEN_HANDS: ((t: TestTable, rng: Rng) => string | void)[] = [
 
     if (open.length > 0) {
       t.cmd(0, { type: 'moveSeat', playerId: t.state.seats[from]!.playerId, seat: pick(rng, open)! });
-
-      return t.state.seats.find((seat) => seat && !t.state.seats[from])?.playerId && 'moved';
     }
   },
   (t, rng) => {
@@ -101,7 +86,7 @@ const BETWEEN_HANDS: ((t: TestTable, rng: Rng) => string | void)[] = [
     }
   },
   (t, rng) => t.cmd(0, { type: 'forgiveBlinds', playerId: t.state.seats[pick(rng, seated(t))!]!.playerId }),
-  (t, rng) => t.cmd(playerIn(t, pick(rng, seated(t))!), { type: 'setStraddle', on: chance(rng, 50) }),
+  (t, rng) => t.cmd(t.playerIn(pick(rng, seated(t))!), { type: 'setStraddle', on: chance(rng, 50) }),
 ];
 
 /** The table as a hand finds it, kept to hold the hand to afterward. */
@@ -270,7 +255,7 @@ test('whatever happens between hands, the blinds go round by the rule and nobody
         moved = false;
       }
 
-      foldOut(t);
+      t.foldOut();
       assertChipsConserved(t.state);
     }
 
@@ -297,7 +282,7 @@ test('once the table settles, an orbit charges everyone in it each blind once an
 
       if (eligibleSeats(t.state).length >= 2) {
         t.deal();
-        foldOut(t);
+        t.foldOut();
       }
     }
 
@@ -316,7 +301,7 @@ test('once the table settles, an orbit charges everyone in it each blind once an
     // Long enough for the big blind to reach everyone waiting for it, and for the button to pass anyone posting
     for (let settling = 0; settling < players.length + 2; settling++) {
       t.deal();
-      foldOut(t);
+      t.foldOut();
     }
 
     const count = () => new Map(players.map((seat) => [seat, 0]));
@@ -337,7 +322,7 @@ test('once the table settles, an orbit charges everyone in it each blind once an
       }
 
       posted.button.set(t.state.hand!.button, (posted.button.get(t.state.hand!.button) ?? 0) + 1);
-      foldOut(t);
+      t.foldOut();
     }
 
     for (const [what, counts] of Object.entries(posted)) {

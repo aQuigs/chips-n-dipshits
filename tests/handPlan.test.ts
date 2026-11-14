@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { addMember, comingIn, planHand, takeUp } from '../src/engine/index.ts';
+import { comingIn, eligibleSeats, planHand, takeUp } from '../src/engine/index.ts';
 import type { HandPlan, TableConfig, TableState } from '../src/engine/index.ts';
 import { TestTable } from './helpers.ts';
 
@@ -70,14 +70,7 @@ class Planned {
   private bombPot = false;
 
   constructor(seats: number[], button: number, config: Partial<TableConfig> = {}) {
-    this.t = new TestTable({ stacks: seats.map(() => 1000), config });
-
-    // Sat down in the first seats, and moved out to the ones asked for from the far end, so that no move lands on a seat still taken
-    for (const player of [...seats.keys()].reverse()) {
-      if (seats[player] !== player) {
-        this.t.cmd(0, { type: 'moveSeat', playerId: this.t.ids[player]!, seat: seats[player]! });
-      }
-    }
+    this.t = new TestTable({ stacks: seats.map(() => 1000), seats, config });
 
     this.first = [...seats];
     this.state.buttonSeat = (button + 9) % 10;
@@ -117,14 +110,10 @@ class Planned {
       case 'rebuy':
         return t.cmd(0, { type: 'setStack', playerId: t.ids[this.player(step[1])]!, stack: 1000 });
 
-      case 'arrive': {
-        const player = t.ids.push(addMember(t.state, `N${step[1]}`, t.ctx()).id) - 1;
-
+      case 'arrive':
         this.first.push(step[1]);
-        t.cmd(player, { type: 'requestSeat', seat: step[1], buyIn: 1000 });
-
-        return t.cmd(0, { type: 'approve', playerId: t.ids[player]! });
-      }
+        t.sitDown(`N${step[1]}`, step[1]);
+        return;
 
       case 'leave': {
         const player = this.player(step[1]);
@@ -561,7 +550,7 @@ for (const { name, seats, button, config, play } of CASES) {
       }
 
       hands += 1;
-      const ready = table.state.seats.flatMap((seat, index) => (seat && !seat.sittingOut && seat.stack > 0 ? [index] : []));
+      const ready = eligibleSeats(table.state);
       const plan = table.deal();
 
       if (step === 'new game') {

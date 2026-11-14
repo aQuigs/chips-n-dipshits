@@ -36,6 +36,8 @@ export interface DealOptions {
 
 export interface TableOptions {
   stacks: number[];
+  /** The seat each player takes; seats 0, 1, 2 and so on when left out. */
+  seats?: number[];
   config?: Partial<TableConfig>;
   seed?: number;
   /** What the players are called, by seat; P0, P1 and so on when left out. */
@@ -130,7 +132,7 @@ export class TestTable {
   now = 1_000_000;
   rng: Rng;
   effects: Effect[] = [];
-  /** Player id by the seat they were first given; for a table taken over with `adopt`, in the order they joined. */
+  /** Player id in the order of `stacks`, which is by seat unless `seats` says otherwise; for a table taken over with `adopt`, in the order they joined. */
   ids: string[] = [];
 
   constructor(options: TableOptions) {
@@ -146,11 +148,11 @@ export class TestTable {
       this.ids.push(addMember(state, name(seat), this.ctx()).id);
     }
 
-    options.stacks.forEach((stack, seat) => {
-      this.cmd(seat, { type: 'requestSeat', seat, buyIn: stack });
+    options.stacks.forEach((stack, player) => {
+      this.cmd(player, { type: 'requestSeat', seat: options.seats?.[player] ?? player, buyIn: stack });
 
-      if (seat > 0) {
-        this.cmd(0, { type: 'approve', playerId: this.ids[seat]! });
+      if (player > 0) {
+        this.cmd(0, { type: 'approve', playerId: this.ids[player]! });
       }
     });
   }
@@ -246,6 +248,30 @@ export class TestTable {
   wait(ms: number): void {
     this.now += ms;
     tick(this.state, this.ctx());
+  }
+
+  /** The player in a seat, as `cmd` and the moves of a hand name them. */
+  playerIn(seat: number): number {
+    return this.ids.indexOf(this.state.seats[seat]!.playerId);
+  }
+
+  /** A new member takes an open seat with the host's approval. Gives back what `cmd` names them by. */
+  sitDown(name: string, seat: number, buyIn = 1000): number {
+    const player = this.ids.push(addMember(this.state, name, this.ctx()).id) - 1;
+
+    this.cmd(player, { type: 'requestSeat', seat, buyIn });
+    this.cmd(0, { type: 'approve', playerId: this.ids[player]! });
+
+    return player;
+  }
+
+  /** Plays the hand on the table to its end by folding round to the last player in it, and clears it away. */
+  foldOut(): void {
+    while (this.state.hand?.stage === 'betting') {
+      this.fold(this.playerIn(this.toAct!));
+    }
+
+    this.finishHand();
   }
 
   /** Keeps stepping time until the hand on the table is over and cleared away. */

@@ -4,7 +4,7 @@
  */
 import assert from 'node:assert/strict';
 
-import { BOARD_SIZE, boardsDealt, evaluateHand, FEED_LIMIT, FLOP_SIZE, LIMITS, nightIsOver, PLAYING_THE_BOARD, reaches, replayHand, roleOf, viewFor } from '../src/engine/index.ts';
+import { BOARD_SIZE, boardsDealt, evaluateHand, FEED_LIMIT, FLOP_SIZE, LIMITS, nightIsOver, owes, PLAYING_THE_BOARD, reaches, replayHand, roleOf, viewFor } from '../src/engine/index.ts';
 import type { Effect, FeedEntry, HandPlayer, HandRecord, TableState } from '../src/engine/index.ts';
 import { CACHE_VALUE_BYTES, utf8Bytes } from '../src/gas/sheetStore.ts';
 import { restoreState } from '../src/server/store.ts';
@@ -89,12 +89,12 @@ export function assertSeatingHolds(state: TableState): void {
  */
 export function assertBlindsHold(state: TableState): void {
   const seated = state.seats.flatMap((seat, index) => (seat ? [{ seat, index }] : []));
-  const owing = seated.filter(({ seat }) => seat.owesBigBlind || seat.owesSmallBlind);
+  const owing = seated.filter(({ seat }) => owes(seat));
   const inSeatRange = (index: number) => Number.isInteger(index) && index >= 0 && index < state.seats.length;
 
   assert.ok(state.config.missedBlinds === 'owed' || owing.length === 0, 'a player owes a blind at a table that forgives them');
   assert.ok(state.blinds !== null || owing.length === 0, 'a player owes a blind with no game going');
-  assert.ok(seated.every(({ seat }) => !seat.postsOwed || seat.owesBigBlind || seat.owesSmallBlind), 'a player is set to post with nothing owed');
+  assert.ok(seated.every(({ seat }) => !seat.postsOwed || owes(seat)), 'a player is set to post with nothing owed');
   assert.ok(state.blinds === null || (inSeatRange(state.blinds.small) && inSeatRange(state.blinds.big)), 'the blinds are on a seat that is not there');
   assert.ok(state.blinds === null || state.blinds.small !== state.blinds.big, 'the small blind and the big blind are on one seat');
 

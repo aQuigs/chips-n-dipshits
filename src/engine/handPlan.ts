@@ -48,12 +48,11 @@ export type ComesIn =
   | 'next hand'
   /** In the next one, posting what they owe. */
   | 'posting'
-  /** When the big blind reaches them. */
-  | 'big blind'
-  /** Once the button has passed them, posting what they owe. */
-  | 'button';
+  /** Not in the next one: when the big blind reaches them, or once the button has passed them, posting what they owe. */
+  | HeldFor;
 
-function owes(seat: Seat): boolean {
+/** Asked of a seat at the table or of one in a player's view. */
+export function owes(seat: Pick<Seat, 'owesBigBlind' | 'owesSmallBlind'>): boolean {
   return seat.owesBigBlind || seat.owesSmallBlind;
 }
 
@@ -118,11 +117,9 @@ function buttonOf({ dealtIn, sbSeat, bbSeat, buttonSeat }: Seating): number {
     return sbSeat;
   }
 
-  const lastBeforeSmallBlind = others.reduce((last, seat) => (fromBigBlind(seat) > fromBigBlind(last) ? seat : last));
-
-  // Nobody plays from the seat the button is due on, or from between it and the small blind: a dead button.
-  // Someone who does play from between them has it instead, so that nobody is ever dealt in behind the button
-  return buttonSeat !== null && fromBigBlind(lastBeforeSmallBlind) < fromBigBlind(buttonSeat) ? buttonSeat : lastBeforeSmallBlind;
+  // The last seat before the small blind's that the button is due on or a hand is played from. So it is dead when nobody
+  // plays from the seat it is due on or from past it, and nobody is ever dealt in behind the button
+  return [...others, ...(buttonSeat === null ? [] : [buttonSeat])].reduce((last, seat) => (fromBigBlind(seat) > fromBigBlind(last) ? seat : last));
 }
 
 /** Where the button goes when no blinds say: on from where it was to the next player, or to one drawn at random when it was nowhere. */
@@ -235,16 +232,19 @@ export function forgive(seat: Seat): void {
   setOwed(seat, undefined);
 }
 
-/** Ends the game the blinds were moving in, so the next hand starts a new one: the button drawn afresh and nothing owed. */
-export function startOver(state: TableState): void {
-  state.buttonSeat = null;
-  state.blinds = null;
-
+export function forgiveEveryone(state: TableState): void {
   for (const seat of state.seats) {
     if (seat) {
       forgive(seat);
     }
   }
+}
+
+/** Ends the game the blinds were moving in, so the next hand starts a new one: the button drawn afresh and nothing owed. */
+export function startOver(state: TableState): void {
+  state.buttonSeat = null;
+  state.blinds = null;
+  forgiveEveryone(state);
 }
 
 /**

@@ -1,7 +1,7 @@
 /* Random play on a test table: what the simulation runs, and what plays a saved table on after it is read back. */
 import assert from 'node:assert/strict';
 
-import { addMember, CONFIG_KEYS, LIMITS, nextDeadline, SEAT_COUNT, viewFor } from '../src/engine/index.ts';
+import { addMember, CONFIG_KEYS, LIMITS, nextDeadline, owes, SEAT_COUNT, viewFor } from '../src/engine/index.ts';
 import type { Command, GameError, Rng } from '../src/engine/index.ts';
 import type { TestTable } from './helpers.ts';
 import { randomConfig } from './randomConfig.ts';
@@ -58,7 +58,7 @@ export const FUZZ_COMMANDS: ((fuzz: Fuzz) => void)[] = [
   ({ t, rng, who }) => {
     // Everyone who owes blinds comes back at once, most of them to post: random play sits players out far more
     // often than it brings one back, and a hand with missed blinds posted in it would hardly ever be dealt
-    const owing = t.state.seats.flatMap((seat) => (seat && (seat.owesBigBlind || seat.owesSmallBlind) ? [t.ids.indexOf(seat.playerId)] : []));
+    const owing = t.state.seats.flatMap((seat) => (seat && owes(seat) ? [t.ids.indexOf(seat.playerId)] : []));
 
     for (const player of owing.length > 0 ? owing : [who]) {
       attempt(t, player, { type: 'comeIn', post: chance(rng, 70) });

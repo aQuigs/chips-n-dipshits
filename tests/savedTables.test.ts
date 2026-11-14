@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
-import { replayHand, STATE_SCHEMA, TIMING } from '../src/engine/index.ts';
+import { owes, replayHand, STATE_SCHEMA, TIMING } from '../src/engine/index.ts';
 import type { TableState } from '../src/engine/index.ts';
 import { restoreState } from '../src/server/store.ts';
 import { checkAround, handRecords, seededRng, TestTable } from './helpers.ts';
@@ -157,7 +157,7 @@ test('a table saved in the middle of a hand before missed blinds finishes that h
     const state = load(file);
 
     assert.deepEqual([state.blinds, state.config.missedBlinds], [null, 'owed'], file);
-    assert.ok(state.seats.every((seat) => !seat || (!seat.owesBigBlind && !seat.owesSmallBlind && !seat.postsOwed)), file);
+    assert.ok(state.seats.every((seat) => !seat || (!owes(seat) && !seat.postsOwed)), file);
   }
 
   // Five players, the button on seat 0, and the hand before the flop

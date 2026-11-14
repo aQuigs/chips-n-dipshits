@@ -3,7 +3,7 @@ import { formatAmount, validAmount } from '../amounts.ts';
 import { bombPotName, bombPotOf } from '../bombPots.ts';
 import { validatedConfig } from '../config.ts';
 import { restartActionClock } from '../hand.ts';
-import { forgive } from '../handPlan.ts';
+import { forgive, forgiveEveryone, owes } from '../handPlan.ts';
 import { actorName, dropCohost, requireMayRemove } from '../hosts.ts';
 import { callLastHands, endNight, nightIsOver, onLastHand, restartNight } from '../night.ts';
 import { movePlayer, shuffleEveryone } from '../reseating.ts';
@@ -169,7 +169,7 @@ export const forgiveBlinds: Handler<'forgiveBlinds'> = {
   by: 'host or cohost',
   run: ({ state, ctx, member, command }) => {
     const { member: target, seat } = seatedMember(state, command.playerId);
-    if (!seat.owesBigBlind && !seat.owesSmallBlind) {
+    if (!owes(seat)) {
       return;
     }
 
@@ -243,10 +243,8 @@ export const updateConfig: Handler<'updateConfig'> = {
     if (state.config.missedBlinds !== before.missedBlinds) {
       const forgiven = state.config.missedBlinds === 'forgiven';
 
-      for (const seat of state.seats) {
-        if (seat && forgiven) {
-          forgive(seat);
-        }
+      if (forgiven) {
+        forgiveEveryone(state);
       }
 
       addFeed(state, ctx.now, 'system', null, forgiven ? 'Missed blinds are forgiven: nobody owes any' : `Missed blinds are owed${when}`);

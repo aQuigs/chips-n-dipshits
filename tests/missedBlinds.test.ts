@@ -6,37 +6,14 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { addMember, comingIn, replayHand } from '../src/engine/index.ts';
+import { comingIn, owes, replayHand } from '../src/engine/index.ts';
 import type { TableConfig } from '../src/engine/index.ts';
 import { chipsIn, options, TestTable } from './helpers.ts';
 import type { DealOptions } from './helpers.ts';
 import { assertHandRecordsHold, assertInvariants } from './invariants.ts';
 
-/** The player in a seat, as the table's commands name them. */
-const playerIn = (t: TestTable, seat: number) => t.ids.indexOf(t.state.seats[seat]!.playerId);
-
-/** A table with a player in each of `seats`, which rise from one to the next. */
-function spread(seats: number[], config: Partial<TableConfig> = {}): TestTable {
-  const t = new TestTable({ stacks: seats.map(() => 1000), config });
-
-  // From the far end, so that no move lands on a seat still taken
-  for (const player of [...seats.keys()].reverse()) {
-    if (seats[player] !== player) {
-      t.cmd(0, { type: 'moveSeat', playerId: t.ids[player]!, seat: seats[player]! });
-    }
-  }
-
-  return t;
-}
-
-/** Plays the hand on the table to its end by folding round to the big blind, and clears it away. */
-function foldOut(t: TestTable): void {
-  while (t.state.hand?.stage === 'betting') {
-    t.fold(playerIn(t, t.toAct!));
-  }
-
-  t.finishHand();
-}
+/** A table with a player in each of `seats`. */
+const spread = (seats: number[], config: Partial<TableConfig> = {}) => new TestTable({ stacks: seats.map(() => 1000), seats, config });
 
 /** Every forced bet of the hand on the table, as `seat what amount`, with how it counts when not as a live bet. */
 function posts(t: TestTable): string[] {
@@ -50,28 +27,19 @@ function blindsOf(t: TestTable): [number | null, number] {
   return [seatOf('small blind')[0] ?? null, seatOf('big blind')[0]!];
 }
 
-function sitDown(t: TestTable, name: string, seat: number): number {
-  const player = t.ids.push(addMember(t.state, name, t.ctx()).id) - 1;
-
-  t.cmd(player, { type: 'requestSeat', seat, buyIn: 1000 });
-  t.cmd(0, { type: 'approve', playerId: t.ids[player]! });
-
-  return player;
-}
-
 test('gap: a newcomer who sits between the button and the small blind makes nobody post a blind twice', () => {
   const t = spread([0, 2, 4, 6]);
   t.deal({ button: 0 });
   assert.deepEqual(blindsOf(t), [2, 4]);
-  foldOut(t);
+  t.foldOut();
 
-  sitDown(t, 'New', 1);
+  t.sitDown('New', 1);
 
   const dealt: [number | null, number][] = [];
   for (let hand = 0; hand < 4; hand++) {
     t.deal();
     dealt.push(blindsOf(t));
-    foldOut(t);
+    t.foldOut();
   }
 
   // The blinds go on round the table as if nobody had come, and reach the newcomer in their turn
@@ -81,15 +49,15 @@ test('gap: a newcomer who sits between the button and the small blind makes nobo
 test('gap: a newcomer who sits between the small blind and the big blind makes nobody post a blind twice', () => {
   const t = spread([0, 2, 4, 6]);
   t.deal({ button: 0 });
-  foldOut(t);
+  t.foldOut();
 
-  sitDown(t, 'New', 3);
+  t.sitDown('New', 3);
 
   const dealt: [number | null, number][] = [];
   for (let hand = 0; hand < 4; hand++) {
     t.deal();
     dealt.push(blindsOf(t));
-    foldOut(t);
+    t.foldOut();
   }
 
   assert.deepEqual(dealt, [[4, 6], [6, 0], [0, 2], [2, 3]]);
@@ -99,7 +67,7 @@ test('gap: the player with the button, moved one seat clockwise, does not get it
   const t = spread([0, 2, 4]);
   t.deal({ button: 0 });
   assert.deepEqual([t.state.hand!.button, ...blindsOf(t)], [0, 2, 4]);
-  foldOut(t);
+  t.foldOut();
 
   t.cmd(0, { type: 'moveSeat', playerId: t.ids[0]!, seat: 1 });
   t.deal();
@@ -116,13 +84,13 @@ function backToPost(config: Partial<TableConfig> = {}): TestTable {
   const t = new TestTable({ stacks: [1000, 1000, 1000, 1000, 1000, 1000], config });
 
   t.deal({ button: 0 });
-  foldOut(t);
+  t.foldOut();
   t.cmd(4, { type: 'sitOut' });
 
   // The big blind passes seat 4 in the second of these, and the button in the third
   for (let hand = 0; hand < 3; hand++) {
     t.deal();
-    foldOut(t);
+    t.foldOut();
   }
 
   assert.deepEqual([t.state.seats[4]!.owesBigBlind, t.state.seats[4]!.owesSmallBlind], [true, true]);
@@ -207,7 +175,7 @@ test('a hand everyone folds to the big blind gives it the dead small blind and t
   const t = dealBack();
   const before = t.stacks();
 
-  foldOut(t);
+  t.foldOut();
 
   // Seat 1 gets back its own blind and wins the small blind, the missed big blind and the dead small blind
   assert.deepEqual(t.stacks().map((stack, seat) => stack - before[seat]!), [0, 60, 0, 0, 0, 0]);
@@ -258,7 +226,7 @@ test('a stack that covers the missed big blind and part of the small blind posts
     assert.ok(t.state.hand!.log.includes(line), t.state.hand!.log.join(' / '));
     assert.deepEqual([t.state.hand!.players[4]!.allIn, t.state.seats[4]!.stack, t.toAct], [true, 0, 2]);
 
-    foldOut(t);
+    t.foldOut();
     assertHandRecordsHold(t.effects);
     assertInvariants(t.state, t.now);
   }
@@ -294,14 +262,14 @@ test('with a straddle on, the returning player has the difference to call, and t
 test('a player posting a missed big blind under the gun does not straddle on top of it', () => {
   const t = new TestTable({ stacks: [1000, 1000, 1000, 1000, 1000, 1000] });
   t.deal({ button: 0 });
-  foldOut(t);
+  t.foldOut();
   t.cmd(3, { type: 'sitOut' });
   t.cmd(3, { type: 'setStraddle', on: true });
 
   // Round until the big blind is back on seat 2, with seat 3 next to act after it
   for (let hand = 0; hand < 4; hand++) {
     t.deal();
-    foldOut(t);
+    t.foldOut();
   }
 
   t.cmd(3, { type: 'comeIn', post: true });
@@ -327,14 +295,14 @@ test('the events of a hand with missed blinds posted retell it: what is in front
   const now = replayHand(t.state.hand!.events)!;
   assert.deepEqual([now.seats[4]!.stack, now.seats[4]!.bet], [t.state.seats[4]!.stack, 60]);
 
-  foldOut(t);
+  t.foldOut();
   assert.equal(assertHandRecordsHold(t.effects), 5);
 });
 
 test('seven-deuce folded to as a lone big blind still collects its bounty, though the hand had nothing else to win', () => {
   const t = new TestTable({ stacks: [1000, 1000, 1000, 1000], config: { sevenDeuceBounty: 50 } });
   t.deal({ button: 0 });
-  foldOut(t);
+  t.foldOut();
 
   t.cmd(2, { type: 'sitOut' });
   t.deal({ holes: { 3: '7s 2h' } });
@@ -350,7 +318,7 @@ test('seven-deuce folded to as a lone big blind still collects its bounty, thoug
 test('a dead button and a hand with no small blind are said in the play-by-play, and the hand plays on round the players in it', () => {
   const t = new TestTable({ stacks: [1000, 1000, 1000, 1000] });
   t.deal({ button: 0 });
-  foldOut(t);
+  t.foldOut();
 
   // The big blind steps out: their seat is the small blind's next, and the button's after that
   t.cmd(2, { type: 'sitOut' });
@@ -397,10 +365,10 @@ test('a dead button and a hand with no small blind are said in the play-by-play,
 test('a bomb pot deals in a player who is waiting for the big blind, and leaves what they owe as it was', () => {
   const t = new TestTable({ stacks: [1000, 1000, 1000, 1000] });
   t.deal({ button: 0 });
-  foldOut(t);
+  t.foldOut();
   t.cmd(3, { type: 'sitOut' });
   t.deal();
-  foldOut(t);
+  t.foldOut();
   t.cmd(3, { type: 'sitIn' });
   assert.equal(comingIn(t.state).get(3), 'big blind');
 
@@ -410,7 +378,7 @@ test('a bomb pot deals in a player who is waiting for the big blind, and leaves 
   assert.deepEqual(posts(t), [0, 1, 2, 3].map((seat) => `${(seat + 3) % 4} bomb pot 100 contribution`));
   assert.deepEqual([t.state.seats[3]!.owesBigBlind, t.state.seats[3]!.owesSmallBlind], [true, true]);
   assertInvariants(t.state, t.now);
-  foldOut(t);
+  t.foldOut();
 
   t.deal();
   assert.deepEqual(t.state.hand!.players.map((player) => player.seat), [0, 1, 2], 'the bomb pot settled what they owed');
@@ -419,10 +387,10 @@ test('a bomb pot deals in a player who is waiting for the big blind, and leaves 
 test('sitting back in waits for the big blind unless the player says they will post, and the choice can be changed until they are dealt in', () => {
   const t = new TestTable({ stacks: [1000, 1000, 1000, 1000, 1000, 1000] });
   t.deal({ button: 0 });
-  foldOut(t);
+  t.foldOut();
   t.cmd(3, { type: 'sitOut' });
   t.deal();
-  foldOut(t);
+  t.foldOut();
 
   const seat = t.state.seats[3]!;
   t.cmd(3, { type: 'sitIn' });
@@ -448,10 +416,10 @@ test('the host or a co-host forgives a player what they owe, the table is told, 
   const t = new TestTable({ stacks: [1000, 1000, 1000, 1000] });
   t.cmd(0, { type: 'setCohost', playerId: t.ids[1]!, on: true });
   t.deal({ button: 0 });
-  foldOut(t);
+  t.foldOut();
   t.cmd(3, { type: 'sitOut' });
   t.deal();
-  foldOut(t);
+  t.foldOut();
   t.cmd(3, { type: 'comeIn', post: true });
 
   assert.throws(() => t.cmd(2, { type: 'forgiveBlinds', playerId: t.ids[3]! }), { name: 'GameError' });
@@ -472,7 +440,7 @@ test('the host or a co-host forgives a player what they owe, the table is told, 
 test('switching missed blinds to forgiven clears what is owed at once and says so, and switching back counts from the next hand', () => {
   const t = new TestTable({ stacks: [1000, 1000, 1000, 1000] });
   t.deal({ button: 0 });
-  foldOut(t);
+  t.foldOut();
   t.cmd(3, { type: 'sitOut' });
   t.deal();
   assert.equal(t.state.seats[3]!.owesBigBlind, true);
@@ -483,7 +451,7 @@ test('switching missed blinds to forgiven clears what is owed at once and says s
 
   t.cmd(0, { type: 'updateConfig', config: { missedBlinds: 'owed' } });
   assert.equal(t.feedText().at(-1), 'Missed blinds are owed from the next hand');
-  foldOut(t);
+  t.foldOut();
 
   t.cmd(0, { type: 'updateConfig', config: { missedBlinds: 'forgiven' } });
   t.cmd(0, { type: 'updateConfig', config: { missedBlinds: 'owed' } });
@@ -492,42 +460,42 @@ test('switching missed blinds to forgiven clears what is owed at once and says s
 
 test('a player who sits down at a table with a game going owes a big blind, and one who sits down before the first hand owes nothing', () => {
   const t = new TestTable({ stacks: [1000, 1000, 1000] });
-  const early = sitDown(t, 'Early', 5);
+  const early = t.sitDown('Early', 5);
   assert.equal(t.state.seats[5]!.owesBigBlind, false);
 
   t.deal({ button: 0 });
   assert.deepEqual(t.state.hand!.players.map((player) => player.seat), [0, 1, 2, 5]);
 
-  const late = sitDown(t, 'Late', 7);
+  const late = t.sitDown('Late', 7);
   assert.deepEqual([t.state.seats[7]!.owesBigBlind, t.state.seats[7]!.owesSmallBlind, t.state.seats[7]!.postsOwed], [true, false, false]);
-  foldOut(t);
+  t.foldOut();
 
   // Posting from where they sit costs a big blind, live, and no small blind
   t.cmd(late, { type: 'comeIn', post: true });
   t.deal();
   assert.deepEqual(posts(t), ['7 missed big blind 20', '2 small blind 10', '5 big blind 20']);
   assert.equal(t.state.seats[5]!.playerId, t.ids[early]);
-  foldOut(t);
+  t.foldOut();
 
   // At a table that forgives missed blinds a newcomer owes nothing
   t.cmd(0, { type: 'updateConfig', config: { missedBlinds: 'forgiven' } });
-  sitDown(t, 'Free', 8);
+  t.sitDown('Free', 8);
   assert.equal(t.state.seats[8]!.owesBigBlind, false);
 });
 
 test('after a shuffle nobody owes, and the next hand is dealt to everyone there to play', () => {
   const t = new TestTable({ stacks: [1000, 1000, 1000, 1000] });
   t.deal({ button: 0 });
-  foldOut(t);
+  t.foldOut();
   t.cmd(3, { type: 'sitOut' });
   t.deal();
-  foldOut(t);
+  t.foldOut();
   t.cmd(3, { type: 'sitIn' });
   assert.equal(t.state.seats.filter((seat) => seat?.owesBigBlind).length, 1);
 
   t.cmd(0, { type: 'shuffleSeats' });
   assert.deepEqual([t.state.blinds, t.state.buttonSeat], [null, null]);
-  assert.equal(t.state.seats.filter((seat) => seat?.owesBigBlind || seat?.owesSmallBlind).length, 0);
+  assert.equal(t.state.seats.filter((seat) => seat && owes(seat)).length, 0);
 
   t.deal();
   assert.equal(t.state.hand!.players.length, 4);
@@ -547,14 +515,14 @@ test('everyone sees who owes, who is waiting for the big blind or to post, and w
   };
 
   t.deal({ button: 0 });
-  foldOut(t);
+  t.foldOut();
   t.cmd(3, { type: 'sitOut' });
   seen([false, false, null, null]);
 
   // Out of the game, they owe and have not said how they will settle it
   t.deal();
   seen([true, true, null, null]);
-  foldOut(t);
+  t.foldOut();
 
   t.cmd(3, { type: 'sitIn' });
   seen([true, true, 'big blind', null]);
@@ -563,7 +531,7 @@ test('everyone sees who owes, who is waiting for the big blind or to post, and w
   seen([true, true, 'button', null]);
 
   t.deal();
-  foldOut(t);
+  t.foldOut();
   seen([true, true, 'posting', null]);
 
   t.deal();

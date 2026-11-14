@@ -346,6 +346,20 @@ function blindsOwed(rig: Rig, kind: (typeof MISSED_BLIND_TABLES)[number]): RigTa
   return table;
 }
 
+/** Opens or closes the play-by-play on a phone, where it is folded away; a desktop has it beside the table. */
+async function toggleFeed(page: Page, screen: ScreenName): Promise<void> {
+  if (screen !== 'desktop') {
+    await page.tap('.feed-toggle');
+  }
+}
+
+/** The bar under the table has room for what it says to a player who owes and for its buttons, and no seat's status is cut off. */
+async function assertOwedBarFits(page: Page, screen: ScreenName): Promise<void> {
+  assert.deepEqual(await squeezed(page, '.controls .waiting, .controls .owed-note, .controls .extras button, .seat .plate .status'), [], 'what the bar or a seat says is cut off');
+  assertOnScreen(await boxes(page, '.controls .owed-note, .controls .extras button, .controls .extras .toggle, .seat .plate'), screen, 'the table and the bar under it');
+  assertApart(await boxes(page, '.controls .waiting'), await boxes(page, '.stage, .controls .extras'), 'what the bar says and what is around it');
+}
+
 const stacksBySeat = (page: Page, seats: number) => Promise.all(Array.from({ length: seats }, (_, seat) => text(page, `.seat[data-seat="${seat}"] .stack`)));
 
 async function openLedger(page: Page, screen: ScreenName): Promise<void> {
@@ -4917,9 +4931,7 @@ const CHECKS: Check[] = [
               page,
               screen,
               async (shape) => {
-                assert.deepEqual(await squeezed(page, '.controls .waiting, .controls .owed-note, .controls .extras button, .seat .plate .status'), [], 'what the bar or a seat says is cut off');
-                assertOnScreen(await boxes(page, '.controls .owed-note, .controls .extras button, .controls .extras .toggle, .seat .plate'), screen, 'the table and the bar under it');
-                assertApart(await boxes(page, '.controls .waiting'), await boxes(page, '.stage, .controls .extras'), 'what the bar says and what is around it');
+                await assertOwedBarFits(page, screen);
 
                 const buttons = await boxes(page, '.controls .extras button');
                 buttons.forEach((button, index) => assertApart([button], buttons.slice(index + 1), 'two buttons under the table'));
@@ -5013,20 +5025,14 @@ const CHECKS: Check[] = [
             await shot(page, `missed-blinds-hand-${kind.name}-${screen}-${shape}`);
           });
 
-          const feedToggle = async () => {
-            if (screen !== 'desktop') {
-              await page.tap('.feed-toggle');
-            }
-          };
-
-          await feedToggle();
+          await toggleFeed(page, screen);
           const said = await texts(page, '.entries li');
           const from = said.indexOf(lines[0]!);
           assert.deepEqual(said.slice(from, from + lines.length), lines);
           assert.deepEqual(await squeezed(page, '.entries li'), [], 'a line of the play-by-play is cut off');
           await assertNoSidewaysScroll(page);
           await shot(page, `missed-blinds-play-by-play-${kind.name}-${screen}`);
-          await feedToggle();
+          await toggleFeed(page, screen);
 
           // With nothing to call she may still raise: the big blind in front of her is a bet she has not acted on
           table.act(firstToAct!, { type: 'fold' });
@@ -5071,9 +5077,7 @@ const CHECKS: Check[] = [
           table.seat(MARGE, 6, kind.stack);
 
           const look = async (name: string) => {
-            assert.deepEqual(await squeezed(page, '.controls .waiting, .controls .owed-note, .controls .extras button, .seat .plate .status'), [], 'what the bar or a seat says is cut off');
-            assertOnScreen(await boxes(page, '.controls .owed-note, .controls .extras button, .seat .plate'), screen, 'the table and the bar under it');
-            assertApart(await boxes(page, '.controls .waiting'), await boxes(page, '.stage, .controls .extras'), 'what the bar says and what is around it');
+            await assertOwedBarFits(page, screen);
             await shot(page, `missed-blinds-newcomer-${name}-${kind.name}-${screen}`);
           };
 
@@ -5231,15 +5235,10 @@ const CHECKS: Check[] = [
         table.dealNext();
 
         const page = await table.open('Quigs', screen);
-        const feedToggle = async () => {
-          if (screen !== 'desktop') {
-            await page.tap('.feed-toggle');
-          }
-        };
         const saidFrom = async (first: string, count: number) => {
-          await feedToggle();
+          await toggleFeed(page, screen);
           const said = await texts(page, '.entries li');
-          await feedToggle();
+          await toggleFeed(page, screen);
 
           return said.slice(said.indexOf(first), said.indexOf(first) + count);
         };

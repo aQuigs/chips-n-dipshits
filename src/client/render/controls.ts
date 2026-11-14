@@ -198,59 +198,45 @@ function nextHandNote(view: TableView): string[] {
   return [countdown, bombPot].filter((part) => part !== null);
 }
 
-/** What a player owes for the blinds they missed; 0 for nothing. */
-function owedBlinds(view: TableView, seat: SeatView): number {
-  return (seat.owesBigBlind ? view.config.bigBlind : 0) + (seat.owesSmallBlind ? view.config.smallBlind : 0);
+/** What the bar says to a player who owes blinds about getting back into the game, and the buttons they settle it with. */
+interface Settling {
+  note: string | null;
+  buttons: HTMLElement[];
 }
 
-/** What the bar tells a player who owes blinds about getting back into the game, or null for nothing. */
-function owedNote(view: TableView, seat: SeatView): string | null {
-  const owed = formatAmount(owedBlinds(view, seat), view.config);
+function settlingOf(view: TableView, seat: SeatView, handlers: ControlHandlers): Settling {
+  const amount = (seat.owesBigBlind ? view.config.bigBlind : 0) + (seat.owesSmallBlind ? view.config.smallBlind : 0);
+  const owed = formatAmount(amount, view.config);
+
+  // Short, since they share a row of a phone with the switch for sitting out: the line above them says the rest
+  const post = (label: string) => commandButton('button.chip-btn', 'post-blinds', label, () => handlers.send({ type: 'comeIn', post: true }));
+  const wait = (spec: `button.${string}`) => commandButton(spec, 'wait-for-blind', 'Wait for big blind', () => handlers.send({ type: 'comeIn', post: false }));
+
+  if (amount === 0) {
+    return { note: null, buttons: [] };
+  }
 
   if (seat.sittingOut || seat.away) {
-    return owedBlinds(view, seat) > 0 ? `You owe ${owed} for the blinds you missed` : null;
+    return { note: `You owe ${owed} for the blinds you missed`, buttons: [wait('button.chip-btn.strong'), post(`Post ${owed} and play`)] };
   }
 
   switch (seat.comesIn) {
     case 'big blind':
-      return 'You are dealt in when the big blind reaches you';
+      return { note: 'You are dealt in when the big blind reaches you', buttons: [post(`Post ${owed} instead`)] };
 
     case 'button':
-      return `You post ${owed} and are dealt in once the button has passed you`;
+      return { note: `You post ${owed} and are dealt in once the button has passed you`, buttons: [wait('button.chip-btn')] };
 
     case 'posting':
-      return `You post ${owed} and are dealt in next hand`;
+      return { note: `You post ${owed} and are dealt in next hand`, buttons: [wait('button.chip-btn')] };
 
     default:
-      return null;
+      return { note: null, buttons: [] };
   }
 }
 
-/** The buttons a player who owes blinds picks how to settle them with, which bring them back if they are sitting out. */
-function owedButtons(view: TableView, seat: SeatView, handlers: ControlHandlers): HTMLElement[] {
-  // Short, since they share a row of a phone with the switch for sitting out: the line above them says the rest
-  const post = (label: string) => commandButton('button.chip-btn', 'post-blinds', label, () => handlers.send({ type: 'comeIn', post: true }));
-  const wait = (spec: `button.${string}`) => commandButton(spec, 'wait-for-blind', 'Wait for big blind', () => handlers.send({ type: 'comeIn', post: false }));
-  const owed = formatAmount(owedBlinds(view, seat), view.config);
-
-  if (owedBlinds(view, seat) === 0) {
-    return [];
-  }
-
-  if (seat.sittingOut || seat.away) {
-    return [wait('button.chip-btn.strong'), post(`Post ${owed} and play`)];
-  }
-
-  if (seat.comesIn === 'big blind') {
-    return [post(`Post ${owed} instead`)];
-  }
-
-  return seat.comesIn === 'button' || seat.comesIn === 'posting' ? [wait('button.chip-btn')] : [];
-}
-
-function waitingEl(text: string, view: TableView, seat?: SeatView): HTMLElement {
+function waitingEl(text: string, view: TableView, owed: string | null = null): HTMLElement {
   const note = nextHandNote(view);
-  const owed = seat ? owedNote(view, seat) : null;
 
   return h('div.waiting', null, text, note.length > 0 ? h('div.next-hand', null, note.map((part) => h('span', null, part))) : null, owed ? h('div.owed-note', null, owed) : null);
 }
@@ -259,6 +245,7 @@ function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandle
   const hand = view.hand;
   const myRequest = view.requests.find((request) => request.playerId === view.you.id);
   const room = view.config.maxBuyIn - seat.stack - seat.pendingAdd;
+  const settling = settlingOf(view, seat, handlers);
 
   let main: HTMLElement;
   if (hand?.options) {
@@ -276,7 +263,7 @@ function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandle
       ),
     );
   } else {
-    main = waitingEl(waitingText(view, hand), view, seat);
+    main = waitingEl(waitingText(view, hand), view, settling.note);
   }
 
   const showCards = hand?.canShow ? commandButton('button.chip-btn', 'show', 'Show my cards', () => handlers.send({ type: 'showCards' })) : null;
@@ -293,16 +280,14 @@ function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandle
 
   const extras: HTMLElement[] = [];
 
-  const settling = owedButtons(view, seat, handlers);
-
   // Coming back owing blinds is a choice between two ways of settling them, which takes the place of the one button
   if (!seat.sittingOut && !seat.away) {
     extras.push(toggle('Sit out next hand', false, 'sit-out', () => handlers.send({ type: 'sitOut' })));
-  } else if (settling.length === 0) {
+  } else if (settling.buttons.length === 0) {
     extras.push(commandButton('button.chip-btn.strong', 'sit-in', "I'm back", () => handlers.send({ type: 'sitIn' })));
   }
 
-  extras.push(...settling);
+  extras.push(...settling.buttons);
 
   if (view.config.allowStraddle) {
     extras.push(toggle('Straddle', seat.straddle, 'straddle', (on) => handlers.send({ type: 'setStraddle', on })));

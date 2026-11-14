@@ -262,7 +262,7 @@ const CHECKS: Check[] = [
 
       await page.focus('.menu [data-action="settings"]');
       await page.keyboard.press('Enter');
-      await page.waitForSelector('#small-blind');
+      await page.waitForSelector('#table-small-blind');
       assert.equal(await page.evaluate(focusInDialog), true, 'the keyboard was lost when one dialog replaced another');
 
       // Between the dialog's last control and its first, Tab passes through the browser's own controls, where the page has no focus
@@ -274,14 +274,14 @@ const CHECKS: Check[] = [
       }
       assert.ok(landedInDialog >= 20, `only ${landedInDialog} of 30 Tabs landed on something in the dialog`);
 
-      await page.fill('#small-blind', '50');
-      await page.fill('#big-blind', '10');
+      await page.fill('#table-small-blind', '50');
+      await page.fill('#table-big-blind', '10');
       await page.click('[data-action="save-settings"]');
       await page.waitForSelector('.toast:has-text("big blind")');
-      assert.equal(await page.inputValue('#small-blind'), '50', 'a refused save threw away what was typed');
+      assert.equal(await page.inputValue('#table-small-blind'), '50', 'a refused save threw away what was typed');
       await shot(page, 'refused-save-desktop');
 
-      await page.fill('#big-blind', '100');
+      await page.fill('#table-big-blind', '100');
       await page.click('[data-action="save-settings"]');
       await page.waitForSelector('.dialog', { state: 'detached' });
       assert.equal(table.view('Quigs').config.bigBlind, 100);

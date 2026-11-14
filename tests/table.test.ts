@@ -4,7 +4,8 @@ import { test } from 'node:test';
 import { addMember, createTable, DEFAULT_CONFIG, ledgerOf, STATE_SCHEMA, viewFor } from '../src/engine/index.ts';
 import type { Ctx, Effect } from '../src/engine/index.ts';
 import { restoreState } from '../src/server/store.ts';
-import { assertChipsConserved, seededRng, TestTable } from './helpers.ts';
+import { seededRng, TestTable } from './helpers.ts';
+import { assertChipsConserved } from './invariants.ts';
 
 function freshCtx(): Ctx {
   return { now: 5000, rng: seededRng(7), effects: [] };

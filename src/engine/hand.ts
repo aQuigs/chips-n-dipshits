@@ -1,6 +1,7 @@
 import { bettingIsClosed, bettingOptions, owesAction } from './betting.ts';
 import { prettyCards, rankOf, shuffledDeck } from './cards.ts';
 import type { Card } from './cards.ts';
+import type { HandEvent } from './events.ts';
 import { evaluateHand } from './handRank.ts';
 import type { HandValue } from './handRank.ts';
 import { buildPots, splitAmount } from './pots.ts';
@@ -30,6 +31,12 @@ const LOG_LIMIT = 240;
 const LOG_HEAD = 40;
 const LOG_GAP = '… a long stretch of the action is left out …';
 
+/**
+ * Events are saved with the table on every action too, and unlike the log they are no use with a
+ * stretch missing. A hand that runs longer than any real one stops being recorded altogether.
+ */
+export const EVENT_LIMIT = 320;
+
 const STREET_BY_BOARD_LENGTH: Record<number, Street> = { 3: 'flop', 4: 'turn', 5: 'river' };
 const STREET_TITLES: Record<Street, string> = { preflop: 'Preflop', flop: 'Flop', turn: 'Turn', river: 'River' };
 
@@ -55,12 +62,34 @@ function narrate(state: TableState, ctx: Ctx, text: string): void {
   }
 }
 
+/** Adds to the hand's events, which are either the whole hand from its start or nothing. */
+function record(hand: Hand, event: HandEvent): void {
+  // Empty past the start means the hand can't be followed: it was under way before events were kept, or it outgrew the limit
+  if (hand.events.length === 0 && event[0] !== 'start') {
+    return;
+  }
+
+  if (hand.events.length >= EVENT_LIMIT) {
+    hand.events = [];
+    return;
+  }
+
+  hand.events.push(event);
+}
+
 function playerAt(hand: Hand, seat: number): HandPlayer | undefined {
   return hand.players.find((p) => p.seat === seat);
 }
 
 function livePlayers(hand: Hand): HandPlayer[] {
   return hand.players.filter((p) => !p.folded);
+}
+
+/** Turns a player's cards face up for the table. `made` names the hand they make, where that is known. */
+function show(state: TableState, ctx: Ctx, player: HandPlayer, made = ''): void {
+  player.shown = true;
+  record(state.hand!, ['show', player.seat, [...player.cards]]);
+  narrate(state, ctx, `${player.name} shows ${prettyCards(player.cards)}${made}`);
 }
 
 function pay(state: TableState, player: HandPlayer, amount: number): void {
@@ -80,6 +109,7 @@ function postBlind(state: TableState, ctx: Ctx, player: HandPlayer, amount: numb
 
   pay(state, player, posted);
   player.lastAction = blind;
+  record(state.hand!, ['post', player.seat, blind, posted, state.seats[player.seat]!.stack]);
   narrate(state, ctx, `${player.name} posts ${blind} ${formatChips(posted)}${player.allIn ? ' and is all in' : ''}`);
 }
 
@@ -154,9 +184,11 @@ export function startHand(state: TableState, ctx: Ctx): void {
     deadline: null,
     result: null,
     log: [],
+    events: [],
   };
   state.hand = hand;
 
+  record(hand, ['start', hand.number, button, smallBlind, bigBlind, players.map((p) => [p.seat, p.name, p.startStack])]);
   narrate(state, ctx, `Hand #${hand.number} · blinds ${formatChips(smallBlind)}/${formatChips(bigBlind)} · ${playerAt(hand, button)!.name} has the button`);
   postBlind(state, ctx, playerAt(hand, sbSeat)!, smallBlind, 'small blind');
   postBlind(state, ctx, playerAt(hand, bbSeat)!, bigBlind, 'big blind');
@@ -177,6 +209,7 @@ export function startHand(state: TableState, ctx: Ctx): void {
     }
   }
 
+  record(hand, ['deal']);
   advance(state, ctx, hand.straddleSeat ?? bbSeat);
 }
 
@@ -262,15 +295,22 @@ function refundUncalledBet(state: TableState, ctx: Ctx): void {
   top.allIn = false;
   state.seats[top.seat]!.stack += excess;
 
+  record(hand, ['return', top.seat, excess]);
   narrate(state, ctx, `Uncalled bet of ${formatChips(excess)} returned to ${top.name}`);
 }
 
-function dealBoardCards(hand: Hand, board: Card[]): Street {
+/** Deals the next street onto one of the hand's boards. */
+function dealBoardCards(hand: Hand, boardIndex: number): Street {
+  const board = hand.boards[boardIndex]!;
   const count = board.length === 0 ? FLOP_SIZE : 1;
+  const dealt: Card[] = [];
 
   for (let i = 0; i < count; i++) {
-    board.push(hand.deck.pop()!);
+    dealt.push(hand.deck.pop()!);
   }
+
+  board.push(...dealt);
+  record(hand, ['street', boardIndex, dealt]);
 
   return STREET_BY_BOARD_LENGTH[board.length]!;
 }
@@ -279,7 +319,7 @@ function dealNextStreet(state: TableState, ctx: Ctx): void {
   const hand = state.hand!;
   const board = hand.boards[0]!;
 
-  hand.street = dealBoardCards(hand, board);
+  hand.street = dealBoardCards(hand, 0);
   hand.currentBet = 0;
   hand.minRaise = hand.bigBlind;
   hand.lastAggressor = null;
@@ -311,6 +351,7 @@ function perform(state: TableState, ctx: Ctx, player: HandPlayer, action: Bettin
     case 'fold': {
       player.folded = true;
       player.lastAction = 'fold';
+      record(hand, ['fold', player.seat]);
       narrate(state, ctx, `${player.name} folds`);
       break;
     }
@@ -321,6 +362,7 @@ function perform(state: TableState, ctx: Ctx, player: HandPlayer, action: Bettin
       }
 
       player.lastAction = 'check';
+      record(hand, ['check', player.seat]);
       narrate(state, ctx, `${player.name} checks`);
       break;
     }
@@ -332,6 +374,7 @@ function perform(state: TableState, ctx: Ctx, player: HandPlayer, action: Bettin
 
       pay(state, player, options.callAmount);
       player.lastAction = 'call';
+      record(hand, ['call', player.seat, options.callAmount, state.seats[player.seat]!.stack]);
       narrate(state, ctx, `${player.name} calls ${formatChips(options.callAmount)}${player.allIn ? ' and is all in' : ''}`);
       break;
     }
@@ -359,6 +402,7 @@ function perform(state: TableState, ctx: Ctx, player: HandPlayer, action: Bettin
       hand.currentBet = to;
       hand.lastAggressor = player.seat;
       player.lastAction = opening ? 'bet' : 'raise';
+      record(hand, [opening ? 'bet' : 'raise', player.seat, to, state.seats[player.seat]!.stack]);
       narrate(state, ctx, `${player.name} ${opening ? 'bets' : 'raises to'} ${formatChips(to)}${player.allIn ? ' and is all in' : ''}`);
       break;
     }
@@ -407,6 +451,7 @@ function timeOut(state: TableState, ctx: Ctx): void {
 
   seat.away = true;
   seat.sittingOut = true;
+  record(hand, ['timeout', player.seat]);
   narrate(state, ctx, `${player.name} ran out of time`);
 
   checkOrFold(state, ctx, player);
@@ -439,8 +484,7 @@ function beginRunout(state: TableState, ctx: Ctx): void {
 
   for (const player of live) {
     if (!player.shown) {
-      player.shown = true;
-      narrate(state, ctx, `${player.name} shows ${prettyCards(player.cards)}`);
+      show(state, ctx, player);
     }
   }
 
@@ -461,6 +505,7 @@ function startRunout(state: TableState, ctx: Ctx, runs: number): void {
   hand.runs = runs;
   hand.runIndex = 0;
   hand.deadline = ctx.now + TIMING.runoutStepMs;
+  record(hand, ['runs', runs]);
 
   if (runs > 1) {
     narrate(state, ctx, 'Everyone agreed to run it twice');
@@ -480,6 +525,7 @@ export function voteRunItTwice(state: TableState, ctx: Ctx, seatIndex: number, a
   }
 
   player.ritVote = agree;
+  record(hand, ['vote', seatIndex, agree]);
 
   if (!agree) {
     narrate(state, ctx, `${player.name} wants to run it once`);
@@ -497,7 +543,7 @@ function runoutStep(state: TableState, ctx: Ctx): void {
   const hand = state.hand!;
   const board = hand.boards[hand.runIndex]!;
 
-  hand.street = dealBoardCards(hand, board);
+  hand.street = dealBoardCards(hand, hand.runIndex);
 
   const boardLabel = hand.runs > 1 ? (hand.runIndex === 0 ? 'First board, ' : 'Second board, ') : '';
   narrate(state, ctx, `${boardLabel}${STREET_TITLES[hand.street]}: ${prettyCards(board)}`);
@@ -544,10 +590,10 @@ function revealAtShowdown(state: TableState, ctx: Ctx): void {
     });
 
     if (canStillWin) {
-      player.shown = true;
       shown.push(player.seat);
-      narrate(state, ctx, `${player.name} shows ${prettyCards(player.cards)} (${mine.name})`);
+      show(state, ctx, player, ` (${mine.name})`);
     } else {
+      record(hand, ['muck', player.seat]);
       narrate(state, ctx, `${player.name} mucks`);
     }
   }
@@ -605,6 +651,7 @@ function settleShowdown(state: TableState, ctx: Ctx): void {
 
         awards.push({ seat, amount: share, run });
         winnings.set(seat, (winnings.get(seat) ?? 0) + share);
+        record(hand, ['win', seat, share, potIndex, run]);
 
         const winner = playerAt(hand, seat)!;
         const handName = values[run]!.get(seat)!.name;
@@ -652,6 +699,7 @@ function finishUncontested(state: TableState, ctx: Ctx, winner: HandPlayer): voi
   const total = pots.reduce((sum, pot) => sum + pot.amount, 0);
 
   state.seats[winner.seat]!.stack += total;
+  pots.forEach((pot, potIndex) => record(hand, ['win', winner.seat, pot.amount, potIndex, 0]));
   narrate(state, ctx, `${winner.name} wins ${formatChips(total)}`);
 
   finishHand(state, ctx, {
@@ -706,11 +754,11 @@ function payBounty(state: TableState, ctx: Ctx, winnerSeat: number): BountyResul
   }
 
   if (!winner.shown) {
-    winner.shown = true;
-    narrate(state, ctx, `${winner.name} shows ${prettyCards(winner.cards)}`);
+    show(state, ctx, winner);
   }
 
   state.seats[winnerSeat]!.stack += total;
+  record(hand, ['bounty', winnerSeat, payments.map((payment): [number, number] => [payment.seat, payment.amount])]);
   narrate(state, ctx, `${winner.name} won with seven-deuce and collects a bounty of ${formatChips(total)}`);
 
   return { seat: winnerSeat, payments };
@@ -745,8 +793,7 @@ export function showCards(state: TableState, ctx: Ctx, seatIndex: number): void 
     throw new GameError('Your cards are already showing');
   }
 
-  player.shown = true;
-  narrate(state, ctx, `${player.name} shows ${prettyCards(player.cards)}`);
+  show(state, ctx, player);
 }
 
 /** Takes the finished hand off the table, writes it to the record and applies everything that was waiting for it. */
@@ -769,6 +816,7 @@ function clearHand(state: TableState, ctx: Ctx): void {
         cards: p.shown ? p.cards : null,
       })),
       result: hand.result!,
+      events: hand.events,
     },
   });
 

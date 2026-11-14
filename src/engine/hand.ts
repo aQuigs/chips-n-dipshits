@@ -1,5 +1,4 @@
 import { formatAmount } from './amounts.ts';
-import { showsAt } from './autoShow.ts';
 import { bettingIsClosed, bettingOptions, chipsFor, objectionTo, onTheClock, passesTo } from './betting.ts';
 import type { BettingAction } from './betting.ts';
 import { boardsComplete, dealStreet, dealTheRest, newBoards, potShares, runOut } from './boards.ts';
@@ -765,8 +764,7 @@ function handsByBoard(hand: Hand): Map<number, HandValue>[] {
  * Turns hands face up in showdown order: the last player to bet or raise on the river goes first, or
  * the first player left of the button if the river was checked around. After that a player shows only
  * if they can still win a pot on some board, and otherwise mucks, unless they chose to show a hand
- * that lost. A loser turned up by choice is shown in its turn like any other hand, and is no hand the
- * players after it have to beat, since one shown before it already beats it.
+ * that lost.
  */
 function revealAtShowdown(state: TableState, ctx: Ctx): void {
   const hand = state.hand!;
@@ -776,7 +774,8 @@ function revealAtShowdown(state: TableState, ctx: Ctx): void {
 
   const aggressor = live.find((p) => p.seat === hand.lastAggressor);
   const order = aggressor ? clockwiseFrom(live, aggressor.seat) : clockwiseAfter(live, hand.button);
-  const shown: number[] = [];
+  // The hands those after them have to beat. A loser shown by choice is not one: a hand among these already beats it
+  const contenders: number[] = [];
 
   for (const player of order) {
     const canStillWin = pots.some((pot) => {
@@ -784,16 +783,16 @@ function revealAtShowdown(state: TableState, ctx: Ctx): void {
         return false;
       }
 
-      const against = shown.filter((seat) => pot.eligible.includes(seat));
+      const against = contenders.filter((seat) => pot.eligible.includes(seat));
 
       return values.some((onBoard) => against.every((seat) => onBoard.get(player.seat)!.score >= onBoard.get(seat)!.score));
     });
 
     if (canStillWin) {
-      shown.push(player.seat);
+      contenders.push(player.seat);
     }
 
-    if (canStillWin || showsAt(state, player.seat, 'lost')) {
+    if (canStillWin || state.seats[player.seat]!.autoShow.includes('lost')) {
       show(state, ctx, player, ` (${values.map((onBoard) => madeHandName(onBoard.get(player.seat)!)).join(' / ')})`);
     } else {
       record(hand, ['muck', player.seat]);
@@ -914,7 +913,7 @@ function finishUncontested(state: TableState, ctx: Ctx, winner: HandPlayer): voi
   });
 
   // As if they pressed to show both the moment the hand ended: a show by choice, not a showdown
-  if (showsAt(state, winner.seat, 'foldedTo')) {
+  if (state.seats[winner.seat]!.autoShow.includes('foldedTo')) {
     show(state, ctx, winner);
   }
 }

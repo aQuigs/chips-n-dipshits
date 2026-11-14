@@ -867,9 +867,7 @@ export class App {
     const turning = screen.shown.turning;
     const chances = screen.shown.chances;
     const muted = screen.mutes.ids();
-    // The table draws nothing of the viewer's choices to show, and redrawing it for one would cut short whatever is moving
-    const { autoShow: _autoShow, ...you } = view.you;
-    const shows = [screen.shape, you, view.hostId, view.cohostIds, view.running, view.nextHandAt, view.nightEndedAt, view.config.actionSeconds, view.seats, handDrawn(view.hand), view.tonight.highHand.next, myRequest, picking, turning, chances, muted];
+    const shows = [screen.shape, view.you, view.hostId, view.cohostIds, view.running, view.nextHandAt, view.nightEndedAt, view.config.actionSeconds, view.seats, handDrawn(view.hand), view.tonight.highHand.next, myRequest, picking, turning, chances, muted];
 
     screen.stage.draw(shows, () => {
       return tableEl(

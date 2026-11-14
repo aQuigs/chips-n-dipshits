@@ -1778,6 +1778,23 @@ function nextFoldedToQuigs(table: RigTable, hole: string): void {
   dealFoldedToQuigs(table, hole);
 }
 
+/** A seat's cards as a page draws them, left to right: each face-up card, or null for a back. */
+const drawnCards = (page: Page, seat: number) => page.evaluate(`[...document.querySelectorAll('.seat[data-seat="${seat}"] .hole .card')].map((card) => card.dataset.card ?? null)`) as Promise<(string | null)[]>;
+
+/** Deals the next hand at the nine-seat table, with the game paused, and gives back when each card of the deal left and how long it took on `page`. */
+async function dealFlights(table: RigTable, page: Page): Promise<(number | null)[][]> {
+  await page.evaluate('window.flights.splice(0)');
+  clearTable(table);
+  table.deal({ button: 0, holes: { 0: 'Qc Jc', 2: PAM_HOLE } });
+
+  await page.waitForFunction(`window.flights.filter((flight) => flight.name === 'deal').length === ${2 * SHOW_PLAYERS.length}`);
+  await dealt(page);
+  const flights = await flown(page);
+  playOut(table);
+
+  return flights.filter((flight) => flight.name === 'deal').map(({ seat, delay, duration }) => [seat, delay, duration]);
+}
+
 /** That Pam's seat is drawn on another page with `cards` up and the rest down, in her order, said so to a screen reader, and clear of what the seats around it say. */
 async function assertPamShows(page: Page, screen: ScreenName, cards: (Card | null)[], where: string): Promise<void> {
   const pam = '.seat[data-seat="2"]';
@@ -1806,9 +1823,6 @@ function pamShowsHerLoser(rig: Rig): RigTable {
 
   return table;
 }
-
-/** A seat's cards as a page draws them, left to right: each face-up card, or null for a back. */
-const drawnCards = (page: Page, seat: number) => page.evaluate(`[...document.querySelectorAll('.seat[data-seat="${seat}"] .hole .card')].map((card) => card.dataset.card ?? null)`) as Promise<(string | null)[]>;
 
 // Run in the page: the chat box as the player has it, with the name picked in the list marked
 const CHAT_BOX = `(() => {
@@ -10062,16 +10076,7 @@ const CHECKS: Check[] = [
           await dealt(page);
         }
 
-        await page.evaluate('window.flights.splice(0)');
-        clearTable(table);
-        table.deal({ button: 0, holes: { 0: 'Qc Jc', 2: PAM_HOLE } });
-
-        await page.waitForFunction(`window.flights.filter((flight) => flight.name === 'deal').length === ${2 * SHOW_PLAYERS.length}`);
-        await dealt(page);
-        const flights = await flown(page);
-        playOut(table);
-
-        return flights.filter((flight) => flight.name === 'deal').map(({ seat, delay, duration }) => [seat, delay, duration]);
+        return dealFlights(table, page);
       };
 
       const quiet = await nextDeal(false);
@@ -10529,10 +10534,10 @@ const CHECKS: Check[] = [
 
         await press(switchOf('lost'));
         await page.waitForSelector(`${switchOf('lost')}[aria-checked="true"]`);
-        assert.deepEqual(table.view('Pam').you.autoShow, ['lost']);
+        assert.deepEqual(table.view('Pam').autoShow, ['lost']);
         await press(switchOf('foldedTo'));
         await page.waitForSelector(`${switchOf('foldedTo')}[aria-checked="true"]`);
-        assert.deepEqual(table.view('Pam').you.autoShow, ['lost', 'foldedTo']);
+        assert.deepEqual(table.view('Pam').autoShow, ['lost', 'foldedTo']);
 
         assert.deepEqual(await squeezed(page, '.dialog [data-auto-show] span, .dialog .note'), [], 'what a switch says is cut off');
         assertOnScreen(await boxes(page, '.dialog [data-auto-show], .dialog [data-action="close"]'), screen, 'the switches of the dialog');
@@ -10551,7 +10556,7 @@ const CHECKS: Check[] = [
         await shot(page, `auto-show-menu-${screen}`);
 
         for (const other of ['Stu', 'Kibitz']) {
-          assert.deepEqual(table.view(other).you.autoShow, []);
+          assert.deepEqual(table.view(other).autoShow, []);
           assert.ok(!JSON.stringify(table.view(other)).includes('foldedTo'), `${other} is told what Pam chose`);
         }
 
@@ -10657,22 +10662,14 @@ const CHECKS: Check[] = [
         await dealt(page);
         assert.deepEqual(await drawnCards(page, 0), showing ? ['Qc', 'Jc'] : [null, null]);
 
-        await page.evaluate('window.flights.splice(0)');
-        clearTable(table);
-        table.deal({ button: 0, holes: { 0: 'Qc Jc', 2: PAM_HOLE } });
-
-        await page.waitForFunction(`window.flights.filter((flight) => flight.name === 'deal').length === ${2 * SHOW_PLAYERS.length}`);
-        await dealt(page);
-        const flights = await flown(page);
-        playOut(table);
-
-        return flights.filter((flight) => flight.name === 'deal').map(({ seat, delay, duration }) => [seat, delay, duration]);
+        return dealFlights(table, page);
       };
 
       const quiet = await nextDeal(false);
       const shown = await nextDeal(true);
       assert.deepEqual(shown, quiet, 'the deal after the cards shown went out otherwise');
       assert.deepEqual(await page.evaluate('window.flipping.map((animation) => animation.playState)').then((states) => (states as string[]).filter((state) => state === 'finished')), []);
+      await page.evaluate('window.flipping.forEach((animation) => animation.finish())');
     },
   ],
 ];

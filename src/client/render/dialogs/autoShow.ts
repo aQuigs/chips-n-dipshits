@@ -21,7 +21,7 @@ const WORDS: Record<AutoShow, { label: string; says: string; short: [on: string,
 /** A switch for each choice, sent at each tap as the switches under the table are. */
 function autoShow(view: TableView, handlers: DialogHandlers): HTMLElement {
   const switches = AUTO_SHOWS.map((when) => {
-    const on = view.you.autoShow.includes(when);
+    const on = view.autoShow.includes(when);
     const words = WORDS[when];
     const button = h('button.toggle.pref', { type: 'button', role: 'switch', 'aria-checked': String(on), 'data-auto-show': when }, h('i'), h('span', null, words.label, h('small', null, words.says)));
 
@@ -30,7 +30,7 @@ function autoShow(view: TableView, handlers: DialogHandlers): HTMLElement {
     return button;
   });
 
-  return frame('Show or muck', handlers, h('p.note', null, 'Kept with your seat until you change it, and done for you when you’re away. Only you see what you chose.'), h('div.auto-shows', null, switches));
+  return frame('Show or muck', handlers, h('p.note', null, 'Kept with your seat until you change it, and done for you when you’re away. Only you see what you chose.'), h('section', null, switches));
 }
 
 export const autoShowDialog: DialogKind<'autoShow'> = {
@@ -38,8 +38,8 @@ export const autoShowDialog: DialogKind<'autoShow'> = {
   menu: {
     label: 'Show or muck',
     who: seated,
-    note: (view) => AUTO_SHOWS.map((when) => WORDS[when].short[view.you.autoShow.includes(when) ? 0 : 1]).join(' · '),
+    note: (view) => AUTO_SHOWS.map((when) => WORDS[when].short[view.autoShow.includes(when) ? 0 : 1]).join(' · '),
   },
-  shows: (view) => view.you.autoShow,
+  shows: (view) => view.autoShow,
   draw: autoShow,
 };

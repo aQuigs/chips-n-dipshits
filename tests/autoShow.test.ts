@@ -382,7 +382,7 @@ test('the choices are in the chooser’s own view and nobody else’s, a watcher
   choose(t, 1, 'foldedTo');
   choose(t, 1, 'lost');
 
-  assert.deepEqual(t.view(1).you.autoShow, ['lost', 'foldedTo']);
+  assert.deepEqual(t.view(1).autoShow, ['lost', 'foldedTo']);
   assert.deepEqual([0, 2, watcher].map(seen), before);
   assertViewsKeepSecrets(t.state, t.now);
 });

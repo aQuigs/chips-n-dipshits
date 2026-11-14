@@ -53,7 +53,7 @@ test('creating a table makes the creator its host and hands back their credentia
 
   assert.match(response.view.id, /^[A-Z2-9]{6}$/);
   assert.equal(response.view.version, 1);
-  assert.deepEqual(response.view.you, { id: response.auth.id, name: 'Quigs', role: 'host', seat: null, identity: null, autoShow: [] });
+  assert.deepEqual(response.view.you, { id: response.auth.id, name: 'Quigs', role: 'host', seat: null, identity: null });
   assert.equal(response.view.config.bigBlind, 2);
   assert.equal(store.read(response.view.id)!.members[0]!.token, response.auth.token);
 });

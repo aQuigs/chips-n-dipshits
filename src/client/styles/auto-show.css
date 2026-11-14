@@ -1,6 +1,0 @@
-/* ---- Show or muck: a player's standing choices to show ---- */
-
-.auto-shows {
-  display: grid;
-  gap: 8px;
-}

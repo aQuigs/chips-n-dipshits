@@ -1,5 +1,7 @@
+import { handSounds } from './effects/handSounds.ts';
 import { turnChime } from './effects/turnChime.ts';
 import type { AppPreferences } from './prefs.ts';
+import type { Sounds } from './sound.ts';
 import type { TableChange } from './tableChange.ts';
 
 export interface EffectContext {
@@ -8,6 +10,8 @@ export interface EffectContext {
   seat: number | null;
   /** The element the table is drawn in, for an effect that moves something on it or draws over it. */
   stage: HTMLElement;
+  /** The way to make a sound, held to the viewer's sound switch and volume. */
+  sounds: Sounds;
 }
 
 /** Something that happens on the page when the table changes: a sound, an animation, an alert. */
@@ -26,6 +30,7 @@ export interface TableEffect {
  * and a line here, one to a line: .gitattributes joins the lines two branches add to this file.
  */
 const TABLE_EFFECTS: (() => TableEffect)[] = [
+  handSounds,
   turnChime,
 ];
 
@@ -33,16 +38,18 @@ const TABLE_EFFECTS: (() => TableEffect)[] = [
 export class TableEffects {
   private readonly prefs: AppPreferences;
   private readonly stage: HTMLElement;
+  private readonly sounds: Sounds;
   private readonly effects = TABLE_EFFECTS.map((make) => make());
 
-  constructor(prefs: AppPreferences, stage: HTMLElement) {
+  constructor(prefs: AppPreferences, stage: HTMLElement, sounds: Sounds) {
     this.prefs = prefs;
     this.stage = stage;
+    this.sounds = sounds;
   }
 
   /** Call once for every view put on screen, with what it brought. */
   run(change: TableChange): void {
-    const context: EffectContext = { prefs: this.prefs, seat: change.view.you.seat, stage: this.stage };
+    const context: EffectContext = { prefs: this.prefs, seat: change.view.you.seat, stage: this.stage, sounds: this.sounds };
 
     for (const effect of this.effects) {
       // An effect that fails must not be what stops the table from updating, or the other effects from happening

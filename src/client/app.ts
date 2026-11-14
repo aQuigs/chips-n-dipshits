@@ -25,9 +25,10 @@ import { tableEl } from './render/table.ts';
 import { createThemePicker } from './render/themePicker.ts';
 import { voiceLinkEl } from './render/voiceLink.ts';
 import type { Shape } from './render/table.ts';
-import { allowSound } from './sound.ts';
+import { Sounds } from './sound.ts';
 import { fontsUrl, themeById } from './themes.ts';
 import { h, holdWhile, secondsUntil, Slot } from './ui.ts';
+import { pageSounds } from './webAudioSounds.ts';
 
 const COUNTDOWN_TICK_MS = 250;
 const TOAST_MS = 4500;
@@ -66,6 +67,7 @@ function parseMember(value: string | null | undefined): Auth | null {
 export class App {
   /** What this viewer has chosen for themselves. */
   readonly prefs: AppPreferences;
+  private readonly sounds: Sounds;
 
   private readonly root: HTMLElement;
   private readonly platform: Platform;
@@ -104,6 +106,7 @@ export class App {
     this.prefs = new Preferences(PREFERENCES, platform.memory, root);
     this.prefs.watch('theme', (id) => this.applyTheme(id));
     this.prefs.watch('deck', (deck) => this.screen?.feed.showDeck(deck));
+    this.sounds = new Sounds(pageSounds(), this.prefs, { now: () => performance.now(), inView: () => !document.hidden });
     this.server = new ServerLine(platform.transport, platform.build, () => this.showOutdated());
     this.hotkeys = new HotkeyPresser(this.prefs, { root, controls: () => this.screen?.controls.element ?? null, dialogOpen: () => this.server.outdated || this.dialog !== null || (this.screen?.seatMoves.active ?? false) });
 
@@ -165,11 +168,6 @@ export class App {
         this.hotkeys.shown();
       }
     });
-
-    // A touch only counts as the visitor's own gesture once the finger lifts, which is the click
-    for (const gesture of ['pointerdown', 'click', 'keydown']) {
-      document.addEventListener(gesture, allowSound);
-    }
   }
 
   /** Switches the theme and remembers it for this browser. */
@@ -370,7 +368,7 @@ export class App {
       overlay,
       modal: new Modal(overlay.element),
       feed,
-      effects: new TableEffects(this.prefs, stage.element),
+      effects: new TableEffects(this.prefs, stage.element, this.sounds),
       seatMoves: new SeatMoves(stage.element, {
         view: () => this.view,
         send: (command) => void this.send(command),

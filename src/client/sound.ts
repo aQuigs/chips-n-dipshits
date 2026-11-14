@@ -1,44 +1,73 @@
-const TURN_NOTES_HZ = [660, 880];
-const NOTE_SECONDS = 0.12;
-const VOLUME = 0.08;
+import type { AppPreferences } from './prefs.ts';
 
-let audio: AudioContext | null = null;
+/** Every sound the page can make. Each is one short recipe in `soundRecipes.ts`. */
+export type SoundName = 'deal' | 'chips' | 'knock' | 'fold' | 'allIn' | 'street' | 'win' | 'myWin' | 'turn';
 
-/**
- * Browsers keep a page silent until the visitor has touched it, and a sound set up before then stays
- * silent for good. Called from any tap or key press, this is what lets the chime be heard afterwards.
- */
-export function allowSound(): void {
-  try {
-    audio ??= new AudioContext();
-
-    if (audio.state !== 'running') {
-      void audio.resume().catch(() => undefined);
-    }
-  } catch {
-    // No sound on this browser
-  }
+/** What makes the sounds: the Web Audio synthesizer in a browser, or silence where there is none. */
+export interface SoundMaker {
+  /** Plays a sound `delay` seconds from now at `volume`, from 0 to 1, or does nothing when it can't. */
+  play(sound: SoundName, volume: number, delay: number): void;
 }
 
-/** Two short rising notes when the action reaches the player. Silent until the page has been touched. */
-export function playTurnChime(): void {
-  try {
-    audio ??= new AudioContext();
+export const silentSounds: SoundMaker = { play: () => undefined };
 
-    TURN_NOTES_HZ.forEach((frequency, index) => {
-      const start = audio!.currentTime + index * NOTE_SECONDS;
-      const oscillator = audio!.createOscillator();
-      const gain = audio!.createGain();
+/** What the page knows that decides whether and when a sound is heard. */
+export interface Listening {
+  /** Milliseconds, from any fixed start. */
+  now(): number;
+  /** False while the page is out of sight: another tab, a phone asleep. */
+  inView(): boolean;
+}
 
-      oscillator.frequency.value = frequency;
-      gain.gain.setValueAtTime(VOLUME, start);
-      gain.gain.exponentialRampToValueAtTime(0.0001, start + NOTE_SECONDS);
+// Sounds asked for together play one after another, this far apart, so they never land as one chord
+export const SOUND_GAP_MS = 120;
 
-      oscillator.connect(gain).connect(audio!.destination);
-      oscillator.start(start);
-      oscillator.stop(start + NOTE_SECONDS);
+// A sound that would have to wait longer than this behind others is dropped, so a burst never queues up
+export const MOST_WAIT_MS = 400;
+
+// What still plays while the page is out of sight, because it calls the player back
+const HEARD_IN_BACKGROUND: ReadonlySet<SoundName> = new Set(['turn']);
+
+// Once the volume slider rests this long, a sample plays at the new volume
+const SAMPLE_AFTER_MS = 200;
+
+/**
+ * The sounds one viewer hears. Whatever on the page makes a sound plays it through here, which is
+ * what holds it to their sound switch and volume and keeps sounds from landing on top of each other.
+ */
+export class Sounds {
+  private readonly maker: SoundMaker;
+  private readonly prefs: AppPreferences;
+  private readonly listening: Listening;
+  private nextAt = -Infinity;
+  private sample: ReturnType<typeof setTimeout> | undefined;
+
+  constructor(maker: SoundMaker, prefs: AppPreferences, listening: Listening) {
+    this.maker = maker;
+    this.prefs = prefs;
+    this.listening = listening;
+
+    prefs.watch('volume', () => {
+      clearTimeout(this.sample);
+      this.sample = setTimeout(() => this.play('chips'), SAMPLE_AFTER_MS);
     });
-  } catch {
-    // A browser that won't play sound must not break the game
+  }
+
+  play(sound: SoundName): void {
+    const volume = this.prefs.get('volume') / 100;
+
+    if (!this.prefs.get('sound') || volume <= 0 || (!this.listening.inView() && !HEARD_IN_BACKGROUND.has(sound))) {
+      return;
+    }
+
+    const now = this.listening.now();
+    const at = Math.max(now, this.nextAt);
+
+    if (at - now > MOST_WAIT_MS) {
+      return;
+    }
+
+    this.nextAt = at + SOUND_GAP_MS;
+    this.maker.play(sound, volume, (at - now) / 1000);
   }
 }

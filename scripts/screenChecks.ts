@@ -5280,8 +5280,32 @@ const CHECKS: Check[] = [
           { buttonsUp: false },
         );
 
+        // The hand that was folded to the big blind had no winner, and its line in the history names none
+        const press = pressOn(page, screen);
+        await press('[data-action="menu"]');
+        await press('.menu [data-action="history"]');
+        await page.waitForSelector('.history summary');
+        assert.equal((await texts(page, '.history summary'))[0], 'Hand #123');
+
         await page.context().close();
       }
+
+      // With a bounty on, seven-deuce folded to as that big blind collects it, and its seat shows what it took though the hand itself won nothing
+      const table = rig.table(['Quigs', 'Stu', 'Pocket Pam', 'Big Al'].map((name) => ({ name, stack: 1000 })), { sevenDeuceBounty: 50 });
+      table.deal({ button: 0 });
+      playOut(table);
+      table.act('Pocket Pam', { type: 'standUp' });
+      table.dealNext({ holes: { 3: '7s 2h' } });
+
+      const page = await table.open('Quigs', 'phone');
+      table.act('Quigs', { type: 'pause' });
+      table.play(folding, (view) => view.hand!.stage === 'done');
+      await page.waitForSelector('.message.result > div');
+      assert.deepEqual(await texts(page, '.message.result > div'), ['Everyone folded to Big Al', 'Seven-deuce! Big Al collects a 100 bounty']);
+      assert.equal(await text(page, '.seat[data-seat="3"] .status.won'), '+100');
+      assert.deepEqual(await squeezed(page, '.message.result > div, .seat .plate .status'), [], 'the result or what a seat took is cut off');
+      await shot(page, 'missed-blinds-bounty-on-a-lone-big-blind');
+      await page.context().close();
     },
   ],
 ];

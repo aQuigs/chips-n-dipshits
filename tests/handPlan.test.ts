@@ -486,6 +486,38 @@ const CASES: Case[] = [
     ],
   },
   {
+    name: 'a player moved onto the seat a blind was left on leaves their own behind: the two blinds are never on one seat, and the button is not held up',
+    seats: [0, 1, 2, 3],
+    button: 0,
+    play: [
+      'D0 S1 B2 | in 0 1 2 3',
+      // The big blind leaves and the small blind is moved onto their seat, which is the one due the small blind next
+      ['leave', 2],
+      ['move', 1, 2],
+      'D1x S2 B3 | in 0 2 3',
+      'D2 S3 B0 | in 0 2 3',
+    ],
+  },
+  {
+    name: 'the big blind moved back onto the seat the small blind left has the button that seat is due, and the seat they left has no small blind to post',
+    seats: [0, 1, 2, 3],
+    button: 0,
+    play: ['D0 S1 B2 | in 0 1 2 3', ['leave', 1], ['move', 2, 1], 'D1 S2x B3 | in 0 1 3', 'D2x S3 B0 | in 0 1 3'],
+  },
+  {
+    name: 'a player moved past a seat a blind was left on has passed a place at the table, though nobody is in it',
+    seats: [0, 1, 2, 4],
+    button: 0,
+    play: [
+      'D0 S1 B2 | in 0 1 2 4',
+      // Past the seat the big blind left, the small blind is the next player after the big blind, and so the next big blind
+      ['leave', 2],
+      ['move', 1, 3],
+      'D1x S2x B3 | in 0 3 4',
+      'D2x S3 B4 | in 0 3 4',
+    ],
+  },
+  {
     name: 'a player who owes keeps owing in a new seat',
     seats: SIX,
     button: 0,

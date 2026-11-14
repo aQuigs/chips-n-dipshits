@@ -117,6 +117,9 @@ interface LastBlinds {
   headsUp: boolean;
   bbSeat: number;
   bigBlindPlayer: string;
+  sbSeat: number;
+  /** Null for a hand nobody posted the small blind in. */
+  smallBlindPlayer: string | null;
 }
 
 function postsOf(t: TestTable): Map<number, Post[]> {
@@ -193,15 +196,19 @@ function assertHandFollowsTheRule(t: TestTable, before: Before, last: LastBlinds
     assert.notEqual(t.state.seats[hand.bbSeat]!.playerId, last.bigBlindPlayer, `${where}: the same player posts the big blind twice running`);
   }
 
+  // Nor the small blind, which only a move of the two blinds onto one seat could bring about
+  if (last?.smallBlindPlayer && before.seats[last.sbSeat]?.playerId === last.smallBlindPlayer) {
+    assert.ok(!posts.get(last.sbSeat)?.includes('small blind'), `${where}: the same player posts the small blind twice running`);
+  }
+
   // The button moves every hand, but for the hand after a heads-up one, when it is due on the seat the small blind had it on
   if (last && !moved) {
     assert.ok(hand.button !== last.button || last.headsUp, `${where}: the button stayed on seat ${hand.button}`);
   }
 
-  // Whoever has the button is dealt last, and a dead button has nobody behind it and ahead of the small blind
-  const order = seatsClockwiseAfter(dealtIn, hand.button);
-  assert.ok(!dealtIn.includes(hand.button) || order.at(-1) === hand.button);
-  assert.ok(order[0] === hand.sbSeat || order[0] === hand.bbSeat, `${where}: seat ${order[0]} is dealt in between the button and the blinds`);
+  // Nobody is dealt in behind the button and ahead of the blinds, whether a player has the button or it is dead
+  const [firstAfterButton] = seatsClockwiseAfter(dealtIn, hand.button);
+  assert.ok(firstAfterButton === hand.sbSeat || firstAfterButton === hand.bbSeat, `${where}: seat ${firstAfterButton} is dealt in between the button and the blinds`);
 }
 
 test('whatever happens between hands, the blinds go round by the rule and nobody is charged a blind they did not owe or choose', () => {
@@ -252,7 +259,14 @@ test('whatever happens between hands, the blinds go round by the rule and nobody
         reached.noSmallBlind += posts.includes('small blind') ? 0 : 1;
         reached.everyoneWaiting += before.blinds && before.ready.some((seat) => owes(before.seats[seat]!) && seat !== hand.bbSeat && !before.seats[seat]!.postsOwed && dealtIn.includes(seat)) ? 1 : 0;
 
-        last = { button: hand.button, headsUp: hand.button === hand.sbSeat, bbSeat: hand.bbSeat, bigBlindPlayer: t.state.seats[hand.bbSeat]!.playerId };
+        last = {
+          button: hand.button,
+          headsUp: hand.button === hand.sbSeat,
+          bbSeat: hand.bbSeat,
+          bigBlindPlayer: t.state.seats[hand.bbSeat]!.playerId,
+          sbSeat: hand.sbSeat,
+          smallBlindPlayer: posts.includes('small blind') ? t.state.seats[hand.sbSeat]!.playerId : null,
+        };
         moved = false;
       }
 

@@ -331,6 +331,22 @@ test('the events of a hand with missed blinds posted retell it: what is in front
   assert.equal(assertHandRecordsHold(t.effects), 5);
 });
 
+test('seven-deuce folded to as a lone big blind still collects its bounty, though the hand had nothing else to win', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 1000, 1000], config: { sevenDeuceBounty: 50 } });
+  t.deal({ button: 0 });
+  foldOut(t);
+
+  t.cmd(2, { type: 'sitOut' });
+  t.deal({ holes: { 3: '7s 2h' } });
+  t.fold(0);
+  t.fold(1);
+
+  // Winning without a showdown is what pays it, and a big blind with nobody to match it wins that way
+  assert.deepEqual(t.state.hand!.result!.winnings, [{ seat: 3, amount: 0 }]);
+  assert.deepEqual(t.state.hand!.result!.bounty, { seat: 3, payments: [{ seat: 0, amount: 50 }, { seat: 1, amount: 50 }] });
+  assert.deepEqual(t.stacks(), [950, 940, 1010, 1100]);
+});
+
 test('a dead button and a hand with no small blind are said in the play-by-play, and the hand plays on round the players in it', () => {
   const t = new TestTable({ stacks: [1000, 1000, 1000, 1000] });
   t.deal({ button: 0 });

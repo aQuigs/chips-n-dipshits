@@ -252,11 +252,15 @@ export function startOver(state: TableState): void {
  * the players sit in: a move that passes nobody leaves that order as it was, so what was on the old
  * seat goes with the player. A move past someone changes the order, and what was on the old seat stays
  * there, as when a player leaves.
+ *
+ * A blind left on a seat nobody is in holds a place in that order as its player did. So a move past
+ * such a seat, or onto it, leaves everything where it was too: the two blinds are never on one seat.
  */
 export function followMove(state: TableState, from: number, to: number): void {
-  const someoneBetween = (start: number, end: number) => state.seats.some((seat, index) => seat !== null && stepsClockwise(start, index) > 0 && stepsClockwise(start, index) < stepsClockwise(start, end));
+  const blindOn = (index: number) => index === state.blinds?.small || index === state.blinds?.big;
+  const passes = (start: number, end: number) => state.seats.some((seat, index) => (seat !== null || blindOn(index)) && stepsClockwise(start, index) > 0 && stepsClockwise(start, index) < stepsClockwise(start, end));
 
-  if (someoneBetween(from, to) && someoneBetween(to, from)) {
+  if (blindOn(to) || (passes(from, to) && passes(to, from))) {
     return;
   }
 

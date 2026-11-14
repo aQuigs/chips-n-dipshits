@@ -96,6 +96,7 @@ export function assertBlindsHold(state: TableState): void {
   assert.ok(state.blinds !== null || owing.length === 0, 'a player owes a blind with no game going');
   assert.ok(seated.every(({ seat }) => !seat.postsOwed || seat.owesBigBlind || seat.owesSmallBlind), 'a player is set to post with nothing owed');
   assert.ok(state.blinds === null || (inSeatRange(state.blinds.small) && inSeatRange(state.blinds.big)), 'the blinds are on a seat that is not there');
+  assert.ok(state.blinds === null || state.blinds.small !== state.blinds.big, 'the small blind and the big blind are on one seat');
 
   if (state.hand && !state.hand.bombPot) {
     const dealtIn = new Set(state.hand.players.map((player) => player.seat));

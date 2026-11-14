@@ -209,6 +209,8 @@ function seatEl(view: TableView, seat: SeatView, slot: number, shape: Shape, clo
   const result = hand?.result;
   const won = sum(result?.winnings.filter((win) => win.seat === seat.seat).map((win) => win.amount) ?? []);
   const bounty = result?.bounty?.seat === seat.seat ? sum(result.bounty.payments.map((payment) => payment.amount)) : 0;
+  // A bounty can be all a hand brought in: a big blind everyone folded to, with no small blind or ante, wins nothing else
+  const took = won + bounty;
   const status = statusOf(seat, hand);
   // A seat makes a hand per board on more than one, and once they are shown down the result in the middle names them: on a phone it needs the room
   const middleNamesHands = hand?.stage === 'done' && boardsWonOn(hand) > 1;
@@ -223,7 +225,7 @@ function seatEl(view: TableView, seat: SeatView, slot: number, shape: Shape, clo
     acting && 'acting',
     seat.folded && 'folded',
     !seat.inHand && (seat.sittingOut || seat.stack === 0) && 'out',
-    won > 0 && 'winner',
+    took > 0 && 'winner',
     moving === seat.playerId && 'moving',
   ].filter(Boolean);
 
@@ -250,7 +252,7 @@ function seatEl(view: TableView, seat: SeatView, slot: number, shape: Shape, clo
     null,
     h('div.name', { title: seat.name }, h('span', null, seat.name), roleMark(view, seat.playerId)),
     h('div.stack', { title: formatAmount(seat.stack, view.config) }, shortAmount(seat.stack, view.config), seat.pendingAdd > 0 ? h('span.pending', null, ` +${shortAmount(seat.pendingAdd, view.config)}`) : null),
-    won > 0 ? h('div.status.won', null, `+${shortAmount(won + bounty, view.config)}`) : status ? h('div.status', { 'data-status': status }, status) : null,
+    took > 0 ? h('div.status.won', null, `+${shortAmount(took, view.config)}`) : status ? h('div.status', { 'data-status': status }, status) : null,
     // The seconds left, for everyone: the bar under the name alone is easy to miss until the time is gone
     timer ? h('div.status.clock', { 'data-countdown': hand!.deadline }, '') : null,
     // In the plate, in short: a line under the seat would run onto the next one down the side of a phone's table

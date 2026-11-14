@@ -255,7 +255,10 @@ class Page {
   device = 0;
   /** Motion is on, and what moves is seen. */
   moving = false;
-  private landed: () => void = () => undefined;
+  /** The page has the time to work out the chances of hands face up. Off, they stay pending, which no test but theirs reads. */
+  worksOutChances = false;
+  /** Whoever is waiting for the table to be still. */
+  private readonly landing: (() => void)[] = [];
   private soundClock = 0;
 
   constructor(server: Server, name: string) {
@@ -265,7 +268,7 @@ class Page {
     const motion = {
       play: (moves: readonly Move[]) => void this.moved.push(...moves),
       cancel: () => undefined,
-      idle: () => new Promise<void>((resolve) => (this.landed = resolve)),
+      idle: () => new Promise<void>((resolve) => void this.landing.push(resolve)),
       seen: () => this.moving,
     };
     // Each sound asked for a long while after the last, so none is dropped for coming in a burst
@@ -273,7 +276,11 @@ class Page {
     const turns = new YourTurn(new Attention(prefs, { ...ways, flash: this.flash }));
 
     this.wire = new Wire(server);
-    this.shown = new ShownTable(motion, () => clock.now() + this.late, () => this.device, {
+    // A clock that stands still gets the whole of a spot worked out at once; one that runs ahead gets none of it
+    let spent = 0;
+    const pace = { now: () => (this.worksOutChances ? 0 : (spent += 1000)), later: () => undefined };
+
+    this.shown = new ShownTable(motion, () => clock.now() + this.late, () => this.device, pace, {
       draw: () => undefined,
       tell: (change) => {
         const seat = change.view.you.seat;
@@ -319,7 +326,7 @@ class Page {
 
   /** Everything that was moving has landed. */
   async land(): Promise<void> {
-    this.landed();
+    this.landing.splice(0).forEach((landed) => landed());
     await settled();
   }
 
@@ -723,6 +730,53 @@ test('a fold shown early into two blinds who always chop tells no badge, nor doe
 
   assert.deepEqual(page.told.slice(before).flatMap((change) => change.earned), []);
   assert.ok(!page.view.feed.some((entry) => entry.text.includes(' earned ')), 'a badge line came with the chop');
+});
+
+test('the hands’ chances are those of the cards face up: unchanged until a card has landed and while the last is held face down, and gone with the result', async (t) => {
+  const server = new Server(
+    [
+      { name: 'Quigs', stack: 1000 },
+      { name: 'Stu', stack: 1000 },
+    ],
+    { allowRunItTwice: false },
+  );
+  server.deal({ button: 0, holes: { 0: ACES, 1: KINGS }, board: '2c 7d 9h Jc 3s' });
+  server.act('Quigs', { type: 'raise', to: 1000 });
+  server.act('Stu', { type: 'call' });
+
+  const page = new Page(server, 'Quigs');
+  t.after(() => page.close());
+  page.worksOutChances = true;
+  page.moving = true;
+  await page.open();
+
+  const figures = () => page.shown.chances?.boards.map((board) => board?.map((figure) => figure.text) ?? null) ?? null;
+  const nextStreet = async () => {
+    server.now = server.view('Quigs').hand!.deadline!;
+    await page.wire.answer('poll');
+  };
+
+  assert.deepEqual([figures(), page.shown.chancesPending], [[null], true], 'the hands are on their way over');
+  await page.land();
+  assert.deepEqual([figures(), page.shown.chancesPending], [[['~83', '~17']], false]);
+
+  await nextStreet();
+  assert.deepEqual([page.view.hand!.boards[0]!.length, figures(), page.shown.chancesPending], [3, [['~83', '~17']], true], 'the flop is dealt and has not landed');
+  await page.land();
+  assert.deepEqual([figures(), page.shown.chancesPending], [[['92', '8']], false]);
+
+  await nextStreet();
+  await page.land();
+  assert.deepEqual(figures(), [['95', '5']]);
+
+  // The river comes with the result, and the page holds it face down
+  await nextStreet();
+  assert.equal(page.shown.turning.length, 1, 'the river is being turned over');
+  assert.deepEqual([figures(), page.shown.chancesPending], [[['95', '5']], false], 'the hands read as on the turn, and wait for nothing');
+
+  await page.land();
+  assert.ok(page.view.hand!.result, 'the result is up');
+  assert.deepEqual([page.shown.chances, page.shown.chancesPending], [null, false]);
 });
 
 test('a move is marked as not confirmed once it has waited long enough, by this device’s clock', async (t) => {

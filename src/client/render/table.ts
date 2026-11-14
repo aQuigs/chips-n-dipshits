@@ -2,10 +2,12 @@ import { formatAmount, shortAmount } from '../../engine/amounts.ts';
 import type { Denominated } from '../../engine/amounts.ts';
 import { onTheClock } from '../../engine/betting.ts';
 import { BOARD_SIZE } from '../../engine/boards.ts';
+import type { ChanceFigure } from '../../engine/chances.ts';
 import { midSentence } from '../../engine/handNames.ts';
 import type { HandRead } from '../../engine/handNames.ts';
 import type { HandView, Holding, SeatView, TableView } from '../../engine/view.ts';
 import type { BoardCard, Place } from '../motion.ts';
+import type { ShownChances } from '../tableChances.ts';
 import { cardEl, h } from '../ui.ts';
 import { nightOver } from './night.ts';
 import { hostOrCohost, roleMark } from './roles.ts';
@@ -211,7 +213,23 @@ function markPlaying(cards: HTMLElement[], reads: readonly HandRead[]): HTMLElem
   return cards;
 }
 
-function seatEl(view: TableView, seat: SeatView, slot: number, shape: Shape, clockOffset: number, moving: string | null): HTMLElement[] {
+/**
+ * A hand's chance to win, a figure for each board in the order the boards lie, in the line of the plate
+ * that otherwise says what its player did. One figure carries its sign; several stand bare, with no
+ * room for more on a phone's seat, and the line's title says them in full.
+ */
+function chanceEl(figures: (ChanceFigure | null)[]): HTMLElement {
+  const several = figures.length > 1;
+  const inFull = figures.map((figure, board) => `${several ? `board ${board + 1} ` : ''}${figure ? `${figure.text}%` : 'still to come'}`).join(', ');
+
+  return h(
+    'div.status.chance',
+    { title: `Chance to win: ${inFull}` },
+    figures.map((figure) => h('span', { class: figure ? figure.favorite && 'favorite' : 'pending' }, figure ? `${figure.text}${several ? '' : '%'}` : '…')),
+  );
+}
+
+function seatEl(view: TableView, seat: SeatView, slot: number, shape: Shape, clockOffset: number, moving: string | null, chances: ShownChances | null): HTMLElement[] {
   const hand = view.hand;
   const isMe = view.you.seat === seat.seat;
   const acting = hand !== null && onTheClock(hand) === seat.seat;
@@ -227,6 +245,8 @@ function seatEl(view: TableView, seat: SeatView, slot: number, shape: Shape, clo
   const holding = isMe ? (hand?.holding ?? null) : null;
   const hint = holding && !middleNamesHands ? hintEl(holding) : null;
   const place = seatPlace(shape, slot);
+  const spot = chances?.seats.indexOf(seat.seat) ?? -1;
+  const chance = spot >= 0 ? chanceEl(chances!.boards.map((figures) => figures?.[spot] ?? null)) : null;
 
   const classes = [
     place.class,
@@ -261,7 +281,9 @@ function seatEl(view: TableView, seat: SeatView, slot: number, shape: Shape, clo
     null,
     h('div.name', { title: seat.name }, h('span', null, seat.name), roleMark(view, seat.playerId)),
     h('div.stack', { title: formatAmount(seat.stack, view.config) }, shortAmount(seat.stack, view.config), seat.pendingAdd > 0 ? h('span.pending', null, ` +${shortAmount(seat.pendingAdd, view.config)}`) : null),
-    took > 0 ? h('div.status.won', null, `+${shortAmount(took, view.config)}`) : status ? h('div.status', { 'data-status': status }, status) : null,
+    // The seat has one line. While hands are face up with cards to come it is the hand's chance, as at the result it is
+    // what the hand won: that its player is all in, away or leaving is back on it once the hand is over
+    took > 0 ? h('div.status.won', null, `+${shortAmount(took, view.config)}`) : (chance ?? (status ? h('div.status', { 'data-status': status }, status) : null)),
     // The seconds left, for everyone: the bar under the name alone is easy to miss until the time is gone
     timer ? h('div.status.clock', { 'data-countdown': hand!.deadline }, '') : null,
     // In the plate, in short: a line under the seat would run onto the next one down the side of a phone's table
@@ -480,9 +502,9 @@ function potEl(table: Denominated, hand: HandView): HTMLElement | null {
 /**
  * The poker table as one viewer sees it, with their own seat at the bottom. `turning` are the last cards
  * of a runout being turned over: they are drawn, for the turn to show, but say nothing yet of the
- * viewer's hand.
+ * viewer's hand. `chances` is what to write beside the hands that are face up against each other.
  */
-export function tableEl(view: TableView, shape: Shape, clockOffset: number, handlers: TableHandlers, turning: readonly BoardCard[]): HTMLElement {
+export function tableEl(view: TableView, shape: Shape, clockOffset: number, handlers: TableHandlers, turning: readonly BoardCard[], chances: ShownChances | null): HTMLElement {
   const seatCount = view.seats.length;
   const hero = view.you.seat ?? 0;
   const nodes: HTMLElement[] = [];
@@ -491,7 +513,7 @@ export function tableEl(view: TableView, shape: Shape, clockOffset: number, hand
     const slot = (index - hero + seatCount) % seatCount;
 
     if (seat) {
-      nodes.push(...seatEl(view, seat, slot, shape, clockOffset, handlers.moving?.playerId ?? null));
+      nodes.push(...seatEl(view, seat, slot, shape, clockOffset, handlers.moving?.playerId ?? null, chances));
     } else {
       nodes.push(openSeatEl(view, index, slot, shape, handlers));
     }

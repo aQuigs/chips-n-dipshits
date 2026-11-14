@@ -1,0 +1,27 @@
+/* ---- A hand's chance to win, written in its seat while hands are face up with cards to come ---- */
+
+/* It has the plate's line for what a player did: the seats down the side of a phone's table have no room for a line
+   more. Bigger letters in a line of the same height (the plate's 1.25 on that line's 0.82em), so no seat grows or
+   moves as the hands are turned up */
+.plate .status.chance {
+  display: flex;
+  justify-content: center;
+  color: var(--text);
+  font-size: 1em;
+  line-height: calc(0.82 * 1.25);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+/* A figure a board, in the order the boards lie, with a hair of line between them */
+.chance span + span {
+  margin-left: 0.4em;
+  padding-left: 0.4em;
+  border-left: 1px solid var(--line);
+}
+
+.chance .favorite {
+  color: var(--good);
+}

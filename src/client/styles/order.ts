@@ -40,4 +40,5 @@ export const STYLESHEETS = [
   'unconfirmed.css',
   'chop.css',
   'badges.css',
+  'chances.css',
 ];

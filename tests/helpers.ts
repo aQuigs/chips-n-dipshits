@@ -1,24 +1,11 @@
 import assert from 'node:assert/strict';
 
 import type { PrefMemory } from '../src/client/prefs.ts';
-import { applyCommand, createTable, addMember, freshDeck, startHand, startOver, tick, viewFor, SEAT_COUNT } from '../src/engine/index.ts';
+import { applyCommand, createTable, addMember, freshDeck, seededRng, startHand, startOver, tick, viewFor, SEAT_COUNT } from '../src/engine/index.ts';
 import type { Card, Command, Ctx, Effect, Hand, HandRecord, LedgerEntry, Rng, TableConfig, TableState, TableView } from '../src/engine/index.ts';
 
-/** A small repeatable generator (mulberry32); the same seed always deals the same cards. */
-export function seededRng(seed: number): Rng {
-  let a = seed >>> 0;
-
-  return {
-    int(maxExclusive: number): number {
-      a = (a + 0x6d2b79f5) >>> 0;
-      let t = a;
-      t = Math.imul(t ^ (t >>> 15), t | 1);
-      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-
-      return Math.floor((((t ^ (t >>> 14)) >>> 0) / 4294967296) * maxExclusive);
-    },
-  };
-}
+/** A small repeatable generator; the same seed always deals the same cards. */
+export { seededRng };
 
 export function cards(text: string): Card[] {
   return text.split(' ').filter((card) => card.length > 0);

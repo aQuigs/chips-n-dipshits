@@ -192,9 +192,13 @@ export interface Flight {
  * moves is at either end. Read the moment each begins, so a slow machine sees what a fast one does.
  * Setting `window.holdAt` to a share of a move stops every move from then on at that point of its own
  * time, in the air, until `window.land()` lets them all finish. `window.frame` counts the page's frames.
+ * `window.inFlight` holds every animation that has not yet told whoever waits on it that it ended: one
+ * cut short by a table drawn again is still there while that draw is looked at, though the stage by
+ * then says it is still.
  */
 export const MOTION = `(() => {
   window.flights = [];
+  window.inFlight = new Set();
   window.holdAt = null;
   window.frame = 0;
 
@@ -237,6 +241,10 @@ export const MOTION = `(() => {
     });
 
     animation.currentTime = 0;
+
+    const ended = () => window.inFlight.delete(animation);
+    window.inFlight.add(animation);
+    animation.finished.then(ended, ended);
 
     if (window.holdAt !== null) {
       animation.currentTime = options.delay + options.duration * window.holdAt;

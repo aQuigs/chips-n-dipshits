@@ -217,6 +217,23 @@ function runoutOnThreeBoards(): TestTable {
   return t;
 }
 
+/** In the pause after a hand won without a call: a player who folded has shown their cards, and the winner has not. */
+function doneWithCardsShown(): TestTable {
+  const t = table([1000, 1000, 1000, 1000], 38);
+  watcher(t);
+
+  t.cmd(0, { type: 'start' });
+  t.deal({ button: 0, holes: { 0: 'Kh Qh', 1: '9c 9d', 2: 'Ah 5s', 3: 'Jc Td' } });
+
+  t.raise(3, 60);
+  t.fold(0);
+  t.fold(1);
+  t.fold(2);
+  t.cmd(1, { type: 'showCards' });
+
+  return t;
+}
+
 /** Tables as the code of one time saved them. */
 interface TableSet {
   /** The schema that code saved. */
@@ -257,10 +274,12 @@ const SETS: TableSet[] = [
       'best-hands-shown': bestHandsShownTonight,
     },
   },
+  // Schema 5 as it ended: the last code for which a player's cards were shown both or none
   {
     schema: 5,
     tables: {
       'runout-three-boards': runoutOnThreeBoards,
+      'done-cards-shown': doneWithCardsShown,
     },
   },
 ];

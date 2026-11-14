@@ -1,26 +1,20 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { MOST_PER_VIEW, soundsHeard } from '../src/client/handSounds.ts';
+import { soundsHeard } from '../src/client/handSounds.ts';
 import { PREFERENCES, Preferences } from '../src/client/prefs.ts';
-import type { AppPreferences, PrefMemory } from '../src/client/prefs.ts';
+import type { AppPreferences } from '../src/client/prefs.ts';
 import { MOST_WAIT_MS, SOUND_GAP_MS, Sounds } from '../src/client/sound.ts';
 import type { SoundMaker, SoundName } from '../src/client/sound.ts';
 import { tableChange } from '../src/client/tableChange.ts';
 import type { TableChange } from '../src/client/tableChange.ts';
 import type { HandEvent, TableView } from '../src/engine/index.ts';
-import { TestTable } from './helpers.ts';
-
-function memory(): PrefMemory {
-  const kept = new Map<string, string>();
-
-  return { get: (key) => kept.get(key) ?? null, set: (key, value) => void kept.set(key, value) };
-}
+import { mapMemory, TestTable } from './helpers.ts';
 
 /** A viewer's sounds, made by a stand-in that writes down what it was asked to play, on a clock the test moves. */
 class Ears {
   readonly played: { sound: SoundName; volume: number; delay: number }[] = [];
-  readonly prefs: AppPreferences = new Preferences(PREFERENCES, memory());
+  readonly prefs: AppPreferences = new Preferences(PREFERENCES, mapMemory());
   now = 0;
   inView = true;
   readonly sounds: Sounds;
@@ -215,7 +209,6 @@ test('a burst of moves plays each sound once, where it last came, and only the l
   assert.deepEqual(soundsHeard(calls, 0), ['chips'], 'five calls are one sound');
 
   const street: HandEvent[] = [['fold', 2], ['call', 3, 20, 980], ['check', 4], ['street', 0, ['As', 'Kd', '2c']], ['bet', 4, 40, 940], ['fold', 5], ['win', 4, 200, 0, 0]];
-  assert.equal(MOST_PER_VIEW, 3);
   assert.deepEqual(soundsHeard(street, 0), ['chips', 'fold', 'win'], 'how the street ended');
 });
 

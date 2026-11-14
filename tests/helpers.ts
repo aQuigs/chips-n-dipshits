@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 
+import type { PrefMemory } from '../src/client/prefs.ts';
 import { applyCommand, createTable, addMember, freshDeck, startHand, tick, viewFor, SEAT_COUNT } from '../src/engine/index.ts';
 import type { Card, Command, Ctx, Effect, Hand, HandRecord, LedgerEntry, Rng, TableConfig, TableState, TableView } from '../src/engine/index.ts';
 
@@ -294,4 +295,13 @@ export function checkAround(t: TestTable, seats: number[], streets: number): voi
 /** What each player has in front of them, has staked in all, and has put in as dead money. */
 export function chipsIn(t: TestTable): number[][] {
   return t.state.hand!.players.map((p) => [p.bet, p.committed, p.dead]);
+}
+
+/** A browser's storage for preferences, kept in `kept`. */
+export function mapMemory(kept: Record<string, string> = {}): PrefMemory & { kept: Record<string, string> } {
+  return {
+    kept,
+    get: (key) => kept[key] ?? null,
+    set: (key, value) => void (kept[key] = value),
+  };
 }

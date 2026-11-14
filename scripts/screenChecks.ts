@@ -126,8 +126,6 @@ async function played(page: Page, from = 0): Promise<{ sound: string; gain: numb
 
 const playedNames = async (page: Page, from = 0) => (await played(page, from)).map((sound) => sound.sound);
 
-const playedCount = async (page: Page) => ((await page.evaluate('window.played.length')) as number);
-
 /** The color a token stands for in the page's theme, as the browser writes a computed color. */
 const tokenColor = (page: Page, token: string) =>
   page.evaluate(`(() => {
@@ -862,13 +860,13 @@ const CHECKS: Check[] = [
         await page.waitForSelector('#pref-sound[aria-checked="false"]');
         await press('[data-action="close"]');
 
-        const before = await playedCount(page);
+        const before = (await played(page)).length;
         table.act('Stu', { type: 'check' });
         table.act('Stu', { type: 'check' });
         table.act('Quigs', { type: 'raise', to: 40 });
         await page.waitForSelector('.turn [data-action="call"]:enabled');
         await page.waitForTimeout(500);
-        assert.equal(await playedCount(page), before, 'a sound played with the sound switched off');
+        assert.deepEqual(await playedNames(page, before), [], 'a sound played with the sound switched off');
 
         await page.context().close();
       }

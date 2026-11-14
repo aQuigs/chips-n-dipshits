@@ -7,7 +7,7 @@ interface VoiceBase {
   length: number;
   /** Loudness at full volume, from 0 to 1. */
   level: number;
-  /** Where `hz` has slid to by the end. */
+  /** Where the note, or the middle of the noise's band, has slid to by the end. */
   slideTo?: number;
 }
 

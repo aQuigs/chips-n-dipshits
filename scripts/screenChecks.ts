@@ -5587,146 +5587,144 @@ const CHECKS: Check[] = [
       await still.context().close();
     },
   ],
-  [
-    'an all-in hand’s last card lies face down and is turned over before anything names the winner, for a player and for a watcher; a big pot throws confetti from the winner’s seat that takes no tap, a small one none, and a new view ends the wait; standing, lying, on the desktop and on a slow phone',
+  ...MOTION_LAYOUTS.map((layout): Check => [
+    `an all-in hand’s last card lies face down and is turned over before anything names the winner, for a player and for a watcher; a big pot throws confetti from the winner’s seat that takes no tap, a small one none, and a new view ends the wait: ${layout.name}`,
     async (rig) => {
-      for (const layout of MOTION_LAYOUTS) {
-        const where = (what: string) => `${layout.name}, ${what}`;
-        const held = !layout.slower;
-        const table = rig.table([{ name: 'Quigs', stack: 10_000 }, { name: 'Stu', stack: 10_000 }, { name: 'Pam', stack: 400 }], { ...layout.config, allowRunItTwice: false });
+      const where = (what: string) => `${layout.name}, ${what}`;
+      const held = !layout.slower;
+      const table = rig.table([{ name: 'Quigs', stack: 10_000 }, { name: 'Stu', stack: 10_000 }, { name: 'Pam', stack: 400 }], { ...layout.config, allowRunItTwice: false });
 
-        table.join('Kibitz');
+      table.join('Kibitz');
 
-        const pages = { Stu: await watch(table, 'Stu', layout), Kibitz: await watch(table, 'Kibitz', layout) };
-        const watched = Object.entries(pages);
+      const pages = { Stu: await watch(table, 'Stu', layout), Kibitz: await watch(table, 'Kibitz', layout) };
+      const watched = Object.entries(pages);
 
-        // What each page has set moving in the hand so far
-        const flights: Record<string, Flight[]> = {};
+      // What each page has set moving in the hand so far
+      const flights: Record<string, Flight[]> = {};
 
-        // Each page shows the table as the server has it, and whatever moved has landed as the still page stands
-        const shown = async (what: string) => {
-          for (const [name, { moving, still }] of watched) {
-            const view = table.view(name);
+      // Each page shows the table as the server has it, and whatever moved has landed as the still page stands
+      const shown = async (what: string) => {
+        for (const [name, { moving, still }] of watched) {
+          const view = table.view(name);
 
-            await Promise.all([caughtUp(moving, view), caughtUp(still, view)]);
-            (flights[name] ??= []).push(...(await flown(moving)));
-            await assertAsStill(moving, still, where(`${what}, as ${name}`));
-          }
-        };
+          await Promise.all([caughtUp(moving, view), caughtUp(still, view)]);
+          (flights[name] ??= []).push(...(await flown(moving)));
+          await assertAsStill(moving, still, where(`${what}, as ${name}`));
+        }
+      };
 
-        // Everyone all in, and the runout dealt up to the river, a street at a time
-        const toTheRiver = async (allIn: () => void) => {
-          Object.keys(flights).forEach((name) => delete flights[name]);
-          allIn();
-          await shown('all in');
+      // Everyone all in, and the runout dealt up to the river, a street at a time
+      const toTheRiver = async (allIn: () => void) => {
+        Object.keys(flights).forEach((name) => delete flights[name]);
+        allIn();
+        await shown('all in');
 
-          for (const street of ['the flop', 'the turn']) {
-            rig.advance(table.view('Quigs').hand!.deadline! - rig.now());
-            await shown(street);
-          }
-
-          for (const [, { moving }] of watched) {
-            await moving.evaluate(SWEAT);
-          }
-        };
-
-        // A small pot: Pam is all in for her last chips, Stu covers her, and she makes a set on the river. With
-        // the river face down, the host pauses and the hand ends: the table is drawn as it is, and nothing waits
-        table.deal({ button: 0, holes: { 0: '9c 4d', 1: 'Qh Qd', 2: '6c 6h' }, board: '2c 7d 9h Jc 6s' });
-        await toTheRiver(() => {
-          table.act('Quigs', { type: 'fold' });
-          table.act('Stu', { type: 'raise', to: 10_000 });
-          table.act('Pam', { type: 'call' });
-        });
-
-        rig.advance(table.view('Quigs').hand!.deadline! - rig.now());
-        const small = table.view('Quigs');
-
-        if (held) {
-          for (const [name, { moving }] of watched) {
-            await sweating(moving, where(`a small pot, as ${name}`), '6s');
-          }
-        } else {
-          await shown('a small pot');
-
-          for (const [name, { moving }] of watched) {
-            await assertCardsFirst(moving, 1, where(`a small pot, as ${name}`));
-          }
+        for (const street of ['the flop', 'the turn']) {
+          rig.advance(table.view('Quigs').hand!.deadline! - rig.now());
+          await shown(street);
         }
 
-        table.act('Quigs', { type: 'pause' });
-        rig.advance(small.hand!.deadline! - rig.now());
-        await shown('the hand ended');
+        for (const [, { moving }] of watched) {
+          await moving.evaluate(SWEAT);
+        }
+      };
+
+      // A small pot: Pam is all in for her last chips, Stu covers her, and she makes a set on the river. With
+      // the river face down, the host pauses and the hand ends: the table is drawn as it is, and nothing waits
+      table.deal({ button: 0, holes: { 0: '9c 4d', 1: 'Qh Qd', 2: '6c 6h' }, board: '2c 7d 9h Jc 6s' });
+      await toTheRiver(() => {
+        table.act('Quigs', { type: 'fold' });
+        table.act('Stu', { type: 'raise', to: 10_000 });
+        table.act('Pam', { type: 'call' });
+      });
+
+      rig.advance(table.view('Quigs').hand!.deadline! - rig.now());
+      const small = table.view('Quigs');
+
+      if (held) {
+        for (const [name, { moving }] of watched) {
+          await sweating(moving, where(`a small pot, as ${name}`), '6s');
+        }
+      } else {
+        await shown('a small pot');
 
         for (const [name, { moving }] of watched) {
-          assert.ok(flights[name]!.length > 0 && flights[name]!.every((flight) => flight.what !== 'confetti'), where(`confetti for a small pot, as ${name}`));
-
-          if (held) {
-            const { up, said } = (await moving.evaluate('window.sweat')) as { up: number[]; said: Record<string, number> };
-            assert.deepEqual([up, said['the result on the felt']], [[], undefined], where(`the river was turned or the result shown after the hand ended under it, as ${name}`));
-          }
-        }
-
-        // A big pot: Quigs and Stu are all in for everything, and Stu catches a king on the river
-        table.deal({ button: 2, holes: { 0: 'Ah Ad', 1: 'Kh Kd', 2: '8c 3d' }, board: '2c 7d 9h Jc Ks' });
-        await toTheRiver(() => {
-          table.act('Pam', { type: 'fold' });
-          table.act('Quigs', { type: 'raise', to: table.view('Quigs').seats[0]!.stack + table.view('Quigs').seats[0]!.bet });
-          table.act('Stu', { type: 'call' });
-        });
-
-        rig.advance(table.view('Quigs').hand!.deadline! - rig.now());
-
-        if (held) {
-          for (const [name, { moving, still }] of watched) {
-            await sweating(moving, where(`a big pot, as ${name}`), 'Ks');
-            if (name === 'Stu') {
-              await shot(moving, `celebrations-sweat-${layout.name}`);
-            }
-
-            // With animations off the card and the result are there at once
-            await still.waitForSelector('.message.result');
-            assert.equal(await style(still, '.board .card[data-card="Ks"]', 'opacity'), '1', where(`the river is not face up at once on a still page, as ${name}`));
-
-            // The burst is held halfway, to look at in the air
-            await moving.evaluate('window.holdAt = 0.5; window.land()');
-            await moving.waitForSelector('.message.result');
-            await moving.waitForSelector('.confetti');
-          }
-
-          for (const [name, { moving }] of watched) {
-            const winner = ((await moving.evaluate(SPOTS)) as Spots).plates[1]!;
-            const thrown = ((await moving.evaluate('window.flights')) as Flight[]).filter((flight) => flight.what === 'confetti');
-            const air = await inTheAir(moving);
-
-            assert.equal(thrown.length, CONFETTI_PIECES, where(`the burst, as ${name}`));
-            thrown.forEach((piece) => assertOver(piece.from, winner, where(`a piece of confetti is thrown from the winner’s seat, as ${name}`)));
-            assert.deepEqual([air.animated, air.standIns, air.inTheWay], [['opacity', 'transform'], CONFETTI_PIECES + 1, 0], where(`the confetti and the pot in the air, as ${name}`));
-            assert.equal(await moving.evaluate(UNDER_CONFETTI), 0, where(`a piece of confetti is what a tap lands on, as ${name}`));
-          }
-
-          await shot(pages.Stu.moving, `celebrations-confetti-${layout.name}`);
-
-          // A watcher may sit down while it flies
-          const kibitz = pages.Kibitz.moving;
-          await pressOn(kibitz, layout.screen)('[data-sit]');
-          await kibitz.waitForSelector('[data-action="confirm-sit"]');
-          await pressOn(kibitz, layout.screen)('[data-action="close"]');
-        }
-
-        await shown('the big pot');
-
-        for (const [name, { moving }] of watched) {
-          await assertCardsFirst(moving, 1, where(`a big pot, as ${name}`));
-        }
-
-        for (const [, { moving, still }] of watched) {
-          await moving.context().close();
-          await still.context().close();
+          await assertCardsFirst(moving, 1, where(`a small pot, as ${name}`));
         }
       }
+
+      table.act('Quigs', { type: 'pause' });
+      rig.advance(small.hand!.deadline! - rig.now());
+      await shown('the hand ended');
+
+      for (const [name, { moving }] of watched) {
+        assert.ok(flights[name]!.length > 0 && flights[name]!.every((flight) => flight.what !== 'confetti'), where(`confetti for a small pot, as ${name}`));
+
+        if (held) {
+          const { up, said } = (await moving.evaluate('window.sweat')) as { up: number[]; said: Record<string, number> };
+          assert.deepEqual([up, said['the result on the felt']], [[], undefined], where(`the river was turned or the result shown after the hand ended under it, as ${name}`));
+        }
+      }
+
+      // A big pot: Quigs and Stu are all in for everything, and Stu catches a king on the river
+      table.deal({ button: 2, holes: { 0: 'Ah Ad', 1: 'Kh Kd', 2: '8c 3d' }, board: '2c 7d 9h Jc Ks' });
+      await toTheRiver(() => {
+        table.act('Pam', { type: 'fold' });
+        table.act('Quigs', { type: 'raise', to: table.view('Quigs').seats[0]!.stack + table.view('Quigs').seats[0]!.bet });
+        table.act('Stu', { type: 'call' });
+      });
+
+      rig.advance(table.view('Quigs').hand!.deadline! - rig.now());
+
+      if (held) {
+        for (const [name, { moving, still }] of watched) {
+          await sweating(moving, where(`a big pot, as ${name}`), 'Ks');
+          if (name === 'Stu') {
+            await shot(moving, `celebrations-sweat-${layout.name}`);
+          }
+
+          // With animations off the card and the result are there at once
+          await still.waitForSelector('.message.result');
+          assert.equal(await style(still, '.board .card[data-card="Ks"]', 'opacity'), '1', where(`the river is not face up at once on a still page, as ${name}`));
+
+          // The burst is held halfway, to look at in the air
+          await moving.evaluate('window.holdAt = 0.5; window.land()');
+          await moving.waitForSelector('.message.result');
+          await moving.waitForSelector('.confetti');
+        }
+
+        for (const [name, { moving }] of watched) {
+          const winner = ((await moving.evaluate(SPOTS)) as Spots).plates[1]!;
+          const thrown = ((await moving.evaluate('window.flights')) as Flight[]).filter((flight) => flight.what === 'confetti');
+          const air = await inTheAir(moving);
+
+          assert.equal(thrown.length, CONFETTI_PIECES, where(`the burst, as ${name}`));
+          thrown.forEach((piece) => assertOver(piece.from, winner, where(`a piece of confetti is thrown from the winner’s seat, as ${name}`)));
+          assert.deepEqual([air.animated, air.standIns, air.inTheWay], [['opacity', 'transform'], CONFETTI_PIECES + 1, 0], where(`the confetti and the pot in the air, as ${name}`));
+          assert.equal(await moving.evaluate(UNDER_CONFETTI), 0, where(`a piece of confetti is what a tap lands on, as ${name}`));
+        }
+
+        await shot(pages.Stu.moving, `celebrations-confetti-${layout.name}`);
+
+        // A watcher may sit down while it flies
+        const kibitz = pages.Kibitz.moving;
+        await pressOn(kibitz, layout.screen)('[data-sit]');
+        await kibitz.waitForSelector('[data-action="confirm-sit"]');
+        await pressOn(kibitz, layout.screen)('[data-action="close"]');
+      }
+
+      await shown('the big pot');
+
+      for (const [name, { moving }] of watched) {
+        await assertCardsFirst(moving, 1, where(`a big pot, as ${name}`));
+      }
+
+      for (const [, { moving, still }] of watched) {
+        await moving.context().close();
+        await still.context().close();
+      }
     },
-  ],
+  ]),
 ];
 
 await mkdir(OUT, { recursive: true });

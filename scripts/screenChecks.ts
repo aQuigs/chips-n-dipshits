@@ -12,7 +12,11 @@ import { fileURLToPath } from 'node:url';
 import type { Page } from 'playwright';
 
 import { BUZZ_PATTERN } from '../src/client/attentionWays.ts';
+import { MOST_SWEAT_MS } from '../src/client/celebrations.ts';
+import { CONFETTI_PIECES } from '../src/client/confetti.ts';
 import { MOST_MOVE_MS, MOST_VIEW_MS, STEP_GAP_MS } from '../src/client/handMoves.ts';
+import { MOVE_MS } from '../src/client/motion.ts';
+import type { MoveName } from '../src/client/motion.ts';
 import { KEYS_SETTLE_MS } from '../src/client/hotkeys.ts';
 import { RECIPES } from '../src/client/soundRecipes.ts';
 import { THEMES } from '../src/client/themes.ts';
@@ -563,6 +567,35 @@ function assertOver(found: Box, wanted: Box | undefined, what: string): void {
 /** Whether two measures are the same to the browser: what one layout gives twice. */
 const same = (a: number, b: number) => Math.abs(a - b) < 0.05;
 
+// Every animation the page's script has running, what each changes, and every stand-in on the table.
+// The flash of a turn is the stylesheet's own, on the table's background
+const inTheAir = (page: Page) =>
+  page.evaluate(`(() => {
+    const animations = document.getAnimations().filter((animation) => !(animation instanceof CSSAnimation));
+
+    // What a tap would land on where each thing in flight is right now: never the thing itself
+    const inTheWay = animations.filter(({ effect: { target } }) => {
+      const box = target.getBoundingClientRect();
+
+      return target.contains(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2));
+    });
+
+    return {
+      moving: document.querySelector('.stage').hasAttribute('data-moving'),
+      animations: animations.length,
+      animated: [...new Set(animations.flatMap((animation) => animation.effect.getKeyframes().flatMap(Object.keys)))].filter((key) => !['offset', 'computedOffset', 'easing', 'composite'].includes(key)).sort(),
+      standIns: document.querySelectorAll('.stand-in').length,
+      inTheWay: inTheWay.length,
+    };
+  })()`) as Promise<{ moving: boolean; animations: number; animated: string[]; standIns: number; inTheWay: number }>;
+
+/**
+ * How long after its view a celebration's move may still be moving: a last card held and turned over is
+ * bounded by the sweat, and confetti by its own flight thrown as the pot lands. Every other move is the
+ * hand's own, bound by its budgets.
+ */
+const CELEBRATION_MS: Partial<Record<MoveName, number>> = { facedown: MOST_SWEAT_MS, reveal: MOST_SWEAT_MS, confetti: MOST_VIEW_MS + MOVE_MS.confetti };
+
 /** What the page has set moving since it was last asked, once all of it has landed. Moves held in the air are let go first. */
 async function flown(page: Page): Promise<Flight[]> {
   await page.evaluate('window.land()');
@@ -571,9 +604,11 @@ async function flown(page: Page): Promise<Flight[]> {
   const flights = (await page.evaluate('window.flights.splice(0)')) as Flight[];
 
   for (const flight of flights) {
+    const most = CELEBRATION_MS[flight.name];
+
     assert.deepEqual(flight.properties.filter((property) => property !== 'transform' && property !== 'opacity'), [], `a ${flight.what} is moved by more than transform and opacity`);
-    assert.ok(flight.duration <= MOST_MOVE_MS, `a ${flight.what} takes ${flight.duration} ms to move`);
-    assert.ok(flight.delay + flight.duration <= MOST_VIEW_MS, `a ${flight.what} is still moving ${flight.delay + flight.duration} ms after the view`);
+    assert.ok(flight.duration <= (most === undefined ? MOST_MOVE_MS : MOVE_MS[flight.name]), `a ${flight.what} takes ${flight.duration} ms to move`);
+    assert.ok(flight.delay + flight.duration <= (most ?? MOST_VIEW_MS), `a ${flight.what} is still moving ${flight.delay + flight.duration} ms after the view`);
   }
 
   return flights;
@@ -736,6 +771,80 @@ function assertDrops(card: Flight, what: string): void {
 
 /** The flights of one kind, in the order the page set them off. */
 const flightsOf = (seen: Seen, what: Flight['what'], standIn: boolean) => seen.flights.filter((flight) => flight.what === what && flight.standIn === standIn);
+
+/**
+ * Run in the page once a hand is all in, before its river: notes how the felt, the seats, the hint, the
+ * play-by-play and the bar under the table stand, then writes down when the last card is face up and the first moment each of them
+ * says more, so a check on a page moving in its own time can tell which came first.
+ */
+const SWEAT = `(() => {
+  const stacks = () => [...document.querySelectorAll('.seat .stack')].map((stack) => stack.textContent).join();
+  const hint = () => document.querySelector('.seat.me .hint')?.textContent ?? '';
+  // The play-by-play and the chat, as the list has them and as the line a phone shows of them while it is closed
+  const bar = () => document.querySelector('.controls-slot').innerHTML;
+  const feed = () => [...document.querySelectorAll('.feed li')].map((line) => line.textContent).join('|') + document.querySelector('.feed .latest').textContent;
+  const telling = () => [
+    document.querySelector('.message.result') && 'the result on the felt',
+    document.querySelector('.seat.winner, .status.won') && 'a winner’s seat',
+    stacks() !== window.sweat.stacks && 'a stack',
+    hint() !== window.sweat.hint && 'the hint',
+    feed() !== window.sweat.feed && 'the play-by-play or the chat',
+    bar() !== window.sweat.bar && 'the bar under the table',
+  ].filter(Boolean);
+
+  window.sweat = { stacks: stacks(), hint: hint(), feed: feed(), bar: bar(), up: [], said: {}, telling };
+
+  if (window.sweatSeen) {
+    return;
+  }
+
+  window.sweatSeen = true;
+
+  const animate = Element.prototype.animate;
+  Element.prototype.animate = function (frames, options) {
+    const animation = animate.call(this, frames, options);
+    if (options?.id === 'reveal') {
+      animation.finished.then(() => window.sweat.up.push(performance.now()), () => undefined);
+    }
+
+    return animation;
+  };
+
+  new MutationObserver(() => window.sweat.telling().forEach((what) => (window.sweat.said[what] ??= performance.now()))).observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true });
+})()`;
+
+/** That the last card of a runout lies face down over its place, its face unseen, and nothing on the page says more than before the river. */
+async function sweating(page: Page, what: string, river: string): Promise<void> {
+  await page.waitForSelector('.board-card.stand-in');
+
+  assert.deepEqual(await page.evaluate('window.sweat.telling()'), [], `${what}: the page gives the result away while the river is face down`);
+  assert.equal(await style(page, `.board .card[data-card="${river}"]`, 'opacity'), '0', `${what}: the river’s face can be seen before it is turned`);
+
+  // The river's own place, in the board's row a step on from the turn as the turn is from the card before it: the
+  // river itself is on its edge, and a card the hand hint lifts is out of the row
+  const [down] = await boxes(page, '.board-card.stand-in .card');
+  const [row] = await boxes(page, '.board[data-run="0"]');
+  const [, , third, turn] = await boxes(page, '.board[data-run="0"] .card');
+  const place = { left: 2 * turn!.left - third!.left, right: 2 * turn!.right - third!.right, top: row!.top, bottom: row!.bottom };
+  assertOver(down!, place, `${what}: the face-down card lies on the river’s place`);
+}
+
+/** That every last card was turned over, and nothing said more than the cards before the last of them was up. */
+async function assertCardsFirst(page: Page, cards: number, what: string): Promise<void> {
+  const { up, said } = (await page.evaluate('window.sweat')) as { up: number[]; said: Record<string, number> };
+
+  assert.equal(up.length, cards, `${what}: the last cards were not all turned over`);
+  for (const [telling, at] of Object.entries(said)) {
+    assert.ok(at >= Math.max(...up), `${what}: ${telling} gave the result away ${Math.round(Math.max(...up) - at)} ms before the last card was up`);
+  }
+}
+
+// Run in the page: the pieces of confetti that are what a tap at their own middle would land on
+const UNDER_CONFETTI = `[...document.querySelectorAll('.confetti')].filter((piece) => {
+  const box = piece.getBoundingClientRect();
+
+  return document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)?.closest('.confetti, .stand-in');
+}).length`;
 
 type Check = [name: string, run: (rig: Rig) => Promise<void>];
 
@@ -4620,27 +4729,6 @@ const CHECKS: Check[] = [
   [
     'with animations on, a tap, a key and a half-typed bet work while cards are in the air, and a new view, a squeezed table, a turned phone or the end of the night leaves nothing behind',
     async (rig) => {
-      // Every animation the page's script has running, what each changes, and every stand-in on the table.
-      // The flash of a turn is the stylesheet's own, on the table's background
-      const inTheAir = (page: Page) =>
-        page.evaluate(`(() => {
-          const animations = document.getAnimations().filter((animation) => !(animation instanceof CSSAnimation));
-
-          // What a tap would land on where each thing in flight is right now: never the thing itself
-          const inTheWay = animations.filter(({ effect: { target } }) => {
-            const box = target.getBoundingClientRect();
-
-            return target.contains(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2));
-          });
-
-          return {
-            moving: document.querySelector('.stage').hasAttribute('data-moving'),
-            animations: animations.length,
-            animated: [...new Set(animations.flatMap((animation) => animation.effect.getKeyframes().flatMap(Object.keys)))].filter((key) => !['offset', 'computedOffset', 'easing', 'composite'].includes(key)).sort(),
-            standIns: document.querySelectorAll('.stand-in').length,
-            inTheWay: inTheWay.length,
-          };
-        })()`) as Promise<{ moving: boolean; animations: number; animated: string[]; standIns: number; inTheWay: number }>;
       const still = { moving: false, animations: 0, animated: [], standIns: 0, inTheWay: 0 };
       const air = (animations: number, standIns: number) => ({ moving: true, animations, animated: ['opacity', 'transform'], standIns, inTheWay: 0 });
 
@@ -5499,6 +5587,144 @@ const CHECKS: Check[] = [
       await still.context().close();
     },
   ],
+  ...MOTION_LAYOUTS.map((layout): Check => [
+    `an all-in hand’s last card lies face down and is turned over before anything names the winner, for a player and for a watcher; a big pot throws confetti from the winner’s seat that takes no tap, a small one none, and a new view ends the wait: ${layout.name}`,
+    async (rig) => {
+      const where = (what: string) => `${layout.name}, ${what}`;
+      const held = !layout.slower;
+      const table = rig.table([{ name: 'Quigs', stack: 10_000 }, { name: 'Stu', stack: 10_000 }, { name: 'Pam', stack: 400 }], { ...layout.config, allowRunItTwice: false });
+
+      table.join('Kibitz');
+
+      const pages = { Stu: await watch(table, 'Stu', layout), Kibitz: await watch(table, 'Kibitz', layout) };
+      const watched = Object.entries(pages);
+
+      // What each page has set moving in the hand so far
+      const flights: Record<string, Flight[]> = {};
+
+      // Each page shows the table as the server has it, and whatever moved has landed as the still page stands
+      const shown = async (what: string) => {
+        for (const [name, { moving, still }] of watched) {
+          const view = table.view(name);
+
+          await Promise.all([caughtUp(moving, view), caughtUp(still, view)]);
+          (flights[name] ??= []).push(...(await flown(moving)));
+          await assertAsStill(moving, still, where(`${what}, as ${name}`));
+        }
+      };
+
+      // Everyone all in, and the runout dealt up to the river, a street at a time
+      const toTheRiver = async (allIn: () => void) => {
+        Object.keys(flights).forEach((name) => delete flights[name]);
+        allIn();
+        await shown('all in');
+
+        for (const street of ['the flop', 'the turn']) {
+          rig.advance(table.view('Quigs').hand!.deadline! - rig.now());
+          await shown(street);
+        }
+
+        for (const [, { moving }] of watched) {
+          await moving.evaluate(SWEAT);
+        }
+      };
+
+      // A small pot: Pam is all in for her last chips, Stu covers her, and she makes a set on the river. With
+      // the river face down, the host pauses and the hand ends: the table is drawn as it is, and nothing waits
+      table.deal({ button: 0, holes: { 0: '9c 4d', 1: 'Qh Qd', 2: '6c 6h' }, board: '2c 7d 9h Jc 6s' });
+      await toTheRiver(() => {
+        table.act('Quigs', { type: 'fold' });
+        table.act('Stu', { type: 'raise', to: 10_000 });
+        table.act('Pam', { type: 'call' });
+      });
+
+      rig.advance(table.view('Quigs').hand!.deadline! - rig.now());
+      const small = table.view('Quigs');
+
+      if (held) {
+        for (const [name, { moving }] of watched) {
+          await sweating(moving, where(`a small pot, as ${name}`), '6s');
+        }
+      } else {
+        await shown('a small pot');
+
+        for (const [name, { moving }] of watched) {
+          await assertCardsFirst(moving, 1, where(`a small pot, as ${name}`));
+        }
+      }
+
+      table.act('Quigs', { type: 'pause' });
+      rig.advance(small.hand!.deadline! - rig.now());
+      await shown('the hand ended');
+
+      for (const [name, { moving }] of watched) {
+        assert.ok(flights[name]!.length > 0 && flights[name]!.every((flight) => flight.what !== 'confetti'), where(`confetti for a small pot, as ${name}`));
+
+        if (held) {
+          const { up, said } = (await moving.evaluate('window.sweat')) as { up: number[]; said: Record<string, number> };
+          assert.deepEqual([up, said['the result on the felt']], [[], undefined], where(`the river was turned or the result shown after the hand ended under it, as ${name}`));
+        }
+      }
+
+      // A big pot: Quigs and Stu are all in for everything, and Stu catches a king on the river
+      table.deal({ button: 2, holes: { 0: 'Ah Ad', 1: 'Kh Kd', 2: '8c 3d' }, board: '2c 7d 9h Jc Ks' });
+      await toTheRiver(() => {
+        table.act('Pam', { type: 'fold' });
+        table.act('Quigs', { type: 'raise', to: table.view('Quigs').seats[0]!.stack + table.view('Quigs').seats[0]!.bet });
+        table.act('Stu', { type: 'call' });
+      });
+
+      rig.advance(table.view('Quigs').hand!.deadline! - rig.now());
+
+      if (held) {
+        for (const [name, { moving, still }] of watched) {
+          await sweating(moving, where(`a big pot, as ${name}`), 'Ks');
+          if (name === 'Stu') {
+            await shot(moving, `celebrations-sweat-${layout.name}`);
+          }
+
+          // With animations off the card and the result are there at once
+          await still.waitForSelector('.message.result');
+          assert.equal(await style(still, '.board .card[data-card="Ks"]', 'opacity'), '1', where(`the river is not face up at once on a still page, as ${name}`));
+
+          // The burst is held halfway, to look at in the air
+          await moving.evaluate('window.holdAt = 0.5; window.land()');
+          await moving.waitForSelector('.message.result');
+          await moving.waitForSelector('.confetti');
+        }
+
+        for (const [name, { moving }] of watched) {
+          const winner = ((await moving.evaluate(SPOTS)) as Spots).plates[1]!;
+          const thrown = ((await moving.evaluate('window.flights')) as Flight[]).filter((flight) => flight.what === 'confetti');
+          const air = await inTheAir(moving);
+
+          assert.equal(thrown.length, CONFETTI_PIECES, where(`the burst, as ${name}`));
+          thrown.forEach((piece) => assertOver(piece.from, winner, where(`a piece of confetti is thrown from the winner’s seat, as ${name}`)));
+          assert.deepEqual([air.animated, air.standIns, air.inTheWay], [['opacity', 'transform'], CONFETTI_PIECES + 1, 0], where(`the confetti and the pot in the air, as ${name}`));
+          assert.equal(await moving.evaluate(UNDER_CONFETTI), 0, where(`a piece of confetti is what a tap lands on, as ${name}`));
+        }
+
+        await shot(pages.Stu.moving, `celebrations-confetti-${layout.name}`);
+
+        // A watcher may sit down while it flies
+        const kibitz = pages.Kibitz.moving;
+        await pressOn(kibitz, layout.screen)('[data-sit]');
+        await kibitz.waitForSelector('[data-action="confirm-sit"]');
+        await pressOn(kibitz, layout.screen)('[data-action="close"]');
+      }
+
+      await shown('the big pot');
+
+      for (const [name, { moving }] of watched) {
+        await assertCardsFirst(moving, 1, where(`a big pot, as ${name}`));
+      }
+
+      for (const [, { moving, still }] of watched) {
+        await moving.context().close();
+        await still.context().close();
+      }
+    },
+  ]),
 ];
 
 await mkdir(OUT, { recursive: true });

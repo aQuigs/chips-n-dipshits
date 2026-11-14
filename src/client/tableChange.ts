@@ -28,6 +28,8 @@ export interface TableChange {
   current: boolean;
   /** The table itself returned to an earlier state, as after the Sheet was restored. */
   wentBack: boolean;
+  /** The server's time as the page reckons it when the view was put on screen, which is later than the view's own when it was slow to arrive. */
+  now: number;
   /**
    * The night has ended and this is the view to say so: the first `current` one that shows an end not
    * already told. What happens for everyone when a night ends hangs off this.
@@ -47,7 +49,7 @@ export interface TableChange {
  */
 export function tableChange(before: TableView | null, view: TableView, now: number, wentBack = false, nightTold = before?.nightEndedAt ?? null): TableChange {
   if (!before || wentBack) {
-    return { before, view, feed: [], events: [], current: false, wentBack, nightEnded: false };
+    return { before, view, feed: [], events: [], current: false, wentBack, nightEnded: false, now };
   }
 
   // A line is known by its number and its time together: a table put back to an earlier state numbers its next lines like ones it had
@@ -62,7 +64,7 @@ export function tableChange(before: TableView | null, view: TableView, now: numb
   // Compared by time, so a night started again and ended again between two views is still news
   const nightEnded = current && view.nightEndedAt !== null && view.nightEndedAt !== nightTold;
 
-  return { before, view, feed, events: current ? newEvents(before, view) : [], current, wentBack, nightEnded };
+  return { before, view, feed, events: current ? newEvents(before, view) : [], current, wentBack, nightEnded, now };
 }
 
 /**

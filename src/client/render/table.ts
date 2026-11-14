@@ -4,7 +4,7 @@ import { BOARD_SIZE } from '../../engine/boards.ts';
 import { midSentence } from '../../engine/handNames.ts';
 import type { HandRead } from '../../engine/handNames.ts';
 import type { HandView, Holding, SeatView, TableView } from '../../engine/view.ts';
-import type { Place } from '../motion.ts';
+import type { BoardCard, Place } from '../motion.ts';
 import { cardEl, h } from '../ui.ts';
 import { nightOver } from './night.ts';
 import { hostOrCohost, roleMark } from './roles.ts';
@@ -311,9 +311,11 @@ function openSeatEl(view: TableView, seat: number, slot: number, shape: Shape, h
   return open('', h('button.plate', { type: 'button', 'data-sit': seat, onclick: () => handlers.onSit(seat) }, 'Sit here'));
 }
 
-function boardEl(hand: HandView): HTMLElement {
+function boardEl(hand: HandView, turning: readonly BoardCard[]): HTMLElement {
   const boards = hand.boards.map((board, run) => {
-    const dealt = markPlaying(board.map((card) => cardEl(card)), hand.holding?.reads.slice(run, run + 1) ?? []);
+    const dealt = board.map((card) => cardEl(card));
+    // A card being turned over has nothing to say yet about the viewer's hand
+    markPlaying(dealt.filter((_card, index) => !turning.some((held) => held.board === run && held.card === index)), hand.holding?.reads.slice(run, run + 1) ?? []);
     const slots = Array.from({ length: BOARD_SIZE }, (_slot, index) => dealt[index] ?? h('div.card.slot'));
 
     return h('div.board', { 'data-run': run }, slots);
@@ -451,8 +453,12 @@ function potEl(table: Denominated, hand: HandView): HTMLElement | null {
   return h('div.pot', null, h('span.label', null, hand.bombPot ? 'Bomb pot' : 'Pot'), formatAmount(hand.pot, table), breakdown ? h('div.sidepots', null, breakdown) : null);
 }
 
-/** The poker table as one viewer sees it, with their own seat at the bottom. */
-export function tableEl(view: TableView, shape: Shape, clockOffset: number, handlers: TableHandlers): HTMLElement {
+/**
+ * The poker table as one viewer sees it, with their own seat at the bottom. `turning` are the last cards
+ * of a runout being turned over: they are drawn, for the turn to show, but say nothing yet of the
+ * viewer's hand.
+ */
+export function tableEl(view: TableView, shape: Shape, clockOffset: number, handlers: TableHandlers, turning: readonly BoardCard[]): HTMLElement {
   const seatCount = view.seats.length;
   const hero = view.you.seat ?? 0;
   const nodes: HTMLElement[] = [];
@@ -477,7 +483,7 @@ export function tableEl(view: TableView, shape: Shape, clockOffset: number, hand
     // How many boards the hand is played on, from its first card: the size of their cards and how far the bets stand off follow it
     { class: `table ${shape}${movable ? ' movable' : ''}`, 'data-boards': hand?.runs ?? 1 },
     h('div.felt'),
-    h('div.center', null, hand ? boardEl(hand) : null, hand ? potEl(view.config, hand) : null, messageEl(view, handlers)),
+    h('div.center', null, hand ? boardEl(hand, turning) : null, hand ? potEl(view.config, hand) : null, messageEl(view, handlers)),
     nodes,
   );
 
@@ -518,11 +524,11 @@ export interface DrawnTable {
   middleOf(element: Element): Point;
   /**
    * Makes a stand-in for what the table no longer draws, to be put on `element`: a pile of chips, saying
-   * `amount` or bare, or a seat's two cards face down, laid out at `place` as the table would draw it
-   * there. It lies over everything and under no finger, and taking it off again leaves the table as it
-   * was drawn. Null where there is no such place.
+   * `amount` or bare, a seat's two cards face down, or one card of a board face down, laid out at `place`
+   * as the table would draw it there. It lies over everything and under no finger, and taking it off
+   * again leaves the table as it was drawn. Null where there is no such place.
    */
-  standIn(what: 'chips' | 'cards', place: Place, amount?: number): HTMLElement | null;
+  standIn(what: 'chips' | 'cards' | 'card', place: Place, amount?: number): HTMLElement | null;
 }
 
 /** The table drawn in `stage` right now, or null while there is none. */
@@ -578,13 +584,13 @@ export function drawnTable(stage: Element): DrawnTable | null {
     return middle && { left: `${middle.x}px`, top: `${middle.y}px` };
   };
 
-  const standIn = (what: 'chips' | 'cards', at: Place, amount?: number): HTMLElement | null => {
+  const standIn = (what: 'chips' | 'cards' | 'card', at: Place, amount?: number): HTMLElement | null => {
     const style = lies(at);
     if (!style) {
       return null;
     }
 
-    const made = what === 'chips' ? chipsEl(amount, drawing.config, style) : h('div.hole', { style }, cardEl(null), cardEl(null));
+    const made = what === 'chips' ? chipsEl(amount, drawing.config, style) : what === 'cards' ? h('div.hole', { style }, cardEl(null), cardEl(null)) : h('div.board-card', { style }, cardEl(null));
 
     made.classList.add('stand-in');
     made.setAttribute('aria-hidden', 'true');

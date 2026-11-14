@@ -12,7 +12,13 @@ export type Place =
   /** Where a seat's bet sits, whether or not one is there now. */
   | { at: 'bet'; seat: number }
   /** One card's place on a board. */
-  | { at: 'board'; board: number; card: number };
+  | ({ at: 'board' } & BoardCard);
+
+/** One card's place on a board: which board, and which card of it from the first. */
+export interface BoardCard {
+  board: number;
+  card: number;
+}
 
 /**
  * Every move there is, by name. How each looks is the page's business (`LOOKS` in pageMotion.ts):
@@ -21,8 +27,12 @@ export type Place =
  *   a seat's cards, one card of a board, a seat's bet. Where the table draws nothing there, nothing moves.
  * - `chips` and `muck` move a stand-in for what the table no longer draws: a pile of chips, or a
  *   seat's cards face down. It is drawn at `from`, travels to `to` and is gone when it lands.
+ * - `facedown` is a stand-in for a board card face down, lying at `from` until it turns onto its edge,
+ *   and `reveal` turns the card the table draws at `to` face up from its edge, unseen until it starts:
+ *   one after the other, a card turned over where it lies.
+ * - `confetti` is a burst of pieces thrown from `from`, laid out from `seed`, gone when they land.
  */
-export type MoveName = 'deal' | 'board' | 'show' | 'bet' | 'chips' | 'muck';
+export type MoveName = 'deal' | 'board' | 'show' | 'bet' | 'chips' | 'muck' | 'facedown' | 'reveal' | 'confetti';
 
 export interface Move {
   name: MoveName;
@@ -31,6 +41,8 @@ export interface Move {
   to: Place;
   /** What a pile of chips says it is worth, in the table's smallest unit. Left out, the pile is a bare chip. */
   amount?: number;
+  /** What a burst is laid out from, so the same win throws the same one. */
+  seed?: number;
   /**
    * Milliseconds from now until it starts. Until then what moves waits where it starts from: cards
    * still to be dealt are not yet seen, and a pile of chips sits where it will leave from.
@@ -39,7 +51,7 @@ export interface Move {
 }
 
 /** How long each move takes, from leaving to landing. */
-export const MOVE_MS: Record<MoveName, number> = { deal: 260, board: 240, show: 200, bet: 200, chips: 280, muck: 220 };
+export const MOVE_MS: Record<MoveName, number> = { deal: 260, board: 240, show: 200, bet: 200, chips: 280, muck: 220, facedown: 150, reveal: 210, confetti: 1100 };
 
 /**
  * What moves things across the table. Motion is decoration over a table that is already drawn as it
@@ -69,6 +81,8 @@ export interface TableMotion {
   cancel(): void;
   /** Resolves once nothing is moving: at once when nothing is. */
   idle(): Promise<void>;
+  /** Whether what is played now is seen: not by a viewer who has motion off, or on a page out of sight. */
+  seen(): boolean;
 }
 
 /** What does the moving: the page's own animations in a browser, or nothing where there are none. */
@@ -77,7 +91,7 @@ export interface MotionPlayer extends TableMotion {
   dispose(): void;
 }
 
-export const stillMotion: MotionPlayer = { play: () => undefined, cancel: () => undefined, idle: () => Promise.resolve(), dispose: () => undefined };
+export const stillMotion: MotionPlayer = { play: () => undefined, cancel: () => undefined, idle: () => Promise.resolve(), seen: () => false, dispose: () => undefined };
 
 /** What the page knows that decides whether anything moves. */
 export interface Watching {
@@ -104,9 +118,13 @@ export class Motion implements MotionPlayer {
   }
 
   play(moves: readonly Move[]): void {
-    if (moves.length > 0 && this.prefs.get('motion') && !this.watching.reduced() && this.watching.inView()) {
+    if (moves.length > 0 && this.seen()) {
       this.player.play(moves);
     }
+  }
+
+  seen(): boolean {
+    return this.prefs.get('motion') && !this.watching.reduced() && this.watching.inView() && this.player.seen();
   }
 
   cancel(): void {

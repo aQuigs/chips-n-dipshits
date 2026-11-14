@@ -5,6 +5,7 @@
 import type { Page } from 'playwright';
 
 import type { Permission } from '../src/client/attentionWays.ts';
+import type { MoveName } from '../src/client/motion.ts';
 import type { Box } from './rig.ts';
 
 /** Run in the page: notifications that are written down, not shown, with the browser's answer so far and the one it gives when asked. */
@@ -112,8 +113,10 @@ export const SPOTS = `(() => {
 
 /** One thing the page set moving, as `MOTION` wrote it down. */
 export interface Flight {
-  /** A card the table draws, a seat's two cards standing in for ones it no longer draws, or a pile of chips. */
-  what: 'card' | 'cards' | 'chips';
+  /** The move it is part of. */
+  name: MoveName;
+  /** A card the table draws or one standing in for it, a seat's two cards standing in for ones it no longer draws, a pile of chips, or a piece of confetti. */
+  what: 'card' | 'cards' | 'chips' | 'confetti';
   /** A stand-in for something the table no longer draws, there only for the move. */
   standIn: boolean;
   /** Whose it is, where the table says: the seat of a card or of a bet it draws. */
@@ -169,13 +172,14 @@ export const MOTION = `(() => {
     };
 
     window.flights.push({
-      what: this.classList.contains('bet') ? 'chips' : this.classList.contains('hole') ? 'cards' : 'card',
+      name: options.id,
+      what: this.classList.contains('bet') ? 'chips' : this.classList.contains('hole') ? 'cards' : this.classList.contains('confetti') ? 'confetti' : 'card',
       standIn: this.classList.contains('stand-in'),
       seat: number(seatOf(this)),
       board: number(this.closest('[data-run]')?.dataset.run),
       text: this.textContent.trim(),
       index: [...this.closest('.stage').querySelectorAll('*')].indexOf(this),
-      properties: [...new Set(frames.flatMap(Object.keys))].filter((key) => key !== 'offset'),
+      properties: [...new Set(frames.flatMap(Object.keys))].filter((key) => !['offset', 'easing', 'composite'].includes(key)),
       from: whereAt(options.delay),
       to: whereAt(options.delay + options.duration - 0.001),
       delay: options.delay,

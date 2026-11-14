@@ -9,6 +9,7 @@ import type { SendOutcome, Session } from './connection.ts';
 import { TableEffects } from './effects.ts';
 import { HotkeyPresser } from './hotkeyPresser.ts';
 import { TableNews } from './tableChange.ts';
+import type { TableChange } from './tableChange.ts';
 import { Modal } from './modal.ts';
 import { Motion, motionAbility } from './motion.ts';
 import { pageMotion, pageWatching } from './pageMotion.ts';
@@ -33,6 +34,7 @@ import type { Shape } from './render/table.ts';
 import { Attention } from './attention.ts';
 import { pageWays } from './pageAttention.ts';
 import { Sounds } from './sound.ts';
+import { Suspense } from './suspense.ts';
 import { fontsUrl, themeById } from './themes.ts';
 import { pageTouch } from './pageTouch.ts';
 import { h, holdWhile, secondsUntil, Slot } from './ui.ts';
@@ -61,6 +63,7 @@ interface TableScreen {
   motion: Motion;
   effects: TableEffects;
   news: TableNews;
+  suspense: Suspense;
   seatMoves: SeatMoves;
   shape: Shape;
   resizeObserver: ResizeObserver;
@@ -409,6 +412,7 @@ export class App {
       motion,
       effects: new TableEffects(this.prefs, stage.element, this.sounds, this.attention, motion),
       news: new TableNews(),
+      suspense: new Suspense(motion, (later) => this.showHeld(later)),
       seatMoves: new SeatMoves(stage.element, {
         view: () => this.view,
         send: (command) => void this.send(command),
@@ -443,6 +447,7 @@ export class App {
     this.table = null;
     this.screen?.resizeObserver.disconnect();
     this.screen?.effects.dispose();
+    this.screen?.suspense.end();
     this.screen?.motion.dispose();
     this.screen?.seatMoves.dispose();
     this.screen = null;
@@ -502,20 +507,37 @@ export class App {
 
   /** Puts on screen a view the connection has taken up. */
   private showView(view: TableView, wentBack: boolean): void {
+    const screen = this.screen;
     const before = this.view;
 
     this.view = view;
-    this.screen?.seatMoves.follow(view);
+    screen?.seatMoves.follow(view);
 
+    // Only for a view that was taken up, so nothing happens twice for one that was dropped or is drawn again.
+    // Worked out before the table is drawn: what is held back while a runout's last cards turn is not drawn either
+    const change = screen?.suspense.see(screen.news.change(before, view, this.clock.now(), wentBack));
+
+    this.drawShown();
+
+    if (screen && change) {
+      screen.effects.run(change);
+      screen.suspense.played();
+    }
+  }
+
+  /** The cards of a runout are up: the table is drawn whole, and what was held back is told. */
+  private showHeld(later: TableChange): void {
+    this.drawShown();
+    this.screen?.effects.run(later);
+  }
+
+  private drawShown(): void {
     // A table that can't be drawn must not be what stops it from updating
     try {
       this.drawTable();
     } catch (error) {
       console.error(error);
     }
-
-    // Only for a view that was taken up, so nothing happens twice for one that was dropped or is drawn again
-    this.screen?.effects.run(this.screen.news.change(before, view, this.clock.now(), wentBack));
   }
 
   /** Whether a move can be made, or whether the table is being heard from, has changed. */
@@ -526,8 +548,9 @@ export class App {
 
     lockTurn(this.screen.controls.element, this.turnLocked());
 
-    if (this.view) {
-      this.drawBanners(this.screen, this.view);
+    const view = this.shownView();
+    if (view) {
+      this.drawBanners(this.screen, view);
     }
   }
 
@@ -537,9 +560,14 @@ export class App {
 
   // ---- Drawing the table screen ----
 
+  /** The table as the screen shows it: while the last cards of a runout are turned, as it stood before its hand was settled. */
+  private shownView(): TableView | null {
+    return this.view && this.screen ? this.screen.suspense.shown(this.view) : this.view;
+  }
+
   private drawTable(): void {
     const screen = this.screen;
-    const view = this.view;
+    const view = this.shownView();
     if (!screen || !view) {
       return;
     }
@@ -548,6 +576,7 @@ export class App {
     this.drawBanners(screen, view);
     this.drawStage(screen, view);
     this.drawControls(screen, view);
+
     screen.feed.update(view.feed);
 
     this.drawDialog();
@@ -624,15 +653,22 @@ export class App {
   private drawStage(screen: TableScreen, view: TableView): void {
     const myRequest = view.requests.find((request) => request.playerId === view.you.id);
     const picking = screen.seatMoves.picking;
-    const shows = [screen.shape, view.you, view.hostId, view.cohostIds, view.running, view.nextHandAt, view.nightEndedAt, view.config.actionSeconds, view.seats, view.hand, myRequest, picking];
+    const turning = screen.suspense.turning;
+    const shows = [screen.shape, view.you, view.hostId, view.cohostIds, view.running, view.nextHandAt, view.nightEndedAt, view.config.actionSeconds, view.seats, view.hand, myRequest, picking, turning];
 
     screen.stage.draw(shows, () => {
-      return tableEl(view, screen.shape, this.clock.offset, {
-        onSit: (seat) => this.openDialog({ kind: 'sit', seat }),
-        onStart: () => void this.send({ type: 'start' }),
-        onPlayOn: () => void this.send({ type: 'playOn' }),
-        moving: screen.seatMoves.tableHandlers(),
-      });
+      return tableEl(
+        view,
+        screen.shape,
+        this.clock.offset,
+        {
+          onSit: (seat) => this.openDialog({ kind: 'sit', seat }),
+          onStart: () => void this.send({ type: 'start' }),
+          onPlayOn: () => void this.send({ type: 'playOn' }),
+          moving: screen.seatMoves.tableHandlers(),
+        },
+        turning,
+      );
     });
 
     screen.seatMoves.redrawn();
@@ -652,8 +688,9 @@ export class App {
     if (shape !== screen.shape) {
       screen.shape = shape;
 
-      if (this.view) {
-        this.drawStage(screen, this.view);
+      const view = this.shownView();
+      if (view) {
+        this.drawStage(screen, view);
       }
     }
   }
@@ -687,7 +724,7 @@ export class App {
       return;
     }
 
-    const view = this.view;
+    const view = this.shownView();
     if (this.dialog && view && !dialogAllowed(this.dialog, view)) {
       this.dialog = null;
     }

@@ -7,6 +7,7 @@ import { formatAmount, signedAmount } from '../engine/amounts.ts';
 import { badgeOf } from '../engine/badges.ts';
 import type { EarnedBadge } from '../engine/badges.ts';
 import { prettyCards } from '../engine/cards.ts';
+import { listed } from '../engine/handNames.ts';
 import type { Card } from '../engine/cards.ts';
 import type { TonightRow } from '../engine/tonight.ts';
 import type { TableView } from '../engine/view.ts';
@@ -16,10 +17,6 @@ import { nightOver } from './render/night.ts';
 const MOST_NAMES = 3;
 
 const counted = (count: number, one: string, many = `${one}s`): string => `${count} ${count === 1 ? one : many}`;
-
-function listed(names: string[]): string {
-  return names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
-}
 
 const rowsOf = (view: TableView, ids: string[]): TonightRow[] => view.tonight.players.filter((row) => ids.includes(row.playerId));
 
@@ -94,11 +91,11 @@ export function leadersOf(view: TableView): Leader[] {
 /** How many times a badge was earned, after its name: nothing for once. */
 export const timesText = (times: number): string => (times > 1 ? ` ×${times}` : '');
 
-/** A badge in words, as "💀 Felted ×2"; nothing for one this page does not know. */
+/** A badge in words, as "💀 Felted ×2". */
 export function badgeText(earned: EarnedBadge): string {
-  const badge = badgeOf(earned.id);
+  const badge = badgeOf(earned.id)!;
 
-  return badge ? `${badge.mark} ${badge.name}${timesText(earned.times)}` : '';
+  return `${badge.mark} ${badge.name}${timesText(earned.times)}`;
 }
 
 /** What a player did tonight besides win or lose money, in a line. */
@@ -131,7 +128,7 @@ export function tonightText(view: TableView): string {
     ...leadersOf(view).map((leader) => `${leader.label}: ${leader.who}, ${leader.what}${leader.cards ? ` (${prettyCards(leader.cards)})` : ''}`),
   ];
 
-  const players = view.tonight.players.map((row) => [`${row.name}${row.seated ? '' : ' (left)'} ${signedAmount(row.net, view.config)} · ${countsOf(row)}`, ...row.badges.map(badgeText).filter(Boolean)].join(' · '));
+  const players = view.tonight.players.map((row) => [`${row.name}${row.seated ? '' : ' (left)'} ${signedAmount(row.net, view.config)} · ${countsOf(row)}`, ...row.badges.map(badgeText)].join(' · '));
 
   return [top.filter(Boolean).join('\n'), players.join('\n'), missedOf(view)].filter(Boolean).join('\n\n');
 }

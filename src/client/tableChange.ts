@@ -3,13 +3,6 @@ import type { HandEvent } from '../engine/events.ts';
 import type { FeedEntry } from '../engine/types.ts';
 import type { TableView } from '../engine/view.ts';
 
-/** A badge someone has just earned. */
-export interface BadgeNews {
-  playerId: string;
-  name: string;
-  badge: EarnedBadge;
-}
-
 // Older than this when it reaches the page, a thing is something the viewer missed, as while their phone slept, not something happening
 const FRESH_MS = 10_000;
 
@@ -43,29 +36,25 @@ export interface TableChange {
    * already told. What happens for everyone when a night ends hangs off this.
    */
   nightEnded: boolean;
-  /** The badges earned that this is the first `current` view to show, in the order of the night's list. */
-  earned: BadgeNews[];
+  /** The badges the viewer has earned that this is the first `current` view to show, in the order of the list. */
+  earned: EarnedBadge[];
 }
 
 /** What is told once, even past a late view: by the first view on time that shows it, and never by a page that opened after it. */
 interface Told {
   nightEndedAt: number | null;
-  /** How many times each player has earned each badge, by member id and badge id. */
+  /** How many times the viewer has earned each badge, by its id. */
   badges: Map<string, number>;
 }
 
-const badgeKey = (playerId: string, badge: EarnedBadge): string => `${playerId} ${badge.id}`;
+const badgesOf = (view: TableView): EarnedBadge[] => view.tonight.players.find((row) => row.playerId === view.you.id)?.badges ?? [];
 
 /** What a view has to tell of these, all of it. */
 function toldIn(view: TableView | null): Told {
-  const badges = (view?.tonight.players ?? []).flatMap((row) => row.badges.map((badge): [string, number] => [badgeKey(row.playerId, badge), badge.times]));
-
-  return { nightEndedAt: view?.nightEndedAt ?? null, badges: new Map(badges) };
+  return { nightEndedAt: view?.nightEndedAt ?? null, badges: new Map(view ? badgesOf(view).map((badge) => [badge.id, badge.times]) : []) };
 }
 
-function newBadges(view: TableView, told: Told): BadgeNews[] {
-  return view.tonight.players.flatMap((row) => row.badges.filter((badge) => badge.times > (told.badges.get(badgeKey(row.playerId, badge)) ?? 0)).map((badge) => ({ playerId: row.playerId, name: row.name, badge })));
-}
+const newBadges = (view: TableView, told: Told): EarnedBadge[] => badgesOf(view).filter((badge) => badge.times > (told.badges.get(badge.id) ?? 0));
 
 /**
  * What `view` adds to `before`, the one shown until now, so that whatever reacts to the table hears

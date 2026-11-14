@@ -54,6 +54,11 @@ export function madeHandName(value: HandValue): string {
   return MADE_NAMES[value.category]!(ranks[0]!, ranks[SECOND_AT[value.category] ?? 0]!);
 }
 
+/** Names in a sentence: "Ann", "Ann and Bob", "Ann, Bob and Cat". */
+export function listed(names: readonly string[]): string {
+  return names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
+}
+
 /** A name as it reads inside a sentence: "wins 40 with two pair, kings and sevens". */
 export function midSentence(name: string): string {
   return name[0]!.toLowerCase() + name.slice(1);

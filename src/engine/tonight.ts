@@ -20,7 +20,7 @@ export function newTonight(): Tonight {
   return { hands: 0, players: {} };
 }
 
-export function newPlayerTonight(): PlayerTonight {
+function newPlayerTonight(): PlayerTonight {
   return { hands: 0, won: 0, biggest: 0, best: null, rebuys: 0, busts: 0, streak: 0, badges: {} };
 }
 

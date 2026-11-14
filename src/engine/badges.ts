@@ -7,7 +7,7 @@
 import { isSevenDeuce, rankOf } from './cards.ts';
 import { somebodyWon } from './handFacts.ts';
 import type { HandFacts, HandShown, PlayerFacts } from './handFacts.ts';
-import { midSentence } from './handNames.ts';
+import { listed, midSentence } from './handNames.ts';
 import { ACE, FOUR_OF_A_KIND, HIGH_CARD, STRAIGHT_FLUSH } from './handRank.ts';
 import { addFeed } from './seats.ts';
 import { countBadge } from './tonight.ts';
@@ -84,12 +84,6 @@ function wonOutright(hand: HandFacts, player: PlayerFacts): boolean {
 /** Who the player took the last chip of, alone. A player broken by a split pot was felted by nobody. */
 const felted = (hand: HandFacts, player: PlayerFacts): PlayerFacts[] => hand.players.filter((other) => other.bustedBy.length === 1 && other.bustedBy[0] === player.seat);
 
-function possessive(names: string[]): string {
-  const owned = names.map((name) => `${name}'s`);
-
-  return owned.length < 2 ? owned.join('') : `${owned.slice(0, -1).join(', ')} and ${owned.at(-1)}`;
-}
-
 /** Every third time a count goes up, which is the first time it reaches a multiple of `every`. */
 const reached = (before: number, after: number, every: number): boolean => after > before && after % every === 0;
 
@@ -141,7 +135,7 @@ export const BADGES: readonly Badge[] = [
     story: (hand, player) => {
       const broke = felted(hand, player);
 
-      return `took ${possessive(broke.map((other) => other.name))} last ${broke.length > 1 ? 'chips' : 'chip'}`;
+      return `took ${listed(broke.map((other) => `${other.name}'s`))} last ${broke.length > 1 ? 'chips' : 'chip'}`;
     },
   },
   {
@@ -196,8 +190,8 @@ export function badgesIn(saved: Readonly<Record<string, number>>): EarnedBadge[]
 
 /** The line in the play-by-play that tells the table a badge was earned. */
 function earnedLine(badge: Badge, hand: HandFacts, player: PlayerFacts, times: number): string {
-  // Lines of the play-by-play end without a stop, as the dealer's do
-  const story = badge.story?.(hand, player) ?? badge.description.replace(/\.$/, '');
+  // The first sentence of the description says what earned it; lines of the play-by-play end without a stop, as the dealer's do
+  const story = badge.story?.(hand, player) ?? badge.description.split('. ')[0]!.replace(/\.$/, '');
 
   return `${player.name} earned ${badge.mark} ${badge.name}${times > 1 ? ` ×${times}` : ''}: ${midSentence(story)}`;
 }

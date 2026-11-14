@@ -20,7 +20,8 @@ export interface PotWon {
   board: number;
   amount: number;
   /** How many players were paid from that pot on that board, this one among them: more than 1 is a split. A tie over a single chip pays one of them, and is 1. */
-  between: number;  /** Another player was in for the pot too. False for a pot nobody else could win: everyone else folded, or a side pot of chips only this player was left in for. */
+  between: number;
+  /** Another player was in for the pot too. False for a pot nobody else could win: everyone else folded, or a side pot of chips only this player was left in for. */
   contested: boolean;
 }
 

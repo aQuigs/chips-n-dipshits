@@ -579,7 +579,7 @@ test('badges are earned once the hand is cleared, so none is drawn or told while
   assert.deepEqual(page.told[0]!.earned, []);
 
   // As though the result had brought one: it is told with the result, once the card is up
-  const fake = { playerId: 'P', name: 'P0', badge: { id: 'felted', times: 1 } };
+  const fake = { id: 'felted', times: 1 };
   const withBadge = holdingPage();
   withBadge.show({ ...result, earned: [fake] });
   assert.deepEqual(withBadge.told[0]!.earned, []);
@@ -596,7 +596,8 @@ test('badges are earned once the hand is cleared, so none is drawn or told while
 
 test('the badges of a hand are told by the view that clears it, which ends any hold first, to the page that saw the card turned and to one still waiting on it', async () => {
   const played = async (stalled: boolean) => {
-    const { t, page: seat } = dealt([1000, 1000], { 0: ACES, 1: KINGS });
+    // The page is the winner's: seat 1 calls with aces
+    const { t, page: seat } = dealt([1000, 1000], { 0: KINGS, 1: ACES });
     t.raise(0, 1000);
     t.call(1);
 
@@ -614,7 +615,7 @@ test('the badges of a hand are told by the view that clears it, which ends any h
 
     assert.deepEqual(page.suspense.turning, []);
     assert.equal(page.suspense.shown(cleared.view), cleared.view);
-    assert.deepEqual(page.told.at(-1)!.earned.map((news) => [news.name, news.badge.id]), [['P0', 'bigPot'], ['P0', 'felted']]);
+    assert.deepEqual(page.told.at(-1)!.earned, [{ id: 'bigPot', times: 1 }, { id: 'felted', times: 1 }]);
 
     page.moves.land();
     await settle();

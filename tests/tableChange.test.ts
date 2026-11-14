@@ -375,14 +375,14 @@ function rebuy(table: TestTable): void {
   table.cmd(0, { type: 'approve', playerId: table.ids[1]! });
 }
 
-const earned = (change: TableChange) => change.earned.map((news) => [news.name, news.badge.id, news.badge.times]);
+const earned = (change: TableChange) => change.earned.map((badge) => [badge.id, badge.times]);
 
-test('a badge is told once, by the first view on time that shows it, and one earned again is told again', () => {
+test('a badge is told once, to whoever earned it, by the first view on time that shows it, and one earned again is told again', () => {
   const table = new TestTable({ stacks: [1000, 1000] });
   const page = new Page();
   page.arrive(table);
 
-  assert.deepEqual(earned(felt(table, page)), [['P0', 'bigPot', 1], ['P0', 'felted', 1]]);
+  assert.deepEqual(earned(felt(table, page)), [['bigPot', 1], ['felted', 1]]);
 
   table.cmd(1, { type: 'chat', text: 'gg' });
   assert.deepEqual(earned(page.arrive(table)), [], 'told again');
@@ -390,7 +390,7 @@ test('a badge is told once, by the first view on time that shows it, and one ear
   // Late on its way, the view tells nothing, and the next on time tells what it brought
   rebuy(table);
   assert.deepEqual(earned(felt(table, page, 30_000)), []);
-  assert.deepEqual(earned(page.arrive(table)), [['P0', 'bigPot', 2], ['P0', 'felted', 2]]);
+  assert.deepEqual(earned(page.arrive(table)), [['bigPot', 2], ['felted', 2]]);
 });
 
 test('badges earned before the page opened, or shown again after the table went back, are never told', () => {

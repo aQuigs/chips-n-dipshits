@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import { PREFERENCES } from '../src/client/prefs.ts';
@@ -7,6 +6,7 @@ import type { Pref } from '../src/client/prefs.ts';
 import { THEMES } from '../src/client/themes.ts';
 import { splitWrittenCards } from '../src/engine/cards.ts';
 import { contrast, distance, VISIONS } from './colorVision.ts';
+import { rules, themeTokens } from './styleRules.ts';
 
 const SUITS = ['s', 'h', 'd', 'c'] as const;
 
@@ -15,36 +15,7 @@ const MIN_CONTRAST = 4.5;
 // Suits closer than this are easy to mistake at a glance
 const MIN_DISTANCE = 20;
 
-type Rules = Map<string, Map<string, string>>;
-
-/** The stylesheet's rules by selector, each the properties it sets. Enough for the flat files in src/client/styles. */
-function rules(file: string): Rules {
-  const css = readFileSync(new URL(`../src/client/styles/${file}`, import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
-  const found: Rules = new Map();
-
-  for (const [, selector, body] of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
-    const properties = new Map<string, string>();
-
-    for (const declaration of body!.split(';')) {
-      const colon = declaration.indexOf(':');
-      if (colon > 0) {
-        properties.set(declaration.slice(0, colon).trim(), declaration.slice(colon + 1).trim().replace(/\s+/g, ' '));
-      }
-    }
-
-    found.set(selector!.trim().replace(/\s+/g, ' '), properties);
-  }
-
-  return found;
-}
-
-const TOKENS = rules('tokens.css');
 const DECK = rules('deck.css');
-
-/** A theme's tokens: the first block's, which every theme starts from, then its own. */
-function themeTokens(id: string): Map<string, string> {
-  return new Map([...TOKENS.get(':root, [data-theme]')!, ...(TOKENS.get(`[data-theme='${id}']`) ?? [])]);
-}
 
 /** What the app's own element ends up with for a choice, in a theme, with every var() looked up. */
 function shown(attribute: string, option: string, theme: string): (property: string) => string {

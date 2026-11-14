@@ -1,0 +1,33 @@
+/* ---- Celebrations: a board's last card turned over where it lies, and confetti over a big pot ---- */
+
+/* A board card face down that stands in for one being turned over is the size of the board's cards */
+.board-card {
+  --card-w: var(--board-card-w);
+}
+
+/* A piece of confetti, held by its middle at the seat it is thrown from. Its colors are ones that read on every theme's felt */
+.confetti {
+  width: clamp(6px, calc(var(--card-w) * 0.24), 10px);
+  aspect-ratio: 5 / 8;
+  border-radius: calc(var(--radius) * 0.2);
+}
+
+.confetti.c0 {
+  background: var(--win);
+}
+
+.confetti.c1 {
+  background: var(--accent);
+}
+
+.confetti.c2 {
+  background: var(--chip);
+}
+
+.confetti.c3 {
+  background: var(--felt-ink);
+}
+
+.confetti.c4 {
+  background: var(--felt-muted);
+}

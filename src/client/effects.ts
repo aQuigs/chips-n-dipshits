@@ -1,4 +1,5 @@
 import type { Attention } from './attention.ts';
+import { celebrations } from './effects/celebrations.ts';
 import { handMoves } from './effects/handMoves.ts';
 import { handSounds } from './effects/handSounds.ts';
 import { yourTurn } from './effects/yourTurn.ts';
@@ -39,6 +40,8 @@ export interface TableEffect {
 const TABLE_EFFECTS: (() => TableEffect)[] = [
   handSounds,
   handMoves,
+  // After the hand's own moves, so the turn it gives a board's last card takes the place of the drop they give it
+  celebrations,
   yourTurn,
 ];
 

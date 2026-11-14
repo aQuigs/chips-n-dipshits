@@ -15,7 +15,7 @@ import { BUZZ_PATTERN } from '../src/client/attentionWays.ts';
 import { KEYS_SETTLE_MS } from '../src/client/hotkeys.ts';
 import { RECIPES } from '../src/client/soundRecipes.ts';
 import { THEMES } from '../src/client/themes.ts';
-import { DEFAULT_CONFIG, presetSettings } from '../src/engine/index.ts';
+import { DEFAULT_CONFIG, LIMITS, presetSettings } from '../src/engine/index.ts';
 import type { Command, TableConfig, TableView } from '../src/engine/index.ts';
 import { contrast } from '../tests/colorVision.ts';
 import { boxes, overlap, Rig, SCREENS, setStageHeight, squeezed, textBoxes } from './rig.ts';
@@ -4040,6 +4040,31 @@ const CHECKS: Check[] = [
           }
         }
       }
+    },
+  ],
+  [
+    'the longest count of hands left and the longest word of a bomb pot on two boards share the bar whole on the smallest phone',
+    async (rig) => {
+      const table = rig.table(
+        LONG_NAMES.slice(0, 6).map((name) => ({ name, stack: 10_000_000 })),
+        { ...CENTS, bombPotAmount: 999_999, bombPotBoards: 'two' },
+      );
+      table.deal({ button: 0, holes: { 0: 'As Ah' } });
+      table.act('Quigs', { type: 'setLastHands', hands: LIMITS.lastHands, from: 1 });
+      table.act('Quigs', { type: 'setBombPot', on: true });
+
+      const page = await table.open('Stu', 'smallPhone');
+      const said = [`${LIMITS.lastHands} more hands after this one`, 'Next hand is a double-board bomb pot: 9,999.99 each'];
+      await page.waitForFunction(`JSON.stringify([...document.querySelectorAll('.controls .next-hand span')].map((part) => part.textContent)) === ${JSON.stringify(JSON.stringify(said))}`);
+      await inShapesOf(
+        page,
+        'smallPhone',
+        async (shape) => {
+          await assertNextHandsFit(page, 'smallPhone', 'player');
+          await shot(page, `last-hands-longest-double-board-smallPhone-${shape}`);
+        },
+        { buttonsUp: false },
+      );
     },
   ],
   [

@@ -5385,6 +5385,99 @@ const CHECKS: Check[] = [
       await page.context().close();
     },
   ],
+  [
+    'with animations on, a missed big blind slides in front of its own seat while the small blind posted dead with it goes from the seat straight to the pot, a hand with no small blind slides none, a big blind folded to alone goes back with no pot behind it, and each lands exactly as a still table stands',
+    async (rig) => {
+      const layout = MOTION_LAYOUTS.find((each) => each.name === 'phone-standing')!;
+      const where = (what: string) => `${layout.name}, ${what}`;
+
+      {
+        const kind = MISSED_BLIND_TABLES[0]!;
+        const table = blindsOwed(rig, kind);
+
+        // Marge posts what she owes in the hand after the button has passed her: the button on seat 4, the blinds on seats 5 and 0
+        table.act(MARGE, { type: 'comeIn', post: true });
+        table.dealNext();
+        playOut(table);
+
+        const { moving, still, step } = await watch(table, 'Quigs', layout, 0.5);
+
+        // The deal is held halfway for the picture, before the step lets it land and measures it
+        table.dealNext({ holes: { 0: 'Ks Kh', 3: 'As Ah' }, board: '2c 7d 9h Jc 3s' });
+        await Promise.all([moving, still].map((page) => caughtUp(page, table.view('Quigs'))));
+        await shot(moving, 'motion-held-missed-blinds');
+
+        const seen = await step('the hand a player posts what they owe in', () => undefined);
+        const slid = flightsOf(seen, 'chips', false);
+        const dropped = flightsOf(seen, 'chips', true);
+        const cards = flightsOf(seen, 'card', false);
+
+        assert.equal(seen.flights.length, 16, where('three bets, a chip and twelve cards move'));
+        assert.deepEqual(slid.map((bet) => [bet.seat, bet.text, bet.delay]), [[3, kind.big, 0], [5, kind.small, 0], [0, kind.big, 0]], where('her missed big blind and the two blinds of the hand'));
+        slid.forEach((bet) => {
+          assertOver(bet.from, seen.after.plates[bet.seat!], where(`the bet of seat ${bet.seat} leaves its seat`));
+          assertOver(bet.to, seen.after.bets[bet.seat!], where(`the bet of seat ${bet.seat} lands in front of that seat`));
+        });
+
+        // Her small blind is dead money: a bare chip from her seat to the pot, and only the big blind in front of her
+        assert.deepEqual(dropped.map((chip) => [chip.text, chip.delay]), [['', 0]], where('the dead small blind'));
+        assertOver(dropped[0]!.from, seen.after.plates[3], where('the dead small blind leaves her seat'));
+        assertOver(dropped[0]!.to, seen.after.pot, where('the dead small blind goes to the pot'));
+        assert.deepEqual(await texts(moving, '.bet'), [kind.big, kind.big, kind.small], where('the bets on the table'));
+        assert.equal(await text(moving, '.pot'), `Pot${kind.pot}`, where('the pot'));
+        assert.deepEqual(cards.map((card) => card.seat), [5, 0, 1, 2, 3, 4].flatMap((seat) => [seat, seat]), where('the cards go around from the left of the button'));
+        await shot(moving, 'motion-landed-missed-blinds');
+
+        await moving.context().close();
+        await still.context().close();
+      }
+
+      const table = rig.table(['Quigs', 'Stu', 'Pocket Pam', 'Big Al'].map((name) => ({ name, stack: 1000 })));
+
+      // Pam had the big blind and leaves: her seat is due the small blind next, and the button the hand after
+      table.deal({ button: 0 });
+      playOut(table);
+      table.act('Pocket Pam', { type: 'standUp' });
+
+      const { moving, still, step } = await watch(table, 'Quigs', layout);
+      const chips = (seen: Seen) => seen.flights.filter((flight) => flight.what === 'chips').map((flight) => [flight.standIn, flight.seat, flight.text, flight.delay]);
+      const dealtTo = (seen: Seen) => flightsOf(seen, 'card', false).map((card) => card.seat);
+
+      let seen = await step('a hand with no small blind', () => table.dealNext());
+      assert.deepEqual(chips(seen), [[false, 3, '20', 0]], where('the big blind is the only bet, and nothing leaves the seat nobody is in'));
+      assertOver(seen.flights[0]!.from, seen.after.plates[3], where('the big blind leaves its seat'));
+      assert.deepEqual(dealtTo(seen), [3, 3, 0, 0, 1, 1], where('the cards of a hand with no small blind'));
+
+      seen = await step('the viewer’s own fold', () => table.act('Quigs', { type: 'fold' }));
+      assert.deepEqual(seen.flights, [], where('the viewer’s own fold moves nothing'));
+
+      // Folded to, the big blind goes back from in front of its seat, and no pile follows it from a pot with nothing in it.
+      // The game is paused first: a table that is running deals the next hand itself, with cards nobody chose
+      seen = await step('a big blind folded to alone', () => {
+        table.act('Quigs', { type: 'pause' });
+        table.act('Stu', { type: 'fold' });
+      });
+      assert.deepEqual(seen.flights.map((flight) => [flight.what, flight.standIn]), [['cards', true], ['chips', true]], where('the last fold and the blind going back'));
+      assert.deepEqual([seen.flights[1]!.text, seen.flights[1]!.delay], ['20', 0], where('the blind going back'));
+      assertOver(seen.flights[1]!.from, seen.before.bets[3], where('the blind going back leaves where it lay'));
+      assertOver(seen.flights[1]!.to, seen.after.plates[3], where('the blind goes back to its seat'));
+      assert.deepEqual(await texts(moving, '.message.result > div'), ['Everyone folded to Big Al'], where('the felt'));
+      await shot(moving, 'motion-landed-folded-to-the-big-blind');
+
+      // The button is dead on the seat Pam left: both blinds slide in, and the cards go around from its left
+      seen = await step('a hand under a dead button', () => {
+        table.play(folding, (view) => view.hand === null);
+        table.dealNext();
+      });
+      assert.deepEqual(chips(seen), [[false, 3, '10', 0], [false, 0, '20', 0]], where('the blinds under a dead button'));
+      assert.deepEqual(dealtTo(seen), [3, 3, 0, 0, 1, 1], where('the cards under a dead button'));
+      assert.equal(await moving.locator('[data-open-seat="2"] .dealer-button').count(), 1, where('the dead button'));
+      await shot(moving, 'motion-landed-dead-button');
+
+      await moving.context().close();
+      await still.context().close();
+    },
+  ],
 ];
 
 await mkdir(OUT, { recursive: true });

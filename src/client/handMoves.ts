@@ -97,8 +97,9 @@ function stepsOf(event: HandEvent, before: ReplayPosition, after: ReplayPosition
     case 'post': {
       const [, seat, , , , as] = event;
 
-      // A blind sits in front of the player like any bet. An ante or a bomb pot's chips go straight to the pot,
-      // from every seat at once, so each is a bare chip and the pot says what they came to
+      // A blind sits in front of the player like any bet, a missed big blind too, whichever seat posts it. An ante,
+      // a bomb pot's chips and a missed small blind posted dead go straight to the pot and leave nothing in front of
+      // the seat: each is a bare chip, as they come from several seats at once, and the pot says what they came to
       return [{ moves: [as ? chips(seatOf(seat), POT) : betSlide(seat)] }];
     }
 

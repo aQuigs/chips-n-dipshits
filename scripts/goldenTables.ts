@@ -169,6 +169,33 @@ function bettingWithStraddleAndMissedBlinds(): TestTable {
   return t;
 }
 
+/**
+ * Between hands, after three showdowns: the night's numbers hold each player's best hand shown, and two
+ * of them showed the same best in different hands, the earlier a flush on the board's four hearts.
+ */
+function bestHandsShownTonight(): TestTable {
+  const t = table([1000, 1000, 1000], 37);
+
+  // Seat 2 in the big blind shows first; seat 0 on the button calls it down
+  const checkDown = (holes: Record<number, string>, board: string) => {
+    t.deal({ button: 0, holes, board });
+    t.call(0);
+    t.fold(1);
+    t.check(2);
+    for (let street = 0; street < 3; street++) {
+      t.check(2);
+      t.check(0);
+    }
+    t.finishHand();
+  };
+
+  checkDown({ 0: 'Ah 3c', 2: 'Kd Kc' }, '2h 7h 9h Jh 4s');
+  checkDown({ 0: 'Qd Qc', 2: 'Ac Ad' }, '2c 7d 9s Js 3h');
+  checkDown({ 0: 'Kc 5d', 2: 'Ah 3d' }, '2h 7h 9h Jh 4c');
+
+  return t;
+}
+
 /** Tables as the code of one time saved them. */
 interface TableSet {
   /** The schema that code saved. */
@@ -198,13 +225,15 @@ const SETS: TableSet[] = [
       'with-straddle-and-missed-blinds': bettingWithStraddleAndMissedBlinds,
     },
   },
-  // Schema 4 as it ended: the last code for which running it more than once was a yes or no to running it twice
+  // Schema 4 as it ended: the last code for which running it more than once was a yes or no to running it
+  // twice, and from before the high hand was kept, with each player's best hand shown and nobody holding it
   {
     schema: 4,
     tables: {
       'run-it-twice-vote': runItTwiceVote,
       'runout-two-boards': runoutOnTwoBoards,
       'runout-run-it-twice-off': runoutWithRunItTwiceOff,
+      'best-hands-shown': bestHandsShownTonight,
     },
   },
 ];

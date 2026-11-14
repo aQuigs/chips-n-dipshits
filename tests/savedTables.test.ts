@@ -18,8 +18,11 @@ const FILES = readdirSync(FOLDER)
 // Saved by the last code of schema 3, with everything added to a table while that schema lasted
 const LAST_OF_SCHEMA_3 = 'schema3-with-straddle-and-missed-blinds.json';
 
-// The rest of schema 3 were saved as it began, before any of it was added
-const OLDEST = FILES.filter((file) => /^schema[23]-/.test(file) && file !== LAST_OF_SCHEMA_3);
+// Saved while schema 3 lasted, before the night's numbers were kept
+const SCHEMA_3 = FILES.filter((file) => /^schema[23]-/.test(file));
+
+// The rest of those were saved as schema 3 began, before any of it was added
+const OLDEST = SCHEMA_3.filter((file) => file !== LAST_OF_SCHEMA_3);
 
 const HANDS_TO_PLAY = 4;
 const STEP_LIMIT = 3000;
@@ -232,7 +235,7 @@ test('a bomb pot saved in the middle by the code before there were two boards go
 });
 
 test('a table saved when a hand had one straddle, kept as its seat, has it as a line of one, and every player who asked to straddle still posts under the gun', () => {
-  for (const file of FILES.filter((name) => /^schema[23]-/.test(name))) {
+  for (const file of SCHEMA_3) {
     const state = load(file);
     const before = JSON.parse(readFileSync(new URL(file, FOLDER), 'utf8')) as { seats: ({ straddle: boolean } | null)[]; hand: { straddleSeat: number | null } | null };
 
@@ -290,7 +293,7 @@ test('a table saved when a hand had one straddle, kept as its seat, has it as a 
 });
 
 test('a table saved before the night’s numbers were kept loads with nothing counted and says how many hands it missed, and a hand it was saved in the middle of is the first one counted', () => {
-  for (const file of FILES) {
+  for (const file of SCHEMA_3) {
     const state = load(file);
     const { tonight, ledger } = TestTable.adopt(state).view(0);
 

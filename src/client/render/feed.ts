@@ -1,5 +1,5 @@
 import type { FeedEntry } from '../../engine/types.ts';
-import { h } from '../ui.ts';
+import { cardText, h } from '../ui.ts';
 
 const CHAT_LENGTH = 200;
 
@@ -12,21 +12,27 @@ const MAX_ENTRIES = 300;
 export interface Feed {
   element: HTMLElement;
   update(entries: readonly FeedEntry[]): void;
+  /** Redraws what is shown for the deck now chosen, which decides how the cards in it are written. */
+  showDeck(deck: string): void;
 }
 
-function entryEl(entry: FeedEntry): HTMLElement {
+function entryEl(entry: FeedEntry, deck: string): HTMLElement {
   if (entry.kind === 'chat') {
     return h('li', { 'data-kind': entry.kind }, h('b', null, `${entry.from}: `), entry.text);
   }
 
-  return h('li', { 'data-kind': entry.kind }, entry.text);
+  return h('li', { 'data-kind': entry.kind }, cardText(entry.text, deck));
+}
+
+function latestText(entry: FeedEntry, deck: string): (string | HTMLElement)[] {
+  return entry.kind === 'chat' ? [`${entry.from}: ${entry.text}`] : cardText(entry.text, deck);
 }
 
 /**
  * The dealer's play-by-play and the table chat in one list. Built once and updated in place, so what
  * someone is typing and where they have scrolled to both survive new entries arriving.
  */
-export function createFeed(onChat: (text: string) => void): Feed {
+export function createFeed(onChat: (text: string) => void, deck: string): Feed {
   const list = h('ol.entries', { 'aria-live': 'polite' });
   const input = h('input', { type: 'text', id: 'chat-input', maxlength: CHAT_LENGTH, placeholder: 'Say something', autocomplete: 'off', 'aria-label': 'Chat message' });
   const latest = h('span.latest');
@@ -58,6 +64,9 @@ export function createFeed(onChat: (text: string) => void): Feed {
   });
 
   let lastSeq = 0;
+  // What the list shows, so it can be written out again for another deck
+  let shown: FeedEntry[] = [];
+  let newest: FeedEntry | null = null;
 
   return {
     element,
@@ -70,17 +79,29 @@ export function createFeed(onChat: (text: string) => void): Feed {
       const following = list.scrollHeight - list.scrollTop - list.clientHeight < FOLLOW_SLACK_PX;
 
       for (const entry of fresh) {
-        list.appendChild(entryEl(entry));
+        list.appendChild(entryEl(entry, deck));
       }
 
       lastSeq = fresh[fresh.length - 1]!.seq;
+      shown = [...shown, ...fresh].slice(-MAX_ENTRIES);
 
       while (list.childElementCount > MAX_ENTRIES) {
         list.firstElementChild!.remove();
       }
 
-      const newest = entries[entries.length - 1]!;
-      latest.textContent = newest.kind === 'chat' ? `${newest.from}: ${newest.text}` : newest.text;
+      newest = entries[entries.length - 1]!;
+      latest.replaceChildren(...latestText(newest, deck));
+
+      if (following) {
+        list.scrollTop = list.scrollHeight;
+      }
+    },
+    showDeck(chosen) {
+      const following = list.scrollHeight - list.scrollTop - list.clientHeight < FOLLOW_SLACK_PX;
+
+      deck = chosen;
+      list.replaceChildren(...shown.map((entry) => entryEl(entry, deck)));
+      latest.replaceChildren(...(newest ? latestText(newest, deck) : []));
 
       if (following) {
         list.scrollTop = list.scrollHeight;

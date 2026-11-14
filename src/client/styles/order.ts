@@ -23,4 +23,5 @@ export const STYLESHEETS = [
   'toast.css',
   'motion.css',
   'preferences.css',
+  'deck.css',
 ];

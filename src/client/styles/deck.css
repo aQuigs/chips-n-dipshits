@@ -1,0 +1,79 @@
+/* ---- The deck and the card backs each player chooses, shown on the app as data-deck and data-card-back ---- */
+
+/*
+ * The choice sets what cards.css draws with. It is set wherever a choice is shown, on the app and on
+ * each sample in Preferences, so a sample of one option inside an app showing another draws its own.
+ */
+[data-deck] {
+  --deck-s: var(--suit-s);
+  --deck-h: var(--suit-h);
+  --deck-d: var(--suit-d);
+  --deck-c: var(--suit-c);
+}
+
+[data-deck='two'] {
+  --deck-d: var(--suit-h);
+  --deck-c: var(--suit-s);
+}
+
+[data-deck='four'] {
+  --deck-s: var(--suit-four-s);
+  --deck-h: var(--suit-four-h);
+  --deck-d: var(--suit-four-d);
+  --deck-c: var(--suit-four-c);
+}
+
+[data-card-back] {
+  --back: var(--card-back);
+}
+
+[data-card-back='lattice'] {
+  --back:
+    repeating-linear-gradient(45deg, transparent 0 4px, var(--accent) 4px 5px),
+    repeating-linear-gradient(-45deg, transparent 0 4px, var(--accent) 4px 5px),
+    var(--bg-raised);
+}
+
+[data-card-back='dots'] {
+  --back: radial-gradient(circle, var(--accent) 0 1.5px, transparent 2px) 0 0 / 6px 6px, var(--rail);
+}
+
+[data-card-back='gingham'] {
+  --back:
+    linear-gradient(90deg, color-mix(in srgb, var(--bad) 45%, transparent) 50%, transparent 0) 0 0 / 6px 6px,
+    linear-gradient(color-mix(in srgb, var(--bad) 45%, transparent) 50%, transparent 0) 0 0 / 6px 6px,
+    var(--card);
+}
+
+[data-card-back='felt'] {
+  --back: var(--felt);
+}
+
+/*
+ * Cards written out, as in the play-by-play and the hand history. The suit colors are made to read
+ * on a card, not on a panel, so with four colors each card is set on a chip of card.
+ */
+[data-deck='four'] .card-text {
+  padding: 0 0.2em;
+  border-radius: calc(var(--radius) * 0.4);
+  background: var(--card);
+  box-shadow: inset 0 0 0 1px var(--card-edge);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+[data-deck='four'] .card-text.suit-s {
+  color: var(--deck-s);
+}
+
+[data-deck='four'] .card-text.suit-h {
+  color: var(--deck-h);
+}
+
+[data-deck='four'] .card-text.suit-d {
+  color: var(--deck-d);
+}
+
+[data-deck='four'] .card-text.suit-c {
+  color: var(--deck-c);
+}

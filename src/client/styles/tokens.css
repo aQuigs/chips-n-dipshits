@@ -1,6 +1,10 @@
 /*
  * Every color, face and shape the app uses is a token, and a theme is nothing more than a set of
  * token values under [data-theme="<id>"]. The other stylesheets never name a color directly.
+ *
+ * --suit-four-* are the four-color deck a player can choose. Each set is checked by
+ * tests/deck.test.ts: every suit reads on the theme's --card, and the four stay apart for the
+ * common kinds of color blindness, which is why hearts and clubs differ in lightness, not just hue.
  */
 
 /* Card Room: green felt, walnut rail, brass numbers. Also the fallback when no theme is set. */
@@ -36,6 +40,10 @@
   --suit-c: #1b1d21;
   --suit-h: #c8323d;
   --suit-d: #c8323d;
+  --suit-four-s: #1b1d21;
+  --suit-four-h: #c8323d;
+  --suit-four-d: #2b76ab;
+  --suit-four-c: #09530f;
   --card-back: repeating-linear-gradient(45deg, #8c1f2b 0 5px, #a52a37 5px 10px);
   --chip: #dcb561;
 
@@ -81,6 +89,10 @@
   --suit-c: #241a14;
   --suit-h: #c22b2b;
   --suit-d: #c22b2b;
+  --suit-four-s: #241a14;
+  --suit-four-h: #c22b2b;
+  --suit-four-d: #183daa;
+  --suit-four-c: #297a66;
   --card-back: repeating-linear-gradient(-45deg, #1f4d4a 0 5px, #286360 5px 10px);
   --chip: #f3a43c;
 
@@ -125,6 +137,10 @@
   --suit-c: #0f9d63;
   --suit-h: #f0366f;
   --suit-d: #1f86f0;
+  --suit-four-s: #17144a;
+  --suit-four-h: #d92644;
+  --suit-four-d: #1c70c4;
+  --suit-four-c: #09530f;
   --card-back: linear-gradient(135deg, #ff55d6, #6f4dff 55%, #35e3ff);
   --chip: #35e3ff;
 
@@ -170,6 +186,10 @@
   --suit-c: #14804a;
   --suit-h: #d42f3b;
   --suit-d: #2257e7;
+  --suit-four-s: #17212c;
+  --suit-four-h: #d42f3b;
+  --suit-four-d: #2d7bb4;
+  --suit-four-c: #0a5c11;
   --card-back: repeating-linear-gradient(45deg, #2257e7 0 5px, #3d6df0 5px 10px);
   --chip: #2257e7;
 

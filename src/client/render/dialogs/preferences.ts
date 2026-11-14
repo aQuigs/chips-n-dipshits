@@ -1,10 +1,34 @@
-import type { Pref, Preferences } from '../../prefs.ts';
-import { h } from '../../ui.ts';
+import type { ChoicePref, Pref, Preferences } from '../../prefs.ts';
+import { cardEl, h } from '../../ui.ts';
 import { everyone, frame } from './dialog.ts';
 import type { DialogHandlers, DialogKind } from './dialog.ts';
 
 /** The store as this dialog uses it: whatever is in the registry, by the kind of each entry. */
 type AnyPreferences = Preferences<Record<string, Pref>>;
+
+/** A choice whose options are drawn as samples: one tile per option, each showing what picking it looks like. */
+function samples(prefs: AnyPreferences, key: string, pref: ChoicePref, preview: NonNullable<ChoicePref['preview']>): HTMLElement {
+  const tiles = pref.options.map((option) => {
+    const sample = h('span.sample', { 'aria-hidden': 'true' }, preview.map(cardEl));
+    sample.dataset[key] = option.value;
+
+    return h(
+      'label.tile',
+      null,
+      h('input', { type: 'radio', name: `pref-${key}`, value: option.value, checked: prefs.get(key) === option.value, onchange: () => prefs.set(key, option.value) }),
+      sample,
+      h('span', null, option.label),
+    );
+  });
+
+  return h(
+    'div.samples',
+    { role: 'radiogroup', id: `pref-${key}`, 'data-pref': key, 'aria-labelledby': `pref-${key}-label` },
+    h('span', { id: `pref-${key}-label` }, pref.label),
+    pref.hint ? h('small', null, pref.hint) : null,
+    h('div.tiles', null, tiles),
+  );
+}
 
 /**
  * The control for one preference. It keeps itself up to date as it is used, so the dialog is drawn
@@ -32,6 +56,10 @@ function control(prefs: AnyPreferences, key: string, pref: Pref): HTMLElement {
     }
 
     case 'choice': {
+      if (pref.preview) {
+        return samples(prefs, key, pref, pref.preview);
+      }
+
       const select = h(
         'select',
         { id, 'data-pref': key, onchange: () => prefs.set(key, select.value) },
@@ -82,6 +110,6 @@ function preferences(handlers: DialogHandlers): HTMLElement {
 
 export const preferencesDialog: DialogKind<'preferences'> = {
   kind: 'preferences',
-  menu: { label: 'Preferences', who: everyone, note: () => 'Sound and the like, just for you' },
+  menu: { label: 'Preferences', who: everyone, note: () => 'Sound, cards and the like, just for you' },
   draw: (_view, handlers) => preferences(handlers),
 };

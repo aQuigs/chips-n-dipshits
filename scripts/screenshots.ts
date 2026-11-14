@@ -60,13 +60,29 @@ async function setTheme(page: Page, id: string): Promise<void> {
   await page.click('[data-action="close"]');
 }
 
+async function setDeck(page: Page, deck: string): Promise<void> {
+  if ((await page.evaluate(`document.querySelector('.cnd').dataset.deck`)) === deck) {
+    return;
+  }
+
+  await openFromMenu(page, 'preferences');
+  await page.click(`#pref-deck .tile:has(input[value="${deck}"])`);
+  await page.click('[data-action="close"]');
+}
+
+/** Each theme with the deck it comes with, then each with the four-color deck a player can choose. */
 async function shotInEveryTheme(page: Page, name: string): Promise<void> {
-  for (const theme of THEMES) {
-    await setTheme(page, theme.id);
-    await shot(page, `${name}-${theme.id}`);
+  for (const deck of ['theme', 'four']) {
+    await setDeck(page, deck);
+
+    for (const theme of THEMES) {
+      await setTheme(page, theme.id);
+      await shot(page, `${name}-${theme.id}${deck === 'four' ? '-four-color' : ''}`);
+    }
   }
 
   await setTheme(page, THEMES[0]!.id);
+  await setDeck(page, 'theme');
 }
 
 async function sit(page: Page, seat: number): Promise<void> {

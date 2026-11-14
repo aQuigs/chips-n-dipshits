@@ -1,3 +1,4 @@
+import type { Card } from '../engine/cards.ts';
 import { DEFAULT_THEME, THEMES } from './themes.ts';
 
 interface PrefBase<Kind extends string, Value> {
@@ -11,7 +12,7 @@ interface PrefBase<Kind extends string, Value> {
   /**
    * Shows the choice on the app's own element, so a stylesheet can react to it with no script:
    * "attribute" as `data-<key>` (on or off, the option, or the number), "property" as the custom
-   * property `--<key>`. The key is spelled with dashes there: `fourColor` is `data-four-color`.
+   * property `--<key>`. The key is spelled with dashes there: `cardBack` is `data-card-back`.
    */
   css?: 'attribute' | 'property';
 }
@@ -20,6 +21,12 @@ export type OnOffPref = PrefBase<'onOff', boolean>;
 
 export interface ChoicePref extends PrefBase<'choice', string> {
   options: readonly { value: string; label: string }[];
+  /**
+   * Cards to draw beside each option, face down where null, so a choice that changes how cards look
+   * is shown rather than named. Each sample carries its option the way `css: 'attribute'` shows it,
+   * so the stylesheet that draws the table draws the sample too.
+   */
+  preview?: readonly (Card | null)[];
 }
 
 export interface RangePref extends PrefBase<'range', number> {
@@ -41,6 +48,34 @@ export const PREFERENCES = {
   // Chosen with the theme picker, on the front page and in the menu
   theme: { kind: 'choice', label: 'Theme', options: THEMES.map((theme) => ({ value: theme.id, label: theme.name })), default: DEFAULT_THEME },
   sound: { kind: 'onOff', label: 'Sound', hint: 'A chime when it is your turn', group: 'Sound', default: true },
+  deck: {
+    kind: 'choice',
+    label: 'Deck',
+    group: 'Cards',
+    options: [
+      { value: 'theme', label: 'Theme' },
+      { value: 'two', label: 'Two colors' },
+      { value: 'four', label: 'Four colors' },
+    ],
+    default: 'theme',
+    css: 'attribute',
+    preview: ['As', 'Ah', 'Ad', 'Ac'],
+  },
+  cardBack: {
+    kind: 'choice',
+    label: 'Card back',
+    group: 'Cards',
+    options: [
+      { value: 'theme', label: 'Theme' },
+      { value: 'lattice', label: 'Lattice' },
+      { value: 'dots', label: 'Dots' },
+      { value: 'gingham', label: 'Gingham' },
+      { value: 'felt', label: 'Felt' },
+    ],
+    default: 'theme',
+    css: 'attribute',
+    preview: [null],
+  },
 } satisfies Record<string, Pref>;
 
 /**

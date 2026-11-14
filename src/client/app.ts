@@ -94,6 +94,7 @@ export class App {
     this.themeHost = themeHost;
     this.prefs = new Preferences(PREFERENCES, platform.memory, root);
     this.prefs.watch('theme', (id) => this.applyTheme(id));
+    this.prefs.watch('deck', (deck) => this.screen?.feed.showDeck(deck));
 
     root.classList.add('cnd');
   }
@@ -336,7 +337,7 @@ export class App {
     });
     this.table = table;
 
-    const feed = createFeed((text) => void this.send({ type: 'chat', text }));
+    const feed = createFeed((text) => void this.send({ type: 'chat', text }), this.prefs.get('deck'));
     const stage = new Slot(h('div.stage'));
     const overlay = new Slot(h('div.overlay', { hidden: true }));
     const screen: TableScreen = {

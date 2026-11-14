@@ -1,4 +1,4 @@
-import { rankOf, suitOf } from '../engine/cards.ts';
+import { rankOf, splitWrittenCards, suitOf } from '../engine/cards.ts';
 import { formatChips } from '../engine/format.ts';
 import type { Card } from '../engine/cards.ts';
 
@@ -152,6 +152,19 @@ export function cardEl(card: Card | null): HTMLElement {
     h('span.rank', null, label),
     h('span.pip', null, SUIT_SYMBOLS[suit]),
   );
+}
+
+/**
+ * Text with each card written in it marked with its suit, for the stylesheet to color. Only the
+ * four-color deck colors them, and with any other the text is left whole: split, its glyphs move by
+ * a fraction of a pixel, and a player who chose nothing would see the page change.
+ */
+export function cardText(text: string, deck: string): (string | HTMLElement)[] {
+  if (deck !== 'four') {
+    return [text];
+  }
+
+  return splitWrittenCards(text).map((part) => (part.suit ? h('span.card-text', { class: `suit-${part.suit}` }, part.text) : part.text));
 }
 
 /** Whole seconds left until a server time, given how far the local clock is from the server's. */

@@ -7893,6 +7893,8 @@ const CHECKS: Check[] = [
         await host.locator('#table-allow-chop').scrollIntoViewIfNeeded();
         assertOnScreen(await boxes(host, switchFor), screen, 'the switch for chops');
         assert.deepEqual(await squeezed(host, `${switchFor} span`), [], 'the name of the switch is cut off');
+        const [box] = await boxes(host, '#table-rabbit-hunting');
+        assert.ok(box!.right - box!.left >= 20, `the switch's box is squeezed by its long name: ${JSON.stringify(box)}`);
         await assertNoSidewaysScroll(host);
         await shot(host, `chop-settings-${screen}`);
 

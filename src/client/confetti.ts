@@ -1,3 +1,5 @@
+import { seededNumbers } from '../engine/seeded.ts';
+
 /**
  * How many pieces a burst throws. Each is one small element with one animation of transform and
  * opacity, which the browser runs off the main thread; two dozen read as a burst on a phone's seat and
@@ -28,22 +30,9 @@ const MORE_REACH = 0.3;
 const MOST_SPIN = 720;
 const MOST_LATE_MS = 120;
 
-/** A generator of numbers from 0 up to 1 that gives the same ones for the same seed (mulberry32). */
-function seeded(seed: number): () => number {
-  let state = seed >>> 0;
-
-  return () => {
-    state = (state + 0x6d2b79f5) >>> 0;
-    let mixed = Math.imul(state ^ (state >>> 15), 1 | state);
-    mixed ^= mixed + Math.imul(mixed ^ (mixed >>> 7), 61 | mixed);
-
-    return ((mixed ^ (mixed >>> 14)) >>> 0) / 2 ** 32;
-  };
-}
-
 /** The pieces of one burst, laid out from `seed`: the same seed throws the same burst. */
 export function confettiBurst(seed: number): ConfettiPiece[] {
-  const next = seeded(seed);
+  const next = seededNumbers(seed);
 
   return Array.from({ length: CONFETTI_PIECES }, () => ({
     angle: (next() - 0.5) * FAN_DEGREES,

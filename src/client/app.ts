@@ -432,7 +432,7 @@ export class App {
       feed,
       motion,
       effects,
-      shown: new ShownTable(motion, () => this.clock.now(), () => Date.now(), {
+      shown: new ShownTable(motion, () => this.clock.now(), () => Date.now(), { now: () => performance.now(), later: (run) => void setTimeout(run) }, {
         draw: () => this.drawShown(),
         tell: (change) => effects.run(change),
         say: (message) => this.toast(message),
@@ -679,7 +679,8 @@ export class App {
     const myRequest = view.requests.find((request) => request.playerId === view.you.id);
     const picking = screen.seatMoves.picking;
     const turning = screen.shown.turning;
-    const shows = [screen.shape, view.you, view.hostId, view.cohostIds, view.running, view.nextHandAt, view.nightEndedAt, view.config.actionSeconds, view.seats, handDrawn(view.hand), myRequest, picking, turning];
+    const chances = screen.shown.chances;
+    const shows = [screen.shape, view.you, view.hostId, view.cohostIds, view.running, view.nextHandAt, view.nightEndedAt, view.config.actionSeconds, view.seats, handDrawn(view.hand), myRequest, picking, turning, chances];
 
     screen.stage.draw(shows, () => {
       return tableEl(
@@ -693,6 +694,7 @@ export class App {
           moving: screen.seatMoves.tableHandlers(),
         },
         turning,
+        chances,
       );
     });
 
@@ -700,6 +702,9 @@ export class App {
 
     // On the part of the screen itself, not on what is drawn in it: marking a move must not draw the table again
     screen.stage.element.toggleAttribute('data-unconfirmed', screen.shown.waiting === 'unconfirmed');
+
+    // For as long as the hands' chances are not those of the cards now on the table, which is what a browser check waits out
+    screen.stage.element.toggleAttribute('data-chances-pending', screen.shown.chancesPending);
 
     this.tickCountdowns();
   }

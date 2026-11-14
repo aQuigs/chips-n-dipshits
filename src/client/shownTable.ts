@@ -4,6 +4,8 @@ import type { TurnLock } from './connection.ts';
 import type { BoardCard, TableMotion } from './motion.ts';
 import { PendingMove } from './pendingMove.ts';
 import { Suspense } from './suspense.ts';
+import { spotsOf, TableChances } from './tableChances.ts';
+import type { Pace, ShownChances } from './tableChances.ts';
 import { newEvents, tableChange, TableNews } from './tableChange.ts';
 import type { TableChange } from './tableChange.ts';
 
@@ -29,12 +31,14 @@ const nameOf = (view: TableView): string => view.seats[view.you.seat!]?.lastActi
  * order: `Suspense` holds back the end of a hand while the last cards of a runout turn, and
  * `PendingMove` lays the player's own move over a view that has not caught up with it. Whatever draws
  * the table screen or reacts to it gets the result (`view()`, and the changes handed to `tell`), and
- * nothing goes around it.
+ * nothing goes around it. What the screen shows beyond the view is worked out from that result too:
+ * `TableChances` reads the chances of the hands face up off the table as shown, never as it is.
  */
 export class ShownTable {
   private readonly news = new TableNews();
   private readonly suspense: Suspense;
   private readonly pending = new PendingMove();
+  private readonly tableChances: TableChances;
   private readonly now: () => number;
   private readonly waited: () => number;
   private readonly out: Showing;
@@ -44,11 +48,13 @@ export class ShownTable {
    * `now` is the server's time as the page reckons it, which is what the game's own times are told in.
    * `waited` is this device's clock, in ms: how long a move has gone unanswered is a matter of the
    * device alone, and the server's time as reckoned here shifts with every answer that comes.
+   * `pace` spreads out the working out of chances.
    */
-  constructor(motion: TableMotion, now: () => number, waited: () => number, out: Showing) {
+  constructor(motion: TableMotion, now: () => number, waited: () => number, pace: Pace, out: Showing) {
     this.now = now;
     this.waited = waited;
     this.out = out;
+    this.tableChances = new TableChances(motion, pace, () => out.draw());
     this.suspense = new Suspense(motion, (later) => this.show(later));
   }
 
@@ -65,6 +71,16 @@ export class ShownTable {
   /** The last cards of a runout being turned over, which the table draws but which say nothing yet of the viewer's hand. */
   get turning(): BoardCard[] {
     return this.suspense.turning;
+  }
+
+  /** Each face-up hand's chance to win, as far as the table shows it yet; null while no hands are face up against each other. */
+  get chances(): ShownChances | null {
+    return this.tableChances.shown;
+  }
+
+  /** Whether the chances of the cards now on the table are still to come. */
+  get chancesPending(): boolean {
+    return this.tableChances.pending;
   }
 
   /**
@@ -91,7 +107,6 @@ export class ShownTable {
     const change = this.pending.see(this.suspense.see(this.news.change(before, view, this.now(), wentBack)));
 
     this.show(change);
-    this.suspense.played();
   }
 
   /**
@@ -132,6 +147,7 @@ export class ShownTable {
   end(): void {
     this.suspense.end();
     this.pending.drop();
+    this.tableChances.end();
   }
 
   /**
@@ -177,7 +193,13 @@ export class ShownTable {
   }
 
   private show(change: TableChange): void {
+    this.tableChances.follow(spotsOf(this.view()!, this.turning));
     this.out.draw();
     this.out.tell(change);
+
+    // The effects have set the table moving, and both wait for it to be still. `Suspense` first: a result
+    // it lets go then is on the table before the chances of the cards before it would be shown
+    this.suspense.played();
+    this.tableChances.played();
   }
 }

@@ -43,7 +43,8 @@ function demoPlatform(demo: DemoTable): Platform {
   // The table lives in the page, so it is the page's own build by definition
   const transport: Transport = { send: async (request) => ({ ...(await demo.send(request)), build: request.build }) };
 
-  return { transport, links, memory: sessionMemory(), boot: {}, build: 'demo' };
+  // The bots' game is a showcase, never a reason to call the visitor back to the tab
+  return { transport, links, memory: sessionMemory(), boot: {}, build: 'demo', ownsTab: false };
 }
 
 /** A box of a fixed device size that shrinks, as a picture would, to the room it is given. */
@@ -64,9 +65,11 @@ function start(root: HTMLElement): void {
 
   // Both screens are the same player, as when someone carries on from their phone
   const apps = [laptop.screen, phone.screen].map((screen) => new App(screen, demoPlatform(demo), preview));
-  // Two screens playing the bots' hands aloud is noise, so the showcase is silent until the visitor switches sound on in one
+  // Two screens playing the bots' hands aloud is noise, so the showcase is silent until the visitor switches sound on in one,
+  // and a phone showing it never buzzes for the bots' game
   for (const app of apps) {
     app.prefs.set('sound', false);
+    app.prefs.set('buzz', false);
   }
 
   // Both hear every key, and one move is enough

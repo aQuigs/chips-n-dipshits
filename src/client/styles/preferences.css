@@ -16,6 +16,25 @@
   flex: none;
 }
 
+/* Small switches side by side, for choices whose labels say it all */
+.switches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.pref.toggle.compact {
+  width: auto;
+  min-height: 44px;
+  padding: 6px 14px 6px 8px;
+  align-items: center;
+}
+
+.pref.toggle[aria-disabled='true'] {
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
 .pref small {
   display: block;
   color: var(--muted);

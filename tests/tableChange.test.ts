@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { ServerClock } from '../src/client/connection.ts';
 import { tableChange } from '../src/client/tableChange.ts';
 import type { TableChange } from '../src/client/tableChange.ts';
 import type { HandEvent, TableView } from '../src/engine/index.ts';
@@ -251,4 +252,38 @@ test('a hand whose events were given up on brings none, where its shorter list w
   view.hand!.events = [];
 
   assert.deepEqual(tableChange(before, view, view.now).events, []);
+});
+
+test('a device whose clock is a minute off still takes a view that arrives at once as current, and one that is slow as late', () => {
+  const table = chattyTable();
+  const clock = new ServerClock();
+  const realNow = Date.now;
+  let device = table.now - 60_000;
+
+  // The page notes each view's time as it takes it up, then reckons the server's time from that
+  const arrive = (before: TableView | null) => {
+    const view = seenBy(table, 0);
+    clock.note(view.now);
+
+    return tableChange(before, view, clock.now());
+  };
+
+  Date.now = () => device;
+  try {
+    const first = arrive(null);
+
+    table.now += 2000;
+    device += 2000;
+    table.cmd(1, { type: 'chat', text: 'on time' });
+    const onTime = arrive(first.view);
+    assert.equal(onTime.current, true, 'a view that arrived at once');
+
+    // Made at once, but taking half a minute to arrive
+    table.now += 2000;
+    table.cmd(1, { type: 'chat', text: 'slow' });
+    device += 32_000;
+    assert.equal(arrive(onTime.view).current, false, 'a view half a minute on its way');
+  } finally {
+    Date.now = realNow;
+  }
 });

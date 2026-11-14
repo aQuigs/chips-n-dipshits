@@ -31,4 +31,5 @@ export const STYLESHEETS = [
   'outdated.css',
   'bomb-pots.css',
   'presets.css',
+  'attention.css',
 ];

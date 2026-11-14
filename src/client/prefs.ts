@@ -20,7 +20,10 @@ interface PrefBase<Kind extends string, Value> {
   glossary?: readonly { term: string; meaning: string }[];
 }
 
-export type OnOffPref = PrefBase<'onOff', boolean>;
+export interface OnOffPref extends PrefBase<'onOff', boolean> {
+  /** Drawn as a small switch beside the others of its group, its label alone saying what it does and its hint kept for a pointer resting on it. */
+  compact?: boolean;
+}
 
 export interface ChoicePref extends PrefBase<'choice', string> {
   options: readonly { value: string; label: string }[];
@@ -88,6 +91,12 @@ export const PREFERENCES = {
     default: true,
     css: 'attribute',
   },
+  // The ways of getting a player's attention (attentionWays.ts) beside the chime, each left out where the device can't do it.
+  // After the cards, so they stay in sight when Preferences opens on a small phone
+  buzz: { kind: 'onOff', label: 'Buzz', hint: 'Two short buzzes on a phone', group: 'When it’s your turn', compact: true, default: true },
+  flash: { kind: 'onOff', label: 'Flash', hint: 'The table lights up for a moment', group: 'When it’s your turn', compact: true, default: true },
+  notify: { kind: 'onOff', label: 'Notification', hint: 'While the game is in another tab', group: 'When it’s your turn', compact: true, default: true },
+  tabTitle: { kind: 'onOff', label: 'Tab title', hint: 'The tab’s name flashes while you are in another tab', group: 'When it’s your turn', compact: true, default: true },
   // Off on a phone whatever is chosen: there the keys do nothing and no key is shown
   hotkeys: {
     kind: 'onOff',
@@ -99,6 +108,20 @@ export const PREFERENCES = {
     glossary: HOTKEY_LIST,
   },
 } satisfies Record<string, Pref>;
+
+/**
+ * Whether this device can do what an on/off preference switches on. 'no' leaves the preference out of
+ * the dialog; 'ask' shows it off until the player's tap gets the browser's leave; 'blocked' shows it off
+ * and says the browser was told no.
+ */
+export type Ability = 'yes' | 'no' | 'ask' | 'blocked';
+
+/** What knows the abilities of this device. A preference it knows nothing of is one any device can follow. */
+export interface Abilities {
+  of(key: string): Ability;
+  /** Asks the browser's leave for what `key` switches on. Only from inside the player's own tap. */
+  ask(key: string): Promise<Ability>;
+}
 
 /**
  * Where choices are kept between visits. The platform's `Memory` is one; only what the store uses is

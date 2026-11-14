@@ -1,5 +1,6 @@
+import type { Attention } from './attention.ts';
 import { handSounds } from './effects/handSounds.ts';
-import { turnChime } from './effects/turnChime.ts';
+import { yourTurn } from './effects/yourTurn.ts';
 import type { AppPreferences } from './prefs.ts';
 import type { Sounds } from './sound.ts';
 import type { TableChange } from './tableChange.ts';
@@ -12,6 +13,8 @@ export interface EffectContext {
   stage: HTMLElement;
   /** The way to make a sound, held to the viewer's sound switch and volume. */
   sounds: Sounds;
+  /** The way to get the viewer's attention, for a reason: a chime, a buzz, a flash, a notification. */
+  attention: Attention;
 }
 
 /** Something that happens on the page when the table changes: a sound, an animation, an alert. */
@@ -31,7 +34,7 @@ export interface TableEffect {
  */
 const TABLE_EFFECTS: (() => TableEffect)[] = [
   handSounds,
-  turnChime,
+  yourTurn,
 ];
 
 /** The effects of one table screen. */
@@ -39,17 +42,19 @@ export class TableEffects {
   private readonly prefs: AppPreferences;
   private readonly stage: HTMLElement;
   private readonly sounds: Sounds;
+  private readonly attention: Attention;
   private readonly effects = TABLE_EFFECTS.map((make) => make());
 
-  constructor(prefs: AppPreferences, stage: HTMLElement, sounds: Sounds) {
+  constructor(prefs: AppPreferences, stage: HTMLElement, sounds: Sounds, attention: Attention) {
     this.prefs = prefs;
     this.stage = stage;
     this.sounds = sounds;
+    this.attention = attention;
   }
 
   /** Call once for every view put on screen, with what it brought. */
   run(change: TableChange): void {
-    const context: EffectContext = { prefs: this.prefs, seat: change.view.you.seat, stage: this.stage, sounds: this.sounds };
+    const context: EffectContext = { prefs: this.prefs, seat: change.view.you.seat, stage: this.stage, sounds: this.sounds, attention: this.attention };
 
     for (const effect of this.effects) {
       // An effect that fails must not be what stops the table from updating, or the other effects from happening

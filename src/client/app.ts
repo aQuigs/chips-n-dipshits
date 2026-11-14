@@ -27,8 +27,11 @@ import { tableEl } from './render/table.ts';
 import { createThemePicker } from './render/themePicker.ts';
 import { voiceLinkEl } from './render/voiceLink.ts';
 import type { Shape } from './render/table.ts';
+import { Attention } from './attention.ts';
+import { pageWays } from './pageAttention.ts';
 import { Sounds } from './sound.ts';
 import { fontsUrl, themeById } from './themes.ts';
+import { pageTouch } from './pageTouch.ts';
 import { h, holdWhile, secondsUntil, Slot } from './ui.ts';
 import { pageSounds } from './webAudioSounds.ts';
 
@@ -70,6 +73,7 @@ export class App {
   /** What this viewer has chosen for themselves. */
   readonly prefs: AppPreferences;
   private readonly sounds: Sounds;
+  private readonly attention: Attention;
 
   private readonly root: HTMLElement;
   private readonly platform: Platform;
@@ -109,6 +113,7 @@ export class App {
     this.prefs.watch('theme', (id) => this.applyTheme(id));
     this.prefs.watch('deck', (deck) => this.screen?.feed.showDeck(deck));
     this.sounds = new Sounds(pageSounds(), this.prefs, { now: () => performance.now(), inView: () => !document.hidden });
+    this.attention = new Attention(this.prefs, pageWays({ sounds: this.sounds, touch: pageTouch(), root, ownsTab: platform.ownsTab }));
     this.server = new ServerLine(platform.transport, platform.build, () => this.showOutdated());
     this.hotkeys = new HotkeyPresser(this.prefs, { root, controls: () => this.screen?.controls.element ?? null, dialogOpen: () => this.server.outdated || this.dialog !== null || (this.screen?.seatMoves.active ?? false) });
 
@@ -392,7 +397,7 @@ export class App {
       overlay,
       modal: new Modal(overlay.element),
       feed,
-      effects: new TableEffects(this.prefs, stage.element, this.sounds),
+      effects: new TableEffects(this.prefs, stage.element, this.sounds, this.attention),
       seatMoves: new SeatMoves(stage.element, {
         view: () => this.view,
         send: (command) => void this.send(command),
@@ -728,6 +733,7 @@ export class App {
       tableLink: () => this.platform.links.tableLink(session.tableId),
       memberLink: () => this.platform.links.memberLink(session.tableId, session.auth),
       prefs: this.prefs,
+      abilities: this.attention,
       toLobby: () => this.showLobby(true),
       pickSeat: (playerId) => {
         this.closeDialog();

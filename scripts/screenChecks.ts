@@ -11,13 +11,17 @@ import { fileURLToPath } from 'node:url';
 
 import type { Page } from 'playwright';
 
+import { BUZZ_PATTERN } from '../src/client/attentionWays.ts';
 import { KEYS_SETTLE_MS } from '../src/client/hotkeys.ts';
 import { RECIPES } from '../src/client/soundRecipes.ts';
 import { THEMES } from '../src/client/themes.ts';
 import { DEFAULT_CONFIG, presetSettings } from '../src/engine/index.ts';
 import type { Command, TableConfig, TableView } from '../src/engine/index.ts';
+import { contrast } from '../tests/colorVision.ts';
 import { boxes, overlap, Rig, SCREENS, setStageHeight, squeezed, textBoxes } from './rig.ts';
 import type { Box, RigPlayer, ScreenName } from './rig.ts';
+import { complaints, NOTICES, TITLES } from './pageSpies.ts';
+import { STAND_IN_HOST } from './standInHost.ts';
 
 const OUT = fileURLToPath(new URL('../screenshots/', import.meta.url));
 
@@ -392,6 +396,48 @@ async function choose(page: Page, prefs: Record<string, string>): Promise<void> 
   await page.evaluate('document.fonts.ready.then(() => undefined)');
 }
 
+const TRANSPARENT = 'rgba(0, 0, 0, 0)';
+
+// Run in the page as it waits for the flash: catches it as it starts and holds it at its brightest, in `window.flash`
+const PAUSE_FLASH = `(() => {
+  const flash = document.querySelector('.stage')?.getAnimations().find((animation) => animation.animationName === 'attention-flash');
+  if (flash) {
+    flash.pause();
+    flash.currentTime = 60;
+    window.flash = flash;
+  }
+  return !!flash;
+})()`;
+
+// Run in the page: what is drawn on top at the middle of each card, bet and button on the table, which a flash must leave as it was
+const ON_TOP = `[...document.querySelectorAll('.table .card, .bet, .turn button')]
+  .map((element) => element.getBoundingClientRect())
+  .filter((box) => box.width > 0)
+  .map((box) => document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)?.outerHTML.slice(0, 80) ?? 'nothing')`;
+
+// Run in the page: lets a check put the page out of sight and back, as another tab does, which a headless browser can't
+const SIGHT = `(() => {
+  let hidden = false;
+  Object.defineProperty(document, 'hidden', { get: () => hidden, configurable: true });
+  Object.defineProperty(document, 'visibilityState', { get: () => (hidden ? 'hidden' : 'visible'), configurable: true });
+  window.outOfSight = (out) => {
+    hidden = out;
+    document.dispatchEvent(new Event('visibilitychange'));
+  };
+})()`;
+
+// Run in the page: every buzz asked for, and whether the page had been touched by then
+const BUZZ = `(() => {
+  window.buzzes = [];
+  Object.defineProperty(Navigator.prototype, 'vibrate', {
+    value: (pattern) => {
+      window.buzzes.push({ pattern, touched: navigator.userActivation.hasBeenActive });
+      return true;
+    },
+    configurable: true,
+  });
+})()`;
+
 type Check = [name: string, run: (rig: Rig) => Promise<void>];
 
 /** The presets are the whole rig's, and the lobby of every check after the one that saved them would offer them. */
@@ -741,14 +787,8 @@ const CHECKS: Check[] = [
 
       const page = await table.open('Pam', 'phone', LISTEN);
       const press = pressOn(page, 'phone');
-      const warnings: string[] = [];
+      const warnings = complaints(page);
       let heard = 0;
-
-      page.on('console', (message) => {
-        if (message.type() === 'error' || message.type() === 'warning') {
-          warnings.push(message.text());
-        }
-      });
 
       /** Waits for the page to play as many sounds as are expected, gives it a moment to play more, and says what it played. */
       const next = async (count: number, settled: string) => {
@@ -3326,6 +3366,255 @@ const CHECKS: Check[] = [
       } finally {
         forgetPresets(rig);
       }
+    },
+  ],
+  [
+    'the flash when it becomes your turn lights the space around the table, under every card, bet and button, in a light and a dark theme, and a half-typed bet survives it',
+    async (rig) => {
+      for (const screen of PHONE_AND_DESKTOP) {
+        for (const theme of ['cardroom', 'daylight']) {
+          const table = rig.table([
+            { name: 'Quigs', stack: 1000 },
+            { name: 'Stu', stack: 1000 },
+          ]);
+          const page = await table.open('Quigs', screen);
+
+          await choose(page, { theme });
+          await standOrLie(page, screen);
+
+          // Heads-up the button acts first, so the deal puts the action on this page; the flash is caught at its brightest
+          table.deal({ button: 0, holes: { 0: 'As Kd', 1: '7h 2c' } });
+          await page.waitForFunction(PAUSE_FLASH);
+          await page.waitForSelector('.turn [data-action="fold"]:enabled');
+
+          const timing = (await page.evaluate(`(() => { const t = window.flash.effect.getComputedTiming(); return { duration: t.duration, iterations: t.iterations }; })()`)) as { duration: number; iterations: number };
+          assert.ok(timing.duration <= 1200 && timing.iterations === 1, `the flash lasts ${JSON.stringify(timing)}`);
+
+          const lit = await style(page, '.stage', 'background-color');
+          assert.notEqual(lit, TRANSPARENT, 'the space around the table is not lit');
+          await dealt(page);
+          await shot(page, `turn-flash-${screen}-${theme}`);
+
+          // A bet being typed while the flash plays is still there after it, in the same box
+          await page.fill('#raise-amount', '137');
+          await page.evaluate(`window.turnPanel = document.querySelector('.turn')`);
+          const onTopLit = await page.evaluate(ON_TOP);
+          await page.evaluate('window.flash.play(); window.flash.finished');
+          table.act('Stu', { type: 'chat', text: 'take your time' });
+          await page.waitForSelector('.entries li:has-text("take your time")', { state: 'attached' });
+
+          assert.equal(await style(page, '.stage', 'background-color'), TRANSPARENT, 'the light stays on after the flash');
+          assert.deepEqual(await page.evaluate(ON_TOP), onTopLit, 'the flash is drawn over something on the table');
+          assert.equal(await page.inputValue('#raise-amount'), '137');
+          assert.equal(await page.evaluate(`window.turnPanel === document.querySelector('.turn')`), true, 'the turn panel was drawn again');
+
+          await page.context().close();
+        }
+      }
+    },
+  ],
+  [
+    'with motion turned down the flash is a steady light for the whole turn, in every shape of the table, and goes when the player acts',
+    async (rig) => {
+      for (const screen of PHONE_AND_DESKTOP) {
+        const table = rig.table([
+          { name: 'Quigs', stack: 1000 },
+          { name: 'Stu', stack: 1000 },
+        ]);
+        const page = await table.open('Quigs', screen);
+        const press = pressOn(page, screen);
+
+        await page.emulateMedia({ reducedMotion: 'reduce' });
+        await page.evaluate(`window.lightOn = 0; document.addEventListener('animationstart', (event) => event.animationName === 'attention-flash' && (window.lightOn += 1))`);
+        table.deal({ button: 0, holes: { 0: 'As Kd', 1: '7h 2c' } });
+        await page.waitForSelector('.turn [data-action="fold"]:enabled');
+        await page.waitForTimeout(1500);
+
+        assert.equal(await page.evaluate('window.lightOn'), 0, 'the flash moved');
+        const lit = await style(page, '.stage', 'background-color');
+        assert.notEqual(lit, TRANSPARENT, 'no steady light a second and a half into the turn');
+
+        await inShapesOf(page, screen, async (shape) => {
+          assert.equal(await style(page, '.stage', 'background-color'), lit);
+          await shot(page, `turn-flash-steady-${screen}-${shape}`);
+        });
+
+        await press('.turn [data-action="call"]');
+        await page.waitForSelector('.turn [data-action="fold"]', { state: 'detached' });
+        assert.equal(await style(page, '.stage', 'background-color'), TRANSPARENT, 'the light outlasted the turn');
+
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'the flash reads in every theme: its line stands out from the page behind the table',
+    async (rig) => {
+      const page = await rig.lobby('desktop');
+
+      for (const theme of THEMES) {
+        const [accent, bg] = (await page.evaluate(`(() => {
+          document.documentElement.dataset.theme = ${JSON.stringify(theme.id)};
+          const tokens = getComputedStyle(document.documentElement);
+          return [tokens.getPropertyValue('--accent'), tokens.getPropertyValue('--bg')];
+        })()`)) as [string, string];
+
+        assert.ok(contrast(accent, bg) >= 3, `${theme.name}: the flash's ${accent} on ${bg} is ${contrast(accent, bg).toFixed(2)} to 1`);
+      }
+
+      await page.context().close();
+    },
+  ],
+  [
+    'a phone buzzes when it becomes your turn, once the page has been touched',
+    async (rig) => {
+      const table = rig.table([
+        { name: 'Quigs', stack: 1000 },
+        { name: 'Stu', stack: 1000 },
+      ]);
+      const page = await table.open('Quigs', 'phone', BUZZ);
+      const warnings = complaints(page);
+
+      // Opening the table took a tap; a reload is none
+      await page.reload();
+      await page.waitForSelector('.stage .table');
+      table.deal({ button: 0 });
+      await page.waitForSelector('.turn [data-action="fold"]:enabled');
+      await page.waitForTimeout(300);
+      assert.deepEqual(await page.evaluate('window.buzzes'), [], 'a buzz before the page was touched');
+
+      await page.tap('.pot');
+      table.act('Quigs', { type: 'call' });
+      await page.waitForSelector('.turn [data-action="fold"]', { state: 'detached' });
+      table.act('Stu', { type: 'check' });
+      table.act('Stu', { type: 'check' });
+      await page.waitForSelector('.turn [data-action="check"]:enabled');
+      await page.waitForFunction('window.buzzes.length > 0');
+
+      assert.deepEqual(await page.evaluate('window.buzzes'), [{ pattern: BUZZ_PATTERN, touched: true }]);
+      assert.deepEqual(warnings, [], 'the page complained in its console');
+
+      await page.context().close();
+    },
+  ],
+  [
+    'from another tab a notification and the tab’s title say it is your turn at the table, with no card or amount, and go when the turn does or the player comes back',
+    async (rig) => {
+      const table = rig.table(
+        [
+          { name: 'Quigs', stack: 1000 },
+          { name: 'Stu', stack: 1000 },
+        ],
+        { name: 'Friday Night' },
+      );
+      const page = await table.open('Quigs', 'desktop', [SIGHT, NOTICES('granted'), TITLES].join(';'));
+      const own = await page.title();
+      const notices = () => page.evaluate('window.notices.map(({ title, options, open }) => ({ title, options, open }))') as Promise<{ title: string; options: Record<string, unknown>; open: boolean }[]>;
+      const words = 'Your turn at Friday Night';
+
+      // In sight, the page itself is enough
+      table.deal({ button: 0, holes: { 0: 'As Kd', 1: '7h 2c' } });
+      await page.waitForSelector('.turn [data-action="fold"]:enabled');
+      await page.waitForTimeout(300);
+      assert.deepEqual(await notices(), [], 'a notification with the page in sight');
+      assert.deepEqual(await page.evaluate('window.titles'), []);
+
+      table.act('Quigs', { type: 'call' });
+      await page.waitForSelector('.turn [data-action="fold"]', { state: 'detached' });
+      await page.evaluate('window.outOfSight(true)');
+      table.act('Stu', { type: 'check' });
+      table.act('Stu', { type: 'check' });
+      await page.waitForFunction('window.notices.length > 0');
+
+      assert.deepEqual(await notices(), [{ title: words, options: { tag: `cnd-${table.id}` }, open: true }]);
+      assert.doesNotMatch(words, /\d|[♠♥♦♣]|\b[AKQJT2-9][shdc]\b/, 'a card or an amount on the lock screen');
+
+      await page.waitForTimeout(2300);
+      const titles = (await page.evaluate('window.titles')) as string[];
+      assert.ok(titles.length >= 3, `the title changed ${titles.length} times in two seconds`);
+      assert.deepEqual([...new Set(titles)].sort(), [`● ${words}`, `○ ${words}`].sort(), 'a title that does not say it is the player’s turn');
+
+      // Acting from another device, or the clock acting for the player, ends the turn the same way
+      table.act('Quigs', { type: 'check' });
+      await page.waitForFunction('!window.notices[0].open');
+      assert.equal(await page.title(), own, 'the title was not put back');
+
+      const settled = ((await page.evaluate('window.titles')) as string[]).length;
+      await page.waitForTimeout(1500);
+      assert.equal(((await page.evaluate('window.titles')) as string[]).length, settled, 'the title kept changing after the turn');
+
+      // Out of sight on the turn card, then back
+      table.act('Stu', { type: 'check' });
+      await page.waitForFunction('window.notices.length === 2');
+      await page.evaluate('window.outOfSight(false)');
+      await page.waitForFunction('!window.notices[1].open');
+      assert.equal(await page.title(), own);
+      assert.deepEqual(await page.evaluate('window.asks'), [], 'the page asked for notifications');
+
+      await page.context().close();
+    },
+  ],
+  [
+    'the Preferences dialog offers the ways a device can get your attention, on the page served here and in Apps Script’s frame, and only a tap asks the browser',
+    async (rig) => {
+      const offered: Record<string, string[]> = {
+        'here-phone': ['buzz', 'flash', 'tabTitle'],
+        'here-desktop': ['flash', 'notify', 'tabTitle'],
+        'frame-phone': ['buzz', 'flash'],
+        'frame-desktop': ['flash'],
+      };
+
+      for (const where of ['here', 'frame'] as const) {
+        for (const screen of PHONE_AND_DESKTOP) {
+          const table = rig.table([
+            { name: 'Quigs', stack: 1000 },
+            { name: 'Stu', stack: 1000 },
+          ]);
+          const page = await table.open('Quigs', screen, [NOTICES('default', 'granted'), ...(where === 'frame' ? [STAND_IN_HOST] : [])].join(';'));
+          const press = pressOn(page, screen);
+
+          await press('[data-action="menu"]');
+          await press('.menu [data-action="preferences"]');
+          await page.waitForSelector('.switches');
+          await page.locator('.switches').scrollIntoViewIfNeeded();
+
+          assert.deepEqual(await page.locator('.switches [data-pref]').evaluateAll((found) => found.map((element) => element.getAttribute('data-pref'))), offered[`${where}-${screen}`]);
+          assertOnScreen(await boxes(page, '.switches [data-pref]'), screen, 'the switches for your turn');
+          assert.deepEqual(await squeezed(page, '.switches [data-pref], .switches [data-pref] span'), [], 'a switch is cut off');
+          const switches = await boxes(page, '.switches [data-pref]');
+          switches.forEach((one, index) => assertApart([one], switches.slice(index + 1), 'two switches'));
+          assert.deepEqual(await page.evaluate('window.asks'), [], 'the page asked for notifications on its own');
+          await shot(page, `preferences-attention-${where}-${screen}`);
+
+          if (where === 'here' && screen === 'desktop') {
+            assert.equal(await page.getAttribute('#pref-notify', 'aria-checked'), 'false', 'on before the browser said yes');
+            await press('#pref-notify');
+            await page.waitForSelector('#pref-notify[aria-checked="true"]');
+            assert.deepEqual(await page.evaluate('window.asks'), [true], 'asked once, from inside the tap');
+          }
+
+          await page.context().close();
+        }
+      }
+
+      // A player who said no in the browser is told so, and a tap asks nothing more
+      const table = rig.table([
+        { name: 'Quigs', stack: 1000 },
+        { name: 'Stu', stack: 1000 },
+      ]);
+      const page = await table.open('Quigs', 'desktop', NOTICES('denied'));
+
+      await page.click('[data-action="menu"]');
+      await page.click('.menu [data-action="preferences"]');
+      await page.waitForSelector('#pref-notify[aria-disabled="true"][aria-checked="false"]');
+      await page.click('#pref-notify', { force: true });
+      assert.match(await text(page, '#pref-notify'), /Blocked in this browser’s settings/);
+      assert.deepEqual(await page.evaluate('window.asks'), []);
+      await page.locator('.switches').scrollIntoViewIfNeeded();
+      assert.deepEqual(await squeezed(page, '.switches [data-pref], .switches [data-pref] span'), [], 'the blocked switch is cut off');
+      assertOnScreen(await boxes(page, '.switches [data-pref]'), 'desktop', 'the blocked switch');
+      await shot(page, 'preferences-attention-blocked-desktop');
+      await page.context().close();
     },
   ],
 ];

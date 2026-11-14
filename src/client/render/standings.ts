@@ -60,7 +60,8 @@ function nightEl(night: PlayedNight, unit: Unit, deck: string): HTMLElement {
   return h(
     'li',
     null,
-    h('span.when', null, nightDate(night.at), h('small', null, ` ${night.table}`)),
+    // A table's name can read as part of the date ("Friday" beside a Sunday's), so it is set apart from it
+    h('span.when', null, nightDate(night.at), h('small', null, ` · ${night.table}`)),
     h('b', { class: `net ${netClass(night.net)}` }, signedAmount(night.net, { unit })),
     h('small.counts', null, nightSummary(night, unit), night.highHand ? ' · high hand of the night' : null),
     night.best ? h('small.counts', null, handEl(night.best, deck)) : null,

@@ -11675,9 +11675,9 @@ const CHECKS: Check[] = [
       const line = (player: KnownPlayer, net: number, more: object = {}) => ({ playerId: player.id, name: player.name, net, hands: 100, won: 25, biggest: 400, best: null, badges: {}, highHand: false, ...more });
 
       rig.results.write([
-        { tableId: 'FRIDAY', tableName: 'Friday night', unit: 'chips', createdAt: rig.now() - 14 * day, version: 1, players: [line(ann, 1500, { hands: 120, won: 30, biggest: 2400, best: ['Ks', 'Kh', 'Kd', 'Kc', 'As'], badges: { quads: 1, heater: 2 }, highHand: true }), line(bob, -500), line(cy, -1000)] },
-        { tableId: 'SUNDAY', tableName: 'Sunday', unit: 'chips', createdAt: rig.now() - 7 * day, version: 1, players: [line(ann, -200, { hands: 80, won: 20 }), line(bob, 900, { biggest: 3100 }), line(cy, -700)] },
-        { tableId: 'TUESDAY', tableName: 'Tuesday', unit: 'chips', createdAt: rig.now() - 2 * day, version: 1, players: [line(bob, 100), line(cy, -100)] },
+        { tableId: 'FRIDAY', tableName: 'Dave’s place', unit: 'chips', createdAt: rig.now() - 14 * day, version: 1, players: [line(ann, 1500, { hands: 120, won: 30, biggest: 2400, best: ['Ks', 'Kh', 'Kd', 'Kc', 'As'], badges: { quads: 1, heater: 2 }, highHand: true }), line(bob, -500), line(cy, -1000)] },
+        { tableId: 'SUNDAY', tableName: 'The garage', unit: 'chips', createdAt: rig.now() - 7 * day, version: 1, players: [line(ann, -200, { hands: 80, won: 20 }), line(bob, 900, { biggest: 3100 }), line(cy, -700)] },
+        { tableId: 'TUESDAY', tableName: 'The back room', unit: 'chips', createdAt: rig.now() - 2 * day, version: 1, players: [line(bob, 100), line(cy, -100)] },
         { tableId: 'CASH', tableName: 'Cash game', unit: 'cents', createdAt: rig.now() - day, version: 1, players: [line(ann, -2550), line(cy, 2550)] },
       ]);
 
@@ -11737,7 +11737,7 @@ const CHECKS: Check[] = [
         await page.waitForSelector('[data-player="Ann"] .standings-nights li');
 
         assert.deepEqual(await texts(page, '[data-player="Ann"] .standings-nights .net'), ['-200', '+1,500'], 'the latest night first');
-        assert.deepEqual((await texts(page, '[data-player="Ann"] .standings-nights .when small')).map((table) => table.trim()), ['Sunday', 'Friday night']);
+        assert.deepEqual((await texts(page, '[data-player="Ann"] .standings-nights .when small')).map((table) => table.trim()), ['· The garage', '· Dave’s place']);
         assert.deepEqual(await texts(page, '[data-player="Ann"] .standings-nights li:last-child .counts'), ['120 hands · 30 pots · biggest 2,400 · high hand of the night', 'Four kings K♠ K♥ K♦ K♣ A♠']);
         assert.deepEqual(await squeezed(page, '.standings-nights .when, .standings-nights .net, .standings-nights .counts, .standings-players dd'), []);
         await page.locator('[data-player="Ann"] .standings-nights').scrollIntoViewIfNeeded();

@@ -3223,7 +3223,7 @@ const CHECKS: Check[] = [
           rig.presets.save({ name, settings: { ...presetSettings({ ...DEFAULT_CONFIG, ...config }), ...extra }, savedAt: 0, savedBy: 'Quigs' }, false);
         const stakes = (page: Page) => Promise.all(['unit input:checked', 'small-blind', 'big-blind', 'min-buy-in', 'max-buy-in'].map((field) => page.inputValue(`#new-table-${field}`)));
 
-        for (const screen of PHONE_AND_DESKTOP) {
+        for (const screen of ['smallPhone', 'phone', 'desktop'] as const) {
           const none = await rig.lobby(screen);
           await none.waitForLoadState('networkidle');
           assert.equal(await none.locator('#new-table-preset, .preset-pick:visible').count(), 0, 'a picker with nothing to pick');
@@ -3238,12 +3238,14 @@ const CHECKS: Check[] = [
           assert.equal(await one.locator('.preset-notes p, .changed').count(), 0, 'the form says something changed before anything was picked');
           await one.context().close();
 
-          for (let index = 0; index < 15; index++) {
+          for (let index = 0; index < 13; index++) {
             keep(`${'Wednesday Wild WWWWWWW'.slice(0, 22)} ${String(index).padStart(7, 'W')}`, { smallBlind: 5 + index, bigBlind: 10 + index });
           }
 
           keep('Tuesday cents', { unit: 'cents', smallBlind: 25, bigBlind: 50, ante: 10, minBuyIn: 2000, maxBuyIn: 10_000, actionSeconds: 20, allowStraddle: false, sevenDeuceBounty: 100 });
           keep('From before', { smallBlind: 5, bigBlind: 10 }, { actionSeconds: 900, rabbitHunting: true });
+          keep('Bombs in chips', { bombPotAmount: 300, bombPotEvery: 5 });
+          keep('Bombs in cents', { unit: 'cents', smallBlind: 25, bigBlind: 50, minBuyIn: 2000, maxBuyIn: 10_000, bombPotAmount: 500 });
 
           const page = await rig.lobby(screen);
           const press = pressOn(page, screen);
@@ -3289,6 +3291,18 @@ const CHECKS: Check[] = [
           assert.deepEqual(await stakes(page), ['chips', '10', '20', '400', '2000']);
           assert.deepEqual(await texts(page, '.preset-notes p'), ['Also set, in the table settings: Seconds to act 20, Allow straddles off.']);
           await press('#new-table-unit label:has-text("Dollars and cents")');
+
+          // Every amount starts over with what the table plays with, the bomb pot's as much as the blinds
+          await page.selectOption('#new-table-preset', { label: 'Bombs in chips' });
+          assert.equal(await page.inputValue('#new-table-bomb-pot-amount'), '300');
+          await press('#new-table-unit label:has-text("Dollars and cents")');
+          assert.equal(await page.inputValue('#new-table-bomb-pot-amount'), '2.50');
+          assert.equal(await page.inputValue('#new-table-bomb-pot-every'), '5', 'a count is no amount, and stays');
+
+          await page.selectOption('#new-table-preset', { label: 'Bombs in cents' });
+          assert.equal(await page.inputValue('#new-table-bomb-pot-amount'), '5.00');
+          await press('#new-table-unit label:has-text("Whole chips")');
+          assert.equal(await page.inputValue('#new-table-bomb-pot-amount'), '100');
 
           // Edited after picking, before the table is made
           await page.selectOption('#new-table-preset', { label: 'Tuesday cents' });

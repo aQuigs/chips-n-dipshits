@@ -51,8 +51,20 @@ test('a preset saved before a setting existed gives it the value a new table sta
   assert.deepEqual(newConfig(used.config), used.config);
 });
 
+test('a dollars-and-cents preset saved before bomb pots gets the bomb pot a new dollars table starts with', () => {
+  const { bombPotAmount: _amount, bombPotEvery: _every, ...beforeBombPots } = kept({ unit: 'cents', smallBlind: 25, bigBlind: 50, minBuyIn: 2000, maxBuyIn: 10_000 });
+
+  const used = fromPreset(beforeBombPots);
+
+  assert.deepEqual(used.notes, []);
+  assert.equal(used.config.bombPotAmount, 250, '2.50, not 100 cents');
+  assert.equal(used.config.bombPotAmount, startingConfig({ unit: 'cents' }).bombPotAmount);
+  assert.equal(used.config.bombPotEvery, 0);
+  assert.equal(fromPreset({ ...beforeBombPots, unit: 'chips' }).config.bombPotAmount, 100);
+});
+
 test('a setting since taken out of the game is dropped without a word', () => {
-  const used = fromPreset({ ...kept({ bigBlind: 40 }), rabbitHunting: true, bombPotEvery: 'often' });
+  const used = fromPreset({ ...kept({ bigBlind: 40 }), rabbitHunting: true, burnCardsShown: 'often' });
 
   assert.deepEqual(used.notes, []);
   assert.equal('rabbitHunting' in used.config, false);

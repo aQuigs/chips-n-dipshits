@@ -196,8 +196,8 @@ function seatEl(view: TableView, seat: SeatView, slot: number, shape: Shape, clo
   const won = sum(result?.winnings.filter((win) => win.seat === seat.seat).map((win) => win.amount) ?? []);
   const bounty = result?.bounty?.seat === seat.seat ? sum(result.bounty.payments.map((payment) => payment.amount)) : 0;
   const status = statusOf(seat, hand);
-  // A seat makes a hand per board on more than one, and once it is over the result in the middle names them: on a phone it needs the room
-  const middleNamesHands = hand?.stage === 'done' && hand.boards.length > 1;
+  // A seat makes a hand per board on more than one, and once they are shown down the result in the middle names them: on a phone it needs the room
+  const middleNamesHands = hand?.stage === 'done' && hand.boards.length > 1 && !hand.result?.uncontested;
   const label = hand?.stage === 'done' && !middleNamesHands ? shownLabel(seat, hand) : null;
   const holding = isMe ? (hand?.holding ?? null) : null;
   const hint = holding && !middleNamesHands ? hintEl(holding) : null;
@@ -315,7 +315,8 @@ function resultLines(view: TableView, hand: HandView): string[] {
 
   const nameAt = (seat: number) => view.seats[seat]?.name ?? 'Someone';
   const amountOf = (chips: number) => formatAmount(chips, view.config);
-  const runs = hand.boards.length;
+  // A hand everyone else folded was won whole, on no board in particular, however many were out
+  const runs = result.uncontested ? 1 : hand.boards.length;
   const lines: string[] = [];
   let fits = true;
 

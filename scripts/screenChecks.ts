@@ -3693,10 +3693,14 @@ const CHECKS: Check[] = [
               { buttonsUp },
             );
 
-          const lookAtHint = async (shape: string) => {
+          const lookAtHint = async () => {
             await assertHintFits(page);
-            assert.equal(await page.locator(`${HINT} .detail`).isVisible(), !namedInShort(shape), `the ranks of the hand in the hint on a ${shape} table`);
             assert.equal(new Set((await textBoxes(page, `${HINT} .read`)).map((line) => line.top)).size, 2, 'each board has one line of the hint');
+          };
+
+          const lookAtTwoPair = async (shape: string) => {
+            await lookAtHint();
+            assert.equal(await page.locator(`${HINT} .detail`).isVisible(), !namedInShort(shape), `the ranks of the two pair in the hint on a ${shape} table`);
           };
 
           // Both flops are out before anyone acts, over the one pot of what everyone posted
@@ -3716,7 +3720,7 @@ const CHECKS: Check[] = [
           assert.deepEqual(await texts(page, '.bet'), Array(4).fill(kind.bet));
           await hintSays(page, 'Two pair, kings and sevens', 'Pair of kings');
           assert.deepEqual(await texts(page, `${HINT} .run`), ['1', '2']);
-          await lookInShapes('bets', true, lookAtHint);
+          await lookInShapes('bets', true, lookAtTwoPair);
 
           const feedToggle = async () => {
             if (screen !== 'desktop') {
@@ -3742,7 +3746,7 @@ const CHECKS: Check[] = [
           assert.deepEqual(await marking(page), { plays: sortedCards('Kh 7s 9d Kd 9c 8h Ts Ks'), idle: sortedCards('2c 4h 3s') });
           await lookInShapes('river', true, async (shape) => {
             await assertMarked(page);
-            await lookAtHint(shape);
+            await lookAtTwoPair(shape);
           });
 
           // Each pot is split between the boards: the short stack takes the first board's half of the one she is in for
@@ -3756,23 +3760,43 @@ const CHECKS: Check[] = [
 
           await lookAtResult('sidePot');
 
-          for (const hand of ['oneEach', 'both'] as const) {
+          const nextHand = () => {
             table.act('Quigs', { type: 'pause' });
             table.play(passive, (view) => view.hand === null);
+          };
+
+          for (const hand of ['oneEach', 'both'] as const) {
+            nextHand();
             deal(hand);
             await lookAtResult(hand);
           }
 
-          table.act('Quigs', { type: 'pause' });
-          table.play(passive, (view) => view.hand === null);
+          // A hand everyone else folds is won whole, on neither board, and the hint stays since nothing in the middle names a hand
+          nextHand();
+          deal('both');
+          table.play(
+            (view, name) => {
+              const { canCheck, minRaiseTo } = view.hand!.options!;
+
+              return name === 'Quigs' ? { type: 'raise', to: minRaiseTo } : { type: canCheck ? 'check' : 'fold' };
+            },
+            (view) => view.hand!.stage === 'done',
+          );
+          await page.waitForFunction(`document.querySelector('.message.result > div')?.textContent?.startsWith('Quigs wins')`);
+          assert.deepEqual(await texts(page, '.message.result > div'), [`Quigs wins ${kind.name === 'cents' ? '12.50' : '500'}`]);
+          await hintSays(page, 'Pair of deuces', 'Ace high');
+          await lookInShapes('result-folded', false, lookAtHint);
+
+          nextHand();
 
           await press('[data-action="menu"]');
           await press('.menu [data-action="history"]');
           await page.waitForSelector('.history summary');
-          assert.deepEqual((await texts(page, '.history summary')).map((line) => line.split('\n')[0]), [125, 124, 123].map((hand) => `Hand #${hand} · double-board bomb pot`));
-          await press('.history summary');
+          assert.deepEqual((await texts(page, '.history summary')).map((line) => line.split('\n')[0]), [126, 125, 124, 123].map((hand) => `Hand #${hand} · double-board bomb pot`));
+          await page.locator('.history details').nth(1).locator('summary').scrollIntoViewIfNeeded();
+          await page.locator('.history details').nth(1).locator('summary').click();
 
-          const told = (await text(page, '.history pre')).split('\n');
+          const told = (await text(page, '.history details[open] pre')).split('\n');
           const [first, second] = results.both.map((line) => line.replace(/^Board \d: /, '').replace(' with ', (_with) => ' on the BOARD with '));
           assert.deepEqual(told.filter((line) => line.includes('River')), ['First board, River: A♥ 7♠ 2♣ 9♦ 4♥', 'Second board, River: A♣ 9♣ 8♥ 10♠ 3♠']);
           assert.deepEqual(told.slice(-2), [first!.replace('BOARD', 'first board'), second!.replace('BOARD', 'second board')]);

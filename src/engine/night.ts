@@ -4,6 +4,7 @@
  * way one starts again, so whatever has to happen at those moments goes in them.
  */
 import { bombPotName, bombPotOf } from './bombPots.ts';
+import { payHighHand } from './highHand.ts';
 import { turnAway } from './seating.ts';
 import { addFeed } from './seats.ts';
 import type { Ctx, TableState } from './types.ts';
@@ -75,8 +76,9 @@ export function countHandPlayed(state: TableState, ctx: Ctx): void {
 
 /**
  * Ends the night, between hands: nothing is dealt, and nobody buys chips, until play starts again.
- * A called bomb pot was for a hand that now never comes, so it is called off; the count of hands toward
- * the next bomb pot is kept. Ending a night that is already over does nothing. `saying` is the chat's line.
+ * The high-hand bonus is paid, before anything reads the night's last numbers. A called bomb pot was
+ * for a hand that now never comes, so it is called off; the count of hands toward the next bomb pot is
+ * kept. Ending a night that is already over does nothing. `saying` is the chat's line.
  */
 export function endNight(state: TableState, ctx: Ctx, saying: string): void {
   if (nightIsOver(state)) {
@@ -92,6 +94,7 @@ export function endNight(state: TableState, ctx: Ctx, saying: string): void {
   state.running = false;
   state.nextHandAt = null;
   addFeed(state, ctx.now, 'system', null, saying);
+  payHighHand(state, ctx, null);
 
   if (state.bombPotCalled) {
     state.bombPotCalled = false;

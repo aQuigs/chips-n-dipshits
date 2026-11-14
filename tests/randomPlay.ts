@@ -1,7 +1,7 @@
 /* Random play on a test table: what the simulation runs, and what plays a saved table on after it is read back. */
 import assert from 'node:assert/strict';
 
-import { addMember, CONFIG_KEYS, LIMITS, mayOfferChop, MOST_RUNS, nextDeadline, owes, SEAT_COUNT, straddlesAllowed, viewFor } from '../src/engine/index.ts';
+import { addMember, CONFIG_KEYS, LIMITS, mayOfferChop, MOST_RUNS, nextDeadline, nextHighHand, owes, SEAT_COUNT, straddlesAllowed, viewFor } from '../src/engine/index.ts';
 import type { Command, GameError, Rng } from '../src/engine/index.ts';
 import type { TestTable } from './helpers.ts';
 import { randomConfig } from './randomConfig.ts';
@@ -138,6 +138,13 @@ export const FUZZ_COMMANDS: ((fuzz: Fuzz) => void)[] = [
     }
   },
   ({ t, rng }) => attempt(t, someoneRunningTheGame(t, rng), { type: chance(rng, 80) ? 'playOn' : 'start' }),
+
+  // The high hand paid out early, mostly the one the sender sees and now and then one that has since changed
+  ({ t, rng }) => {
+    const hand = nextHighHand(t.state.tonight.highHand)?.hand.hand ?? 0;
+
+    attempt(t, chance(rng, 85) ? someoneRunningTheGame(t, rng) : rng.int(t.ids.length), { type: 'payHighHand', hand: chance(rng, 85) ? hand : hand + 1 });
+  },
 
   ({ t, rng }) => {
     // Mostly a change the host could make. Now and then one that also asks for what was fixed at creation, which is refused whole

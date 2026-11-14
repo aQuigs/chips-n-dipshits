@@ -1,6 +1,7 @@
 /* The end of a hand: everything that happens once a finished hand has been taken off the table, as one list run from one place. */
 import { earnBadges } from './badges.ts';
 import { handFacts } from './handFacts.ts';
+import { takeHighHand } from './highHand.ts';
 import type { HandFacts } from './handFacts.ts';
 import { countHandPlayed } from './night.ts';
 import { reseatAfterHand } from './reseating.ts';
@@ -35,6 +36,7 @@ function settleSeats(state: TableState, ctx: Ctx): void {
 const AT_HAND_END: AtHandEnd[] = [
   // Badges are earned from what the count made of the hand, and before the night can end, so the last hand's are in its recap
   (state, ctx, facts) => earnBadges(state, ctx, facts, countHand(state.tonight, facts)),
+  takeHighHand,
   settleSeats,
   reseatAfterHand,
   countHandPlayed,

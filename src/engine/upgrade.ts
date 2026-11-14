@@ -1,8 +1,9 @@
 import { startingConfig, withRetiredSettings } from './config.ts';
 import type { HandEvent } from './events.ts';
+import { highHandsFrom } from './highHand.ts';
 import { newTonight } from './tonight.ts';
 import { STATE_SCHEMA } from './types.ts';
-import type { Hand, HandPlayer, HandRecord, HandRecordPlayer, Member, PlayerTonight, Seat, TableState } from './types.ts';
+import type { Hand, HandPlayer, HandRecord, HandRecordPlayer, Member, PlayerTonight, Seat, TableState, Tonight } from './types.ts';
 
 /** What schema 3 kept of straddles: whether a player posts one under the gun, the only kind there was, and the one seat that did in a hand. */
 interface SchemaThree {
@@ -75,6 +76,8 @@ interface SavedDefaults {
   record(): Partial<HandRecord>;
   recordPlayer(): Partial<HandRecordPlayer>;
   playerTonight(): Partial<PlayerTonight>;
+  /** Given what the night's numbers already hold, since a default can come from them. */
+  tonight(saved: Tonight): Partial<Tonight>;
 }
 
 /**
@@ -92,6 +95,8 @@ export const SAVED_DEFAULTS: SavedDefaults = {
   record: () => ({ events: [], bombPot: null, bigBlind: 0 }),
   recordPlayer: () => ({ playerId: '' }),
   playerTonight: () => ({ busts: 0, streak: 0, badges: {} }),
+  // Saved with each player's best hand and nobody holding the high hand: it is theirs, as the night's numbers tell it
+  tonight: (saved) => ({ highHand: highHandsFrom(saved) }),
 };
 
 function fillMissing<T extends object>(saved: T, defaults: Partial<T>): void {
@@ -114,6 +119,8 @@ function fillDefaults(table: TableState): void {
   for (const numbers of Object.values(table.tonight.players)) {
     fillMissing(numbers, SAVED_DEFAULTS.playerTonight());
   }
+
+  fillMissing(table.tonight, SAVED_DEFAULTS.tonight(table.tonight));
 
   for (const seat of table.seats) {
     if (seat) {

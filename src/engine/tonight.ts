@@ -12,12 +12,14 @@ import type { Card } from './cards.ts';
 import { somebodyWon, wonAPot, wonTheHand } from './handFacts.ts';
 import type { HandFacts } from './handFacts.ts';
 import { madeHandName } from './handNames.ts';
+import { highHandsView, newHighHands } from './highHand.ts';
+import type { HighHandsView } from './highHand.ts';
 import { evaluateHand } from './handRank.ts';
 import type { PlayerTonight, TableState, Tonight } from './types.ts';
 import type { LedgerRow } from './view.ts';
 
 export function newTonight(): Tonight {
-  return { hands: 0, players: {} };
+  return { hands: 0, players: {}, highHand: newHighHands() };
 }
 
 function newPlayerTonight(): PlayerTonight {
@@ -145,6 +147,7 @@ export interface TonightView {
    */
   dipshits: string[];
   crownedBy: CrownedBy;
+  highHand: HighHandsView;
 }
 
 /** The rows that have the most of something, among those that have any of it. */
@@ -222,5 +225,6 @@ export function tonightView(state: TableState, ledger: readonly LedgerRow[], ove
     biggestPot: ids(leaders(players, (row) => row.biggest)),
     bestHand: ids(leaders(players, (row) => bestRank.get(row.playerId)!)),
     ...(over ? crown(players) : { dipshits: [], crownedBy: 'net' }),
+    highHand: highHandsView(state),
   };
 }

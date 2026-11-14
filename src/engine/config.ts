@@ -227,6 +227,15 @@ export const CONFIG_SPECS: { [K in ConfigKey]-?: SpecFor<TableConfig[K]> } = {
     group: 'extras',
     nextHand: true,
   },
+  highHandBonus: {
+    kind: 'chips',
+    label: 'High-hand bonus',
+    subject: 'The high-hand bonus',
+    hint: 'Paid by everyone else seated to whoever shows the best hand of the night, when the night ends. 0 for the honor alone',
+    default: 0,
+    min: 0,
+    group: 'extras',
+  },
   bombPotAmount: {
     kind: 'chips',
     label: 'Bomb pot',

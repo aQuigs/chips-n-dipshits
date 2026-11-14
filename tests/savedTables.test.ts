@@ -297,7 +297,7 @@ test('a table saved before the night’s numbers were kept loads with nothing co
     const state = load(file);
     const { tonight, ledger } = TestTable.adopt(state).view(0);
 
-    assert.deepEqual(state.tonight, { hands: 0, players: {} }, file);
+    assert.deepEqual(state.tonight, { hands: 0, players: {}, highHand: { best: null, sincePaid: {} } }, file);
     assert.deepEqual([tonight.hands, tonight.missed], [0, state.handCount - (state.hand ? 1 : 0)], file);
     assert.deepEqual(tonight.players.map((row) => [row.playerId, row.net, row.hands]).sort(), ledger.map((row) => [row.playerId, row.net, 0]).sort(), file);
   }

@@ -4,6 +4,7 @@ import { newConfig } from './config.ts';
 import { startHand, stepHand, TIMING } from './hand.ts';
 import { handEnded } from './handEnd.ts';
 import { addFeed, eligibleSeats } from './seats.ts';
+import { newTonight } from './tonight.ts';
 import { GameError, SEAT_COUNT, STATE_SCHEMA } from './types.ts';
 import type { Command, Ctx, Member, TableState } from './types.ts';
 import { LIMITS, text } from './validate.ts';
@@ -123,6 +124,7 @@ export function createTable(id: string, hostName: unknown, configInput: unknown,
     handsSinceBombPot: 0,
     lastHand: null,
     nightEndedAt: null,
+    tonight: newTonight(),
     feed: [],
     feedSeq: 0,
   };
@@ -181,10 +183,10 @@ export function tick(state: TableState, ctx: Ctx): boolean {
     }
 
     if (state.hand) {
-      stepHand(state, ctx);
+      const ended = stepHand(state, ctx);
 
-      if (!state.hand) {
-        handEnded(state, ctx);
+      if (ended) {
+        handEnded(ended, state, ctx);
       }
     } else {
       state.nextHandAt = null;

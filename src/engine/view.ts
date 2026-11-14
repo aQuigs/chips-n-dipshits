@@ -14,6 +14,8 @@ import { handsLeft, nightIsOver, onLastHand } from './night.ts';
 import { buildPots } from './pots.ts';
 import type { Pot } from './pots.ts';
 import { memberOf, seatIndexOf } from './seats.ts';
+import { tonightView } from './tonight.ts';
+import type { TonightView } from './tonight.ts';
 import type { BombPot, FeedEntry, Hand, HandPlayer, HandResult, HandStage, PassedOver, PlayerAction, RequestKind, Straddle, StraddlePost, Street, TableConfig, TableState } from './types.ts';
 
 /** A hole card as one viewer sees it: the card, or null when it is face down for them. */
@@ -144,6 +146,8 @@ export interface TableView {
   /** Requests waiting on the host: all of them for the host and co-hosts, only their own for everyone else. */
   requests: RequestView[];
   ledger: LedgerRow[];
+  /** The night's numbers and who leads in what, the same for every viewer. */
+  tonight: TonightView;
   members: { id: string; name: string }[];
 }
 
@@ -224,6 +228,7 @@ export function viewFor(state: TableState, playerId: string, now: number): Table
 
   const approves = reaches(role, 'host or cohost');
   const visibleRequests = state.requests.filter((request) => approves || request.playerId === playerId);
+  const ledger = ledgerOf(state);
 
   return {
     id: state.id,
@@ -245,7 +250,8 @@ export function viewFor(state: TableState, playerId: string, now: number): Table
     nightEndedAt: state.nightEndedAt,
     feed: state.feed,
     requests: visibleRequests.map((request) => ({ ...request, name: memberOf(state, request.playerId).name })),
-    ledger: ledgerOf(state),
+    ledger,
+    tonight: tonightView(state, ledger, nightIsOver(state)),
     members: state.members.map((m) => ({ id: m.id, name: m.name })),
   };
 }

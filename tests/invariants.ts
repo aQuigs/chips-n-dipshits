@@ -262,6 +262,8 @@ export function assertViewsKeepSecrets(state: TableState, now: number): void {
   // A token is looked for inside longer text too, such as a link
   const anyToken = new RegExp(state.members.map((member) => member.token.replace(/[^A-Za-z0-9]/g, '\\$&')).join('|'));
 
+  const tonight = state.members[0] ? viewFor(state, state.members[0].id, now).tonight : null;
+
   for (const viewer of state.members) {
     const view = viewFor(state, viewer.id, now);
     const json = JSON.stringify(view);
@@ -269,9 +271,13 @@ export function assertViewsKeepSecrets(state: TableState, now: number): void {
     assert.ok(!json.includes('"deck"') && !json.includes('"token"'), 'a view leaked the deck or a token');
     assert.ok(!anyToken.test(json), 'a view carries a token');
 
+    // The night's numbers hold cards of hands that are over, the best hand each player has shown, and such a card
+    // can be face down again in the hand on the table without being a secret. So they are looked at apart: they are
+    // the same whoever asks, and tests/tonight.test.ts holds them at every step to what the hand records say
     const faceDown = new Set([...(hand?.deck ?? []), ...(hand?.players ?? []).filter((p) => !p.shown && p.playerId !== viewer.id).flatMap((p) => p.cards)]);
-    const leaked = secretIn(view, faceDown);
+    const leaked = secretIn({ ...view, tonight: null }, faceDown);
     assert.equal(leaked, undefined, `${viewer.name}'s view holds a card that is face down for them`);
+    assert.deepEqual(view.tonight, tonight, `${viewer.name} is shown other numbers for the night than the rest of the table`);
 
     for (const player of hand?.players ?? []) {
       const seen = view.seats[player.seat]!.cards!;
@@ -317,7 +323,7 @@ export function assertViewsKeepSecrets(state: TableState, now: number): void {
 }
 
 /** The chat when every line is as long as it may be, in characters that take three bytes each. */
-function fullestChat(): FeedEntry[] {
+export function fullestChat(): FeedEntry[] {
   const line = (length: number) => '好'.repeat(length);
 
   return Array.from({ length: FEED_LIMIT }, (_entry, index) => ({

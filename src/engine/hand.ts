@@ -14,7 +14,7 @@ import { buildPots, splitAmount } from './pots.ts';
 import { addFeed, clockwiseAfter, clockwiseFrom, eligibleSeats, seatsClockwiseAfter } from './seats.ts';
 import { stakesText } from './stakes.ts';
 import { GameError } from './types.ts';
-import type { AnteFrom, BombPot, BountyResult, Ctx, Hand, HandPlayer, HandResult, PotAward, PotResult, ShownHand, Street, TableState } from './types.ts';
+import type { AnteFrom, BombPot, BountyResult, Ctx, Hand, HandPlayer, HandRecord, HandResult, PotAward, PotResult, ShownHand, Street, TableState } from './types.ts';
 
 export const TIMING = {
   /** Added to the action clock so a click made at the buzzer still counts after the round trip. */
@@ -861,54 +861,54 @@ export function showCards(state: TableState, ctx: Ctx, seatIndex: number): void 
   show(state, ctx, player);
 }
 
-/** Takes the finished hand off the table and writes it to the record. What its end sets off is `handEnded`'s to do. */
-function clearHand(state: TableState, ctx: Ctx): void {
+/** Takes the finished hand off the table and writes it to the record, which is all that is kept of it. */
+function clearHand(state: TableState, ctx: Ctx): HandRecord {
   const hand = state.hand!;
+  const record: HandRecord = {
+    at: ctx.now,
+    tableId: state.id,
+    number: hand.number,
+    summary: hand.log.join('\n'),
+    boards: hand.boards,
+    bigBlind: hand.bigBlind,
+    bombPot: hand.bombPot,
+    players: hand.players.map((p) => ({
+      seat: p.seat,
+      playerId: p.playerId,
+      name: p.name,
+      startStack: p.startStack,
+      endStack: state.seats[p.seat]!.stack,
+      cards: p.shown ? p.cards : null,
+    })),
+    result: hand.result!,
+    events: hand.events,
+  };
 
-  ctx.effects.push({
-    type: 'hand',
-    record: {
-      at: ctx.now,
-      tableId: state.id,
-      number: hand.number,
-      summary: hand.log.join('\n'),
-      boards: hand.boards,
-      bombPot: hand.bombPot,
-      players: hand.players.map((p) => ({
-        seat: p.seat,
-        name: p.name,
-        startStack: p.startStack,
-        endStack: state.seats[p.seat]!.stack,
-        cards: p.shown ? p.cards : null,
-      })),
-      result: hand.result!,
-      events: hand.events,
-    },
-  });
-
+  ctx.effects.push({ type: 'hand', record });
   state.hand = null;
+
+  return record;
 }
 
 /**
  * Does whatever the hand's deadline was waiting for. Only call once the deadline has passed. A step
- * that leaves no hand on the table has ended one, and `handEnded` is to be called for it.
+ * that ends the hand gives back its record, for `handEnded` to be called with; any other gives null.
  */
-export function stepHand(state: TableState, ctx: Ctx): void {
+export function stepHand(state: TableState, ctx: Ctx): HandRecord | null {
   const hand = state.hand!;
 
   switch (hand.stage) {
     case 'betting':
       timeOut(state, ctx);
-      break;
+      return null;
     case 'ritVote':
       narrate(state, ctx, 'Not everyone voted in time, so it runs once');
       startRunout(state, ctx, 1);
-      break;
+      return null;
     case 'runout':
       runoutStep(state, ctx);
-      break;
+      return null;
     case 'done':
-      clearHand(state, ctx);
-      break;
+      return clearHand(state, ctx);
   }
 }

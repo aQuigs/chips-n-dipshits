@@ -1,15 +1,16 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { createTable, DEFAULT_CONFIG, LIMITS, presetSettings } from '../src/engine/index.ts';
+import { addMember, createTable, DEFAULT_CONFIG, LIMITS, presetSettings } from '../src/engine/index.ts';
 import type { Effect, HandRecord, TableConfig, TableState } from '../src/engine/index.ts';
 import { SheetPresetStore } from '../src/gas/sheetPresetStore.ts';
-import { SheetStore } from '../src/gas/sheetStore.ts';
+import { CACHE_VALUE_BYTES, SheetStore, utf8Bytes } from '../src/gas/sheetStore.ts';
 import { MemoryPresetStore } from '../src/server/memoryPresetStore.ts';
 import type { PresetStore, SavedPreset } from '../src/server/presetStore.ts';
 import { StoreBusyError } from '../src/server/store.ts';
 import { FakeCache, FakeLock, FakeSpreadsheet } from './fakes.ts';
-import { seededRng } from './helpers.ts';
+import { seededRng, TestTable } from './helpers.ts';
+import { fullestChat } from './invariants.ts';
 
 function setup() {
   const lock = new FakeLock();
@@ -79,6 +80,7 @@ function handRecord(tableId: string, number: number): HandRecord {
     number,
     summary: `Hand #${number}`,
     boards: [[]],
+    bigBlind: 20,
     bombPot: null,
     players: [],
     result: { uncontested: true, pots: [], winnings: [], hands: [], bounty: null },
@@ -889,4 +891,45 @@ test('the largest preset the game can make fits its cell with room to spare, and
   assert.throws(() => store.save(preset('Huge', { name: 'x'.repeat(50_000) }), false), /maximum of 50000 characters/);
   assert.deepEqual(names(store), ['W'.repeat(LIMITS.presetNameLength)], 'nothing of the refused one was left behind');
   assert.equal(tab().getLastRow(), 2);
+});
+
+test('after the longest night a full table still fits its row and the cache: ten seated, thirty who came and went, the longest names, every number at its largest and a full chat', () => {
+  const { store, cache, anotherRun } = setup();
+
+  // Sixteen characters of three bytes each, no two names alike
+  const name = (index: number) => '好'.repeat(LIMITS.nameLength - 1) + String.fromCodePoint(0x4e00 + index);
+  const t = new TestTable({ stacks: Array.from({ length: 10 }, () => LIMITS.chips), names: Array.from({ length: 10 }, (_name, seat) => name(seat)), config: { maxBuyIn: LIMITS.chips } });
+
+  for (let gone = 10; gone < 40; gone++) {
+    const member = addMember(t.state, name(gone), t.ctx());
+
+    member.buyIn = LIMITS.chips;
+    member.cashOut = LIMITS.chips - 1;
+  }
+
+  // A hand that all ten are in, with some betting behind it
+  t.deal({ button: 0 });
+  for (let calls = 0; calls < 9; calls++) {
+    t.call(t.playerIn(t.toAct!));
+  }
+
+  // More hands than any night has, a pot of every chip ten players can hold, and a best hand for everyone
+  for (const member of t.state.members) {
+    t.state.tonight.players[member.id] = { hands: 99_999, won: 99_999, biggest: 10 * LIMITS.chips, best: ['As', 'Ks', 'Qs', 'Js', 'Ts'], rebuys: 9_999 };
+  }
+  t.state.tonight.hands = 99_999;
+  t.state.feed = fullestChat();
+
+  const numbers = JSON.stringify(t.state.tonight).length;
+  assert.ok(numbers <= 40 * 110, `the night's numbers for forty players take ${numbers} characters`);
+
+  save(store, t.state);
+
+  // Kept by the cache too, which is what spares every poll a read of the Sheet under the lock
+  const bytes = utf8Bytes(JSON.stringify(t.state));
+  assert.ok(bytes <= CACHE_VALUE_BYTES, `the table comes to ${bytes} bytes`);
+  assert.ok(cache.entries.has(`state:${t.state.id}`), 'the table was too big for the cache');
+
+  cache.entries.clear();
+  assert.deepEqual(anotherRun().read(t.state.id), t.state, 'and it reads back from its row the same');
 });

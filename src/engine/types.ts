@@ -273,6 +273,31 @@ export interface FeedEntry {
   text: string;
 }
 
+/** One player's running numbers for the night. What each counts is said where it is counted, in `tonight.ts`. */
+export interface PlayerTonight {
+  /** Hands they were dealt into. */
+  hands: number;
+  /** Hands they took chips from the pots of. */
+  won: number;
+  /** The most chips they took from the pots of one hand. */
+  biggest: number;
+  /** The five cards of the best hand they turned up at a showdown, or null when they have shown none. */
+  best: Card[] | null;
+  /** Times they bought chips after the first. */
+  rebuys: number;
+}
+
+/**
+ * The night's running numbers. Finished hands leave the table for their own tab, so what the night
+ * comes to is counted here as each hand ends. Only `tonight.ts` changes it.
+ */
+export interface Tonight {
+  /** Finished hands counted. Fewer than the table has played when its first hands were dealt before the count was kept. */
+  hands: number;
+  /** By member id. A member is in it once they are dealt a hand or buy chips again. */
+  players: Record<string, PlayerTonight>;
+}
+
 export interface TableState {
   schema: number;
   id: string;
@@ -314,6 +339,7 @@ export interface TableState {
   lastHand: number | null;
   /** When the night ended, or null while it goes on. Only `endNight` and `restartNight` (`night.ts`) change it. */
   nightEndedAt: number | null;
+  tonight: Tonight;
   feed: FeedEntry[];
   feedSeq: number;
 }
@@ -332,6 +358,8 @@ export type LedgerEntry = { at: number; tableId: string; playerId: string; name:
 
 export interface HandRecordPlayer {
   seat: number;
+  /** The member in the seat; '' in a record saved before records kept it. */
+  playerId: string;
   name: string;
   startStack: number;
   endStack: number;
@@ -346,6 +374,8 @@ export interface HandRecord {
   /** The dealer's play-by-play, one line per event. */
   summary: string;
   boards: Card[][];
+  /** The big blind the hand was dealt under; 0 in a record saved before records kept it. */
+  bigBlind: number;
   bombPot: BombPot | null;
   players: HandRecordPlayer[];
   result: HandResult;

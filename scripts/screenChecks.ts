@@ -11781,8 +11781,10 @@ const CHECKS: Check[] = [
         // The table plays on underneath, and what the viewer opened stays open
         table.act(`Quigs ${screen}`, { type: 'chat', text: 'still here' });
         await seat.waitForSelector('.feed li:has-text("still here")', { state: 'attached' });
-        table.deal({ button: 0 });
-        await seat.waitForSelector('.seat.me .card', { state: 'attached' });
+        // The viewer's own turn comes too, which takes a hand being played back off the table and must leave this alone
+        table.deal({ button: 1 });
+        await seat.waitForSelector('.turn [data-action="fold"]', { state: 'attached' });
+        assert.equal(await text(seat, '.dialog h2'), 'Standings');
         assert.equal(await seat.locator('[data-player="Cy"] details[open] .standings-nights li').count(), 3);
 
         await seatPress('.dialog [data-action="close"]');

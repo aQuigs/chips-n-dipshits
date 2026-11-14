@@ -21,8 +21,8 @@ const clicks = (times: number[], hz: number, level: number): Voice[] => times.ma
  * Every sound has its own set of notes and bursts, which is how a browser check tells them apart.
  */
 export const RECIPES: Record<SoundName, Voice[]> = {
-  // Cards skimming the felt, one per flick
-  deal: [0, 0.06, 0.12].map((at) => ({ noise: 5000, width: 0.8, at, length: 0.035, level: 0.7 })),
+  // Cards skimming the felt, one per flick, over before a flop dealt with them, as in a bomb pot, can start
+  deal: [0, 0.04, 0.08].map((at) => ({ noise: 5000, width: 0.8, at, length: 0.035, level: 0.7 })),
   // Two chips clicking down
   chips: [...clicks([0, 0.05], 4000, 1), { tone: 3200, at: 0, length: 0.05, level: 0.15 }, { tone: 4100, at: 0.05, length: 0.05, level: 0.12 }],
   // Two raps of the knuckles on the table, pitched high enough for a phone's speaker

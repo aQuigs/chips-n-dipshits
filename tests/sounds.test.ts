@@ -5,6 +5,7 @@ import { soundsHeard } from '../src/client/handSounds.ts';
 import { PREFERENCES, Preferences } from '../src/client/prefs.ts';
 import type { AppPreferences } from '../src/client/prefs.ts';
 import { MOST_WAIT_MS, SOUND_GAP_MS, Sounds } from '../src/client/sound.ts';
+import { RECIPES } from '../src/client/soundRecipes.ts';
 import type { SoundMaker, SoundName } from '../src/client/sound.ts';
 import { tableChange } from '../src/client/tableChange.ts';
 import type { TableChange } from '../src/client/tableChange.ts';
@@ -164,6 +165,26 @@ test('a hand run twice deals every street of both boards with its own sound, and
   }
 
   assert.deepEqual(heard, [['street'], ['street'], ['street'], ['street'], ['street'], ['street', 'win']]);
+});
+
+test('a hand dealt straight to the flop, as a bomb pot is, plays the deal and then the flop, one clear of the other', () => {
+  const ears = new Ears();
+  const toTheFlop: HandEvent[] = [
+    ['start', 4, 0, 10, 20, [[0, 'P0', 1000], [1, 'P1', 1000]]],
+    ['post', 0, 'ante', 40, 960, 'contribution'],
+    ['post', 1, 'ante', 40, 960, 'contribution'],
+    ['deal'],
+    ['street', 0, ['As', 'Kd', '2c']],
+  ];
+
+  for (const sound of soundsHeard(toTheFlop, 0)) {
+    ears.sounds.play(sound);
+  }
+
+  const dealEnds = Math.max(...RECIPES.deal.map((voice) => voice.at + voice.length));
+
+  assert.deepEqual(ears.played.map((played) => played.sound), ['deal', 'street']);
+  assert.ok(dealEnds < ears.played[1]!.delay, `the deal is still playing when the flop comes: ${dealEnds} s against ${ears.played[1]!.delay} s`);
 });
 
 test('a seven-deuce bounty rings up its chips after the pot', () => {

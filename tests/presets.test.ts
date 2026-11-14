@@ -51,6 +51,21 @@ test('a preset saved before a setting existed gives it the value a new table sta
   assert.deepEqual(newConfig(used.config), used.config);
 });
 
+test('a preset saved when run it twice was a switch runs it as it did: on is up to twice and off is once only, and a value of the new setting saved beside it wins', () => {
+  const { maxRuns: _runs, ...beforeThree } = kept({});
+
+  for (const [on, runs] of [[true, 2], [false, 1]] as const) {
+    const used = fromPreset({ ...beforeThree, allowRunItTwice: on });
+
+    assert.deepEqual(used.notes, []);
+    assert.equal(used.config.maxRuns, runs);
+    assert.ok(!('allowRunItTwice' in used.config));
+  }
+
+  assert.equal(fromPreset(beforeThree).config.maxRuns, 3, 'a preset older than either starts where a new table does');
+  assert.equal(fromPreset({ ...beforeThree, allowRunItTwice: true, maxRuns: 3 }).config.maxRuns, 3);
+});
+
 test('a preset saved when there was one kind of straddle plays as it did: under the gun if it allowed that, and no other kind', () => {
   for (const allowStraddle of [true, false]) {
     const { allowDoubleStraddle: _double, allowButtonStraddle: _button, allowMississippiStraddle: _mississippi, ...beforeMoreStraddles } = kept({ allowStraddle });

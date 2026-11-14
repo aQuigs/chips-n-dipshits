@@ -1,5 +1,5 @@
 /* A preset: a table's settings kept under a name, for the group to start the next table from. */
-import { CONFIG_KEYS, CONFIG_RULES, CONFIG_SPECS, DEFAULT_CONFIG, fieldsOf, newConfig, settingText, startingConfig, validSetting } from './config.ts';
+import { CONFIG_KEYS, CONFIG_RULES, CONFIG_SPECS, DEFAULT_CONFIG, fieldsOf, newConfig, settingText, startingConfig, validSetting, withRetiredSettings } from './config.ts';
 import type { ConfigKey } from './config.ts';
 import type { TableConfig } from './types.ts';
 import { LIMITS, text } from './validate.ts';
@@ -59,11 +59,11 @@ function backToUsual(keys: ConfigKey[], config: TableConfig): string {
 
 /**
  * The settings a preset gives a new table now. A setting added since it was saved starts where a new
- * table's does, one since removed is dropped, and a value that is no longer allowed is replaced by the
+ * table's does, one since renamed is read as the setting that took its place, one since removed is dropped, and a value that is no longer allowed is replaced by the
  * usual one with a note saying so. `others` holds the settings presets don't keep.
  */
 export function fromPreset(settings: unknown, others: TableConfig = DEFAULT_CONFIG): PresetUse {
-  const saved = fieldsOf(settings);
+  const saved = withRetiredSettings(fieldsOf(settings));
   const usual = startingConfig(saved);
   const config: TableConfig = { ...usual, ...Object.fromEntries(NOT_KEPT.map((key) => [key, others[key]])) };
   const set = (key: ConfigKey, value: unknown) => ((config as unknown as Record<string, unknown>)[key] = value);

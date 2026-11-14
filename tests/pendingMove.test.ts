@@ -632,7 +632,7 @@ test('the last card of an all-in runout is held back from the view that confirms
       { name: 'Quigs', stack: 1000 },
       { name: 'Stu', stack: 1000 },
     ],
-    { allowRunItTwice: false },
+    { maxRuns: 1 },
   );
   server.deal({ button: 0, holes: { 0: ACES, 1: KINGS }, board: '2c 7d 9h Jc 3s' });
   server.act('Quigs', { type: 'call' });

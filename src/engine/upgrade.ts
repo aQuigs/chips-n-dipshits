@@ -1,4 +1,5 @@
-import { startingConfig } from './config.ts';
+import { startingConfig, withRetiredSettings } from './config.ts';
+import type { HandEvent } from './events.ts';
 import { newTonight } from './tonight.ts';
 import { STATE_SCHEMA } from './types.ts';
 import type { Hand, HandPlayer, HandRecord, HandRecordPlayer, Member, PlayerTonight, Seat, TableState } from './types.ts';
@@ -7,6 +8,19 @@ import type { Hand, HandPlayer, HandRecord, HandRecordPlayer, Member, PlayerToni
 interface SchemaThree {
   seats: ((Partial<Seat> & { straddle?: boolean }) | null)[];
   hand: (Partial<Hand> & { straddleSeat?: number | null }) | null;
+}
+
+/** A pick of schema 4: whether the player agreed to run it twice. */
+type SchemaFourVote = boolean | number | null;
+
+/** A pick as a number of runs: a yes was to run it twice and a no was to run it once. */
+function runsOf(vote: SchemaFourVote): number | null {
+  return typeof vote === 'boolean' ? (vote ? 2 : 1) : vote;
+}
+
+/** A hand's events with each yes or no to running it twice as the number of runs it was. Records keep no schema, so both kinds may be read. */
+function votesAsRuns(events: HandEvent[]): HandEvent[] {
+  return events.map((event) => (event[0] === 'vote' ? ['vote', event[1], runsOf(event[2] as SchemaFourVote)!] : event));
 }
 
 /**
@@ -35,6 +49,19 @@ const STEPS: Record<number, (state: TableState) => void> = {
       // It was posted whole or not at all, at twice the big blind the hand was dealt under
       hand.straddles = straddler === null ? [] : [{ seat: straddler, what: 'straddle', amount: 2 * hand.bigBlind! }];
       delete hand.straddleSeat;
+    }
+  },
+  4: (state) => {
+    state.config = withRetiredSettings(state.config as unknown as Record<string, unknown>) as unknown as TableState['config'];
+
+    if (state.hand) {
+      state.hand.maxRuns = state.config.maxRuns;
+
+      for (const player of state.hand.players) {
+        player.ritVote = runsOf(player.ritVote);
+      }
+
+      state.hand.events = votesAsRuns(state.hand.events ?? []);
     }
   },
 };
@@ -126,6 +153,7 @@ export function upgradeState(saved: TableState): TableState {
 /** Gives a hand record saved by older code the fields added since. */
 export function upgradeRecord(saved: HandRecord): HandRecord {
   fillMissing(saved, SAVED_DEFAULTS.record());
+  saved.events = votesAsRuns(saved.events);
 
   for (const player of saved.players) {
     fillMissing(player, SAVED_DEFAULTS.recordPlayer());

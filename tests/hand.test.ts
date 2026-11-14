@@ -356,7 +356,7 @@ test('all in before the flop: hands turn face up and the board comes one street 
 });
 
 test('run it twice: each board plays for half the pot and the first board gets the odd chip', () => {
-  const t = new TestTable({ stacks: [500, 500, 500], config: { smallBlind: 5, bigBlind: 20, allowRunItTwice: true } });
+  const t = new TestTable({ stacks: [500, 500, 500], config: { smallBlind: 5, bigBlind: 20, maxRuns: 2 } });
   t.deal({ button: 0, holes: { 0: ACES, 2: KINGS }, board: BOARD, secondBoard: 'Kd 4c 5h 8s Td' });
 
   t.raise(0, 500);
@@ -368,10 +368,10 @@ test('run it twice: each board plays for half the pot and the first board gets t
   assert.equal(t.view(0).hand!.canVote, true);
   assert.equal(t.view(1).hand!.canVote, false, 'a folded player has no vote');
 
-  t.cmd(0, { type: 'ritVote', agree: true });
+  t.cmd(0, { type: 'ritVote', runs: 2 });
   assert.equal(hand.stage, 'ritVote');
-  assert.throws(() => t.cmd(0, { type: 'ritVote', agree: true }), /already voted/);
-  t.cmd(2, { type: 'ritVote', agree: true });
+  assert.throws(() => t.cmd(0, { type: 'ritVote', runs: 2 }), /already picked/);
+  t.cmd(2, { type: 'ritVote', runs: 2 });
 
   assert.equal(hand.stage, 'runout');
   assert.equal(hand.runs, 2);
@@ -386,16 +386,97 @@ test('run it twice: each board plays for half the pot and the first board gets t
   assertChipsConserved(t.state);
 });
 
+test('run three times: each board plays for a third of the pot, the chips that do not divide go to the first boards, and each run is its own showdown', () => {
+  for (const unit of ['chips', 'cents'] as const) {
+    const t = new TestTable({ stacks: [500, 500, 500], config: { unit, smallBlind: 7, bigBlind: 20, maxRuns: 3 } });
+    t.deal({ button: 0, holes: { 0: ACES, 2: KINGS }, board: BOARD, secondBoard: 'Kd 4c 5h 8s Td', thirdBoard: 'Qd Qc 6h 5s 4d' });
+
+    t.raise(0, 500);
+    t.fold(1);
+    t.call(2);
+    t.cmd(0, { type: 'ritVote', runs: 3 });
+    t.cmd(2, { type: 'ritVote', runs: 3 });
+    t.runToResult();
+
+    const hand = t.state.hand!;
+    assert.deepEqual(hand.boards, [BOARD, 'Kd 4c 5h 8s Td', 'Qd Qc 6h 5s 4d'].map((board) => board.split(' ')), unit);
+    assert.deepEqual(hand.result!.pots[0]!.awards, [
+      { seat: 0, amount: 336, run: 0 },
+      { seat: 2, amount: 336, run: 1 },
+      { seat: 0, amount: 335, run: 2 },
+    ], unit);
+    assert.deepEqual(t.stacks(), [671, 493, 336], unit);
+    assert.ok(t.feedText().includes(unit === 'chips' ? 'P0 wins 335 on the third board with two pair, aces and queens' : 'P0 wins 3.35 on the third board with two pair, aces and queens'), t.feedText().join(' / '));
+    assertChipsConserved(t.state);
+  }
+});
+
+test('run three times with a side pot: every pot is split in three, a different player wins each board, and a tie splits its board', () => {
+  const t = new TestTable({ stacks: [200, 500, 500], config: { maxRuns: 3 } });
+  // The third board is a straight that everyone plays, so each pot's share of it is split among all in for it
+  t.deal({ button: 0, holes: { 0: ACES, 1: KINGS, 2: QUEENS }, board: BOARD, secondBoard: 'Qd 4c 5h 8s Td', thirdBoard: '5d 6c 7s 8h 9c' });
+
+  t.raise(0, 200);
+  t.raise(1, 500);
+  t.call(2);
+  for (const seat of [0, 1, 2]) {
+    t.cmd(seat, { type: 'ritVote', runs: 3 });
+  }
+  t.runToResult();
+
+  const [main, side] = t.state.hand!.result!.pots;
+  assert.deepEqual([main!.amount, side!.amount], [600, 600]);
+  assert.deepEqual(main!.awards, [
+    { seat: 0, amount: 200, run: 0 },
+    { seat: 2, amount: 200, run: 1 },
+    // The odd chip of a split share goes to the first winner clockwise from the button
+    { seat: 1, amount: 67, run: 2 },
+    { seat: 2, amount: 67, run: 2 },
+    { seat: 0, amount: 66, run: 2 },
+  ]);
+  assert.deepEqual(side!.awards, [
+    { seat: 1, amount: 200, run: 0 },
+    { seat: 2, amount: 200, run: 1 },
+    { seat: 1, amount: 100, run: 2 },
+    { seat: 2, amount: 100, run: 2 },
+  ]);
+  assert.deepEqual(t.stacks(), [266, 367, 567]);
+  assertChipsConserved(t.state);
+});
+
+test('run three times, the seven-deuce bounty is for winning the main pot on every board: two of three pay nothing', () => {
+  const bounty = (third: string): TestTable => {
+    const t = new TestTable({ stacks: [500, 500, 1000], config: { sevenDeuceBounty: 50, maxRuns: 3 } });
+    t.deal({ button: 0, holes: { 0: '7h 2c', 1: 'Jh Td' }, board: '7d 7s 2h 9c 4d', secondBoard: '7c 2d 5s 8h Ad', thirdBoard: third });
+    t.raise(0, 500);
+    t.call(1);
+    t.fold(2);
+    t.cmd(0, { type: 'ritVote', runs: 3 });
+    t.cmd(1, { type: 'ritVote', runs: 3 });
+    t.runToResult();
+
+    return t;
+  };
+
+  const everyBoard = bounty('2s Kc Qd 5c 3h');
+  assert.deepEqual(everyBoard.state.hand!.result!.bounty, { seat: 0, payments: [{ seat: 2, amount: 50 }] });
+  assert.deepEqual(everyBoard.stacks(), [1020 + 50, 0, 980 - 50]);
+
+  const twoOfThree = bounty('Js Kc Qd 5c 3h');
+  assert.equal(twoOfThree.state.hand!.result!.bounty, null);
+  assert.deepEqual(twoOfThree.stacks(), [680, 340, 980]);
+});
+
 test('run it twice from the flop keeps the flop and deals a second turn and river', () => {
-  const t = new TestTable({ stacks: [500, 500], config: { allowRunItTwice: true } });
+  const t = new TestTable({ stacks: [500, 500], config: { maxRuns: 2 } });
   t.deal({ button: 0, holes: { 0: ACES, 1: KINGS }, board: BOARD, secondBoard: 'Kd Kc' });
   t.call(0);
   t.check(1);
 
   t.raise(1, 480);
   t.call(0);
-  t.cmd(0, { type: 'ritVote', agree: true });
-  t.cmd(1, { type: 'ritVote', agree: true });
+  t.cmd(0, { type: 'ritVote', runs: 2 });
+  t.cmd(1, { type: 'ritVote', runs: 2 });
   t.runToResult();
 
   const hand = t.state.hand!;
@@ -404,32 +485,32 @@ test('run it twice from the flop keeps the flop and deals a second turn and rive
 });
 
 test('one no, or no answer in time, means the board runs once', () => {
-  const declined = new TestTable({ stacks: [500, 500], config: { allowRunItTwice: true } });
+  const declined = new TestTable({ stacks: [500, 500], config: { maxRuns: 2 } });
   declined.deal({ button: 0, holes: { 0: ACES, 1: KINGS }, board: BOARD });
   declined.raise(0, 500);
   declined.call(1);
-  declined.cmd(1, { type: 'ritVote', agree: false });
+  declined.cmd(1, { type: 'ritVote', runs: 1 });
 
   assert.equal(declined.state.hand!.stage, 'runout');
   assert.equal(declined.state.hand!.runs, 1);
 
-  const ignored = new TestTable({ stacks: [500, 500], config: { allowRunItTwice: true } });
+  const ignored = new TestTable({ stacks: [500, 500], config: { maxRuns: 2 } });
   ignored.deal({ button: 0, holes: { 0: ACES, 1: KINGS }, board: BOARD });
   ignored.raise(0, 500);
   ignored.call(1);
-  ignored.cmd(0, { type: 'ritVote', agree: true });
+  ignored.cmd(0, { type: 'ritVote', runs: 2 });
   ignored.wait(TIMING.ritVoteMs);
 
   assert.equal(ignored.state.hand!.stage, 'runout');
   assert.equal(ignored.state.hand!.runs, 1);
-  assert.ok(ignored.feedText().includes('Not everyone voted in time, so it runs once'));
+  assert.ok(ignored.feedText().includes("P0 picked twice, P1 didn't pick in time: running it once"));
   ignored.runToResult();
   assert.deepEqual(ignored.stacks(), [1000, 0]);
 });
 
 test('a player who gives up their seat during the run-it-twice vote does not hold it up', () => {
   const allIn = (): TestTable => {
-    const t = new TestTable({ stacks: [500, 500, 500], config: { allowRunItTwice: true } });
+    const t = new TestTable({ stacks: [500, 500, 500], config: { maxRuns: 2 } });
     t.deal({ button: 0, holes: { 0: ACES, 1: KINGS, 2: QUEENS }, board: BOARD, secondBoard: 'Kd 4c 5h 8s Td' });
     t.raise(0, 500);
     t.call(1);
@@ -440,11 +521,11 @@ test('a player who gives up their seat during the run-it-twice vote does not hol
   };
 
   const stoodUp = allIn();
-  stoodUp.cmd(0, { type: 'ritVote', agree: true });
+  stoodUp.cmd(0, { type: 'ritVote', runs: 2 });
   stoodUp.cmd(2, { type: 'standUp' });
   assert.equal(stoodUp.state.hand!.stage, 'runout', 'nobody is left waiting for a vote that will not come');
   assert.equal(stoodUp.state.hand!.runs, 1);
-  assert.ok(stoodUp.feedText().includes('P2 left without voting, so it runs once'));
+  assert.ok(stoodUp.feedText().includes('P0 picked twice, P2 left without picking: running it once'));
 
   const removed = allIn();
   removed.cmd(0, { type: 'kick', playerId: removed.ids[1]! });
@@ -452,11 +533,11 @@ test('a player who gives up their seat during the run-it-twice vote does not hol
   assert.equal(removed.state.hand!.runs, 1);
 
   const votedFirst = allIn();
-  votedFirst.cmd(2, { type: 'ritVote', agree: true });
+  votedFirst.cmd(2, { type: 'ritVote', runs: 2 });
   votedFirst.cmd(2, { type: 'standUp' });
   assert.equal(votedFirst.state.hand!.stage, 'ritVote', 'a vote already given still counts');
-  votedFirst.cmd(0, { type: 'ritVote', agree: true });
-  votedFirst.cmd(1, { type: 'ritVote', agree: true });
+  votedFirst.cmd(0, { type: 'ritVote', runs: 2 });
+  votedFirst.cmd(1, { type: 'ritVote', runs: 2 });
   assert.equal(votedFirst.state.hand!.runs, 2);
   votedFirst.finishHand();
   assertChipsConserved(votedFirst.state);
@@ -895,7 +976,7 @@ test('changing the action clock applies to the player already being waited for',
 test('seven-deuce bounty: a tie on the second board is not winning outright, even when one chip cannot be split', () => {
   const t = new TestTable({
     stacks: [100, 100, 1],
-    config: { smallBlind: 1, bigBlind: 2, allowRunItTwice: true, sevenDeuceBounty: 50 },
+    config: { smallBlind: 1, bigBlind: 2, maxRuns: 2, sevenDeuceBounty: 50 },
   });
   t.deal({
     button: 0,
@@ -908,7 +989,7 @@ test('seven-deuce bounty: a tie on the second board is not winning outright, eve
   t.call(1);
 
   for (const seat of [0, 1, 2]) {
-    t.cmd(seat, { type: 'ritVote', agree: true });
+    t.cmd(seat, { type: 'ritVote', runs: 2 });
   }
 
   t.runToResult();
@@ -1297,7 +1378,7 @@ test('seven-deuce bounty with an ante: the antes are won with the pot, and the b
 });
 
 test('run it twice with a big-blind ante: the ante is split between the boards with the main pot it is in', () => {
-  const t = new TestTable({ stacks: [100, 500, 500], config: { ante: 25, anteFrom: 'bigBlind', allowRunItTwice: true } });
+  const t = new TestTable({ stacks: [100, 500, 500], config: { ante: 25, anteFrom: 'bigBlind', maxRuns: 2 } });
   t.deal({ button: 0, holes: { 0: ACES, 1: KINGS, 2: QUEENS }, board: BOARD, secondBoard: 'Qd 4c 5h 8s Td' });
 
   t.raise(0, 100);
@@ -1306,7 +1387,7 @@ test('run it twice with a big-blind ante: the ante is split between the boards w
   assert.ok(t.feedText().includes('Uncalled bet of 25 returned to P1'), 'the big blind had 25 less to call with');
 
   for (const voter of [0, 1, 2]) {
-    t.cmd(voter, { type: 'ritVote', agree: true });
+    t.cmd(voter, { type: 'ritVote', runs: 2 });
   }
   t.runToResult();
 

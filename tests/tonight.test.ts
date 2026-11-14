@@ -79,18 +79,31 @@ test('a pot won is counted once a hand, whatever paid: a share of a split pot, o
   assert.deepEqual([numbers(split, 0).won, numbers(split, 0).biggest], [1, 22], 'a share of the 45, not the 45');
   assert.deepEqual([numbers(split, 2).won, numbers(split, 2).biggest], [1, 23]);
 
-  const twice = new TestTable({ stacks: [500, 500, 500], config: { smallBlind: 5, bigBlind: 20, allowRunItTwice: true } });
+  const twice = new TestTable({ stacks: [500, 500, 500], config: { smallBlind: 5, bigBlind: 20, maxRuns: 2 } });
   twice.deal({ button: 0, holes: { 0: ACES, 2: KINGS }, board: BOARD, secondBoard: SECOND });
   twice.raise(0, 500);
   twice.fold(1);
   twice.call(2);
-  twice.cmd(0, { type: 'ritVote', agree: true });
-  twice.cmd(2, { type: 'ritVote', agree: true });
+  twice.cmd(0, { type: 'ritVote', runs: 2 });
+  twice.cmd(2, { type: 'ritVote', runs: 2 });
   finish(twice);
 
   assert.deepEqual([numbers(twice, 0).won, numbers(twice, 0).biggest], [1, 503]);
   assert.deepEqual([numbers(twice, 2).won, numbers(twice, 2).biggest], [1, 502]);
   assert.deepEqual(numbers(twice, 2).best, cards('Kd Ks Kh Td 8s'), 'three kings on the second board beat the pair they made on the first');
+
+  // Three times, two boards to one player: a pot won once, and the biggest pot is both boards added up
+  const thrice = new TestTable({ stacks: [500, 500, 500], config: { smallBlind: 7, bigBlind: 20, maxRuns: 3 } });
+  thrice.deal({ button: 0, holes: { 0: ACES, 2: KINGS }, board: BOARD, secondBoard: SECOND, thirdBoard: 'Qd Qc 6h 5s 4d' });
+  thrice.raise(0, 500);
+  thrice.fold(1);
+  thrice.call(2);
+  thrice.cmd(0, { type: 'ritVote', runs: 3 });
+  thrice.cmd(2, { type: 'ritVote', runs: 3 });
+  finish(thrice);
+
+  assert.deepEqual([numbers(thrice, 0).won, numbers(thrice, 0).biggest], [1, 336 + 335]);
+  assert.deepEqual([numbers(thrice, 2).won, numbers(thrice, 2).biggest], [1, 336]);
 
   const scooped = new TestTable({ stacks: [1000, 1000, 1000], config: { bombPotBoards: 'two' } });
   scooped.cmd(0, { type: 'setBombPot', on: true });
@@ -570,7 +583,7 @@ const TABLES = Number(process.env.SIM_TABLES ?? 40);
 const STEPS_PER_TABLE = 600;
 
 test('over random games the numbers are at every step exactly what the hand records and the ledger make them, and no fact holds a card nobody was shown', () => {
-  const reached = { hands: 0, showdowns: 0, runTwice: 0, bombPots: 0, doubleBoards: 0, antes: 0, transfers: 0, rebuys: 0, left: 0, nightsEnded: 0, playedOn: 0, crowned: 0, busts: 0, splits: 0, bestHands: 0, chops: 0 };
+  const reached = { hands: 0, showdowns: 0, runTwice: 0, runThrice: 0, bombPots: 0, doubleBoards: 0, antes: 0, transfers: 0, rebuys: 0, left: 0, nightsEnded: 0, playedOn: 0, crowned: 0, busts: 0, splits: 0, bestHands: 0, chops: 0 };
   // Hands with each kind of straddle posted
   const straddled: Record<Straddle, number> = { straddle: 0, 'double straddle': 0, 'button straddle': 0, 'Mississippi straddle': 0 };
   const badges: Record<string, number> = {};
@@ -632,7 +645,8 @@ test('over random games the numbers are at every step exactly what the hand reco
         reached.hands += 1;
         reached.showdowns += facts.ended === 'showdown' ? 1 : 0;
         reached.chops += facts.ended === 'chop' ? 1 : 0;
-        reached.runTwice += facts.runTwice ? 1 : 0;
+        reached.runTwice += facts.timesRun === 2 ? 1 : 0;
+        reached.runThrice += facts.timesRun === 3 ? 1 : 0;
         reached.bombPots += facts.bombPot ? 1 : 0;
         reached.doubleBoards += facts.bombPot?.boards === 2 ? 1 : 0;
         reached.antes += record.events[0]?.[0] === 'start' && record.events[0][6] ? 1 : 0;
@@ -680,7 +694,7 @@ test('over random games the numbers are at every step exactly what the hand reco
   // The run only proves something if it reached the parts of the game the numbers have to survive
   const said = JSON.stringify({ ...reached, straddled, badges });
   assert.ok(reached.hands >= TABLES * 30 && reached.showdowns >= TABLES * 10, said);
-  assert.ok(reached.runTwice >= TABLES / 2 && reached.bombPots >= TABLES && reached.doubleBoards >= TABLES / 2, said);
+  assert.ok(reached.runTwice >= TABLES / 2 && reached.runThrice >= TABLES / 4 && reached.bombPots >= TABLES && reached.doubleBoards >= TABLES / 2, said);
   assert.ok(reached.antes >= TABLES * 5, said);
   assert.ok(reached.chops >= TABLES / 2, said);
   // A double needs four players, two of them wanting one in a row from under the gun, so it comes up least

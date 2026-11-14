@@ -22,7 +22,7 @@ test('the default settings are the registry\'s defaults, and the table accepts t
     allowDoubleStraddle: false,
     allowButtonStraddle: false,
     allowMississippiStraddle: false,
-    allowRunItTwice: true,
+    maxRuns: 3,
     allowChop: false,
     sevenDeuceBounty: 0,
     bombPotAmount: 100,
@@ -40,7 +40,8 @@ test('a refusal names the setting and says what it may be', () => {
   assert.throws(settings({ smallBlind: 0 }), { name: 'GameError', message: 'The small blind must be a whole number from 1 to 1,000,000,000' });
   assert.throws(settings({ actionSeconds: 301 }), { message: 'The action clock must be a whole number from 0 to 300' });
   assert.throws(settings({ actionSeconds: 4 }), { message: 'The action clock must be off or at least 5 seconds' });
-  assert.throws(settings({ allowRunItTwice: 1 }), { message: 'Run it twice must be on or off' });
+  assert.throws(settings({ maxRuns: 4 }), { message: 'Running it more than once must be one of: Once only, Up to twice, Up to three times' });
+  assert.throws(settings({ maxRuns: '2' }), { message: 'Running it more than once must be one of: Once only, Up to twice, Up to three times' }, 'a count chosen from a few is the number itself, not its text');
   assert.throws(settings({ name: 'x'.repeat(41) }), { message: 'The table name must be 1 to 40 characters' });
   assert.throws(settings({ name: 7 }), { message: 'The table name is missing' });
   assert.throws(settings({ bigBlind: 5 }), { message: "The big blind can't be smaller than the small blind" });
@@ -64,9 +65,9 @@ test('when several things are wrong, the complaint is about the one that was alw
   assert.equal(complaint({ smallBlind: 50, bigBlind: 10, minBuyIn: 0 }), "The big blind can't be smaller than the small blind");
   assert.equal(complaint({ smallBlind: 0, bigBlind: 0 }), 'The small blind must be a whole number from 1 to 1,000,000,000');
   assert.equal(complaint({ minBuyIn: 500, maxBuyIn: 100, actionSeconds: 400 }), "The maximum buy-in can't be smaller than the minimum");
-  assert.equal(complaint({ bigBlind: 5, allowRunItTwice: 0 }), "The big blind can't be smaller than the small blind");
-  assert.equal(complaint({ sevenDeuceBounty: -1, allowRunItTwice: 'x', name: 7 }), 'The table name is missing');
-  assert.equal(complaint({ sevenDeuceBounty: -1, allowRunItTwice: 'x' }), 'Run it twice must be on or off');
+  assert.equal(complaint({ bigBlind: 5, maxRuns: 0 }), "The big blind can't be smaller than the small blind");
+  assert.equal(complaint({ sevenDeuceBounty: -1, maxRuns: 'x', name: 7 }), 'The table name is missing');
+  assert.equal(complaint({ sevenDeuceBounty: -1, maxRuns: 'x' }), 'Running it more than once must be one of: Once only, Up to twice, Up to three times');
 });
 
 test('settings the host leaves out keep their value, and anything that is no setting is dropped', () => {
@@ -131,7 +132,7 @@ test('random settings are always ones the table accepts, and between them reach 
 
 test('changing a setting that waits for the next hand leaves the hand in play as it is', () => {
   const waiting = CONFIG_KEYS.filter((key) => CONFIG_SPECS[key].nextHand);
-  assert.deepEqual(waiting, ['smallBlind', 'bigBlind', 'ante', 'anteFrom', 'allowStraddle', 'allowDoubleStraddle', 'allowButtonStraddle', 'allowMississippiStraddle', 'missedBlinds', 'sevenDeuceBounty', 'bombPotAmount', 'bombPotEvery', 'bombPotBoards']);
+  assert.deepEqual(waiting, ['smallBlind', 'bigBlind', 'ante', 'anteFrom', 'allowStraddle', 'allowDoubleStraddle', 'allowButtonStraddle', 'allowMississippiStraddle', 'maxRuns', 'missedBlinds', 'sevenDeuceBounty', 'bombPotAmount', 'bombPotEvery', 'bombPotBoards']);
 
   const rng = seededRng(3);
 

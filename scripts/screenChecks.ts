@@ -46,7 +46,7 @@ const passive = (view: TableView): Command => ({ type: view.hand!.options!.canCh
 const allIn = (view: TableView): Command => {
   const hand = view.hand!;
   if (hand.canVote) {
-    return { type: 'ritVote', agree: true };
+    return { type: 'ritVote', runs: 2 };
   }
 
   return hand.options!.canRaise ? { type: 'raise', to: hand.options!.maxRaiseTo } : { type: 'call' };
@@ -1029,7 +1029,7 @@ const TONIGHT_TABLES = [
  * hold put them all in, and Zed lost his and bought more. Stu has left since, and Lurker has only watched.
  */
 function tonightTable(rig: Rig, config: Partial<TableConfig>): RigTable {
-  const table = rig.table(LONG_NAMES.map((name, index) => ({ name, stack: name === 'Zed' ? LIMITS.chips : MIXED_STACKS[index]! })), { ...config, allowRunItTwice: false });
+  const table = rig.table(LONG_NAMES.map((name, index) => ({ name, stack: name === 'Zed' ? LIMITS.chips : MIXED_STACKS[index]! })), { ...config, maxRuns: 1 });
   const board = '2c 7d 9h Jc 3s';
 
   table.deal({ button: 0, holes: { 0: 'As Ah', 1: 'Ks Kh', 2: 'Qs Qh', 3: 'Ts Th', 4: '8s 8h', 5: '6s 6h', 6: '5s 5h', 7: '4s 4h', 8: 'Ad Kd', 9: 'Qd Td' }, board });
@@ -1070,7 +1070,7 @@ const OFFER_TICK_MS = 250;
 
 /** Quigs, Stu and Big Al one hand into a night that Quigs is up in and the other two are level in, with Zed watching, between hands and paused. */
 function nightOfOneHand(rig: Rig): RigTable {
-  const table = rig.table([{ name: 'Quigs', stack: 1000 }, { name: 'Stu', stack: 1000 }, { name: 'Big Al', stack: 1000 }], { allowRunItTwice: false });
+  const table = rig.table([{ name: 'Quigs', stack: 1000 }, { name: 'Stu', stack: 1000 }, { name: 'Big Al', stack: 1000 }], { maxRuns: 1 });
 
   table.join('Zed');
   table.deal({ button: 0, holes: { 0: 'As Ah', 1: 'Ks Kh', 2: 'Qs Qh' }, board: '2c 7d 9h Jc 3s' });
@@ -1599,7 +1599,7 @@ const CHECKS: Check[] = [
       const stacks = [1000, 5000, 20_000, 300, 1_000_000, 777];
       const table = rig.table(
         LONG_NAMES.slice(0, 6).map((name, index) => ({ name, stack: stacks[index]! })),
-        { allowRunItTwice: true },
+        { maxRuns: 2 },
       );
       table.deal({
         button: 0,
@@ -3473,7 +3473,7 @@ const CHECKS: Check[] = [
             { name: 'Quigs', stack: 1000 },
             { name: 'Stu', stack: 1000 },
           ],
-          { allowRunItTwice: true, sevenDeuceBounty: 50 },
+          { maxRuns: 2, sevenDeuceBounty: 50 },
         );
 
       const boardPlays = heads();
@@ -5656,7 +5656,7 @@ const CHECKS: Check[] = [
       await page.context().close();
 
       // A hand run twice is dealt a street at a time, a board after the other: each card lands as its own street is heard
-      table = rig.table(MOTION_PLAYERS.slice(0, 2), { allowRunItTwice: true });
+      table = rig.table(MOTION_PLAYERS.slice(0, 2), { maxRuns: 2 });
       ({ page, look } = await watcher(table));
 
       table.deal({ button: 0, holes: { 0: 'As Ah', 1: 'Kd Kc' }, board: '3c 8d Jh Qs 4d', secondBoard: '2c 5h 9s Td 6c' });
@@ -6247,7 +6247,7 @@ const CHECKS: Check[] = [
     async (rig) => {
       const where = (what: string) => `${layout.name}, ${what}`;
       const held = !layout.slower;
-      const table = rig.table([{ name: 'Quigs', stack: 10_000 }, { name: 'Stu', stack: 10_000 }, { name: 'Pam', stack: 400 }], { ...layout.config, allowRunItTwice: false });
+      const table = rig.table([{ name: 'Quigs', stack: 10_000 }, { name: 'Stu', stack: 10_000 }, { name: 'Pam', stack: 400 }], { ...layout.config, maxRuns: 1 });
 
       table.join('Kibitz');
 
@@ -6633,7 +6633,7 @@ const CHECKS: Check[] = [
     'players level for the worst night share the crown until rebuys or pots won part them, each ending of the night crowns again from the numbers as they stand, and two of the longest names fit the crown on the smallest phone',
     async (rig) => {
       const screen = 'smallPhone';
-      const table = rig.table([{ name: 'Quigs', stack: 1000 }, { name: WIDEST, stack: 1000 }, { name: 'Marge Simpson-Jr', stack: 1000 }], { allowRunItTwice: false });
+      const table = rig.table([{ name: 'Quigs', stack: 1000 }, { name: WIDEST, stack: 1000 }, { name: 'Marge Simpson-Jr', stack: 1000 }], { maxRuns: 1 });
       const id = (name: string) => table.auth(name).id;
       const page = await table.open('Marge Simpson-Jr', screen);
       const press = pressOn(page, screen);
@@ -6814,7 +6814,7 @@ const CHECKS: Check[] = [
     'while an all-in hand’s last card lies face down the Tonight dialog says nothing the cards have not, for a player and for a watcher, and has the result once the card is up; when that hand is the night’s last, the recap comes only once the hand is off the table, to a page that saw the card turned and to one still waiting on it',
     async (rig) => {
       const { screen } = MOTION_LAYOUTS[0]!;
-      const table = rig.table([{ name: 'Quigs', stack: 10_000 }, { name: 'Stu', stack: 10_000 }, { name: 'Pam', stack: 10_000 }], { allowRunItTwice: false });
+      const table = rig.table([{ name: 'Quigs', stack: 10_000 }, { name: 'Stu', stack: 10_000 }, { name: 'Pam', stack: 10_000 }], { maxRuns: 1 });
 
       table.join('Kibitz');
 

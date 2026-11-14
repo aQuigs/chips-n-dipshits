@@ -307,7 +307,7 @@ test('history returns the finished hands of the table', () => {
 /** Plays a table through the service with every player polling, the way browsers would. */
 function playThroughService(store: TableStore, steps: number, rng: Rng, beforeStep: () => void = () => {}): number {
   const { service, tableId, players, clock, act } = seatedTable(store);
-  viewOf(act(0, { type: 'updateConfig', config: { actionSeconds: 15, allowRunItTwice: true, sevenDeuceBounty: 20 } }));
+  viewOf(act(0, { type: 'updateConfig', config: { actionSeconds: 15, maxRuns: 2, sevenDeuceBounty: 20 } }));
   viewOf(act(0, { type: 'start' }));
 
   const versions = players.map(() => 0);
@@ -345,7 +345,7 @@ function playThroughService(store: TableStore, steps: number, rng: Rng, beforeSt
       viewOf(act(actor, command));
     } else if (hand?.stage === 'ritVote' && rng.int(10) < 7) {
       const voter = hand.players.find((p) => !p.folded && p.ritVote === null)!;
-      viewOf(act(players.findIndex((auth) => auth.id === voter.playerId), { type: 'ritVote', agree: true }));
+      viewOf(act(players.findIndex((auth) => auth.id === voter.playerId), { type: 'ritVote', runs: 2 }));
     } else {
       // Busted or timed-out players come back so the game keeps going
       saved.seats.forEach((seat, index) => {

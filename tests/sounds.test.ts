@@ -78,7 +78,7 @@ const BY_SOMEONE_ELSE: [HandEvent, SoundName | null][] = [
   [['return', 1, 200], null],
   [['street', 0, ['As', 'Kd', '2c']], 'street'],
   [['street', 1, ['9h']], 'street'],
-  [['vote', 1, true], null],
+  [['vote', 1, 3], null],
   [['runs', 2], null],
   [['show', 1, ['7d', '2s']], null],
   [['muck', 1], null],
@@ -149,7 +149,7 @@ test('a hand plays its deal, its moves, its streets and its result as they come'
 });
 
 test('a hand run twice deals every street of both boards with its own sound, and the pot after the last', () => {
-  const table = new TestTable({ stacks: [1000, 1000], config: { allowRunItTwice: true } });
+  const table = new TestTable({ stacks: [1000, 1000], config: { maxRuns: 2 } });
   const page = new Page(table, 1);
 
   table.deal({ button: 0, holes: { 0: 'As Ah', 1: 'Kd Kc' }, board: '3c 8d Jh Qs 4d', secondBoard: '2c 5h 9s 6d 7c' });
@@ -158,8 +158,8 @@ test('a hand run twice deals every street of both boards with its own sound, and
   assert.deepEqual(page.arrive(), ['allIn']);
   table.call(1);
   page.arrive();
-  table.cmd(0, { type: 'ritVote', agree: true });
-  table.cmd(1, { type: 'ritVote', agree: true });
+  table.cmd(0, { type: 'ritVote', runs: 2 });
+  table.cmd(1, { type: 'ritVote', runs: 2 });
   page.arrive();
 
   const heard: SoundName[][] = [];

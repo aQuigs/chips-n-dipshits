@@ -127,7 +127,7 @@ test('a player who leaves before their move happens takes it with them, and cann
 });
 
 test('a player in a run-it-twice vote still votes, and moves once the boards are out', () => {
-  const t = new TestTable({ stacks: [500, 500, 500], config: { allowRunItTwice: true } });
+  const t = new TestTable({ stacks: [500, 500, 500], config: { maxRuns: 2 } });
   t.cmd(2, { type: 'sitOut' });
   t.deal({ button: 0, holes: { 0: 'As Ah', 1: 'Ks Kh' }, board: '2c 7d 9h 3s 4s', secondBoard: '5c 6c 8d Jd Qc' });
   t.raise(t.toAct === 0 ? 0 : 1, 500);
@@ -139,8 +139,8 @@ test('a player in a run-it-twice vote still votes, and moves once the boards are
   assert.equal(seatOf(t, 0), 0, 'a voter was moved out from under the vote');
   assert.equal(seatOf(t, 2), 7, 'a player watching the vote waited for nothing');
 
-  t.cmd(0, { type: 'ritVote', agree: true });
-  t.cmd(1, { type: 'ritVote', agree: true });
+  t.cmd(0, { type: 'ritVote', runs: 2 });
+  t.cmd(1, { type: 'ritVote', runs: 2 });
   t.runToResult();
   assert.equal(t.state.hand!.runs, 2);
   t.finishHand();

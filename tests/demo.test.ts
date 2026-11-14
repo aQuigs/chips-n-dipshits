@@ -54,7 +54,7 @@ test('the bots keep the demo table going for hands on end, and no chip goes miss
     if (mine) {
       await demo.send({ op: 'act', tableId: demo.tableId, auth: demo.you, command: mine.canCheck ? { type: 'check' } : { type: 'call' } });
     } else if (view.hand?.canVote) {
-      await demo.send({ op: 'act', tableId: demo.tableId, auth: demo.you, command: { type: 'ritVote', agree: true } });
+      await demo.send({ op: 'act', tableId: demo.tableId, auth: demo.you, command: { type: 'ritVote', runs: 2 } });
     } else if (view.requests.length > 0) {
       await demo.send({ op: 'act', tableId: demo.tableId, auth: demo.you, command: { type: 'approve', playerId: view.requests[0]!.playerId } });
     } else if (view.seats[0]!.stack === 0 && !view.seats[0]!.inHand && view.seats[0]!.pendingAdd === 0) {
@@ -91,7 +91,7 @@ test('a bot in the big blind answers when the person at the page offers to chop'
       // Folding whatever it can, so the action comes round to the blinds often
       await act(hand.options.canCheck ? { type: 'check' } : { type: 'fold' });
     } else if (hand?.canVote) {
-      await act({ type: 'ritVote', agree: true });
+      await act({ type: 'ritVote', runs: 2 });
     } else if (view.requests.length > 0) {
       await act({ type: 'approve', playerId: view.requests[0]!.playerId });
     } else if (view.seats[0]!.stack === 0 && !view.seats[0]!.inHand && view.seats[0]!.pendingAdd === 0) {

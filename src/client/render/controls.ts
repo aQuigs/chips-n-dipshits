@@ -378,8 +378,8 @@ function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandle
       h(
         'div.buttons',
         null,
-        h('button.btn.fold', { type: 'button', 'data-action': 'rit-no', 'data-hotkey': HOTKEYS.once, onclick: () => void handlers.send({ type: 'ritVote', agree: false }) }, 'Once'),
-        h('button.btn.raise', { type: 'button', 'data-action': 'rit-yes', 'data-hotkey': HOTKEYS.twice, onclick: () => void handlers.send({ type: 'ritVote', agree: true }) }, 'Twice'),
+        h('button.btn.fold', { type: 'button', 'data-action': 'rit-no', 'data-hotkey': HOTKEYS.once, onclick: () => void handlers.send({ type: 'ritVote', runs: 1 }) }, 'Once'),
+        h('button.btn.raise', { type: 'button', 'data-action': 'rit-yes', 'data-hotkey': HOTKEYS.twice, onclick: () => void handlers.send({ type: 'ritVote', runs: 2 }) }, 'Twice'),
       ),
     );
   } else {

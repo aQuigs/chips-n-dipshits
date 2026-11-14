@@ -84,8 +84,8 @@ export interface HandFacts {
   bombPot: BombPot | null;
   /** How many boards were on the table when it ended. */
   boards: number;
-  /** It was on two boards because the players agreed to run it twice, not because it was dealt on two. */
-  runTwice: boolean;
+  /** How many times the rest was run after the betting ended with everyone all in: 1 unless the players picked more. A hand dealt on several boards is run once. */
+  timesRun: number;
   /** 0 for a hand recorded before records said what the big blind was. */
   bigBlind: number;
   /** Every chip that was played for, all pots together. Uncalled chips that went back are not in it. */
@@ -193,7 +193,7 @@ export function handFacts(record: HandRecord): HandFacts {
     ended: endingOf(result),
     bombPot: record.bombPot,
     boards: record.boards.length,
-    runTwice: record.boards.length > boardsDealt(record.bombPot),
+    timesRun: record.boards.length / boardsDealt(record.bombPot),
     bigBlind: record.bigBlind,
     pot,
     players,

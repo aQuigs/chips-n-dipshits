@@ -7,7 +7,7 @@ export const SEAT_COUNT = 10;
  * Bumped when the shape of a saved table changes (a field renamed, retyped or removed), together with a
  * step in `upgradeState`. A field that is only added gets a default in `SAVED_DEFAULTS` instead.
  */
-export const STATE_SCHEMA = 4;
+export const STATE_SCHEMA = 5;
 
 /** What a table's amounts count, since every one of them is kept as a whole number: chips, or the cents of an amount written in dollars. */
 export type Unit = 'chips' | 'cents';
@@ -41,7 +41,8 @@ export interface TableConfig {
   allowDoubleStraddle: boolean;
   allowButtonStraddle: boolean;
   allowMississippiStraddle: boolean;
-  allowRunItTwice: boolean;
+  /** The most times the rest of a hand may be run when everyone is all in: 1 never offers more. See `runVote.ts`. */
+  maxRuns: 1 | 2 | 3;
   /** Paid by every other player dealt in to whoever wins with seven-deuce; 0 turns it off. */
   sevenDeuceBounty: number;
   /** What everyone dealt into a bomb pot puts in. */
@@ -116,7 +117,7 @@ export type Street = 'preflop' | 'flop' | 'turn' | 'river';
 
 /**
  * betting: someone is on the clock.
- * ritVote: everyone is all in and deciding whether to run the board twice.
+ * ritVote: everyone is all in and picking how many times to run the rest of the board.
  * runout: everyone is all in and the remaining board is being dealt, one street per step.
  * chop: the small blind offered to chop the blinds, and the big blind is on the clock to answer.
  * done: chips are awarded and the result stays up until the deadline.
@@ -180,14 +181,15 @@ export interface HandPlayer {
   hasActed: boolean;
   /** Hole cards are face up for everyone. */
   shown: boolean;
-  ritVote: boolean | null;
+  /** How many times they picked to run the rest when everyone is all in; null until they pick. */
+  ritVote: number | null;
   lastAction: PlayerAction | null;
 }
 
 export interface PotAward {
   seat: number;
   amount: number;
-  /** Which board won it: 0, or 1 for the second board when run twice. */
+  /** Which board won it: 0 for the first, and on from there for a hand on several. */
   run: number;
 }
 
@@ -238,6 +240,8 @@ export interface Hand {
   passedOver: PassedOver[];
   /** The seven-deuce bounty this hand was dealt under; like the blinds, a new setting waits for the next hand. */
   bounty: number;
+  /** The most times the rest may be run when everyone is all in, as the table allowed when this hand was dealt. */
+  maxRuns: number;
   /** What kind of hand this is: a bomb pot and its terms, or null for an ordinary hand. Settled when it is dealt. */
   bombPot: BombPot | null;
   /** The small blind has offered to chop the blinds, which they may do once a hand. */
@@ -246,7 +250,7 @@ export interface Hand {
   deck: Card[];
   /** The boards on the table. They and the three fields after them are kept by `boards.ts`, and written nowhere else. */
   boards: Card[][];
-  /** How many boards the hand is played on: more than one from the deal in a double-board bomb pot, or from an all-in on when the rest is run twice. More than are on the table while a hand run twice has its second still to come. */
+  /** How many boards the hand is played on: more than one from the deal in a double-board bomb pot, or from an all-in on when the rest is run more than once. More than are on the table while a hand run several times has boards still to come. */
   runs: number;
   /** The first board still being dealt; any before it have all their cards. */
   runIndex: number;
@@ -435,7 +439,8 @@ export type Command =
   | { type: 'answerChop'; agree: boolean; turn?: number }
   /** Says whether the player chops the blinds whenever the other blind would too. */
   | { type: 'setAlwaysChop'; on: boolean }
-  | { type: 'ritVote'; agree: boolean }
+  /** How many times the player wants the rest of an all-in hand run: see `runVote.ts`. */
+  | { type: 'ritVote'; runs: number }
   | { type: 'showCards' }
   | { type: 'chat'; text: string }
   | { type: 'start' }

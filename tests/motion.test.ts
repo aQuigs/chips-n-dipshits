@@ -182,7 +182,7 @@ test('each kind of hand event moves what it should, or nothing', () => {
     ['the flop, with the bets before it', ON_THE_FLOP.slice(0, -1), ON_THE_FLOP.at(-1)!, ['chips 20 bet0>pot @0', 'chips 20 bet1>pot @0', 'chips 20 bet2>pot @0', 'board >board0.0 @0', 'board >board0.1 @60', 'board >board0.2 @120']],
     ['the flop, with a missed big blind among the bets and the small blind posted dead with it already in the pot', [DEALT[0]!, ['post', 0, 'missed big blind', 20, 980], ['post', 0, 'dead small blind', 10, 970, 'dead'], DEALT[1]!, DEALT[2]!, ['deal'], ['check', 0], ['call', 1, 10, 980], ['check', 2]], ['street', 0, ['As', 'Kd', '2c']], ['chips 20 bet0>pot @0', 'chips 20 bet1>pot @0', 'chips 20 bet2>pot @0', 'board >board0.0 @0', 'board >board0.1 @60', 'board >board0.2 @120']],
     ['the turn after checks', [...ON_THE_FLOP, ['check', 1], ['check', 2], ['check', 0]], ['street', 0, ['9h']], ['board >board0.3 @0']],
-    ['a vote to run it twice', ON_THE_FLOP, ['vote', 1, true], []],
+    ['a pick of how many times to run it', ON_THE_FLOP, ['vote', 1, 3], []],
     ['the bets going in when the rest is run out', [...ON_THE_FLOP, ['bet', 1, 980, 0], ['call', 2, 980, 0], ['fold', 0]], ['runs', 1], ['chips 980 bet1>pot @0', 'chips 980 bet2>pot @0']],
     ['cards turned face up', ON_THE_FLOP, ['show', 1, ['7d', '2s']], ['show >cards1 @0']],
     ['a hand mucked at the showdown', ON_THE_FLOP, ['muck', 1], []],
@@ -349,7 +349,7 @@ test('a bomb pot sends a bare chip from every seat to the pot as the cards go ou
 });
 
 test('a hand run twice lands each street where it belongs, the second board’s cards after those both boards share', () => {
-  const table = new TestTable({ stacks: [1000, 1000], config: { allowRunItTwice: true } });
+  const table = new TestTable({ stacks: [1000, 1000], config: { maxRuns: 2 } });
   const page = new Page(table, 1);
 
   table.deal({ button: 0, holes: { 0: 'As Ah', 1: 'Kd Kc' }, board: '3c 8d Jh Qs 4d', secondBoard: '2c 5h' });
@@ -362,9 +362,9 @@ test('a hand run twice lands each street where it belongs, the second board’s 
   // The bets go to the pot when the betting ends, which the hand's events only say once the vote is over
   table.call(0);
   assert.deepEqual(page.arrive(), ['show >cards0 @0', 'chips 980 bet0>pot @0', 'chips 980 bet1>pot @0']);
-  table.cmd(0, { type: 'ritVote', agree: true });
+  table.cmd(0, { type: 'ritVote', runs: 2 });
   assert.deepEqual(page.arrive(), []);
-  table.cmd(1, { type: 'ritVote', agree: true });
+  table.cmd(1, { type: 'ritVote', runs: 2 });
   assert.deepEqual(page.arrive(), [], 'and they are not gathered a second time');
 
   const landed: string[][] = [];
@@ -498,7 +498,7 @@ test('a street dealt to two boards lands on both in the moment its one sound is 
   assert.deepEqual(boards(own.moves), ['board0.3 @0', 'board1.3 @0']);
 
   // Run twice, a board is dealt after the other, and a slow view brings the end of one with the start of the next
-  const twice = new TestTable({ stacks: [1000, 1000], config: { allowRunItTwice: true } });
+  const twice = new TestTable({ stacks: [1000, 1000], config: { maxRuns: 2 } });
   const watching = new Page(twice, 1);
 
   twice.deal({ button: 0, holes: { 0: 'As Ah', 1: 'Kd Kc' }, board: '3c 8d Jh Qs 4d', secondBoard: '2c 5h' });
@@ -506,8 +506,8 @@ test('a street dealt to two boards lands on both in the moment its one sound is 
   twice.check(1);
   twice.raise(1, 980);
   twice.call(0);
-  twice.cmd(0, { type: 'ritVote', agree: true });
-  twice.cmd(1, { type: 'ritVote', agree: true });
+  twice.cmd(0, { type: 'ritVote', runs: 2 });
+  twice.cmd(1, { type: 'ritVote', runs: 2 });
   twice.wait(twice.state.hand!.deadline! - twice.now);
   watching.arrive();
   twice.wait(twice.state.hand!.deadline! - twice.now);
@@ -547,7 +547,7 @@ test('nothing moves on the first view, on a table that went back, or for what ha
 });
 
 test('bets that went to the pot while the viewer was away are not seen going there', () => {
-  const table = new TestTable({ stacks: [1000, 1000], config: { allowRunItTwice: true } });
+  const table = new TestTable({ stacks: [1000, 1000], config: { maxRuns: 2 } });
   const page = new Page(table, 1);
 
   table.deal({ button: 0 });
@@ -627,7 +627,7 @@ test('whatever random play brings, in views of one event or many, stays in budge
   for (let seed = 1; seed <= 12; seed++) {
     const rng = seededRng(seed * 104_729);
     const players = 2 + rng.int(9);
-    const table = new TestTable({ stacks: Array.from({ length: players }, () => 200 + rng.int(1800)), seed, config: { allowRunItTwice: true, sevenDeuceBounty: 20, ante: seed % 3 === 0 ? 5 : 0, bombPotAmount: 50, bombPotEvery: seed % 4 === 0 ? 3 : 0 } });
+    const table = new TestTable({ stacks: Array.from({ length: players }, () => 200 + rng.int(1800)), seed, config: { maxRuns: 2, sevenDeuceBounty: 20, ante: seed % 3 === 0 ? 5 : 0, bombPotAmount: 50, bombPotEvery: seed % 4 === 0 ? 3 : 0 } });
     const page = new Page(table, 0);
 
     table.cmd(0, { type: 'start' });

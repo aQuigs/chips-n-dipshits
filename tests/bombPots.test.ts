@@ -474,7 +474,7 @@ test('nobody straddles a bomb pot, and the straddle is back in the hand after', 
 
 test('a bomb pot that puts everyone all in is run twice when the table plays that and everyone agrees, from the flop', () => {
   const t = bombPot(
-    { stacks: [100, 100, 40], config: { allowRunItTwice: true } },
+    { stacks: [100, 100, 40], config: { maxRuns: 2 } },
     { holes: { 0: ACES, 1: KINGS, 2: QUEENS }, board: BOARD, secondBoard: 'Kd 4c' },
   );
   const hand = t.state.hand!;
@@ -484,7 +484,7 @@ test('a bomb pot that puts everyone all in is run twice when the table plays tha
   assert.equal(t.view(2).hand!.canVote, true);
 
   for (const voter of [0, 1, 2]) {
-    t.cmd(voter, { type: 'ritVote', agree: true });
+    t.cmd(voter, { type: 'ritVote', runs: 2 });
   }
   t.runToResult();
 
@@ -499,8 +499,8 @@ test('a bomb pot that puts everyone all in is run twice when the table plays tha
   assertHandRecordsHold(t.effects);
 
   // One no and it runs once, as in any hand
-  const once = bombPot({ stacks: [100, 100], config: { allowRunItTwice: true } }, { holes: { 0: ACES, 1: KINGS }, board: BOARD });
-  once.cmd(1, { type: 'ritVote', agree: false });
+  const once = bombPot({ stacks: [100, 100], config: { maxRuns: 2 } }, { holes: { 0: ACES, 1: KINGS }, board: BOARD });
+  once.cmd(1, { type: 'ritVote', runs: 1 });
   once.runToResult();
   assert.deepEqual(once.state.hand!.boards, [['2c', '7d', '9h', 'Jc', '3s']]);
   assert.deepEqual(once.stacks(), [200, 0]);

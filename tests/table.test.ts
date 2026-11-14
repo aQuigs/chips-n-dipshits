@@ -720,14 +720,14 @@ test('a player is told what their own cards make, on every street, and nobody el
 });
 
 test('a hand run twice is read on each board', () => {
-  const t = new TestTable({ stacks: [500, 500], config: { allowRunItTwice: true } });
+  const t = new TestTable({ stacks: [500, 500], config: { maxRuns: 2 } });
   t.deal({ button: 0, holes: { 0: 'As Ah', 1: 'Ks Kh' }, board: '2c 7d 9h Jc 3s', secondBoard: 'Kd Kc' });
   t.call(0);
   t.check(1);
   t.raise(1, 480);
   t.call(0);
-  t.cmd(0, { type: 'ritVote', agree: true });
-  t.cmd(1, { type: 'ritVote', agree: true });
+  t.cmd(0, { type: 'ritVote', runs: 2 });
+  t.cmd(1, { type: 'ritVote', runs: 2 });
   t.runToResult();
 
   const reads = t.view(1).hand!.holding!.reads;

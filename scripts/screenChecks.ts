@@ -222,8 +222,9 @@ async function inEveryShape(page: Page, look: (shape: string) => Promise<void>, 
     ['wide', Math.floor(width / WIDE_ASPECT) - 1],
   ];
 
+  // The shortest a phone's table gets with a turn's buttons under it, measured on a 360 and a 375 phone in each font
   if (buttonsUp) {
-    shapes.push(['wide', Math.round(width * 0.75)]);
+    shapes.push(['wide', Math.round(width * 0.78)]);
   }
 
   for (const [shape, height] of shapes) {
@@ -2093,36 +2094,38 @@ const CHECKS: Check[] = [
       const marked = { plays: sortedCards('Ks 7d Kh 7s Ah'), idle: sortedCards('2c 9d') };
 
       // On a phone the host picks a seat for themselves, and the move waits for the hand
-      const picked = sixAtTheRiver();
-      let page = await picked.open('Quigs', 'phone');
-      await hintSays(page, 'Two pair, kings and sevens');
-      await page.tap('[data-action="menu"]');
-      await page.tap('.menu [data-action="players"]');
-      await page.tap('.dialog li:has-text("Quigs") [data-action="move"]');
-      await page.waitForSelector('.dialog', { state: 'detached' });
-      assert.deepEqual(await marking(page), marked, 'picking a seat changed the marking');
-      await page.tap('[data-move-to="7"]');
-      await page.waitForSelector('.seat.me .move-note');
-      assert.equal(picked.view('Quigs').seats[0]?.moveTo, 7);
+      for (const screen of ['phone', 'smallPhone'] as const) {
+        const picked = sixAtTheRiver();
+        const page = await picked.open('Quigs', screen);
+        await hintSays(page, 'Two pair, kings and sevens');
+        await page.tap('[data-action="menu"]');
+        await page.tap('.menu [data-action="players"]');
+        await page.tap('.dialog li:has-text("Quigs") [data-action="move"]');
+        await page.waitForSelector('.dialog', { state: 'detached' });
+        assert.deepEqual(await marking(page), marked, 'picking a seat changed the marking');
+        await page.tap('[data-move-to="7"]');
+        await page.waitForSelector('.seat.me .move-note');
+        assert.equal(picked.view('Quigs').seats[0]?.moveTo, 7);
 
-      await inEveryShape(page, async (shape) => {
-        await shot(page, `hint-move-waiting-phone-${shape}`);
-        assert.deepEqual(await marking(page), marked);
-        await assertMarked(page);
-        await assertHintFits(page);
+        await inEveryShape(page, async (shape) => {
+          await shot(page, `hint-move-waiting-${screen}-${shape}`);
+          assert.deepEqual(await marking(page), marked);
+          await assertMarked(page);
+          await assertHintFits(page);
 
-        const [note] = await boxes(page, '.seat.me .move-note');
-        const [plate] = await boxes(page, '.seat.me .plate');
-        assert.ok(note!.left >= plate!.left && note!.right <= plate!.right && note!.top >= plate!.top && note!.bottom <= plate!.bottom, 'the note of a move sticks out of the seat');
-        assertApart(await textBoxes(page, `${HINT} .read`), [note!], 'the hand hint and the note of a move');
-        assert.deepEqual(await squeezed(page, '.seat.me .move-note'), [], 'the note of a move is cut off');
-      });
-      await page.context().close();
+          const [note] = await boxes(page, '.seat.me .move-note');
+          const [plate] = await boxes(page, '.seat.me .plate');
+          assert.ok(note!.left >= plate!.left && note!.right <= plate!.right && note!.top >= plate!.top && note!.bottom <= plate!.bottom, 'the note of a move sticks out of the seat');
+          assertApart(await textBoxes(page, `${HINT} .read`), [note!], 'the hand hint and the note of a move');
+          assert.deepEqual(await squeezed(page, '.seat.me .move-note'), [], 'the note of a move is cut off');
+        });
+        await page.context().close();
+      }
 
       // On the desktop the host drags their own seat, marked cards and all, onto an open one
       for (const shape of ['wide', 'tall'] as const) {
         const dragged = sixAtTheRiver();
-        page = await dragged.open('Quigs', 'desktop');
+        const page = await dragged.open('Quigs', 'desktop');
         if (shape === 'tall') {
           await setStageHeight(page, 900);
         }

@@ -16,12 +16,14 @@
 }
 
 /*
- * Lying down, the seats either side of the viewer's sit a quarter of the table away at the same height,
- * so a name wider than the room between them wraps instead of running under them. Standing up, nothing
- * else is that low.
+ * Lying down, the seats either side of the viewer's sit 23% of the table's width away at the same
+ * height, so a name wider than the room between them wraps instead of running under them. Standing
+ * up, nothing else is that low.
  */
 .table.wide .seat.me .hint {
-  max-width: max(var(--seat-w), 46cqw - var(--seat-w));
+  /* As wide as its name, up to that room, not as narrow as the seat it hangs from */
+  width: max-content;
+  max-width: max(var(--seat-w), 46cqw - var(--seat-w-other));
   white-space: normal;
 }
 

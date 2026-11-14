@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { LIMITS } from '../src/engine/index.ts';
-import type { Command, KnownPlayer, TableView } from '../src/engine/index.ts';
+import type { Command, KnownPlayer } from '../src/engine/index.ts';
 import { SheetPlayerStore } from '../src/gas/sheetPlayerStore.ts';
 import { SheetStore } from '../src/gas/sheetStore.ts';
 import type { ApiResponse, Auth, Who } from '../src/server/api.ts';
@@ -16,7 +16,7 @@ import { PokerService } from '../src/server/service.ts';
 import { StoreBusyError } from '../src/server/store.ts';
 import type { TableStore } from '../src/server/store.ts';
 import { Calls, FakeCache, FakeLock, FakeSpreadsheet } from './fakes.ts';
-import { DAY_MS, seededRng } from './helpers.ts';
+import { DAY_MS, failure, joined, seededRng, viewOf } from './helpers.ts';
 
 const NOW = 1_700_000_000_000;
 
@@ -55,26 +55,6 @@ function deployed() {
   const players = new SheetPlayerStore({ spreadsheet: () => sheet, cache, lock, flush: () => calls.players.note('flush'), rng: seededRng(77) });
 
   return { ...setup(players, tables), lock, calls, sheet, cache, tab: () => sheet.sheets.get('Players')! };
-}
-
-type Joined = Extract<ApiResponse, { kind: 'joined' }>;
-
-function joined(response: ApiResponse): Joined {
-  assert.ok(response.ok && response.kind === 'joined', JSON.stringify(response));
-
-  return response;
-}
-
-function viewOf(response: ApiResponse): TableView {
-  assert.ok(response.ok && response.kind === 'view', JSON.stringify(response));
-
-  return response.view;
-}
-
-function failure(response: ApiResponse) {
-  assert.equal(response.ok, false, JSON.stringify(response));
-
-  return response as Extract<ApiResponse, { ok: false }>;
 }
 
 const NEW: Who = { as: 'new' };
@@ -128,12 +108,12 @@ test('a player the list does not have, as after their row was removed, gets in u
   const { listed, create, join } = setup();
   const host = joined(create('Host'));
 
-  const gone = joined(join(host.view.id, 'Bob', known('GONE234567')));
+  const gone = joined(join(host.view.id, 'Bob', known('GONE234')));
   assert.deepEqual(gone.view.you, { id: gone.auth.id, name: 'Bob', role: 'member', seat: null, identity: null });
 
   // The name was the list's and not theirs to change, so a table that has it makes room all the same
-  assert.equal(joined(join(host.view.id, 'Bob', known('GONE234567'))).view.you.name, 'Bob 2');
-  assert.equal(joined(create('Bob', known('GONE234567'))).view.you.identity, null);
+  assert.equal(joined(join(host.view.id, 'Bob', known('GONE234'))).view.you.name, 'Bob 2');
+  assert.equal(joined(create('Bob', known('GONE234'))).view.you.identity, null);
   assert.deepEqual(listed(), []);
 });
 
@@ -141,7 +121,7 @@ test('a request that says who its sender is in a shape the game does not know is
   const { service, store, listed, create } = setup();
   const host = joined(create('Host'));
 
-  for (const who of ['Bob', 7, [], {}, { as: 'known' }, { as: 'known', id: 7 }, { as: 'someone else' }, { id: 'ABCDEFGH23' }]) {
+  for (const who of ['Bob', 7, [], {}, { as: 'known' }, { as: 'known', id: 7 }, { as: 'someone else' }, { id: 'ABCDEFG' }]) {
     for (const request of [{ op: 'create', name: 'Ann', who }, { op: 'join', tableId: host.view.id, name: 'Ann', who }, { op: 'identify', tableId: host.view.id, auth: host.auth, who }]) {
       assert.deepEqual(service.handle(request), { ok: false, code: 'invalid', error: 'Malformed request' }, JSON.stringify(request));
     }
@@ -263,8 +243,8 @@ test('when the list of players cannot be asked or written to, everyone still get
 
     const host = joined(create('Host', NEW));
     const ann = joined(join(host.view.id, 'Ann', NEW));
-    const bob = joined(join(host.view.id, 'Bob', known('ABCDEFGH23')));
-    const second = joined(join(host.view.id, 'Bob', known('ABCDEFGH23')));
+    const bob = joined(join(host.view.id, 'Bob', known('ABCDEFG')));
+    const second = joined(join(host.view.id, 'Bob', known('ABCDEFG')));
 
     assert.deepEqual([host, ann, bob, second].map((member) => member.view.you.identity), [null, null, null, null], what);
     assert.deepEqual(viewOf(poll(host.view.id, host.auth)).members.map((member) => member.name), ['Host', 'Ann', 'Bob', 'Bob 2'], what);
@@ -500,9 +480,9 @@ test('saying who you are is refused when it cannot be done, and never without th
 
     if (players === busy) {
       assert.deepEqual(identify(host.view.id, ann.auth, NEW), { ok: false, code: 'busy', error: 'The list of players is busy, try again' });
-      assert.deepEqual(identify(host.view.id, ann.auth, known('ABCDEFGH23')), { ok: false, code: 'busy', error: 'The list of players is busy, try again' });
+      assert.deepEqual(identify(host.view.id, ann.auth, known('ABCDEFG')), { ok: false, code: 'busy', error: 'The list of players is busy, try again' });
     } else {
-      assert.equal(failure(identify(host.view.id, ann.auth, known('ABCDEFGH23'))).error, 'That player is no longer on the list. Pick again');
+      assert.equal(failure(identify(host.view.id, ann.auth, known('ABCDEFG'))).error, 'That player is no longer on the list. Pick again');
       assert.match(failure(identify(host.view.id, ann.auth, NEW, '=1')).error, /Names start with/);
       assert.deepEqual(service.handle({ op: 'identify', tableId: host.view.id, auth: ann.auth }), { ok: false, code: 'invalid', error: 'The request does not say who you are' });
     }

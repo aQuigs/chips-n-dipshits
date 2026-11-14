@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import type { PrefMemory } from '../src/client/prefs.ts';
 import { applyCommand, createTable, addMember, freshDeck, seededRng, startHand, startOver, tick, viewFor, SEAT_COUNT } from '../src/engine/index.ts';
 import type { Card, Command, Ctx, Effect, Hand, HandPlayer, HandRecord, LedgerEntry, Rng, TableConfig, TableState, TableView } from '../src/engine/index.ts';
+import type { ApiResponse, Joined } from '../src/server/api.ts';
 
 /** A player's cards the table has not seen. */
 export const faceDownCards = (player: HandPlayer): Card[] => player.cards.filter((_card, nth) => !player.shown[nth]);
@@ -342,6 +343,27 @@ export function chipsIn(t: TestTable): number[][] {
  */
 export function withoutTheServersPart(view: TableView): unknown {
   return { ...view, version: 0, now: 0, feed: [], hand: view.hand && { ...view.hand, deadline: null, pots: [] } };
+}
+
+/** The service's answer, as one to someone who made or joined a table. */
+export function joined(response: ApiResponse): Joined {
+  assert.ok(response.ok && response.kind === 'joined', JSON.stringify(response));
+
+  return response;
+}
+
+/** The service's answer, as a view of the table. */
+export function viewOf(response: ApiResponse): TableView {
+  assert.ok(response.ok && response.kind === 'view', JSON.stringify(response));
+
+  return response.view;
+}
+
+/** The service's answer, as a refusal. */
+export function failure(response: ApiResponse) {
+  assert.equal(response.ok, false, JSON.stringify(response));
+
+  return response as Extract<ApiResponse, { ok: false }>;
 }
 
 /** A browser's storage for preferences, kept in `kept`. */

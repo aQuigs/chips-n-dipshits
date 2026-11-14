@@ -1,6 +1,6 @@
 import { playerName } from '../engine/index.ts';
 import type { KnownPlayer, Rng } from '../engine/index.ts';
-import { dueToBeSeen, inListOrder, mayAdd, newPlayerId } from './playerStore.ts';
+import { dueToBeSeen, inListOrder, listed, newcomer } from './playerStore.ts';
 import type { KeptPlayer, PlayerStore } from './playerStore.ts';
 
 /** Keeps the known players in memory, for local play and tests. `rng` is where their ids come from: one of its own wherever the game's is seeded, so that a new player changes no card dealt after. */
@@ -26,17 +26,13 @@ export class MemoryPlayerStore implements PlayerStore {
       found.seenAt = at;
     }
 
-    return { id: found.id, name: found.name };
+    return listed(found);
   }
 
   add(name: string, at: number): KnownPlayer {
-    const clean = playerName(name);
-
-    mayAdd(this.kept, this.kept.length, clean);
-
-    const added = { id: newPlayerId(this.rng, this.kept), name: clean, seenAt: at };
+    const added = newcomer(this.kept, this.kept.length, playerName(name), at, this.rng);
     this.kept.push(added);
 
-    return { id: added.id, name: added.name };
+    return listed(added);
   }
 }

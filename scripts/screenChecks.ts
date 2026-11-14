@@ -204,14 +204,6 @@ async function standOrLie(page: Page, screen: ScreenName): Promise<void> {
 
 const TO_THE_CENT = 'This table plays to the cent, so an amount has at most two decimals';
 
-/** Waits for something the page does by itself that leaves no mark on the screen to wait for. */
-async function reached(done: () => boolean, what: string): Promise<void> {
-  for (const deadline = Date.now() + 15_000; !done(); ) {
-    assert.ok(Date.now() < deadline, `never happened: ${what}`);
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-}
-
 /** A page that asks "who are you?", the front page or a table's link, once it has heard which players the game knows. */
 async function askedWho(rig: Rig, screen: ScreenName, path: string): Promise<Page> {
   const page = await rig.page(screen, 'a visitor');
@@ -10268,17 +10260,10 @@ const CHECKS: Check[] = [
           // The list is kept from the page until the check has looked: what it says first comes from the browser alone
           const page = await rig.page(screen, 'a returning player');
           const press = pressOn(page, screen);
-          let letIn = () => {};
-          const held = new Promise<void>((resolve) => (letIn = resolve));
+          const list = await Gate.on(page, 'players');
 
           await page.addInitScript(remembers(wide!, typed));
-          await page.route('**/api', async (route) => {
-            if (JSON.parse(route.request().postData() ?? '{}').op === 'players') {
-              await held;
-            }
-
-            await route.continue();
-          });
+          await list.close('requests');
           await page.goto(`${rig.url}${path}`);
           await page.waitForSelector('.who-remembered');
           await page.evaluate('document.fonts.ready.then(() => undefined)');
@@ -10291,7 +10276,7 @@ const CHECKS: Check[] = [
 
             if (when === 'before the list is in') {
               const heard = page.waitForResponse((response) => (response.request().postData() ?? '').includes('"op":"players"'));
-              letIn();
+              await list.open();
               await heard;
             }
           }
@@ -10390,25 +10375,21 @@ const CHECKS: Check[] = [
         for (const remembered of [false, true]) {
           const page = await rig.page(screen, 'a visitor without the list');
           const press = pressOn(page, screen);
-          let asked = 0;
+          const list = await Gate.on(page, 'players');
 
           if (remembered) {
             await page.addInitScript(`localStorage.setItem('cnd.player', ${JSON.stringify(JSON.stringify(bob))})`);
           }
 
-          await page.route('**/api', (route) => {
-            if (JSON.parse(route.request().postData() ?? '{}').op !== 'players') {
-              return route.continue();
-            }
-
-            asked += 1;
-
-            return route.abort('failed');
-          });
+          await list.close('requests');
           await page.goto(`${rig.url}?table=${table.id}`);
           await page.waitForSelector('[data-action="join-table"]:enabled');
           await page.evaluate('document.fonts.ready.then(() => undefined)');
-          await reached(() => asked >= 2, 'the page asks for the list again');
+
+          // The request fails, as on a bad line, and the page asks again
+          await list.holding();
+          await list.lose();
+          await list.holding();
 
           assert.equal(await page.getAttribute('.who-ask', 'data-who'), remembered ? 'remembered' : 'name');
           assert.equal(await toastShown(page), 0, 'the page said something about a list it can do without');

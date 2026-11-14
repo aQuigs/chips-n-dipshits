@@ -2,9 +2,9 @@
  * Who the person at this browser is on the game's list of players: what the browser remembers of it,
  * and what a form asking "who are you?" offers and sends. No part of it touches the page.
  */
-import { playerName } from '../engine/names.ts';
-import { listedLike } from '../engine/players.ts';
-import type { KnownPlayer } from '../engine/players.ts';
+import { listedLike, playerName } from '../engine/names.ts';
+import type { KnownPlayer } from '../engine/types.ts';
+import type { PrefMemory } from './prefs.ts';
 import type { Who } from '../server/api.ts';
 
 /**
@@ -26,10 +26,8 @@ function playerFrom(kept: string | null): KnownPlayer | null {
   }
 }
 
-/** The part of the browser's memory this needs. It never throws: a browser that refuses storage just forgets. */
-export interface PlayerMemory {
-  get(key: string): string | null;
-  set(key: string, value: string): void;
+/** The browser's memory as the preferences have it, with a way to forget. */
+export interface PlayerMemory extends PrefMemory {
   remove(key: string): void;
 }
 
@@ -136,11 +134,7 @@ export function offerOf(asked: Asked): Offer {
  * name the list has for them, which for someone new is the name they typed as the list keeps names.
  */
 export function playerFor(id: string, as: Answer): KnownPlayer {
-  try {
-    return { id, name: playerName(as.name) };
-  } catch {
-    return { id, name: as.name };
-  }
+  return { id, name: as.who.as === 'new' ? playerName(as.name) : as.name };
 }
 
 export function answerOf(asked: Asked): Answer {

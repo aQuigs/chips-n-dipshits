@@ -1,6 +1,6 @@
 import { addMember, applyCommand, createTable, GameError, listedLike, playerName, presetName, presetSettings, randomId, requireLevel, setIdentity, sharedPreset, tick, viewFor } from '../engine/index.ts';
 import type { Arriving, Command, Ctx, Member, Preset, Rng, TableState } from '../engine/index.ts';
-import type { ApiResponse, Auth, ErrorCode, Who } from './api.ts';
+import type { ApiResponse, Auth, ErrorCode, Joined, Who } from './api.ts';
 import { NOWHERE } from './errorLog.ts';
 import type { ErrorLog, Failure } from './errorLog.ts';
 import { NameOnList } from './playerStore.ts';
@@ -128,7 +128,6 @@ interface Arrival extends Arriving {
   enlist: boolean;
 }
 
-type Joined = Extract<ApiResponse, { kind: 'joined' }>;
 
 /** Anyone with the game's address may list the presets, so they are handed out holding only what presets keep. */
 function presetsAnswer(presets: Preset[]): ApiResponse {

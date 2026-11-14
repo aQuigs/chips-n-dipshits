@@ -53,14 +53,16 @@ async function timed(what: string, step: () => Promise<unknown>): Promise<void> 
   console.log(`  ${what}: ${((Date.now() - started) / 1000).toFixed(1)} s`);
 }
 
+type ScriptAnswer = { ok: boolean; presets?: Preset[]; players?: KnownPlayer[]; error?: string };
+
 /** Asks the script directly from inside the game's frame, the way the page itself does, as the page's build. */
-async function ask(visitor: Visitor, request: object): Promise<{ ok: boolean; presets?: Preset[]; players?: KnownPlayer[]; error?: string }> {
+async function ask(visitor: Visitor, request: object): Promise<ScriptAnswer> {
   const body = JSON.stringify(request);
 
   return visitor.app.locator('body').evaluate(`new Promise((resolve, reject) => google.script.run
     .withSuccessHandler((json) => resolve(JSON.parse(json)))
     .withFailureHandler(reject)
-    .api(JSON.stringify({ ...${body}, build: window.CND_BUILD })))`) as Promise<{ ok: boolean; presets?: Preset[]; players?: KnownPlayer[]; error?: string }>;
+    .api(JSON.stringify({ ...${body}, build: window.CND_BUILD })))`) as Promise<ScriptAnswer>;
 }
 
 async function checkPlayers(visitor: Visitor): Promise<KnownPlayer[]> {

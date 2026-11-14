@@ -1,8 +1,8 @@
 import { listedLike, playerName } from '../engine/index.ts';
 import type { KnownPlayer, Rng } from '../engine/index.ts';
-import { dueToBeSeen, inListOrder, isPlayerId, mayAdd, newPlayerId } from '../server/playerStore.ts';
+import { dueToBeSeen, inListOrder, isPlayerId, listed, newcomer } from '../server/playerStore.ts';
 import type { KeptPlayer, PlayerStore } from '../server/playerStore.ts';
-import { FIRST_DATA_ROW, openTab, TEXT, TIMESTAMP, underLock } from './sheets.ts';
+import { FIRST_DATA_ROW, freeRow, openTab, TEXT, TIMESTAMP, underLock } from './sheets.ts';
 import type { CacheLike, LockLike, SheetLike, SpreadsheetLike } from './sheets.ts';
 
 export interface SheetPlayerStoreDeps {
@@ -10,7 +10,6 @@ export interface SheetPlayerStoreDeps {
   cache: CacheLike;
   lock: LockLike;
   flush: () => void;
-  /** Where a new player's id comes from. */
   rng: Rng;
 }
 
@@ -35,6 +34,13 @@ interface Row {
   player: KeptPlayer | null;
 }
 
+/** The tab as it was read: whether it has its headers, every row with anything in it, and the players that could be read, in the order of their rows. */
+interface Tab {
+  headed: boolean;
+  rows: Row[];
+  players: KeptPlayer[];
+}
+
 /**
  * One row's player, or null: an id the game did not give, a name that is no name, or an id or a name
  * that a row above already has, which is then the one that counts.
@@ -49,10 +55,6 @@ function keptOf(cells: unknown[], above: KeptPlayer[]): KeptPlayer | null {
   } catch {
     return null;
   }
-}
-
-function readable(rows: Row[]): KeptPlayer[] {
-  return rows.flatMap(({ player }) => (player ? [player] : []));
 }
 
 /**
@@ -83,7 +85,7 @@ export class SheetPlayerStore implements PlayerStore {
       this.noteSeen(id, at);
     }
 
-    return { id: found.id, name: found.name };
+    return listed(found);
   }
 
   add(name: string, at: number): KnownPlayer {
@@ -91,12 +93,8 @@ export class SheetPlayerStore implements PlayerStore {
 
     return this.locked(() => {
       const sheet = this.tab(true)!;
-      const { headed, rows } = this.read(sheet);
-      const players = readable(rows);
-
-      mayAdd(players, rows.length, clean);
-
-      const added: KeptPlayer = { id: newPlayerId(this.deps.rng, players), name: clean, seenAt: at };
+      const { headed, rows, players } = this.read(sheet);
+      const added = newcomer(players, rows.length, clean, at, this.deps.rng);
 
       this.write(() => {
         // A tab that lost its headers, as when making it failed halfway, gets them back
@@ -104,7 +102,7 @@ export class SheetPlayerStore implements PlayerStore {
           sheet.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]);
         }
 
-        const range = sheet.getRange(this.freeRow(rows), 1, 1, HEADERS.length);
+        const range = sheet.getRange(freeRow(rows), 1, 1, HEADERS.length);
 
         // Plain text before anything is written: an id like 2E56789234 is not turned into a number, and
         // nothing a player typed is ever taken for a formula, whatever the rule for names comes to allow
@@ -113,7 +111,7 @@ export class SheetPlayerStore implements PlayerStore {
       });
       this.remember([...players, added]);
 
-      return { id: added.id, name: added.name };
+      return listed(added);
     });
   }
 
@@ -140,7 +138,7 @@ export class SheetPlayerStore implements PlayerStore {
       }
 
       const sheet = this.tab(false);
-      const players = sheet ? readable(this.read(sheet).rows) : [];
+      const players = sheet ? this.read(sheet).players : [];
 
       this.remember(players);
 
@@ -188,39 +186,35 @@ export class SheetPlayerStore implements PlayerStore {
   }
 
   /**
-   * Whether the tab has its headers, and every row below them with anything in its four cells, as a
-   * player or null. One that can't be read still takes a place, so the list never takes more rows than
-   * it may. A row with nothing in them, cleared by hand or holding only a note to the side, is free.
+   * A row with anything in its four cells is a player or null: one that can't be read still takes a
+   * place, so the list never takes more rows than it may. A row with nothing in them, cleared by hand
+   * or holding only a note to the side, is free.
    */
-  private read(sheet: SheetLike): { headed: boolean; rows: Row[] } {
+  private read(sheet: SheetLike): Tab {
     const last = sheet.getLastRow();
     const values = last < 1 ? [] : sheet.getRange(1, 1, last, HEADERS.length).getValues();
     const blank = (cells: unknown[]) => cells.every((cell) => String(cell).trim() === '');
     const rows: Row[] = [];
+    const players: KeptPlayer[] = [];
 
     // The first row is the headers whatever it says, except a player: deleting the header row by hand
     // moves one up into its place, and they are on the list still
     const first = values.length > 0 && keptOf(values[0]!, []) ? 1 : FIRST_DATA_ROW;
 
     values.slice(first - 1).forEach((cells, index) => {
-      if (!blank(cells)) {
-        rows.push({ row: first + index, player: keptOf(cells, readable(rows)) });
+      if (blank(cells)) {
+        return;
+      }
+
+      const player = keptOf(cells, players);
+
+      rows.push({ row: first + index, player });
+      if (player) {
+        players.push(player);
       }
     });
 
-    return { headed: values.length > 0 && !blank(values[0]!), rows };
-  }
-
-  /** The first row below the headers that holds nothing, which is never past the limit while there is room for one more player. */
-  private freeRow(rows: Row[]): number {
-    const taken = new Set(rows.map(({ row }) => row));
-    let row = FIRST_DATA_ROW;
-
-    while (taken.has(row)) {
-      row += 1;
-    }
-
-    return row;
+    return { headed: values.length > 0 && !blank(values[0]!), rows, players };
   }
 
   /**
@@ -231,7 +225,7 @@ export class SheetPlayerStore implements PlayerStore {
     try {
       this.locked(() => {
         const sheet = this.tab(false);
-        const rows = sheet ? this.read(sheet).rows : [];
+        const { rows, players } = sheet ? this.read(sheet) : { rows: [], players: [] };
         const found = rows.find(({ player }) => player?.id === id);
 
         // Someone else's request may have noted them while this one waited for the lock
@@ -245,7 +239,7 @@ export class SheetPlayerStore implements PlayerStore {
           found.player.seenAt = at;
         }
 
-        this.remember(readable(rows));
+        this.remember(players);
       });
     } catch (error) {
       console.error(error);

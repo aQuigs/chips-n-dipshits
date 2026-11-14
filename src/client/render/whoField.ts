@@ -1,4 +1,4 @@
-import type { KnownPlayer } from '../../engine/players.ts';
+import type { KnownPlayer } from '../../engine/types.ts';
 import { LIMITS } from '../../engine/validate.ts';
 import { answerOf, offerOf } from '../knownPlayers.ts';
 import type { Answer, Asked } from '../knownPlayers.ts';
@@ -21,8 +21,8 @@ export interface PlayerHandlers {
 
 export interface WhoField {
   element: HTMLElement;
-  /** The list of known players has been heard from. `remembered` is who the browser still remembers being, now that it has. */
-  offer(players: readonly KnownPlayer[], remembered: KnownPlayer | null): void;
+  /** The list of known players has been heard from. */
+  offer(listed: Listed): void;
   /** What the form it stands in sends. */
   answer(): Answer;
 }
@@ -127,9 +127,9 @@ export function whoField(id: string, typed: string, remembered: KnownPlayer | nu
   return {
     element,
 
-    offer(players, stillRemembered) {
-      asked.players = players;
-      asked.remembered = stillRemembered;
+    offer(listed) {
+      asked.players = listed.players;
+      asked.remembered = listed.remembered;
       draw();
     },
 

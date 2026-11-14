@@ -67,14 +67,15 @@ function sleep(ms: number): Promise<void> {
  * instead of a Sheet. For trying changes and for the browser tests.
  */
 export async function startDevServer(options: DevServerOptions): Promise<DevServer> {
+  const rng = new ByteRng(() => [...randomBytes(RANDOM_BATCH_BYTES)]);
   const game =
     options.service ??
     new PokerService({
       store: new MemoryStore(),
       presets: new MemoryPresetStore(),
-      players: new MemoryPlayerStore(new ByteRng(() => [...randomBytes(RANDOM_BATCH_BYTES)])),
+      players: new MemoryPlayerStore(rng),
       clock: { now: () => Date.now() },
-      rng: new ByteRng(() => [...randomBytes(RANDOM_BATCH_BYTES)]),
+      rng,
       errors: options.errors,
     });
   let service = new BuildGate(game, UNSTAMPED_BUILD);

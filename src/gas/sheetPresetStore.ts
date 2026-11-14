@@ -2,7 +2,7 @@ import { presetName, sameName } from '../engine/index.ts';
 import type { Preset } from '../engine/index.ts';
 import { placeOf } from '../server/presetStore.ts';
 import type { PresetStore, SavedPreset } from '../server/presetStore.ts';
-import { FIRST_DATA_ROW, openTab, TEXT, TIMESTAMP, underLock } from './sheets.ts';
+import { FIRST_DATA_ROW, freeRow, openTab, TEXT, TIMESTAMP, underLock } from './sheets.ts';
 import type { LockLike, SheetLike, SpreadsheetLike } from './sheets.ts';
 
 export interface SheetPresetStoreDeps {
@@ -60,7 +60,7 @@ export class SheetPresetStore implements PresetStore {
       const sheet = this.tab(true)!;
       const rows = this.rows(sheet);
       const place = placeOf(rows.map((kept) => kept.preset?.name ?? null), preset.name, replace);
-      const at = place < rows.length ? rows[place]!.row : this.freeRow(rows);
+      const at = place < rows.length ? rows[place]!.row : freeRow(rows);
       const range = sheet.getRange(at, 1, 1, HEADERS.length);
 
       // Plain text, so a name that starts with = is not taken for a formula
@@ -101,17 +101,5 @@ export class SheetPresetStore implements PresetStore {
     const values = last < FIRST_DATA_ROW ? [] : sheet.getRange(FIRST_DATA_ROW, 1, last - FIRST_DATA_ROW + 1, 2).getValues();
 
     return values.flatMap((cells, index) => (cells.every((cell) => String(cell).trim() === '') ? [] : [{ row: FIRST_DATA_ROW + index, preset: presetOf(cells) }]));
-  }
-
-  /** The first row below the headers that no preset takes, which is never past the limit while there is room for one more. */
-  private freeRow(rows: Row[]): number {
-    const taken = new Set(rows.map(({ row }) => row));
-    let row = FIRST_DATA_ROW;
-
-    while (taken.has(row)) {
-      row += 1;
-    }
-
-    return row;
   }
 }

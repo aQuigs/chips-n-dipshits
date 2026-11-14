@@ -272,20 +272,16 @@ export class App {
   }
 
   /**
-   * Asks for the players the game knows as soon as a screen that asks "who are you?" is up, and again
-   * when an attempt from it came to nothing, since the usual reason is a name the list turned out to
-   * have. Like the presets they are only a help: the screen asks for a name without them, and a
-   * failure is tried again quietly for as long as the screen shows.
+   * Brings a screen something it works without, as soon as it is up: a failure is tried again quietly
+   * for as long as the screen shows and the help is still `wanted`.
    */
-  private async offerPlayers(screen: AsksWho): Promise<void> {
-    const asked = ++this.playersAsked;
-
-    for (let retryIn = 0; this.root.contains(screen.element) && asked === this.playersAsked; ) {
+  private async offerWhileShown<T>(screen: HTMLElement, load: () => Promise<T>, offer: (loaded: T) => void, wanted: () => boolean = () => true): Promise<void> {
+    for (let retryIn = 0; this.root.contains(screen) && wanted(); ) {
       try {
-        const { players, remembered } = await this.listPlayers();
+        const loaded = await load();
 
-        if (this.root.contains(screen.element)) {
-          screen.offerPlayers(players, remembered);
+        if (this.root.contains(screen)) {
+          offer(loaded);
         }
 
         return;
@@ -297,24 +293,19 @@ export class App {
   }
 
   /**
-   * Asks for the group's presets as soon as the lobby is up, so they are there by the time the host has
-   * typed their name. They are only a help: a failure is tried again quietly for as long as the lobby shows.
+   * The players the game knows, for a screen that asks "who are you?". Asked for again when an attempt
+   * from the screen came to nothing, since the usual reason is a name the list turned out to have; only
+   * the latest asking goes on trying.
    */
-  private async offerPresets(lobby: LobbyScreen): Promise<void> {
-    for (let retryIn = 0; this.root.contains(lobby.element); ) {
-      try {
-        const presets = await this.listPresets();
+  private offerPlayers(screen: AsksWho): Promise<void> {
+    const asked = ++this.playersAsked;
 
-        if (this.root.contains(lobby.element)) {
-          lobby.offerPresets(presets);
-        }
+    return this.offerWhileShown(screen.element, () => this.listPlayers(), (listed) => screen.offerPlayers(listed), () => asked === this.playersAsked);
+  }
 
-        return;
-      } catch {
-        retryIn = nextRetry(retryIn);
-        await sleep(retryIn);
-      }
-    }
+  /** The group's presets, so that they are there by the time the host has typed their name. */
+  private offerPresets(lobby: LobbyScreen): Promise<void> {
+    return this.offerWhileShown(lobby.element, () => this.listPresets(), (presets) => lobby.offerPresets(presets));
   }
 
   /** The compact theme picker for the screens before the table. */
@@ -491,10 +482,9 @@ export class App {
   }
 
   /**
-   * Remembers, beside the preferences, who the visitor has just become at a table: the name they
-   * typed, and the known player the table has them down as. One it has down as nobody was let in while
-   * the list of players could not be asked or had no room; they are told where to say it again, and
-   * whoever the browser remembered before is kept, since only the list itself says a player is gone.
+   * One the table has down as nobody got in while the list of players could not be asked or had no
+   * room. Whoever the browser remembered before is kept then, since only a list that loaded says a
+   * player is gone.
    */
   private noteWho(as: Answer, view: TableView): void {
     if (as.who.as === 'new') {

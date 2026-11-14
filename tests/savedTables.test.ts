@@ -86,9 +86,9 @@ test('every table saved before the game knew its players loads with members nobo
 
     const t = TestTable.adopt(state);
     const first = state.members[0]!;
-    setIdentity(state, first.id, { id: 'KNOWN23456', name: first.name }, t.ctx());
+    setIdentity(state, first.id, { id: 'KNOWN23', name: first.name }, t.ctx());
 
-    assert.deepEqual(state.members.map((member) => member.identity), ['KNOWN23456', ...state.members.slice(1).map(() => null)], file);
+    assert.deepEqual(state.members.map((member) => member.identity), ['KNOWN23', ...state.members.slice(1).map(() => null)], file);
     assertInvariants(state, t.now);
     assert.deepEqual(restoreState(JSON.stringify(state)), state, `${file}: a table with an identity in it did not load as it was saved`);
   }

@@ -127,7 +127,8 @@
 
 .field input:where(:not([type='radio'])),
 .say input,
-.copy input {
+.copy input,
+.who-filter {
   width: 100%;
   min-height: 44px;
   padding: 0 12px;

@@ -82,6 +82,16 @@ export interface Member {
   identity: string | null;
 }
 
+/**
+ * A player on the game's list, known from one night to the next. The id is the player: it is what a
+ * member of a table carries and what anything kept about them over time is kept under, and it never
+ * changes. The name is only how the list shows them, and whoever runs the game may change it.
+ */
+export interface KnownPlayer {
+  id: string;
+  name: string;
+}
+
 export interface Seat {
   playerId: string;
   stack: number;

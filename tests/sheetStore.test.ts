@@ -963,7 +963,7 @@ test('after the longest night the fullest table still fits its row and the cache
   }
 
   // Every one of them a player the game knows
-  t.state.members.forEach((member, index) => (member.identity = `KNOWN${10_000 + index}`));
+  t.state.members.forEach((member, index) => (member.identity = `KNOWN${10 + index}`));
 
   // A hand that all ten are in, with some betting behind it
   t.deal({ button: 0 });
@@ -2183,7 +2183,7 @@ test('two runs that fail first at the same moment make one Errors tab with one h
 
 const PLAYER_ROWS = 1 + LIMITS.knownPlayers;
 const PLAYER_HEADERS = ['ID (the game knows a player by this, so leave it as it is)', 'Name', 'First seen', 'Last seen'];
-const PLAYER_ID = /^[A-HJ-NP-Z2-9]{10}$/;
+const PLAYER_ID = /^[A-HJ-NP-Z2-9]{7}$/;
 
 function playerSetup(rng: Rng = seededRng(77)) {
   const lock = new FakeLock();
@@ -2247,7 +2247,7 @@ for (const [kind, make] of [
     assert.deepEqual(store.seen(ann.id, NOW + SEEN_EVERY_MS), ann);
     assert.deepEqual(store.list(), [ann, bob]);
 
-    assert.equal(store.seen('NOBODY2345', NOW), null);
+    assert.equal(store.seen('NOBODY2', NOW), null);
     assert.equal(store.seen('', NOW), null);
     assert.deepEqual(store.list(), [ann, bob]);
   });
@@ -2302,7 +2302,7 @@ test('players in a Sheet that has never had one: asking finds nobody and makes n
   const { run, spreadsheet, tab } = playerSetup();
 
   assert.deepEqual(run().list(), []);
-  assert.equal(run().seen('ABCDEFGH23', NOW), null);
+  assert.equal(run().seen('ABCDEFG', NOW), null);
   assert.equal(spreadsheet.sheets.has('Players'), false, 'reading made the tab');
 
   const quigs = run().add('Quigs', NOW);
@@ -2359,19 +2359,19 @@ test('a Players tab whose header row was deleted by hand still has the player wh
 });
 
 test('ids and names that a spreadsheet would take for a number or a date are kept as the text they are', () => {
-  // An id spelled 2E56789234, which a cell not formatted as text keeps as 2 followed by 56789234 zeros
+  // An id spelled 2E56789, which a cell not formatted as text keeps as 2 followed by 56789 zeros
   const letters = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  const spelled = [...'2E56789234', ...['A', 'B', 'C', 'D'].map((letter) => letter.repeat(10)).join('')].map((letter) => letters.indexOf(letter));
+  const spelled = [...'2E56789', ...['A', 'B', 'C', 'D'].map((letter) => letter.repeat(7)).join('')].map((letter) => letters.indexOf(letter));
   const { run, cache, tab } = playerSetup({ int: () => spelled.shift()! });
   const names = ['1E5', '007', '3.14', '1-2', '12'];
 
   const added = names.map((name, index) => run().add(name, NOW + index));
-  assert.equal(added[0]!.id, '2E56789234');
+  assert.equal(added[0]!.id, '2E56789');
 
   cache.entries.clear();
   assert.deepEqual(run().list(), [...added].reverse(), 'read back from the tab itself');
   assert.deepEqual(tab().cells.slice(1).map((row) => row[1]), names);
-  assert.equal(tab().cells[1]![0], '2E56789234');
+  assert.equal(tab().cells[1]![0], '2E56789');
 });
 
 test('rows of the Players tab changed by hand: a renamed player keeps their id, a removed one is nobody, and what can no longer be read is skipped and keeps its place', () => {
@@ -2448,7 +2448,7 @@ test('what a join costs the Sheet: nothing while the list is cached, one read wh
       const player = players[known - 1]!;
 
       assert.deepEqual(counted(() => run().seen(player.id, NOW + 1000)), { ...NO_SHEET_CALLS, cacheGets: 1, cachePuts: 0 }, `${at}: a known player joins on a night they were already seen`);
-      assert.deepEqual(counted(() => run().seen('NOBODY2345', NOW)), { ...NO_SHEET_CALLS, cacheGets: 1, cachePuts: 0 }, `${at}: an id the list does not have`);
+      assert.deepEqual(counted(() => run().seen('NOBODY2', NOW)), { ...NO_SHEET_CALLS, cacheGets: 1, cachePuts: 0 }, `${at}: an id the list does not have`);
       assert.deepEqual(
         counted(() => run().seen(player.id, NOW + SEEN_EVERY_MS)),
         { opens: 1, made: 0, lastRows: 1, reads: 1, formats: 1, writes: 1, flushes: 1, cacheGets: 1, cachePuts: 1 },

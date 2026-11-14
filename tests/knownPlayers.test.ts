@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import type { KnownPlayer } from '../src/engine/index.ts';
 import { answerOf, offerOf, playerFor, RememberedPlayer } from '../src/client/knownPlayers.ts';
 import type { Asked, PlayerMemory } from '../src/client/knownPlayers.ts';
+import { mapMemory } from './helpers.ts';
 
 const ANN = { id: 'ANNANNANN2', name: 'Ann' };
 const BOB = { id: 'BOBBOBBOB2', name: 'Bob' };
@@ -11,14 +12,9 @@ const BIG_AL = { id: 'BIGALBIGA2', name: 'Big Al' };
 
 /** A browser's memory as the page is handed it, holding a seat and a typed name from before, as most browsers that come back do. */
 function browser(kept: Record<string, string> = {}): PlayerMemory & { kept: Record<string, string> } {
-  const all: Record<string, string> = { 'cnd.seat.ABC234': 'MEMBER23.TOKENTOKENTOKENTOKEN2345', 'cnd.name': 'Annie', 'cnd.theme': 'felt', ...kept };
+  const memory = mapMemory({ 'cnd.seat.ABC234': 'MEMBER23.TOKENTOKENTOKENTOKEN2345', 'cnd.name': 'Annie', 'cnd.theme': 'felt', ...kept });
 
-  return {
-    kept: all,
-    get: (key) => all[key] ?? null,
-    set: (key, value) => void (all[key] = value),
-    remove: (key) => void delete all[key],
-  };
+  return { ...memory, remove: (key) => void delete memory.kept[key] };
 }
 
 function asked(over: Partial<Asked> = {}): Asked {

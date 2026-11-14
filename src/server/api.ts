@@ -95,3 +95,6 @@ export type ApiResponse =
   | { ok: true; kind: 'presets'; presets: Preset[] }
   | { ok: true; kind: 'reported' }
   | { ok: true; kind: 'players'; players: KnownPlayer[] };
+
+/** The answer to someone who made a table or joined one: who they are there, and the table as they see it. */
+export type Joined = Extract<ApiResponse, { kind: 'joined' }>;

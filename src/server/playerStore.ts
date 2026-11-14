@@ -47,8 +47,12 @@ export class ListFull extends GameError {
   }
 }
 
-/** Longer than a member's id at a table, so the two are never taken for each other in the Sheet. */
-const PLAYER_ID_LENGTH = 10;
+/**
+ * Every member who is a known player carries this in their table's saved state, which has the cache's
+ * limit to fit, so it is no longer than it must be: seven characters are tens of billions of ids for a
+ * list of two hundred. A table's id has six and a member's eight, so the three are told apart at sight.
+ */
+const PLAYER_ID_LENGTH = 7;
 const PLAYER_ID = new RegExp(`^[A-Z0-9]{${PLAYER_ID_LENGTH}}$`);
 
 /** Whether this is an id the game gives a known player, as opposed to something typed into its place. */
@@ -66,16 +70,22 @@ export function dueToBeSeen(player: KeptPlayer, at: number): boolean {
   return at - player.seenAt >= SEEN_EVERY_MS;
 }
 
+/** A player as the list hands them out, without what only a store keeps of them. */
+export function listed({ id, name }: KnownPlayer): KnownPlayer {
+  return { id, name };
+}
+
 /** The list as it is handed out: the most recently seen first, and among those seen at the same time by name. */
 export function inListOrder(players: readonly KeptPlayer[]): KnownPlayer[] {
-  return [...players].sort((a, b) => b.seenAt - a.seenAt || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)).map(({ id, name }) => ({ id, name }));
+  return [...players].sort((a, b) => b.seenAt - a.seenAt || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)).map(listed);
 }
 
 /**
- * Checks that someone new may be added under `name`. `places` is how many places of the list are
- * taken, which counts one holding something that can't be read; `players` are those that can.
+ * Someone new under `name`, with an id none of `players` has, or the reason they can't be added: the
+ * name is on the list, or the list is full. `places` is how many places of the list are taken, which
+ * counts one holding something that can't be read; `players` are those that can.
  */
-export function mayAdd(players: readonly KnownPlayer[], places: number, name: string): void {
+export function newcomer(players: readonly KnownPlayer[], places: number, name: string, at: number, rng: Rng): KeptPlayer {
   const holder = listedLike(players, name);
   if (holder) {
     throw new NameOnList(holder.name);
@@ -84,15 +94,12 @@ export function mayAdd(players: readonly KnownPlayer[], places: number, name: st
   if (places >= LIMITS.knownPlayers) {
     throw new ListFull();
   }
-}
 
-/** An id for someone new that none of `players` has. */
-export function newPlayerId(rng: Rng, players: readonly KnownPlayer[]): string {
   for (;;) {
     const id = randomId(rng, PLAYER_ID_LENGTH);
 
     if (!players.some((player) => player.id === id)) {
-      return id;
+      return { id, name, seenAt: at };
     }
   }
 }

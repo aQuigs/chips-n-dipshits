@@ -70,6 +70,18 @@ export function dataRows(sheet: SheetLike, columns: number): unknown[][] {
   return last < FIRST_DATA_ROW ? [] : sheet.getRange(FIRST_DATA_ROW, 1, last - FIRST_DATA_ROW + 1, columns).getValues();
 }
 
+/** The first row below the headers that none of `rows` takes, for a tab that fills the rows cleared by hand before it grows. */
+export function freeRow(rows: readonly { row: number }[]): number {
+  const taken = new Set(rows.map(({ row }) => row));
+  let row = FIRST_DATA_ROW;
+
+  while (taken.has(row)) {
+    row += 1;
+  }
+
+  return row;
+}
+
 /**
  * A tab by its name. One that isn't there is made, with its headers, only when `create` says so,
  * which must be under the lock but for the Errors tab; otherwise it is null. A Sheet made before a tab was thought of gets it

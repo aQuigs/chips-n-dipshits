@@ -456,11 +456,14 @@ export class RigBrowser {
   }
 }
 
-/** Which of a page's requests a gate stands in the way of: the moves of a hand, the polls for news of the table, reactions, or showing cards after a hand. */
-export type Gated = 'moves' | 'polls' | 'reactions' | 'shows';
+/** Which of a page's requests a gate stands in the way of: the moves of a hand, the polls for news of the table, reactions, showing cards after a hand, or asking for the list of known players. */
+export type Gated = 'moves' | 'polls' | 'reactions' | 'shows' | 'players';
 
-/** The commands a gate for each kind of request stops. */
-const GATED_COMMANDS: Record<Exclude<Gated, 'polls'>, ReadonlySet<Command['type']>> = { moves: MOVES, reactions: FLEETING, shows: new Set(['showCards']) };
+/** The requests a gate stops that are not commands, by what they ask for. */
+const GATED_OPS: Partial<Record<Gated, ApiRequest['op']>> = { polls: 'poll', players: 'players' };
+
+/** The commands a gate for each other kind of request stops. */
+const GATED_COMMANDS: Partial<Record<Gated, ReadonlySet<Command['type']>>> = { moves: MOVES, reactions: FLEETING, shows: new Set(['showCards']) };
 
 /** Where a closed gate stops things: on their way to the server, which then has heard nothing, or on the way back from it. */
 export type GateSide = 'requests' | 'answers';
@@ -579,7 +582,7 @@ export class Gate {
 
   private meet(route: Route): Promise<void> | void {
     const body = JSON.parse(route.request().postData() ?? '{}') as ApiRequest;
-    const mine = this.what === 'polls' ? body.op === 'poll' : body.op === 'act' && GATED_COMMANDS[this.what].has(body.command.type);
+    const mine = body.op === 'act' ? GATED_COMMANDS[this.what]?.has(body.command.type) : body.op === GATED_OPS[this.what];
 
     if (this.side === null || !mine) {
       return route.fallback();

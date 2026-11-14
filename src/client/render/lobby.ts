@@ -1,10 +1,9 @@
 import { CONFIG_SPECS, settingText, startingConfig } from '../../engine/config.ts';
 import type { ConfigKey } from '../../engine/config.ts';
-import type { KnownPlayer } from '../../engine/players.ts';
 import { fromPreset, PRESET_KEYS } from '../../engine/presets.ts';
 import type { Preset } from '../../engine/presets.ts';
 import { stakesText } from '../../engine/stakes.ts';
-import type { TableConfig } from '../../engine/types.ts';
+import type { KnownPlayer, TableConfig } from '../../engine/types.ts';
 import type { TableInfo } from '../../server/api.ts';
 import type { Answer } from '../knownPlayers.ts';
 import { h } from '../ui.ts';

@@ -4,11 +4,10 @@ import { newConfig } from './config.ts';
 import { startHand, stepHand, TIMING } from './hand.ts';
 import { handEnded } from './handEnd.ts';
 import { numberedName, playerName, readAlike } from './names.ts';
-import type { KnownPlayer } from './players.ts';
 import { addFeed, eligibleSeats, memberOf } from './seats.ts';
 import { newTonight } from './tonight.ts';
 import { GameError, SEAT_COUNT, STATE_SCHEMA } from './types.ts';
-import type { Command, Ctx, Member, TableState } from './types.ts';
+import type { Command, Ctx, KnownPlayer, Member, TableState } from './types.ts';
 import { LIMITS } from './validate.ts';
 
 // Without look-alike characters, so an id read aloud or retyped survives

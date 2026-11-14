@@ -713,12 +713,12 @@ try {
   console.log('A card shown after the hand whose answer is lost after the table played it is sent once more, and comes out once');
   {
     const dealer = await open(browser);
-    const showTable = await createTable(dealer, server.url, 'Bart');
+    const showTable = await createTable(dealer, server.url, 'Nelson');
     await sit(dealer, 0);
 
     const other = await open(browser);
     await other.goto(`${server.url}?table=${showTable}`);
-    await other.fill('#join-name', 'Lisa');
+    await other.fill('#join-name', 'Milhouse');
     await other.click('[data-action="join-table"]');
     await sit(other, 1);
     await dealer.click('.banner [data-action="approve"]');
@@ -940,7 +940,7 @@ try {
     google.close();
   }
 
-  console.log('A table that was put away says so once, stops asking, and is in neither the address nor the browser afterwards, its mutes included');
+  console.log('A table that was put away says so once, stops asking, and is in neither the address nor the browser afterwards, its mutes included, while who the browser is stays');
   {
     // A game of its own, whose clock can be moved on two weeks
     let ahead = 0;
@@ -953,6 +953,10 @@ try {
       const member = inAddress(page, 'me')!;
       assert.equal(await remembered(page, old), member);
       await page.evaluate(`localStorage.setItem('cnd.mute.${old}', '["someone"]')`);
+
+      const whoItIs = `localStorage.getItem('cnd.player')`;
+      const marge = await page.evaluate(whoItIs);
+      assert.match(String(marge), /"name":"Marge"/);
 
       const polls: unknown[] = [];
       page.on('request', (request) => {
@@ -973,6 +977,7 @@ try {
       assert.deepEqual([inAddress(page, 'table'), inAddress(page, 'me')], [null, null], 'the address still names the table that is gone');
       assert.equal(await remembered(page, old), null, 'the browser still remembers a seat at it');
       assert.equal(await page.evaluate(`localStorage.getItem('cnd.mute.${old}')`), null, 'the browser still keeps who was muted at it');
+      assert.equal(await page.evaluate(whoItIs), marge, 'who the browser is went with a table, though it is not about any one table');
 
       // The answer was a plain one, not a failure to be tried again
       const asked = polls.length;
@@ -982,6 +987,7 @@ try {
       // Loaded again there is no table to go back to, and the personal link someone kept is answered the same way
       await page.reload();
       await page.waitForSelector('[data-action="create-table"]');
+      assert.equal(await page.innerText('.who-remembered b'), 'Marge');
 
       const kept = await open(browser);
       await kept.goto(`${later.url}?table=${old}&me=${member}`);
@@ -1054,22 +1060,19 @@ try {
     const idOf = (name: string) => known.list().find((listed) => listed.name === name)!.id;
     const pills = (page: Page) => page.locator('.who-list .who-pill').allInnerTexts();
 
-    /** Stops the page's requests for the list of players until `open` is called, or fails them all, and counts them. */
-    const listRequests = async (page: Page, how: 'held' | 'failed') => {
-      const held: (() => void)[] = [];
-      const state = { asked: 0, open: () => held.splice(0).forEach((go) => go()) };
+    /** A gate that keeps the list of players from the page until it is opened. */
+    const listKept = async (page: Page) => {
+      const gate = await Gate.on(page, 'players');
+      await gate.close('requests');
 
-      await page.route('**/api', (route) => {
-        if (JSON.parse(route.request().postData() ?? '{}').op !== 'players') {
-          return route.continue();
-        }
+      return gate;
+    };
 
-        state.asked += 1;
-
-        return how === 'failed' ? route.abort('failed') : new Promise<void>((resolve) => held.push(() => resolve(route.continue())));
-      });
-
-      return state;
+    /** The page's request for the list fails, as on a bad line, and the page asks again. */
+    const listFails = async (gate: Gate) => {
+      await gate.holding();
+      await gate.lose();
+      await gate.holding();
     };
 
     try {
@@ -1087,15 +1090,15 @@ try {
 
       // A guest's join form before the list is in asks for a name; what is half typed, and the cursor, are still there when it arrives
       const guest = await open(browser);
-      const list = await listRequests(guest, 'held');
+      const list = await listKept(guest);
       await guest.goto(`${fresh.url}?table=${first}`);
       await guest.waitForSelector('[data-action="join-table"]:not([disabled])');
-      await until('the guest to ask for the list', () => list.asked === 1);
+      await list.holding();
       assert.equal(await asks(guest), 'name');
 
       await guest.click('#join-name');
       await guest.keyboard.type('Bo');
-      list.open();
+      await list.open();
       await guest.waitForSelector('.who-pick');
       assert.deepEqual(await pills(guest), ['Quigs']);
       assert.equal(await guest.getAttribute('[data-action="someone-new"]', 'aria-pressed'), 'true');
@@ -1109,17 +1112,15 @@ try {
 
       const guestSeat = await remembered(guest, first);
       assert.ok(guestSeat);
-      await guest.unroute('**/api');
 
       // The next visit says who it takes them for before the list is even in, and making a table needs no name typed
-      const again = await listRequests(host, 'held');
+      const again = await listKept(host);
       await host.goto(fresh.url);
       await host.waitForSelector('.who-remembered');
+      await again.holding();
       assert.equal(await host.innerText('.who-remembered b'), 'Quigs');
       assert.equal(await host.isVisible('#host-name'), false);
-      again.open();
-      await until('the list to come in', () => again.asked === 1);
-      await host.unroute('**/api');
+      await again.open();
 
       await host.click('[data-action="create-table"]');
       await host.waitForSelector('#table-link');
@@ -1172,10 +1173,10 @@ try {
 
       // A list that will not load: someone new is asked for a name and gets in, hearing nothing of it
       const stranger = await open(browser);
-      const failing = await listRequests(stranger, 'failed');
+      const failing = await listKept(stranger);
       await stranger.goto(`${fresh.url}?table=${second}`);
       await stranger.waitForSelector('[data-action="join-table"]:not([disabled])');
-      await until('the list to be asked for again', () => failing.asked >= 2);
+      await listFails(failing);
       assert.equal(await asks(stranger), 'name');
       assert.equal(await stranger.isVisible('.toast'), false, 'the page said something about a list it can do without');
 
@@ -1185,17 +1186,17 @@ try {
       assert.deepEqual(await player(stranger), { id: idOf('Dee'), name: 'Dee' });
 
       // And someone remembered is still taken for who they were: only a list that did load says a player is gone
-      const asked = failing.asked;
+      await failing.lose();
       await stranger.goto(fresh.url);
       await stranger.waitForSelector('.who-remembered');
-      await until('the lobby to ask for the list and be failed', () => failing.asked >= asked + 2);
+      await listFails(failing);
       assert.equal(await stranger.innerText('.who-remembered b'), 'Dee');
       assert.deepEqual(await player(stranger), { id: idOf('Dee'), name: 'Dee' });
-      await stranger.unroute('**/api');
+      await failing.open();
 
       // A remembered player the list no longer has is forgotten without a word, and the seats stay
       const strangerSeat = await remembered(stranger, second);
-      await stranger.evaluate(`localStorage.setItem('cnd.player', JSON.stringify({ id: 'GONE234567', name: 'Ghost' }))`);
+      await stranger.evaluate(`localStorage.setItem('cnd.player', JSON.stringify({ id: 'GONE234', name: 'Ghost' }))`);
       await stranger.goto(fresh.url);
       await stranger.waitForSelector('.who-pick');
       assert.equal(await stranger.isVisible('.who-remembered'), false);

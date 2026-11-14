@@ -17,7 +17,7 @@ function who(view: TableView, handlers: DialogHandlers): HTMLElement {
 
       // Whoever they said they are here comes first, then whoever the browser remembers them as from another night
       field ??= whoField('who-name', view.you.name, null, view.you.identity ?? remembered?.id ?? null);
-      field.offer(players, null);
+      field.offer({ players, remembered: null });
 
       place.replaceChildren(field.element);
       status.textContent = '';

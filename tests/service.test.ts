@@ -2,46 +2,25 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { TIMING, viewFor } from '../src/engine/index.ts';
-import type { Command, Rng, TableView } from '../src/engine/index.ts';
+import type { Command, Rng } from '../src/engine/index.ts';
 import { SheetStore } from '../src/gas/sheetStore.ts';
-import type { ApiResponse, Auth } from '../src/server/api.ts';
+import type { Auth } from '../src/server/api.ts';
 import { ByteRng } from '../src/server/byteRng.ts';
 import { MemoryPlayerStore } from '../src/server/memoryPlayerStore.ts';
 import { MemoryPresetStore } from '../src/server/memoryPresetStore.ts';
 import { MemoryStore } from '../src/server/memoryStore.ts';
 import { PUT_AWAY_MESSAGE } from '../src/server/putAway.ts';
-import type { PlayerStore } from '../src/server/playerStore.ts';
 import { PokerService } from '../src/server/service.ts';
 import type { TableStore } from '../src/server/store.ts';
 import { FakeCache, FakeLock, FakeSpreadsheet } from './fakes.ts';
-import { DAY_MS, seededRng } from './helpers.ts';
+import { DAY_MS, failure, joined, seededRng, viewOf } from './helpers.ts';
 
-function setup(store: TableStore = new MemoryStore(), players: PlayerStore = new MemoryPlayerStore(seededRng(12))) {
+function setup(store: TableStore = new MemoryStore()) {
   const clock = { time: 1_000_000, now: () => clock.time };
   const presets = new MemoryPresetStore();
-  const service = new PokerService({ store, presets, players, clock, rng: seededRng(11) });
+  const service = new PokerService({ store, presets, players: new MemoryPlayerStore(seededRng(12)), clock, rng: seededRng(11) });
 
-  return { service, store, presets, players, clock };
-}
-
-type Joined = Extract<ApiResponse, { kind: 'joined' }>;
-
-function joined(response: ApiResponse): Joined {
-  assert.ok(response.ok && response.kind === 'joined', JSON.stringify(response));
-
-  return response;
-}
-
-function viewOf(response: ApiResponse): TableView {
-  assert.ok(response.ok && response.kind === 'view', JSON.stringify(response));
-
-  return response.view;
-}
-
-function failure(response: ApiResponse) {
-  assert.equal(response.ok, false, JSON.stringify(response));
-
-  return response as Extract<ApiResponse, { ok: false }>;
+  return { service, store, presets, clock };
 }
 
 /** A table with the host and two more players seated, ready to start. */

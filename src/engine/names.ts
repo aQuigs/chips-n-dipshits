@@ -46,6 +46,17 @@ export function readAlike(a: string, b: string): boolean {
   return one.length === other.length && one.every((letter, at) => letter.toLowerCase() === other[at]!.toLowerCase() || stroke(letter) === stroke(other[at]!));
 }
 
+/**
+ * The one on the game's list of players whose name reads like this one, or null when nobody's does.
+ * There, names are read with their spaces gone as well, so that "Big Al", "big al" and "BigAl" are one
+ * player. No two on the list read alike, which also means any two of them can sit at one table.
+ */
+export function listedLike<P extends { name: string }>(players: readonly P[], name: string): P | null {
+  const squeezed = (spaced: string) => spaced.replace(/\s/g, '');
+
+  return players.find((player) => readAlike(squeezed(player.name), squeezed(name))) ?? null;
+}
+
 /** A name as it is kept, or the reason it can't be one. */
 export function playerName(value: unknown): string {
   const name = text(value, 'Your name', LIMITS.nameLength);

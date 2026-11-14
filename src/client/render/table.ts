@@ -356,12 +356,12 @@ function resultLines(view: TableView, hand: HandView): string[] {
   }
 
   const nameAt = (seat: number) => view.seats[seat]?.name ?? 'Someone';
-  const amountOf = (chips: number) => formatAmount(chips, view.config);
-  const runs = boardsWonOn(hand);
-
   if (result.chopped) {
     return [`${nameAt(hand.sbSeat)} and ${nameAt(hand.bbSeat)} chop the blinds`];
   }
+
+  const amountOf = (chips: number) => formatAmount(chips, view.config);
+  const runs = boardsWonOn(hand);
   const lines: string[] = [];
   let fits = true;
 

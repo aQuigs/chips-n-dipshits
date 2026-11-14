@@ -624,7 +624,7 @@ function timeOut(state: TableState, ctx: Ctx): void {
   narrate(state, ctx, `${player.name} ran out of time`);
 
   if (hand.stage === 'chop') {
-    settleChop(state, ctx, player, answerUnasked(seat) ?? false, false);
+    settleChop(state, ctx, player, seat.alwaysChop, false);
     return;
   }
 
@@ -644,7 +644,7 @@ export function stopWaitingFor(state: TableState, ctx: Ctx, seatIndex: number): 
     checkOrFold(state, ctx, player);
     advance(state, ctx, seatIndex);
   } else if (hand.stage === 'chop' && hand.toAct === seatIndex) {
-    settleChop(state, ctx, player, answerUnasked(state.seats[seatIndex]!) ?? false, false);
+    settleChop(state, ctx, player, state.seats[seatIndex]!.alwaysChop, false);
   } else if (hand.stage === 'ritVote' && !player.folded && player.ritVote === null) {
     narrate(state, ctx, `${player.name} left without voting, so it runs once`);
     startRunout(state, ctx, 1);

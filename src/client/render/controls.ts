@@ -188,6 +188,8 @@ function turnPanel(table: Denominated, hand: HandView, stack: number, handlers: 
   );
 }
 
+const smallBlindName = (view: TableView, hand: HandView) => view.seats[hand.sbSeat]?.name ?? 'The small blind';
+
 /** The big blind's question when the small blind offers to chop: an answer is a move, like any on the clock. */
 function chopQuestion(view: TableView, hand: HandView, handlers: ControlHandlers): HTMLElement {
   const answer = (agree: boolean) => () => void handlers.send({ type: 'answerChop', agree, turn: hand.turn });
@@ -195,7 +197,7 @@ function chopQuestion(view: TableView, hand: HandView, handlers: ControlHandlers
   return h(
     'div.turn.chop-question',
     null,
-    h('div.prompt', null, `${view.seats[hand.sbSeat]?.name ?? 'The small blind'} offers to chop: you each take back your blind and the hand ends`),
+    h('div.prompt', null, `${smallBlindName(view, hand)} offers to chop: you each take back your blind and the hand ends`),
     h(
       'div.buttons',
       null,
@@ -238,7 +240,7 @@ function waitingText(view: TableView, hand: HandView | null): string {
   if (hand.stage === 'chop') {
     const big = view.seats[hand.bbSeat]?.name ?? 'the big blind';
 
-    return view.you.seat === hand.sbSeat ? `You offered to chop. Waiting for ${big}` : `${view.seats[hand.sbSeat]?.name ?? 'The small blind'} offered to chop. Waiting for ${big}`;
+    return view.you.seat === hand.sbSeat ? `You offered to chop. Waiting for ${big}` : `${smallBlindName(view, hand)} offered to chop. Waiting for ${big}`;
   }
 
   if (hand.stage === 'ritVote') {

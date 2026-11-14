@@ -571,6 +571,10 @@ export function assertChopIsWhole(record: HandRecord): void {
 }
 
 /** Checks every finished hand among the effects, and says how many there were. */
+/** Each answer to an offer to chop in a hand, and whether it was the clock that gave it. */
+export const chopAnswers = (record: HandRecord) =>
+  record.events.flatMap((event, nth) => (event[0] === 'chopAnswer' ? [{ agree: event[2], timedOut: record.events[nth - 1]?.[0] === 'timeout' }] : []));
+
 export function assertHandRecordsHold(effects: Effect[]): number {
   const records = handRecords(effects);
 

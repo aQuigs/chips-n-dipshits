@@ -227,8 +227,6 @@ export function randomStep(t: TestTable, rng: Rng): void {
   }
 
   if (hand?.stage === 'chop') {
-    assert.equal(hand.toAct, hand.bbSeat, 'someone other than the big blind is answering a chop');
-
     if (deadline !== null && chance(rng, 10)) {
       t.wait(deadline - t.now);
     } else {

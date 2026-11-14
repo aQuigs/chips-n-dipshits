@@ -9,7 +9,7 @@ import { blindsOnly, mayOfferChop, replayHand, SEAT_COUNT, STRADDLES, TIMING } f
 import type { HandEvent, Rng, TableConfig, TableState } from '../src/engine/index.ts';
 import { restoreState } from '../src/server/store.ts';
 import { handRecords, seededRng, TestTable } from './helpers.ts';
-import { assertChipsConserved, assertHandRecordsHold, assertInvariants } from './invariants.ts';
+import { assertChipsConserved, assertHandRecordsHold, chopAnswers, assertInvariants } from './invariants.ts';
 import { chance, pick } from './randomPlay.ts';
 
 // Four players with the button on seat 0: the small blind on seat 1, the big blind on seat 2, seat 3 first to act
@@ -747,7 +747,7 @@ test('over random tables an offer is legal exactly when the rule says, and every
     }
 
     for (const record of handRecords(t.effects)) {
-      const answers = record.events.flatMap((event, nth) => (event[0] === 'chopAnswer' ? [{ agree: event[2], timedOut: record.events[nth - 1]?.[0] === 'timeout' }] : []));
+      const answers = chopAnswers(record);
 
       if (record.result.chopped) {
         assert.ok(record.players.every((player) => player.endStack === player.startStack), `seed ${seed}: a chop changed a stack`);

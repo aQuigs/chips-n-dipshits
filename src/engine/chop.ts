@@ -1,14 +1,7 @@
 /*
- * Chopping the blinds: when everyone but the two blinds folds before the flop, the small blind may offer,
- * instead of folding, calling or raising, that each takes back what they posted. The big blind answers on
- * the clock. Yes ends the hand with no winner; no, or no answer, puts the small blind back on the clock
- * with the usual choices, and the offer can't be made again in that hand.
- *
- * A player can also say they always chop. When both blinds have, the hand is chopped as the action
- * reaches the small blind, and a big blind who has answers an offer yes without being asked.
- *
- * This module says when a hand can be chopped and how a big blind answers without being asked; the hand
- * itself (`hand.ts`) makes the offer, takes the answer and ends the hand, through the same end as any other.
+ * When a hand can be chopped and how a big blind answers without being asked; the hand itself (`hand.ts`)
+ * makes the offer, takes the answer and ends the hand, through the same end as any other. The rules are
+ * in the README's house rules.
  */
 import type { Hand, HandPlayer, Seat, TableState } from './types.ts';
 

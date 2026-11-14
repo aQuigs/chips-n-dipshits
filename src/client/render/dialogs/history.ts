@@ -1,4 +1,4 @@
-import { chips, h } from '../../ui.ts';
+import { cardText, chips, h } from '../../ui.ts';
 import { everyone, frame } from './dialog.ts';
 import type { DialogHandlers, DialogKind } from './dialog.ts';
 
@@ -19,7 +19,7 @@ function history(handlers: DialogHandlers): HTMLElement {
                 return `${hand.players.find((p) => p.seat === win.seat)?.name ?? '?'} +${chips(withBounty)}`;
               });
 
-              return h('details', null, h('summary', null, `Hand #${hand.number}`, h('small', null, winners.join(', '))), h('pre', null, hand.summary));
+              return h('details', null, h('summary', null, `Hand #${hand.number}`, h('small', null, winners.join(', '))), h('pre', null, cardText(hand.summary, handlers.prefs.get('deck'))));
             })),
       );
     },

@@ -61,6 +61,17 @@ function start(root: HTMLElement): void {
   const apps = [laptop.screen, phone.screen].map((screen) => new App(screen, demoPlatform(demo), preview));
   apps[1]!.prefs.set('sound', false);
 
+  // And so they hold the same cards: a deck or a back chosen on one screen is on the other too
+  for (const key of ['deck', 'cardBack'] as const) {
+    for (const [from, to] of [apps, [...apps].reverse()] as [App, App][]) {
+      from.prefs.watch(key, (value) => {
+        if (to.prefs.get(key) !== value) {
+          to.prefs.set(key, value);
+        }
+      });
+    }
+  }
+
   const picker = createThemePicker(DEFAULT_THEME, (id) => choose(id));
   let chosen = '';
 

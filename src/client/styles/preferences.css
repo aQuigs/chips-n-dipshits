@@ -43,3 +43,74 @@
   background: none;
   accent-color: var(--accent);
 }
+
+/* A choice drawn as samples: a tile per option, picked like a radio button */
+.samples {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.samples small {
+  font-weight: 400;
+}
+
+.tiles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.tile {
+  position: relative;
+  display: grid;
+  flex: 1 1 0;
+  justify-items: center;
+  gap: 6px;
+  min-width: min-content;
+  padding: 10px 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-raised);
+  color: var(--text);
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.tile input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.tile:has(input:checked) {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.tile:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.sample {
+  --card-w: 20px;
+
+  display: flex;
+  gap: 3px;
+}
+
+/* A back's pattern needs the room to show */
+.sample .card.back {
+  --card-w: 30px;
+}
+
+/* Forced colors drop the shadow and repaint every border alike, so the chosen tile shows by its width */
+@media (forced-colors: active) {
+  .tile:has(input:checked) {
+    border-width: 3px;
+  }
+}

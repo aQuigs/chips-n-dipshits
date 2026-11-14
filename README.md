@@ -9,7 +9,7 @@ No-limit hold'em for a group of friends, played in the browser. There is no serv
 - The host approves seats and rebuys, pauses the game, changes blinds and settings, adjusts stacks, removes players and can hand the table to someone else.
 - The host can name co-hosts, who can do all of that too except name co-hosts, hand the table over or remove the host. The host has a ★ by their name and co-hosts a ☆.
 - A ledger with who pays whom to settle up, hand history, table chat with the dealer's play-by-play.
-- Four themes with a picker on the front page and in the menu; each player chooses their own. Works on a phone, upright or sideways, and on a desktop.
+- Four themes with a picker on the front page and in the menu; each player chooses their own, along with a four-color deck and a card back. Works on a phone, upright or sideways, and on a desktop.
 - A personal link to carry on from another device.
 
 ## House rules
@@ -88,6 +88,6 @@ Things worth knowing before changing it:
 - A theme is a set of values for the design tokens in `src/client/styles/tokens.css`, plus an entry in `src/client/themes.ts`.
 - The page's styles are one file per part of the screen in `src/client/styles/`, joined in the order `order.ts` lists them; a new part adds its file and a line there.
 - Each dialog is a file in `src/client/render/dialogs/`, with its line in the menu declared beside it, and `index.ts` lists them in the order the menu shows them.
-- What a player sets for themselves, such as sound, is an entry in `src/client/prefs.ts`. The Preferences dialog is drawn from those entries, and each choice is kept in the player's browser.
+- What a player sets for themselves, such as sound or the deck, is an entry in `src/client/prefs.ts`. The Preferences dialog is drawn from those entries, with sample cards beside a choice that changes how cards look, and each choice is kept in the player's browser.
 - What happens on the page when the table changes, such as the chime when it is your turn, is an effect in `src/client/effects/`, listed in `effects.ts`. Each is handed the table as it was and as it is, with the hand's events and the lines that are new picked out, so none has to keep track of what it has already done.
 - Another game is a new engine module behind the same commands and views; another database is a new `TableStore`; another host for the page is a new `Transport` and `Links`.

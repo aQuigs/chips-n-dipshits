@@ -74,6 +74,33 @@ const COUNT_NOTES = `(() => {
 
 const CHIME_NOTES = 2;
 
+/** The color a token stands for in the page's theme, as the browser writes a computed color. */
+const tokenColor = (page: Page, token: string) =>
+  page.evaluate(`(() => {
+    const probe = document.createElement('i');
+    probe.style.color = 'var(${token})';
+    document.body.append(probe);
+    const color = getComputedStyle(probe).color;
+    probe.remove();
+    return color;
+  })()`) as Promise<string>;
+
+const style = (page: Page, selector: string, property: string) =>
+  page.evaluate(`getComputedStyle(document.querySelector(${JSON.stringify(selector)}))[${JSON.stringify(property)}]`) as Promise<string>;
+
+/** The colors the cards on the table are drawn in, one card of each suit. */
+async function suitColors(page: Page): Promise<Record<string, string>> {
+  const colors: Record<string, string> = {};
+
+  for (const suit of ['s', 'h', 'd', 'c']) {
+    colors[suit] = await style(page, `.table .card.suit-${suit}`, 'color');
+  }
+
+  return colors;
+}
+
+const FACE_DOWN = '.seat:not(.me) .card.back';
+
 type Check = [name: string, run: (rig: Rig) => Promise<void>];
 
 const CHECKS: Check[] = [
@@ -390,6 +417,87 @@ const CHECKS: Check[] = [
         await page.waitForSelector('.board .card[data-card]:nth-child(4)');
         await page.waitForSelector('.turn [data-action="check"]:enabled');
         assert.equal(await notes(), CHIME_NOTES, 'switched back on, the chime stays silent');
+
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'the deck and the back a player picks are drawn on every card, shown before they are picked, and kept',
+    async (rig) => {
+      for (const screen of ['phone', 'desktop'] as const) {
+        const table = rig.table([
+          { name: 'Quigs', stack: 1000 },
+          { name: 'Stu', stack: 1000 },
+          { name: 'Pam', stack: 1000 },
+        ]);
+        // A card of each suit in sight on the flop: hearts and diamonds in hand, spades, clubs and diamonds on the board
+        table.deal({ button: 0, holes: { 0: 'Ah Kd', 1: 'Qs Qh', 2: '7c 2d' }, board: '3s 4c Jd 9h Qd' });
+        table.play(passive, (view) => view.hand!.street === 'flop');
+
+        const page = await table.open('Quigs', screen);
+        const press = (selector: string) => (screen === 'phone' ? page.tap(selector) : page.click(selector));
+        const pick = (key: string, value: string) => press(`#pref-${key} .tile:has(input[value="${value}"])`);
+
+        await page.waitForSelector('.board .card[data-card]:nth-child(3)');
+        await page.waitForSelector('.entries li:has-text("Flop")', { state: 'attached' });
+
+        const theme = await suitColors(page);
+        const themeBack = await style(page, FACE_DOWN, 'backgroundImage');
+        assert.equal(theme.d, theme.h, 'Card Room draws diamonds as it did');
+        assert.equal(await page.locator('.entries .card-text').count(), 0, 'a card in the play-by-play is marked out with nothing chosen');
+
+        await press('[data-action="menu"]');
+        await press('.menu [data-action="preferences"]');
+        await page.waitForSelector('#pref-deck');
+
+        assertOnScreen(await boxes(page, '.dialog, .samples .tile'), screen, 'the Preferences dialog with its cards');
+        assert.deepEqual(await squeezed(page, '.dialog h3, .samples > span, .tile > span:last-child'), [], 'a choice of cards is cut off');
+        assert.equal(await page.evaluate(`document.querySelector('.dialog-body').scrollWidth <= document.querySelector('.dialog-body').clientWidth`), true, 'the dialog scrolls sideways');
+        const tiles = await boxes(page, '.samples .tile');
+        tiles.forEach((tile, index) => assertApart([tile], tiles.slice(index + 1), 'two choices of cards'));
+
+        // Each sample is drawn as its choice would draw the table, whatever the table is drawn with now
+        assert.equal(await style(page, '#pref-deck [data-deck="four"] .card.suit-d', 'color'), await tokenColor(page, '--suit-four-d'));
+        assert.equal(await style(page, '#pref-deck [data-deck="theme"] .card.suit-d', 'color'), theme.d);
+        await shot(page, `preferences-cards-${screen}`);
+
+        await pick('deck', 'four');
+        assert.equal(await page.evaluate(`localStorage.getItem('cnd.deck')`), 'four');
+
+        const backs = new Set<string>();
+        for (const back of ['lattice', 'dots', 'gingham', 'felt', 'theme']) {
+          const sample = `#pref-cardBack [data-card-back="${back}"] .card.back`;
+          assert.notEqual(await style(page, sample, 'backgroundImage'), await style(page, FACE_DOWN, 'backgroundImage'), `the ${back} sample is drawn with the back the table has now`);
+
+          await pick('cardBack', back);
+          const drawn = await style(page, FACE_DOWN, 'backgroundImage');
+
+          assert.equal(drawn, await style(page, sample, 'backgroundImage'), `the ${back} back on the table is not the one Preferences showed`);
+          backs.add(drawn);
+        }
+
+        assert.equal(backs.size, 5, 'two backs look the same on the table');
+        assert.equal(await style(page, FACE_DOWN, 'backgroundImage'), themeBack, 'the theme back is not the one there was before');
+
+        await pick('cardBack', 'gingham');
+        const gingham = await style(page, FACE_DOWN, 'backgroundImage');
+        await press('[data-action="close"]');
+
+        const four = await suitColors(page);
+        for (const suit of ['s', 'h', 'd', 'c']) {
+          assert.equal(four[suit], await tokenColor(page, `--suit-four-${suit}`), `the ${suit} cards are not drawn in the four-color deck`);
+        }
+
+        assert.equal(new Set(Object.values(four)).size, 4, `two suits share a color: ${JSON.stringify(four)}`);
+        assert.equal(await style(page, '.entries .card-text.suit-c', 'color'), four.c, 'a club in the play-by-play is not drawn as a club');
+        assert.equal(await style(page, '.entries .card-text.suit-c', 'backgroundColor'), await tokenColor(page, '--card'), 'a card in the play-by-play is not set on a card');
+        await shot(page, `four-color-${screen}`);
+
+        await page.reload();
+        await page.waitForSelector('.board .card[data-card]:nth-child(3)');
+        assert.deepEqual(await suitColors(page), four, 'the deck changed with a reload');
+        assert.equal(await style(page, FACE_DOWN, 'backgroundImage'), gingham, 'the back changed with a reload');
 
         await page.context().close();
       }

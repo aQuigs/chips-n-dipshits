@@ -43,7 +43,7 @@ export function suitOf(card: Card): string {
   return card[1]!;
 }
 
-const SUIT_SYMBOLS: Record<string, string> = { c: '♣', d: '♦', h: '♥', s: '♠' };
+export const SUIT_SYMBOLS: Record<string, string> = { c: '♣', d: '♦', h: '♥', s: '♠' };
 
 export function prettyCard(card: Card): string {
   const rank = card[0] === 'T' ? '10' : card[0]!;
@@ -53,4 +53,28 @@ export function prettyCard(card: Card): string {
 
 export function prettyCards(cards: readonly Card[]): string {
   return cards.map(prettyCard).join(' ');
+}
+
+const SUIT_OF_SYMBOL = new Map(Object.entries(SUIT_SYMBOLS).map(([suit, symbol]) => [symbol, suit]));
+const WRITTEN_CARD = new RegExp(`(?<![\\p{L}\\p{N}])(?:10|[2-9JQKA])([${Object.values(SUIT_SYMBOLS).join('')}])(?![\\p{L}\\p{N}])`, 'gu');
+
+/** Text split around each card written in it by `prettyCard`, with that card's suit. */
+export function splitWrittenCards(text: string): { text: string; suit: string | null }[] {
+  const parts: { text: string; suit: string | null }[] = [];
+  let from = 0;
+
+  for (const match of text.matchAll(WRITTEN_CARD)) {
+    if (match.index > from) {
+      parts.push({ text: text.slice(from, match.index), suit: null });
+    }
+
+    parts.push({ text: match[0], suit: SUIT_OF_SYMBOL.get(match[1]!)! });
+    from = match.index + match[0].length;
+  }
+
+  if (from < text.length) {
+    parts.push({ text: text.slice(from), suit: null });
+  }
+
+  return parts;
 }

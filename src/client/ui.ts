@@ -1,4 +1,4 @@
-import { rankOf, suitOf } from '../engine/cards.ts';
+import { rankOf, splitWrittenCards, SUIT_SYMBOLS, suitOf } from '../engine/cards.ts';
 import { formatChips } from '../engine/format.ts';
 import type { Card } from '../engine/cards.ts';
 
@@ -133,7 +133,6 @@ export function signedChips(amount: number): string {
   return amount > 0 ? `+${chips(amount)}` : chips(amount);
 }
 
-const SUIT_SYMBOLS: Record<string, string> = { c: '♣', d: '♦', h: '♥', s: '♠' };
 const RANK_LABELS: Record<number, string> = { 10: '10', 11: 'J', 12: 'Q', 13: 'K', 14: 'A' };
 
 /** A playing card, face up, or face down when given null. */
@@ -152,6 +151,22 @@ export function cardEl(card: Card | null): HTMLElement {
     h('span.rank', null, label),
     h('span.pip', null, SUIT_SYMBOLS[suit]),
   );
+}
+
+/**
+ * Whether cards written in text are marked for the stylesheet to color. Only the four-color deck
+ * colors them, and with any other the text is left whole: split, its glyphs move by a fraction of a
+ * pixel, and a player who chose nothing would see the page change.
+ */
+export const marksCards = (deck: string): boolean => deck === 'four';
+
+/** Text with each card written in it marked with its suit, when the deck colors them. */
+export function cardText(text: string, deck: string): (string | HTMLElement)[] {
+  if (!marksCards(deck)) {
+    return [text];
+  }
+
+  return splitWrittenCards(text).map((part) => (part.suit ? h('span.card-text', { class: `suit-${part.suit}` }, part.text) : part.text));
 }
 
 /** Whole seconds left until a server time, given how far the local clock is from the server's. */

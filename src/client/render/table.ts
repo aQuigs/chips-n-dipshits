@@ -444,6 +444,15 @@ function messageEl(view: TableView, handlers: TableHandlers): HTMLElement | null
   return h('div.message', null, 'Waiting for at least two players with chips');
 }
 
+/**
+ * What of a hand the table draws, for telling whether the table has to be drawn again. The side pots
+ * are left out while the betting is on: `potEl` shows them only once it is over, and every bet changes
+ * them, so a view that only confirms a bet the table already shows would otherwise draw it all anew.
+ */
+export function handDrawn(hand: HandView | null): unknown {
+  return hand?.stage === 'betting' ? { ...hand, pots: null } : hand;
+}
+
 function potEl(table: Denominated, hand: HandView): HTMLElement | null {
   // Once the hand is over the pot has gone to the winners, and the result says who got what
   if (hand.pot === 0 || hand.stage === 'done') {

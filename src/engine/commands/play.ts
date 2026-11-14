@@ -2,8 +2,8 @@
  * What a player does in the hand on the table. Any member may send these: whether it is their turn,
  * their vote or their cards to show is for the hand to say, in its own words.
  */
+import type { BettingAction } from '../betting.ts';
 import { act, showCards as showCardsOf, voteRunItTwice } from '../hand.ts';
-import type { BettingAction } from '../hand.ts';
 import { seatIndexOf } from '../seats.ts';
 import { GameError } from '../types.ts';
 import type { Ctx, Member, TableState } from '../types.ts';

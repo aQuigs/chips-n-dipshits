@@ -1,10 +1,12 @@
 import { editableAmount, formatAmount, hasDecimals, parseAmount, shortAmount } from '../../engine/amounts.ts';
 import type { Denominated } from '../../engine/amounts.ts';
+import type { BettingAction } from '../../engine/betting.ts';
 import { bombPotName } from '../../engine/bombPots.ts';
 import { straddlesAllowed } from '../../engine/straddles.ts';
 import type { Command, PassedOver } from '../../engine/types.ts';
 import type { HandView, SeatView, TableView } from '../../engine/view.ts';
 import { HOTKEYS } from '../hotkeys.ts';
+import type { Waiting } from '../shownTable.ts';
 import { h, holdWhile } from '../ui.ts';
 import { lastHandsText, nightOver, onLastHand } from './night.ts';
 
@@ -14,6 +16,29 @@ export interface ControlHandlers {
   openRebuy(): void;
   /** Opens the player's own choice of straddles, at a table that allows more than one kind. */
   openStraddles(): void;
+  sizing: Sizing;
+}
+
+/**
+ * The bet a player is sizing, kept apart from the buttons, so that a panel drawn again for the same
+ * decision still has it: after a move the server refused, the buttons come back as they were left.
+ */
+export interface Sizing {
+  /** What stood in the amount box for the decision numbered `turn`; null when nothing was kept for it. */
+  typed(turn: number): string | null;
+  keep(turn: number, typed: string): void;
+}
+
+/** A `Sizing` that remembers the latest decision only, which is the only one a panel is ever drawn for. */
+export function sizingMemory(): Sizing {
+  let kept: { turn: number; typed: string } | null = null;
+
+  return {
+    typed: (turn) => (kept?.turn === turn ? kept.typed : null),
+    keep: (turn, typed) => {
+      kept = { turn, typed };
+    },
+  };
 }
 
 interface SizePreset {
@@ -110,12 +135,25 @@ function turnPanel(table: Denominated, hand: HandView, stack: number, handlers: 
       amount.value = editableAmount(raiseTo, table);
     }
   });
+  // What is in the box is kept as a move goes out: should the move come off again, the panel drawn then has the bet as it was left
+  const play = (move: BettingAction): void => {
+    handlers.sizing.keep(turn, amount.value);
+    void handlers.send({ ...move, turn });
+  };
+
   raiseButton.addEventListener('click', () => {
     if (amount.reportValidity()) {
-      void handlers.send({ type: 'raise', to: raiseTo, turn });
+      play({ type: 'raise', to: raiseTo });
     }
   });
+
   choose(minRaiseTo);
+
+  const typedBefore = handlers.sizing.typed(turn);
+  if (typedBefore !== null) {
+    amount.value = typedBefore;
+    readBox();
+  }
 
   const presetButtons = PRESETS.map((preset) => {
     const target = preset.potShare === null ? minRaiseTo : hand.currentBet + preset.potShare * (hand.pot + callAmount);
@@ -127,8 +165,8 @@ function turnPanel(table: Denominated, hand: HandView, stack: number, handlers: 
 
   const callLabel = callAmount >= stack ? 'Call all in' : 'Call';
   const passButton = options.canCheck
-    ? h('button.btn.call', { type: 'button', 'data-action': 'check', 'data-hotkey': HOTKEYS.pass, onclick: () => void handlers.send({ type: 'check', turn }) }, 'Check')
-    : h('button.btn.call', { type: 'button', 'data-action': 'call', 'data-hotkey': HOTKEYS.pass, onclick: () => void handlers.send({ type: 'call', turn }) }, moveLabel(callLabel, callCost, table));
+    ? h('button.btn.call', { type: 'button', 'data-action': 'check', 'data-hotkey': HOTKEYS.pass, onclick: () => play({ type: 'check' }) }, 'Check')
+    : h('button.btn.call', { type: 'button', 'data-action': 'call', 'data-hotkey': HOTKEYS.pass, onclick: () => play({ type: 'call' }) }, moveLabel(callLabel, callCost, table));
 
   return h(
     'div.turn',
@@ -137,7 +175,7 @@ function turnPanel(table: Denominated, hand: HandView, stack: number, handlers: 
     h(
       'div.buttons',
       null,
-      h('button.btn.fold', { type: 'button', 'data-action': 'fold', 'data-hotkey': HOTKEYS.fold, onclick: () => void handlers.send({ type: 'fold', turn }) }, 'Fold'),
+      h('button.btn.fold', { type: 'button', 'data-action': 'fold', 'data-hotkey': HOTKEYS.fold, onclick: () => play({ type: 'fold' }) }, 'Fold'),
       passButton,
       options.canRaise ? raiseButton : null,
     ),
@@ -168,8 +206,10 @@ function waitingText(view: TableView, hand: HandView | null): string {
     return hand || view.nextHandAt !== null ? 'Next hand coming up' : 'Waiting for at least two players with chips';
   }
 
-  if (hand.stage === 'betting' && hand.toAct !== null) {
-    return `Waiting for ${view.seats[hand.toAct]?.name ?? 'the next player'}`;
+  if (hand.stage === 'betting') {
+    // Nobody is named while the viewer's own move waits for the server's answer, which says what comes next: one that
+    // ends the street, or one the page shows nothing of, which leaves the action on the viewer
+    return hand.toAct === null || hand.toAct === view.you.seat ? 'Waiting for the dealer' : `Waiting for ${view.seats[hand.toAct]?.name ?? 'the next player'}`;
   }
 
   if (hand.stage === 'ritVote') {
@@ -278,7 +318,7 @@ function ownNote(owed: string | null, hand: HandView | null, view: TableView): O
   return hand?.passedOver ? { about: 'straddle', text: passedOverText(view, hand.passedOver) } : null;
 }
 
-function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandlers): HTMLElement {
+function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandlers, waiting: Waiting | null): HTMLElement {
   const hand = view.hand;
   const myRequest = view.requests.find((request) => request.playerId === view.you.id);
   const room = view.config.maxBuyIn - seat.stack - seat.pendingAdd;
@@ -286,7 +326,11 @@ function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandle
   const settling = nightOver(view) ? { note: null, buttons: [] } : settlingOf(view, seat, handlers);
 
   let main: HTMLElement;
-  if (hand?.options) {
+  if (waiting === 'sent') {
+    // A move of theirs is out that the page shows nothing of. The buttons that made it are gone until the table has
+    // answered, whatever they were: this comes first, so the buttons of a kind of move added later go the same way
+    main = waitingEl(waitingText(view, hand), view, ownNote(settling.note, hand, view));
+  } else if (hand?.options) {
     main = turnPanel(view.config, hand, seat.stack, handlers);
   } else if (hand?.canVote) {
     main = h(
@@ -301,7 +345,7 @@ function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandle
       ),
     );
   } else {
-    main = waitingEl(waitingText(view, hand), view, ownNote(settling.note, hand, view));
+    main = waitingEl(waiting === 'unconfirmed' ? `Waiting for the table to confirm your ${seat.lastAction ?? 'move'}…` : waitingText(view, hand), view, ownNote(settling.note, hand, view));
   }
 
   const showCards = hand?.canShow ? commandButton('button.chip-btn', 'show', 'Show my cards', () => handlers.send({ type: 'showCards' })) : null;
@@ -357,12 +401,16 @@ function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandle
   return h('div.controls.seated', null, main, h('div.extras', null, extras));
 }
 
-/** Everything the viewer can do right now, for the bar under the table. */
-export function controlsEl(view: TableView, handlers: ControlHandlers): HTMLElement {
+/**
+ * Everything the viewer can do right now, for the bar under the table. `waiting` says how a move of
+ * theirs that is out with the server is to be taken (`ShownTable.waiting`): with no buttons for one
+ * that is only sent, and with a line that says so for one the server has been slow to confirm.
+ */
+export function controlsEl(view: TableView, handlers: ControlHandlers, waiting: Waiting | null): HTMLElement {
   const seat = view.you.seat === null ? null : view.seats[view.you.seat];
 
   if (seat) {
-    return seatedControls(view, seat, handlers);
+    return seatedControls(view, seat, handlers, waiting);
   }
 
   const myRequest = view.requests.find((request) => request.playerId === view.you.id);

@@ -1,4 +1,29 @@
+import { formatAmount } from './amounts.ts';
+import type { Denominated } from './amounts.ts';
+import { clockwiseAfter } from './seats.ts';
 import type { Hand, HandPlayer, TableState } from './types.ts';
+
+export type BettingAction = { type: 'fold' } | { type: 'check' } | { type: 'call' } | { type: 'raise'; to: number };
+
+/** What the rules of a betting round ask of a player in it. */
+export interface Bettor {
+  seat: number;
+  /** Chips put in on the current street. */
+  bet: number;
+  folded: boolean;
+  allIn: boolean;
+  /** Has acted on the current street; blinds don't count. */
+  hasActed: boolean;
+}
+
+/**
+ * A round of betting as its rules see it. A hand is one, and so is what a player's view shows of a
+ * hand, which is how the page works out where its own move leaves the action by the engine's rule.
+ */
+export interface BettingRound<P extends Bettor = Bettor> {
+  players: readonly P[];
+  currentBet: number;
+}
 
 export interface BettingOptions {
   canCheck: boolean;
@@ -38,10 +63,52 @@ export function bettingOptions(state: TableState, hand: Hand, player: HandPlayer
 }
 
 /**
+ * Why a player with these options may not make this move, in words for them; null when they may.
+ * `currentBet` is the bet they face.
+ */
+export function objectionTo(action: BettingAction, options: BettingOptions, currentBet: number, table: Denominated): string | null {
+  switch (action.type) {
+    case 'fold':
+      return null;
+
+    case 'check':
+      return options.canCheck ? null : `You can't check, there is a bet of ${formatAmount(currentBet, table)} to you`;
+
+    case 'call':
+      return options.canCheck ? 'There is nothing to call' : null;
+
+    case 'raise': {
+      if (!options.canRaise) {
+        return "You can't raise here";
+      }
+
+      const { to } = action;
+      const inRange = Number.isInteger(to) && to >= options.minRaiseTo && to <= options.maxRaiseTo;
+
+      return inRange ? null : `A raise here must be between ${formatAmount(options.minRaiseTo, table)} and ${formatAmount(options.maxRaiseTo, table)}`;
+    }
+  }
+}
+
+/** The chips a move takes from the stack of a player with these options and `bet` in front of them already. */
+export function chipsFor(action: BettingAction, options: BettingOptions, bet: number): number {
+  switch (action.type) {
+    case 'call':
+      return options.callAmount;
+
+    case 'raise':
+      return action.to - bet;
+
+    default:
+      return 0;
+  }
+}
+
+/**
  * True when the street's betting is over: everyone still able to bet has acted and matched the bet,
  * or nobody is left who could bet against anyone.
  */
-export function bettingIsClosed(hand: Hand): boolean {
+export function bettingIsClosed(hand: BettingRound): boolean {
   const live = hand.players.filter((p) => !p.folded);
   const active = live.filter((p) => !p.allIn);
 
@@ -62,6 +129,18 @@ export function bettingIsClosed(hand: Hand): boolean {
   return active.every((p) => p.hasActed && p.bet === hand.currentBet);
 }
 
-export function owesAction(hand: Hand, player: HandPlayer): boolean {
+export function owesAction(hand: BettingRound, player: Bettor): boolean {
   return !player.folded && !player.allIn && (!player.hasActed || player.bet < hand.currentBet);
+}
+
+/**
+ * Who the action passes to from `seat`, whose player has just acted. Null when it passes to nobody:
+ * one player is left in the hand, or the street's betting is over.
+ */
+export function passesTo<P extends Bettor>(hand: BettingRound<P>, seat: number): P | null {
+  if (hand.players.filter((p) => !p.folded).length <= 1 || bettingIsClosed(hand)) {
+    return null;
+  }
+
+  return clockwiseAfter(hand.players, seat).find((p) => owesAction(hand, p)) ?? null;
 }

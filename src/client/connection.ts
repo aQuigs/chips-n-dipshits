@@ -18,8 +18,11 @@ const MAX_RETRY_MS = 10_000;
 // How many of the latest answers the server's clock is judged from
 const CLOCK_SAMPLES = 8;
 
-// A move in the hand. Only one may be on its way at a time, and it must not be repeated on a guess
-const MOVES = new Set<Command['type']>(['fold', 'check', 'call', 'raise', 'ritVote']);
+/**
+ * The moves of a hand. Only one may be on its way at a time, and it must not be repeated on a guess.
+ * A kind of move added here is at once shown as sent, its buttons gone, while it is out (`ShownTable.moveIs`).
+ */
+export const MOVES = new Set<Command['type']>(['fold', 'check', 'call', 'raise', 'ritVote']);
 
 /** Why the table isn't being heard from: no answer at all, or an answer saying the server couldn't cope. */
 export type Trouble = 'unreachable' | 'struggling';
@@ -28,7 +31,7 @@ export type Trouble = 'unreachable' | 'struggling';
  * Whether the buttons that play a move can be pressed. `sent` is a move on its way. `unanswered` is a
  * move that got no answer, so nobody knows yet whether it was played; the table has to be heard from first.
  */
-type TurnLock = 'open' | 'sent' | 'unanswered';
+export type TurnLock = 'open' | 'sent' | 'unanswered';
 
 /**
  * taken: the table carried the command out.
@@ -140,6 +143,12 @@ export class ServerClock {
 export interface TableListener {
   /** A view to put on screen: newer than the one before, or older because the table itself `wentBack`. */
   view(view: TableView, wentBack: boolean): void;
+  /**
+   * How the move last sent stands. `sent` comes with the move, the moment before it goes out. `open`
+   * comes only after whatever view the move's answer, or the poll that looked it up, brought has been
+   * taken up: whoever is told can go by the view that is showing to know whether the move was played.
+   */
+  move(lock: TurnLock, sent?: Command): void;
   /** Whether a move can be made, or whether the table is being heard from, has changed. */
   status(): void;
   /** The server has said this member or this table is not there. */
@@ -220,7 +229,7 @@ export class TableConnection {
         return 'refused';
       }
 
-      this.setTurnLock('sent');
+      this.setTurnLock('sent', command);
     }
 
     const response = await this.server.ask({ op: 'act', tableId, auth, command });
@@ -240,14 +249,16 @@ export class TableConnection {
       return 'unanswered';
     }
 
+    if (response.ok && response.kind === 'view') {
+      this.take(response.view);
+    }
+
     if (move) {
       this.setTurnLock('open');
     }
 
     if (!response.ok) {
       this.fail(response);
-    } else if (response.kind === 'view') {
-      this.take(response.view);
     }
 
     return response.ok ? 'taken' : 'refused';
@@ -290,17 +301,19 @@ export class TableConnection {
       whole = false;
       this.setTrouble(null);
 
-      // The table has been heard from since the move that got no answer, so the screen can be trusted again
-      if (this.turnLock === 'unanswered') {
-        this.setTurnLock('open');
-      }
-
       if (response.kind === 'view') {
         // The server answered after this page already held `held`, so a version below that is no late
         // arrival: the table itself has gone back, as after a restore of the Sheet, and the server is right.
         // Anything from `held` up to what is showing was only overtaken by the answer to a move or a chat line
         this.take(response.view, response.view.version < held);
-      } else if (response.kind === 'unchanged') {
+      }
+
+      // The table has been heard from since the move that got no answer, so the screen can be trusted again
+      if (this.turnLock === 'unanswered') {
+        this.setTurnLock('open');
+      }
+
+      if (response.kind === 'unchanged') {
         this.clock.note(response.now);
 
         if (Date.now() - asked < QUICK_POLL_GAP_MS) {
@@ -310,8 +323,9 @@ export class TableConnection {
     }
   }
 
-  private setTurnLock(lock: TurnLock): void {
+  private setTurnLock(lock: TurnLock, sent?: Command): void {
     this.turnLock = lock;
+    this.listener.move(lock, sent);
     this.listener.status();
   }
 

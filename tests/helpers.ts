@@ -337,6 +337,14 @@ export function chipsIn(t: TestTable): number[][] {
   return t.state.hand!.players.map((p) => [p.bet, p.committed, p.dead]);
 }
 
+/**
+ * A view without what the page's prediction of a move leaves to the server: when the view was made,
+ * the clock of whoever is next, the side pots and the play-by-play.
+ */
+export function withoutTheServersPart(view: TableView): unknown {
+  return { ...view, version: 0, now: 0, feed: [], hand: view.hand && { ...view.hand, deadline: null, pots: [] } };
+}
+
 /** A browser's storage for preferences, kept in `kept`. */
 export function mapMemory(kept: Record<string, string> = {}): PrefMemory & { kept: Record<string, string> } {
   return {

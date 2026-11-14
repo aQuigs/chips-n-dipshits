@@ -125,6 +125,7 @@ test('a table connection whose move the newer build refused tells nobody, sends 
 
   const connection = new TableConnection(line, { tableId, auth }, new ServerClock(), {
     view: () => told.push('view'),
+    move: () => undefined,
     status: () => told.push('status'),
     refused: () => told.push('refused'),
     notice: (message) => told.push(message),

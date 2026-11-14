@@ -8,8 +8,6 @@ import { isRefusal, nextRetry, ServerClock, ServerLine, sleep, TableConnection }
 import type { SendOutcome, Session } from './connection.ts';
 import { TableEffects } from './effects.ts';
 import { HotkeyPresser } from './hotkeyPresser.ts';
-import { TableNews } from './tableChange.ts';
-import type { TableChange } from './tableChange.ts';
 import { Modal } from './modal.ts';
 import { Motion, motionAbility } from './motion.ts';
 import { pageMotion, pageWatching } from './pageMotion.ts';
@@ -17,7 +15,8 @@ import type { Platform } from './platform.ts';
 import { PREFERENCES, Preferences } from './prefs.ts';
 import { movePromptEl, SeatMoves } from './seatMoves.ts';
 import type { Abilities, AppPreferences } from './prefs.ts';
-import { controlsEl, controlsSignature, lockTurn } from './render/controls.ts';
+import { controlsEl, controlsSignature, lockTurn, sizingMemory } from './render/controls.ts';
+import type { Sizing } from './render/controls.ts';
 import { dialogAllowed, dialogEl, dialogShows } from './render/dialogs/index.ts';
 import type { Dialog, DialogHandlers } from './render/dialogs/index.ts';
 import { createFeed } from './render/feed.ts';
@@ -27,14 +26,14 @@ import type { LobbyScreen } from './render/lobby.ts';
 import { nightOver } from './render/night.ts';
 import { outdatedEl } from './render/outdated.ts';
 import { hostOrCohost } from './render/roles.ts';
-import { tableEl } from './render/table.ts';
+import { handDrawn, tableEl } from './render/table.ts';
 import { createThemePicker } from './render/themePicker.ts';
 import { voiceLinkEl } from './render/voiceLink.ts';
 import type { Shape } from './render/table.ts';
 import { Attention } from './attention.ts';
 import { pageWays } from './pageAttention.ts';
+import { ShownTable } from './shownTable.ts';
 import { Sounds } from './sound.ts';
-import { Suspense } from './suspense.ts';
 import { fontsUrl, themeById } from './themes.ts';
 import { pageTouch } from './pageTouch.ts';
 import { h, holdWhile, secondsUntil, Slot } from './ui.ts';
@@ -62,8 +61,9 @@ interface TableScreen {
   feed: Feed;
   motion: Motion;
   effects: TableEffects;
-  news: TableNews;
-  suspense: Suspense;
+  /** What the screen shows of the table, which every view passes through on its way here. */
+  shown: ShownTable;
+  sizing: Sizing;
   seatMoves: SeatMoves;
   shape: Shape;
   resizeObserver: ResizeObserver;
@@ -96,7 +96,6 @@ export class App {
 
   /** The table this page is at, from sitting down at its screen until that screen is left. */
   private table: TableConnection | null = null;
-  private view: TableView | null = null;
   private screen: TableScreen | null = null;
   private dialog: Dialog | null = null;
   private dialogOpens = 0;
@@ -403,6 +402,7 @@ export class App {
 
     const table = new TableConnection(this.server, session, this.clock, {
       view: (shown, wentBack) => this.showView(shown, wentBack),
+      move: (lock, sent) => this.screen?.shown.moveIs(lock, sent),
       status: () => this.showStatus(),
       refused: (error) => this.dropSession(error),
       notice: (message) => this.toast(message),
@@ -413,6 +413,7 @@ export class App {
     const stage = new Slot(h('div.stage'));
     const overlay = new Slot(h('div.overlay', { hidden: true }));
     const motion = new Motion(pageMotion(stage.element), this.prefs, this.watching);
+    const effects = new TableEffects(this.prefs, stage.element, this.sounds, this.attention, motion, { offer: (dialog, still) => this.offerDialog(dialog, still) });
     const screen: TableScreen = {
       topbar: new Slot(h('header.topbar')),
       banners: new Slot(h('div.banners')),
@@ -422,11 +423,15 @@ export class App {
       modal: new Modal(overlay.element),
       feed,
       motion,
-      effects: new TableEffects(this.prefs, stage.element, this.sounds, this.attention, motion, { offer: (dialog, still) => this.offerDialog(dialog, still) }),
-      news: new TableNews(),
-      suspense: new Suspense(motion, (later) => this.showHeld(later)),
+      effects,
+      shown: new ShownTable(motion, () => this.clock.now(), () => Date.now(), {
+        draw: () => this.drawShown(),
+        tell: (change) => effects.run(change),
+        say: (message) => this.toast(message),
+      }),
+      sizing: sizingMemory(),
       seatMoves: new SeatMoves(stage.element, {
-        view: () => this.view,
+        view: () => this.screen?.shown.heard ?? null,
         send: (command) => void this.send(command),
         changed: () => this.drawTable(),
       }),
@@ -459,11 +464,10 @@ export class App {
     this.table = null;
     this.screen?.resizeObserver.disconnect();
     this.screen?.effects.dispose();
-    this.screen?.suspense.end();
+    this.screen?.shown.end();
     this.screen?.motion.dispose();
     this.screen?.seatMoves.dispose();
     this.screen = null;
-    this.view = null;
     this.dialog = null;
     this.offered = null;
   }
@@ -485,6 +489,10 @@ export class App {
    */
   private showOutdated(): void {
     this.closeDialog();
+
+    // A move this page was showing as made may never be played, or was and its answer is now left unread:
+    // the page cannot tell, so what stays behind the notice is the server's last word, and the reload shows the truth
+    this.screen?.shown.forget();
 
     // Like the countdowns: a clock still running down would say the table behind the notice is the table as it is now
     for (const animation of this.root.getAnimations({ subtree: true })) {
@@ -524,30 +532,10 @@ export class App {
     this.toast(error.code === 'not_found' ? 'That table no longer exists.' : 'This browser is not at the table anymore. Join again to keep playing.');
   }
 
-  /** Puts on screen a view the connection has taken up. */
+  /** Puts on screen a view the connection has taken up: only such a one, so nothing happens twice for a view that was dropped. */
   private showView(view: TableView, wentBack: boolean): void {
-    const screen = this.screen;
-    const before = this.view;
-
-    this.view = view;
-    screen?.seatMoves.follow(view);
-
-    // Only for a view that was taken up, so nothing happens twice for one that was dropped or is drawn again.
-    // Worked out before the table is drawn: what is held back while a runout's last cards turn is not drawn either
-    const change = screen?.suspense.see(screen.news.change(before, view, this.clock.now(), wentBack));
-
-    this.drawShown();
-
-    if (screen && change) {
-      screen.effects.run(change);
-      screen.suspense.played();
-    }
-  }
-
-  /** The cards of a runout are up: the table is drawn whole, and what was held back is told. */
-  private showHeld(later: TableChange): void {
-    this.drawShown();
-    this.screen?.effects.run(later);
+    this.screen?.seatMoves.follow(view);
+    this.screen?.shown.take(view, wentBack);
   }
 
   private drawShown(): void {
@@ -579,9 +567,12 @@ export class App {
 
   // ---- Drawing the table screen ----
 
-  /** The table as the screen shows it: while the last cards of a runout are turned, as it stood before its hand was settled. */
+  /**
+   * The table as the screen shows it: with the viewer's own move on it before the server has answered,
+   * and while the last cards of a runout are turned, as it stood before its hand was settled.
+   */
   private shownView(): TableView | null {
-    return this.view && this.screen ? this.screen.suspense.shown(this.view) : this.view;
+    return this.screen?.shown.view() ?? null;
   }
 
   private drawTable(): void {
@@ -602,12 +593,18 @@ export class App {
   }
 
   private drawControls(screen: TableScreen, view: TableView): void {
-    const redrawn = screen.controls.draw(controlsSignature(view), () =>
-      controlsEl(view, {
-        send: (command) => this.send(command),
-        openRebuy: () => this.openDialog({ kind: 'rebuy' }),
-        openStraddles: () => this.openDialog({ kind: 'straddles' }),
-      }),
+    const waiting = screen.shown.waiting;
+    const redrawn = screen.controls.draw([controlsSignature(view), waiting], () =>
+      controlsEl(
+        view,
+        {
+          send: (command) => this.send(command),
+          openRebuy: () => this.openDialog({ kind: 'rebuy' }),
+          openStraddles: () => this.openDialog({ kind: 'straddles' }),
+          sizing: screen.sizing,
+        },
+        waiting,
+      ),
     );
 
     if (redrawn) {
@@ -673,8 +670,8 @@ export class App {
   private drawStage(screen: TableScreen, view: TableView): void {
     const myRequest = view.requests.find((request) => request.playerId === view.you.id);
     const picking = screen.seatMoves.picking;
-    const turning = screen.suspense.turning;
-    const shows = [screen.shape, view.you, view.hostId, view.cohostIds, view.running, view.nextHandAt, view.nightEndedAt, view.config.actionSeconds, view.seats, view.hand, myRequest, picking, turning];
+    const turning = screen.shown.turning;
+    const shows = [screen.shape, view.you, view.hostId, view.cohostIds, view.running, view.nextHandAt, view.nightEndedAt, view.config.actionSeconds, view.seats, handDrawn(view.hand), myRequest, picking, turning];
 
     screen.stage.draw(shows, () => {
       return tableEl(
@@ -692,6 +689,9 @@ export class App {
     });
 
     screen.seatMoves.redrawn();
+
+    // On the part of the screen itself, not on what is drawn in it: marking a move must not draw the table again
+    screen.stage.element.toggleAttribute('data-unconfirmed', screen.shown.waiting === 'unconfirmed');
 
     this.tickCountdowns();
   }
@@ -722,6 +722,12 @@ export class App {
 
     for (const element of this.root.querySelectorAll<HTMLElement>('[data-countdown]')) {
       element.textContent = String(secondsUntil(Number(element.dataset.countdown), this.clock.offset));
+    }
+
+    // A move that has waited too long for its answer says so by the clock, with no view to draw it
+    const screen = this.screen;
+    if (screen && (screen.shown.waiting === 'unconfirmed') !== screen.stage.element.hasAttribute('data-unconfirmed')) {
+      this.drawShown();
     }
   }
 

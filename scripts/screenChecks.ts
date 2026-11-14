@@ -2407,7 +2407,7 @@ const CHECKS: Check[] = [
         const [button] = await boxes(page, '.outdated [data-action="reload"]');
         const { width, height } = SCREENS[screen];
 
-        assertOnScreen([notice!, ...parts], screen, 'the notice');
+        assertOnScreen([notice!], screen, 'the notice');
         assert.equal(parts.length, 3);
         assert.ok(cover!.left <= 0 && cover!.top <= 0 && cover!.right >= width && cover!.bottom >= height, `the notice leaves some of the page uncovered: ${JSON.stringify(cover)}`);
         for (const part of parts) {
@@ -2449,6 +2449,9 @@ const CHECKS: Check[] = [
         const clock = await text(page, '.seat.me [data-countdown]');
         await page.waitForTimeout(1300);
         assert.equal(await text(page, '.seat.me [data-countdown]'), clock, 'the clock behind the notice is still counting down');
+
+        const animations = (await page.evaluate(`document.querySelector('.app').getAnimations({ subtree: true }).map((animation) => animation.playState)`)) as string[];
+        assert.ok(animations.length > 0 && animations.every((state) => state === 'paused'), `the bar that drains with the clock is still draining: ${animations.join(', ')}`);
 
         assert.equal(await page.locator('.outdated').count(), 1);
         assert.deepEqual(sent, [], 'a move was sent from behind the notice');

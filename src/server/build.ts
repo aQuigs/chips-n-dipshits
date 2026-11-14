@@ -23,6 +23,8 @@ const OPEN_TO_ANOTHER_BUILD: Record<ApiRequest['op'], boolean> = {
   history: true,
 };
 
+const STALE: ApiError = { ok: false, code: 'stale', error: OUTDATED_MESSAGE };
+
 function fieldsOf(request: unknown): { op?: unknown; build?: unknown } {
   return typeof request === 'object' && request !== null ? request : {};
 }
@@ -42,15 +44,14 @@ export class BuildGate {
   }
 
   handle(request: unknown): ApiResponse & Built {
-    const refusal: ApiError | null = this.turnsAway(request) ? { ok: false, code: 'stale', error: OUTDATED_MESSAGE } : null;
+    const response = this.turnsAway(request) ? STALE : this.service.handle(request);
 
-    return { ...(refusal ?? this.service.handle(request)), build: this.build };
+    return { ...response, build: this.build };
   }
 
   /**
-   * As the service's, for a page of this build. A page of any other is answered at once: its poll is
-   * turned away or it stops at the build on the answer, so waiting would only keep that from it, and
-   * hold one of the few requests a host serves at a time.
+   * As the service's, for a page of this build. A page of another is answered at once: holding its poll
+   * would only delay its finding out, and tie up one of the few requests a host serves at a time.
    */
   waitFor(request: unknown): PollWait | null {
     return fieldsOf(request).build === this.build ? this.service.waitFor(request) : null;

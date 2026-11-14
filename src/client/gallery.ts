@@ -5,9 +5,10 @@
 import { createDemoTable } from '../demo/demoTable.ts';
 import type { DemoTable } from '../demo/demoTable.ts';
 import { App } from './app.ts';
-import type { Links, Memory, Platform, Transport } from './platform.ts';
+import type { Links, Memory, Platform } from './platform.ts';
 import { createThemePicker } from './render/themePicker.ts';
 import { DEFAULT_THEME } from './themes.ts';
+import type { Transport } from './transport.ts';
 import { h } from './ui.ts';
 
 interface Size {

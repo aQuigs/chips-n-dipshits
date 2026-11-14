@@ -24,8 +24,3 @@
   min-width: 160px;
   text-decoration: none;
 }
-
-/* The clocks on the table behind the notice stop with the page */
-.cnd:has(> .outdated) .app * {
-  animation-play-state: paused;
-}

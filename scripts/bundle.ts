@@ -145,7 +145,7 @@ export async function galleryPage(): Promise<string> {
 }
 
 /** The server side as one script for Apps Script, which has no modules. Unstamped, like the page. */
-export function appsScriptCode(webAppUrl: string, plugins: Plugin[] = []): Promise<string> {
+function appsScriptCode(webAppUrl: string, plugins: Plugin[] = []): Promise<string> {
   return bundle('src/gas/main.ts', {
     globalName: 'CND',
     // Apps Script's engine is older than a browser's, so newer syntax is rewritten
@@ -163,6 +163,11 @@ function stamped(built: string, id: string): string {
   }
 
   return built.replaceAll(UNSTAMPED_BUILD, () => id);
+}
+
+/** Which build a page says it is. */
+export function buildOf(page: string): string | undefined {
+  return /window\.CND_BUILD = "([^"]*)";/.exec(page)?.[1];
 }
 
 /** What a build writes to dist, by path there, and the id all of it carries. */

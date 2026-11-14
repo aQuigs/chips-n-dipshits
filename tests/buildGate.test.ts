@@ -22,7 +22,7 @@ function setup() {
   const auth: Auth = created.auth;
   const saved = () => JSON.stringify(store.read(tableId));
 
-  return { gate, store, tableId, auth, saved };
+  return { gate, tableId, auth, saved };
 }
 
 function refusal(response: ApiResponse & Built): ApiError & Built {
@@ -68,9 +68,8 @@ test('a page of the same build is answered as ever, and every answer says which 
 });
 
 test('a page of another build gets nothing changed: every command, joining and creating are refused as stale', () => {
-  const { gate, store, tableId, auth, saved } = setup();
+  const { gate, tableId, auth, saved } = setup();
   const before = saved();
-  const tablesBefore = store.read(tableId)!.version;
 
   for (const request of changes(tableId, auth)) {
     const refused = refusal(gate.handle({ ...request, build: OLDER_BUILD }));
@@ -81,7 +80,6 @@ test('a page of another build gets nothing changed: every command, joining and c
   }
 
   assert.equal(saved(), before, 'the table is as it was');
-  assert.equal(store.read(tableId)!.version, tablesBefore);
 });
 
 test('a page of another build is still shown the table, and learns from the answer which build the server is', () => {
@@ -119,13 +117,11 @@ test('being out of date is never answered as the seat or the table being gone', 
 
   for (const [request, code] of gone) {
     assert.equal(refusal(gate.handle({ ...request, build: THIS_BUILD })).code, code);
-  }
-
-  for (const request of [...gone.map(([request]) => request), ...changes(tableId, stranger), ...changes('NOPE99', auth)]) {
     assert.equal(refusal(gate.handle({ ...request, build: OLDER_BUILD })).code, 'stale', JSON.stringify(request));
     assert.equal(refusal(gate.handle(request)).code, 'stale', JSON.stringify(request));
   }
 
+  // Nor is the page from before pages named their build, whose polls are turned away, told so about a seat that is gone
   for (const poll of [
     { op: 'poll', tableId, auth: stranger, since: -1, holdMs: 20_000 },
     { op: 'poll', tableId: 'NOPE99', auth, since: -1, holdMs: 20_000 },
@@ -151,7 +147,6 @@ test('being out of date is never answered as the seat or the table being gone', 
 test('the page from before pages named their build is told to reload, keeps its seat and does not hammer the server', () => {
   const { gate, tableId, auth, saved } = setup();
   const before = saved();
-  const logsThePlayerOut = (response: ApiResponse) => !response.ok && (response.code === 'unauthorized' || response.code === 'not_found');
 
   const poll = { op: 'poll', tableId, auth, since: 1, holdMs: 20_000 };
   const polled = refusal(gate.handle(poll));
@@ -174,7 +169,6 @@ test('the page from before pages named their build is told to reload, keeps its 
 
     assert.equal(refused.code, 'stale', JSON.stringify(command));
     assert.equal(refused.error, 'The game was updated. Reload to keep playing.', 'the words its toast shows');
-    assert.equal(logsThePlayerOut(refused), false);
   }
 
   const info = gate.handle({ op: 'info', tableId });
@@ -182,11 +176,6 @@ test('the page from before pages named their build is told to reload, keeps its 
   assert.equal(info.table.id, tableId);
 
   assert.equal(refusal(gate.handle({ op: 'history', tableId, auth })).code, 'stale');
-
-  for (const response of [polled, firstPoll]) {
-    assert.equal(logsThePlayerOut(response), false);
-  }
-
   assert.equal(saved(), before, 'the table is as it was');
 });
 

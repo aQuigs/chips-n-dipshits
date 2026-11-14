@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { ServerClock, ServerLine, TableConnection } from '../src/client/connection.ts';
+import { ServerClock, ServerLine, sleep, TableConnection } from '../src/client/connection.ts';
 import type { Transport } from '../src/client/transport.ts';
 import type { ApiRequest, ApiResponse, Auth, Built } from '../src/server/api.ts';
 import { BuildGate } from '../src/server/build.ts';
@@ -37,9 +37,7 @@ function server() {
 
 /** Whether a promise has come to anything a little later: an answer that is withheld never does. */
 async function settles(promise: Promise<unknown>): Promise<boolean> {
-  const later = new Promise<false>((resolve) => setTimeout(() => resolve(false), 30));
-
-  return Promise.race([promise.then(() => true), later]);
+  return Promise.race([promise.then(() => true), sleep(30).then(() => false)]);
 }
 
 async function tableOf(line: ServerLine): Promise<{ tableId: string; auth: Auth; view: Extract<ApiResponse, { kind: 'joined' }>['view'] }> {
@@ -142,6 +140,6 @@ test('a table connection whose move the newer build refused tells nobody, sends 
 
   // Coming back to the tab, or anything else that asks afresh, sends nothing
   connection.refresh(true);
-  await settles(new Promise(() => undefined));
+  await sleep(30);
   assert.deepEqual(sent.map((request) => request.op), ['act']);
 });

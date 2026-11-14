@@ -39,22 +39,19 @@ function uuidBytes(): number[] {
 let serviceForThisRun: BuildGate | null = null;
 
 function service(): BuildGate {
-  if (serviceForThisRun) {
-    return serviceForThisRun;
-  }
-
-  const game = new PokerService({
-    store: new SheetStore({
-      spreadsheet: () => SpreadsheetApp.getActiveSpreadsheet(),
-      cache: CacheService.getScriptCache(),
-      lock: LockService.getScriptLock(),
-      flush: () => SpreadsheetApp.flush(),
+  serviceForThisRun ??= new BuildGate(
+    new PokerService({
+      store: new SheetStore({
+        spreadsheet: () => SpreadsheetApp.getActiveSpreadsheet(),
+        cache: CacheService.getScriptCache(),
+        lock: LockService.getScriptLock(),
+        flush: () => SpreadsheetApp.flush(),
+      }),
+      clock: { now: () => Date.now() },
+      rng: new ByteRng(uuidBytes),
     }),
-    clock: { now: () => Date.now() },
-    rng: new ByteRng(uuidBytes),
-  });
-
-  serviceForThisRun = new BuildGate(game, BUILD_ID);
+    BUILD_ID,
+  );
 
   return serviceForThisRun;
 }

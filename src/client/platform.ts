@@ -1,8 +1,6 @@
 import type { ApiRequest, ApiResponse, Auth, Built } from '../server/api.ts';
 import type { Transport } from './transport.ts';
 
-export type { Transport } from './transport.ts';
-
 /** What the page is told when it is served: where it lives and which table the link points at. */
 export interface Boot {
   /** The page's own address, for building links. Only needed where the page can't read it itself. */
@@ -114,6 +112,11 @@ function memberParameter(auth: Auth): string {
   return `${auth.id}.${auth.token}`;
 }
 
+/** What follows the web app's own address: the table, and with it the member. */
+function addressOf(table?: string | null, me?: string | null): Record<string, string> {
+  return table ? { table, ...(me ? { me } : {}) } : {};
+}
+
 /**
  * Inside Apps Script the page sits in a frame from another site. It can't see the real address, so
  * that is handed in and changed through the host; and browsers treat what such a frame stores as
@@ -123,18 +126,13 @@ function appsScriptLinks(host: AppsScriptHost, boot: Boot): Links {
   const baseUrl = boot.baseUrl ?? '';
 
   // The frame can't read the address either, so what was served and what has been put there since is kept
-  let address: Record<string, string> = { ...(boot.table ? { table: boot.table } : {}), ...(boot.table && boot.me ? { me: boot.me } : {}) };
+  let address = addressOf(boot.table, boot.me);
 
   return {
     tableLink: (tableId) => linkTo(baseUrl, { table: tableId }),
     memberLink: (tableId, auth) => linkTo(baseUrl, { table: tableId, me: memberParameter(auth) }),
     showTable: (tableId, auth) => {
-      address = tableId ? { table: tableId } : {};
-
-      if (tableId && auth) {
-        address.me = memberParameter(auth);
-      }
-
+      address = addressOf(tableId, auth && memberParameter(auth));
       host.script.history.replace(null, address, '');
     },
     reloadLink: () => linkTo(baseUrl, address),

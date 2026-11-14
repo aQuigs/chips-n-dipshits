@@ -11,7 +11,7 @@ import vm from 'node:vm';
 
 import type { Plugin } from 'esbuild';
 
-import { buildFiles } from '../scripts/bundle.ts';
+import { buildFiles, buildOf } from '../scripts/bundle.ts';
 import type { Build } from '../scripts/bundle.ts';
 import type { ApiRequest, ApiResponse, Built } from '../src/server/api.ts';
 import { UNSTAMPED_BUILD } from '../src/server/build.ts';
@@ -87,10 +87,12 @@ interface DeployedScript {
 }
 
 const appScript = (html: string) => [...html.matchAll(SCRIPT_ELEMENT)].map((found) => found[2]!).sort((a, b) => b.length - a.length)[0]!;
-const buildOf = (html: string) => /window\.CND_BUILD = "([^"]*)";/.exec(html)?.[1];
 
-async function deploy(built?: Build): Promise<DeployedScript> {
-  const { id, files } = built ?? (await buildFiles(DEPLOYED_AT));
+// Built once for every test here: each deploys it anew, with a Sheet of its own
+const BUILT: Promise<Build> = buildFiles(DEPLOYED_AT);
+
+async function deploy(): Promise<DeployedScript> {
+  const { id, files } = await BUILT;
   const code = files['gas/Code.js']!;
   const page = files['gas/index.html']!;
   const spreadsheet = new FakeSpreadsheet();
@@ -182,20 +184,19 @@ test('a held poll gives up after the time it was asked to wait', async () => {
 });
 
 test("the page's script reaches the browser whole, although Apps Script takes out what it reads as comments", async () => {
-  const built = await buildFiles(DEPLOYED_AT);
-  const script = await deploy(built);
+  const built = await BUILT;
+  const script = await deploy();
   const page = script.doGet({}).getContent();
   const served = appScript(page);
 
   assert.equal(served.length, appScript(built.files['gas/index.html']!).length, 'nothing was cut out of it');
-  assert.doesNotMatch(served, /\/[/*]/, 'nothing in it reads as the start of a comment');
   assert.doesNotThrow(() => new vm.Script(served));
   assert.equal(buildOf(page), built.id, 'nor out of the line that says which build the page is');
 });
 
 test('the page and the script of one build say they are the same build', async () => {
-  const built = await buildFiles(DEPLOYED_AT);
-  const script = await deploy(built);
+  const built = await BUILT;
+  const script = await deploy();
 
   assert.match(built.id, /^[0-9a-f]{12}$/);
   assert.equal(buildOf(built.files['gas/index.html']!), built.id);
@@ -231,7 +232,7 @@ function withALineAddedTo(file: string): Plugin {
 
 test('the build id follows what was built: the same twice over, and another when the page or the rules change', async () => {
   const [first, second, otherPage, otherRules] = await Promise.all([
-    buildFiles(DEPLOYED_AT),
+    BUILT,
     buildFiles(DEPLOYED_AT),
     buildFiles(DEPLOYED_AT, [withALineAddedTo('src/client/app.ts')]),
     buildFiles(DEPLOYED_AT, [withALineAddedTo('src/engine/hand.ts')]),

@@ -76,9 +76,6 @@ export class App {
   private readonly server: ServerLine;
   private readonly hotkeys: HotkeyPresser;
 
-  /** The game was updated after this page was loaded: the notice is up, and nothing on the page does anything anymore. */
-  private outdated = false;
-
   /** The table this page is at, from sitting down at its screen until that screen is left. */
   private table: TableConnection | null = null;
   private view: TableView | null = null;
@@ -108,7 +105,7 @@ export class App {
     this.prefs.watch('theme', (id) => this.applyTheme(id));
     this.prefs.watch('deck', (deck) => this.screen?.feed.showDeck(deck));
     this.server = new ServerLine(platform.transport, platform.build, () => this.showOutdated());
-    this.hotkeys = new HotkeyPresser(this.prefs, { root, controls: () => this.screen?.controls.element ?? null, dialogOpen: () => this.outdated || this.dialog !== null || (this.screen?.seatMoves.active ?? false) });
+    this.hotkeys = new HotkeyPresser(this.prefs, { root, controls: () => this.screen?.controls.element ?? null, dialogOpen: () => this.server.outdated || this.dialog !== null || (this.screen?.seatMoves.active ?? false) });
 
     root.classList.add('cnd');
   }
@@ -146,7 +143,7 @@ export class App {
     setInterval(() => this.tickCountdowns(), COUNTDOWN_TICK_MS);
 
     document.addEventListener('keydown', (event) => {
-      if (event.key !== 'Escape' || this.outdated) {
+      if (event.key !== 'Escape' || this.server.outdated) {
         return;
       }
 
@@ -431,8 +428,12 @@ export class App {
    * player what a reload brings them back to.
    */
   private showOutdated(): void {
-    this.outdated = true;
     this.closeDialog();
+
+    // Like the countdowns: a clock still running down would say the table behind the notice is the table as it is now
+    for (const animation of this.root.getAnimations({ subtree: true })) {
+      animation.pause();
+    }
 
     const notice = outdatedEl(this.platform.links.reloadLink(), this.table !== null);
 
@@ -633,8 +634,7 @@ export class App {
   }
 
   private tickCountdowns(): void {
-    // A clock still running down would say the table behind the notice is the table as it is now
-    if (this.outdated) {
+    if (this.server.outdated) {
       return;
     }
 

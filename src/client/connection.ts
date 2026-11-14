@@ -68,7 +68,9 @@ export class ServerLine {
   private readonly transport: Transport;
   private readonly build: string;
   private readonly onOutdated: () => void;
-  private outdated = false;
+
+  /** The server has answered as another build than this page is. It stays so until the page is loaded again. */
+  outdated = false;
 
   /** `onOutdated` is called once, when the first answer from another build arrives. */
   constructor(transport: Transport, build: string, onOutdated: () => void) {

@@ -57,7 +57,7 @@ You need Node 24 or newer and a Google account.
 
 With several Google accounts signed in to one browser, Google tends to send these steps to the wrong one. A private window with only the owner's account avoids that.
 
-`npm run deploy` is also how an update goes live; the address stays the same. A page that was open through the update says "The game was updated" the next time it hears from the server, with a Reload button, and until it is reloaded nothing it sends changes a table. The reload comes back to the same table and seat. Only the update that first brings this in is different, since the pages open then are too old to know: they show "The table is slow to answer. Trying again…" over the table as it was, and answer anything the player presses with "The game was updated. Reload to keep playing."; reloading the browser tab brings those back to their seat too.
+`npm run deploy` is also how an update goes live; the address stays the same. A page that was open through the update says "The game was updated" the next time it hears from the server, with a Reload button, and until it is reloaded nothing it sends changes a table. The reload comes back to the same table and seat.
 
 The Sheet is the database. It holds every table (including the cards in play), the ledger and the hand history, so only people you trust not to peek should have access to it. Players never need access to the Sheet itself.
 

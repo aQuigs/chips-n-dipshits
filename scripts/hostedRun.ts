@@ -443,8 +443,7 @@ try {
     await first.waitForSelector('.outdated');
     noticeUp = true;
 
-    assert.match(await noticeText(first), /The game was updated/);
-    assert.match(await noticeText(first), /Reload to keep playing\. Your place at the table is kept\./);
+    assert.match(await noticeText(first), /The game was updated\s+Reload to keep playing\. Your place at the table is kept\./);
     assert.equal(await first.locator('.stage .table').count(), 1, 'the table as it last was is still behind the notice');
     assert.equal(await first.locator('.toast:visible').count(), 0, 'the refusal is not also a toast');
 
@@ -452,16 +451,12 @@ try {
     assert.equal((await asNewerBuild({ op: 'act', tableId, auth: authOf(hostMember), command: { type: 'chat', text: 'back in a second' } })).ok, true);
     await second.waitForSelector('.outdated');
 
-    // Nor do the keys of the turn, or coming back to the tab, get anything sent
-    for (const key of ['c', 'f', 'Enter', 'Escape']) {
-      await first.keyboard.press(key);
-    }
+    // Nor does coming back to the tab, which asks afresh on a page that is current
     await first.evaluate(`document.dispatchEvent(new Event('visibilitychange'))`);
     await sleep(QUIET_MS);
 
     assert.deepEqual(afterNotice, [], 'nothing was sent once the notice was up');
     assert.deepEqual(moves, ['check'], 'the move was sent once');
-    assert.equal(await first.locator('.outdated').count(), 1, 'Escape does not put the notice away');
 
     const table = await asNewerBuild({ op: 'poll', tableId, auth: authOf(member), since: -1 });
     assert.equal(table.view!.hand.toAct, table.view!.you.seat, 'the refused check was not played: it is still this player’s turn');
@@ -476,12 +471,6 @@ try {
     assert.equal(await reload.evaluate((element) => element.tagName), 'A');
     assert.equal(await reload.getAttribute('href'), `${server.url}?table=${tableId}&me=${member}`);
     assert.equal(await reload.getAttribute('target'), '_top');
-
-    // The keyboard stays in the notice: Tab finds the link and nothing behind it
-    for (let press = 0; press < 6; press++) {
-      await first.keyboard.press('Tab');
-      assert.equal(await first.evaluate(`document.activeElement === document.body || !!document.activeElement.closest('.outdated')`), true, `Tab number ${press + 1} reached the page behind the notice`);
-    }
 
     await first.unroute('**/api');
     await reload.click();

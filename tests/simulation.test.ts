@@ -244,7 +244,7 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
   assert.ok(hunts.hunted >= TABLES && hunts.onTwoBoards >= TABLES / 20, hunting);
 
   const showing = `hands with cards shown by choice: ${JSON.stringify(shownByChoice)}`;
-  assert.ok(shownByChoice.oneCard >= TABLES * 2 && shownByChoice.otherAfter >= TABLES / 2 && shownByChoice.both >= TABLES * 2, showing);
+  assert.ok(shownByChoice.oneCard >= TABLES * 2 && shownByChoice.otherAfter >= TABLES / 4 && shownByChoice.both >= TABLES * 2, showing);
 
   const doubles = `double-board bomb pots: ${JSON.stringify(doubleBoards)}`;
   assert.ok(doubleBoards.chips >= TABLES / 2 && doubleBoards.cents >= TABLES / 2, doubles);

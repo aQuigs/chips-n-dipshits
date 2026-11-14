@@ -20,6 +20,9 @@ import type { DealOptions } from '../tests/helpers.ts';
 import { assertInvariants } from '../tests/invariants.ts';
 import { clientPage } from './bundle.ts';
 
+// Names a font to draw every screen in. CI's browser has other fonts than the machine a check was written on,
+// and what fails only there usually fails here in a narrower font ('Times New Roman') or a wider one ('Verdana').
+const FONT_OVERRIDE = process.env.RIG_FONT;
 const STEP_TIMEOUT_MS = 15_000;
 
 export const SCREENS = {
@@ -222,6 +225,14 @@ export class Rig {
     const context = await this.browser.newContext({ viewport: SCREENS[screen], ...(touch ? { deviceScaleFactor: 2, isMobile: true, hasTouch: true } : {}) });
     const page = await context.newPage();
 
+    if (FONT_OVERRIDE) {
+      await context.addInitScript(`document.addEventListener('DOMContentLoaded', () => {
+        const style = document.createElement('style');
+        style.textContent = '* { font-family: ${FONT_OVERRIDE}, sans-serif !important; }';
+        document.head.append(style);
+      });`);
+    }
+
     page.setDefaultTimeout(STEP_TIMEOUT_MS);
     page.on('pageerror', (error) => this.pageErrors.push(`${who}: ${error.message}`));
 
@@ -295,6 +306,21 @@ export async function textBoxes(page: Page, selector: string): Promise<Box[]> {
       .filter((box) => box.width > 0 && box.height > 0)
       .map((box) => ({ left: box.left, top: box.top, right: box.right, bottom: box.bottom }))`,
   ) as Promise<Box[]>;
+}
+
+/**
+ * Makes the table's part of the screen this tall. How much of a phone the table gets depends on how the buttons
+ * under it wrap, and so on the fonts of the machine; a check about the table's shape sets the height itself.
+ */
+export async function setStageHeight(page: Page, height: number): Promise<void> {
+  const viewport = page.viewportSize();
+  const [stage] = await boxes(page, '.stage');
+  assert.ok(viewport && stage, 'no table on the page to resize');
+
+  await page.setViewportSize({ width: viewport.width, height: Math.round(viewport.height + height - (stage.bottom - stage.top)) });
+
+  const [resized] = await boxes(page, '.stage');
+  assert.ok(resized && Math.abs(resized.bottom - resized.top - height) <= 1, `the table's part of the screen is ${resized && resized.bottom - resized.top} tall, not ${height}`);
 }
 
 export function overlap(a: Box, b: Box): boolean {

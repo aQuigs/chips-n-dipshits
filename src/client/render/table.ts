@@ -12,7 +12,7 @@ export type Shape = 'wide' | 'tall';
 type Anchor = 'top' | 'middle' | 'bottom';
 
 type SeatSpot = [x: number, y: number, anchor: Anchor];
-type Spot = [x: number, y: number];
+type Spot = [x: number, y: number, besideTheMiddle?: true];
 
 // Where each seat sits, in percent of the stage, going clockwise from the viewer at the bottom
 const SEAT_SPOTS: Record<Shape, SeatSpot[]> = {
@@ -42,10 +42,11 @@ const SEAT_SPOTS: Record<Shape, SeatSpot[]> = {
   ],
 };
 
-// Where each seat's bet sits: between the seat and the middle, clear of the board
+// Where each seat's bet sits: between the seat and the middle, clear of the board. A standing table has no
+// room for a bet between a side seat and the board, so those bets go just above and below the middle.
 const BET_SPOTS: Record<Shape, Spot[]> = {
   wide: [[50, 70], [33, 70], [22, 59], [22, 41], [33, 30], [50, 30], [67, 30], [78, 41], [78, 59], [67, 70]],
-  tall: [[50, 73], [33, 71], [33, 59], [33, 41], [33, 28], [50, 24], [67, 28], [67, 41], [67, 59], [67, 71]],
+  tall: [[50, 73], [33, 71], [33, 59, true], [33, 41, true], [33, 28], [50, 24], [67, 28], [67, 41, true], [67, 59, true], [67, 71]],
 };
 
 const BOARD_SIZE = 5;
@@ -74,9 +75,16 @@ function seatPlace(shape: Shape, slot: number): { class: string; style: Record<s
 }
 
 function betPlace(shape: Shape, slot: number): Record<string, string> {
-  const [x, y] = BET_SPOTS[shape][slot]!;
+  const [x, y, besideTheMiddle] = BET_SPOTS[shape][slot]!;
 
-  return { left: `${x}%`, top: `${y}%` };
+  if (!besideTheMiddle) {
+    return { left: `${x}%`, top: `${y}%` };
+  }
+
+  // The board and the pot keep their size on a short table, where a share of its height stops clearing them
+  const fromTheMiddle = `max(${Math.abs(y - 50)}%, var(--center-reach))`;
+
+  return { left: `${x}%`, top: `calc(50% ${y < 50 ? '-' : '+'} ${fromTheMiddle})` };
 }
 
 function sum(amounts: number[]): number {

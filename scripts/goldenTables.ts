@@ -102,6 +102,21 @@ function runoutOnTwoBoards(): TestTable {
   return t;
 }
 
+/** Two players all in before the flop at a table that never runs it twice: the flop is out and the turn is to come. */
+function runoutWithRunItTwiceOff(): TestTable {
+  const t = table([1000, 1000, 1000], 37, { allowRunItTwice: false });
+
+  t.cmd(0, { type: 'start' });
+  t.deal({ button: 0, holes: { 0: 'As Ah', 1: '9c 8c', 2: 'Kd Kh' }, board: 'Ks 7s 2d 3c 4h' });
+
+  t.raise(0, 1000);
+  t.fold(1);
+  t.call(2);
+  t.wait(TIMING.runoutStepMs);
+
+  return t;
+}
+
 /** A hand just won with seven-deuce, the bounty paid, and one of the losers on their way out of their seat. */
 function doneWithBountyPaid(): TestTable {
   const t = table([1000, 1000, 1000, 1000], 35);
@@ -181,6 +196,15 @@ const SETS: TableSet[] = [
     schema: 3,
     tables: {
       'with-straddle-and-missed-blinds': bettingWithStraddleAndMissedBlinds,
+    },
+  },
+  // Schema 4 as it ended: the last code for which running it more than once was a yes or no to running it twice
+  {
+    schema: 4,
+    tables: {
+      'run-it-twice-vote': runItTwiceVote,
+      'runout-two-boards': runoutOnTwoBoards,
+      'runout-run-it-twice-off': runoutWithRunItTwiceOff,
     },
   },
 ];

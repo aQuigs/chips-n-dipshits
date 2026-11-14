@@ -18,8 +18,8 @@ const FILES = readdirSync(FOLDER)
 // Saved by the last code of schema 3, with everything added to a table while that schema lasted
 const LAST_OF_SCHEMA_3 = 'schema3-with-straddle-and-missed-blinds.json';
 
-// The rest were saved as schema 3 began, before any of it was added
-const OLDEST = FILES.filter((file) => file !== LAST_OF_SCHEMA_3);
+// The rest of schema 3 were saved as it began, before any of it was added
+const OLDEST = FILES.filter((file) => /^schema[23]-/.test(file) && file !== LAST_OF_SCHEMA_3);
 
 const HANDS_TO_PLAY = 4;
 const STEP_LIMIT = 3000;
@@ -232,7 +232,7 @@ test('a bomb pot saved in the middle by the code before there were two boards go
 });
 
 test('a table saved when a hand had one straddle, kept as its seat, has it as a line of one, and every player who asked to straddle still posts under the gun', () => {
-  for (const file of FILES) {
+  for (const file of FILES.filter((name) => /^schema[23]-/.test(name))) {
     const state = load(file);
     const before = JSON.parse(readFileSync(new URL(file, FOLDER), 'utf8')) as { seats: ({ straddle: boolean } | null)[]; hand: { straddleSeat: number | null } | null };
 

@@ -86,7 +86,7 @@ const BETWEEN_HANDS: ((t: TestTable, rng: Rng) => void)[] = [
     }
   },
   (t, rng) => t.cmd(0, { type: 'forgiveBlinds', playerId: t.state.seats[pick(rng, seated(t))!]!.playerId }),
-  (t, rng) => t.cmd(t.playerIn(pick(rng, seated(t))!), { type: 'setStraddle', on: chance(rng, 50) }),
+  (t, rng) => t.cmd(t.playerIn(pick(rng, seated(t))!), { type: 'setStraddle', kind: 'straddle', on: chance(rng, 50) }),
 ];
 
 /** The table as a hand finds it, kept to hold the hand to afterward. */

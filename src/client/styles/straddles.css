@@ -1,0 +1,11 @@
+/* ---- Straddles: a player's own choice of them, and word of one the hand did not take ---- */
+
+.straddle-note {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.straddle-kinds {
+  display: grid;
+  gap: 8px;
+}

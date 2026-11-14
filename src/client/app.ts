@@ -587,6 +587,7 @@ export class App {
       controlsEl(view, {
         send: (command) => this.send(command),
         openRebuy: () => this.openDialog({ kind: 'rebuy' }),
+        openStraddles: () => this.openDialog({ kind: 'straddles' }),
       }),
     );
 

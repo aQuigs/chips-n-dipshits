@@ -56,7 +56,7 @@ function bettingWithStraddleAndSidePot(): TestTable {
   const t = table([2000, 2000, 400, 2000, 2000], 32);
   watcher(t);
 
-  t.cmd(3, { type: 'setStraddle', on: true });
+  t.cmd(3, { type: 'setStraddle', kind: 'straddle', on: true });
   t.cmd(0, { type: 'start' });
   t.deal({ button: 0, holes: { 0: 'Ad Qd', 2: 'Jc Jh', 3: '9s 8s', 4: 'Ks Kc' }, board: 'Jd 7c 2s 5h Tc' });
 
@@ -140,7 +140,7 @@ function bettingWithStraddleAndMissedBlinds(): TestTable {
 
   t.cmd(4, { type: 'comeIn', post: true });
   for (const seat of [1, 2, 5]) {
-    t.cmd(seat, { type: 'setStraddle', on: true });
+    t.cmd(seat, { type: 'setStraddle', kind: 'straddle', on: true });
   }
 
   // The button on seat 5, the blinds on seats 0 and 1, and seat 2 under the gun

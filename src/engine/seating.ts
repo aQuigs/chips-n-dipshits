@@ -22,7 +22,7 @@ function grantSeat(state: TableState, ctx: Ctx, request: SeatRequest): void {
     sittingOut: false,
     away: false,
     leaving: false,
-    straddle: false,
+    straddles: [],
     pendingAdd: 0,
     moveTo: null,
     ...owedOnSitting(state),

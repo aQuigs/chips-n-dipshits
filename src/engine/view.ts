@@ -14,7 +14,7 @@ import { handsLeft, nightIsOver, onLastHand } from './night.ts';
 import { buildPots } from './pots.ts';
 import type { Pot } from './pots.ts';
 import { memberOf, seatIndexOf } from './seats.ts';
-import type { BombPot, FeedEntry, Hand, HandPlayer, HandResult, HandStage, PlayerAction, RequestKind, Street, TableConfig, TableState } from './types.ts';
+import type { BombPot, FeedEntry, Hand, HandPlayer, HandResult, HandStage, PassedOver, PlayerAction, RequestKind, Straddle, StraddlePost, Street, TableConfig, TableState } from './types.ts';
 
 /** A hole card as one viewer sees it: the card, or null when it is face down for them. */
 export type VisibleCard = Card | null;
@@ -27,7 +27,8 @@ export interface SeatView {
   sittingOut: boolean;
   away: boolean;
   leaving: boolean;
-  straddle: boolean;
+  /** The kinds of straddle they post whenever one is theirs to post. */
+  straddles: Straddle[];
   pendingAdd: number;
   /** The seat the host is moving them to when the hand ends. */
   moveTo: number | null;
@@ -66,7 +67,10 @@ export interface HandView {
   button: number;
   sbSeat: number;
   bbSeat: number;
-  straddleSeat: number | null;
+  /** The hand's straddles, in the order they were posted. */
+  straddles: StraddlePost[];
+  /** Why the viewer posted no straddle in this hand, when they had asked for one their seat could have posted; null otherwise. */
+  passedOver: PassedOver | null;
   bigBlind: number;
   bombPot: BombPot | null;
   /** Every chip in the middle, bets in front of players included. */
@@ -168,7 +172,7 @@ export function viewFor(state: TableState, playerId: string, now: number): Table
       sittingOut: seat.sittingOut,
       away: seat.away,
       leaving: seat.leaving,
-      straddle: seat.straddle,
+      straddles: seat.straddles,
       pendingAdd: seat.pendingAdd,
       moveTo: seat.moveTo,
       owesBigBlind: seat.owesBigBlind,
@@ -199,7 +203,8 @@ export function viewFor(state: TableState, playerId: string, now: number): Table
       button: hand.button,
       sbSeat: hand.sbSeat,
       bbSeat: hand.bbSeat,
-      straddleSeat: hand.straddleSeat,
+      straddles: hand.straddles,
+      passedOver: hand.passedOver.find((passed) => passed.seat === mySeat) ?? null,
       bigBlind: hand.bigBlind,
       bombPot: hand.bombPot,
       pot: hand.players.reduce((sum, p) => sum + p.committed + p.dead, 0),

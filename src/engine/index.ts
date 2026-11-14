@@ -16,6 +16,7 @@ export * from './pots.ts';
 export * from './presets.ts';
 export * from './seats.ts';
 export * from './stakes.ts';
+export * from './straddles.ts';
 export * from './table.ts';
 export * from './types.ts';
 export * from './upgrade.ts';

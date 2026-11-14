@@ -4,7 +4,7 @@
  */
 import assert from 'node:assert/strict';
 
-import { BOARD_SIZE, boardsDealt, evaluateHand, FEED_LIMIT, FLOP_SIZE, LIMITS, nightIsOver, owes, PLAYING_THE_BOARD, reaches, replayHand, roleOf, viewFor } from '../src/engine/index.ts';
+import { BOARD_SIZE, boardsDealt, evaluateHand, FEED_LIMIT, FLOP_SIZE, isStraddle, LIMITS, nightIsOver, owes, PLAYING_THE_BOARD, reaches, replayHand, roleOf, STRADDLES, STRADDLES_IN_A_ROW, straddlesAllowed, viewFor } from '../src/engine/index.ts';
 import type { Effect, FeedEntry, HandPlayer, HandRecord, TableState } from '../src/engine/index.ts';
 import { CACHE_VALUE_BYTES, utf8Bytes } from '../src/gas/sheetStore.ts';
 import { restoreState } from '../src/server/store.ts';
@@ -104,6 +104,59 @@ export function assertBlindsHold(state: TableState): void {
     assert.ok(owing.every(({ index }) => !dealtIn.has(index)), 'a player is in a hand with blinds while owing one');
     assert.ok(dealtIn.has(state.hand.bbSeat), 'a hand with blinds has nobody on the big blind');
   }
+}
+
+/**
+ * A player's standing choice of straddles is of kinds the table allows, each once. A hand has one line
+ * of them at most: a first straddle of twice the big blind, then only ones that double the one before,
+ * each from another player dealt in and none from a seat that posted a blind. A bomb pot has none.
+ */
+export function assertStraddlesHold(state: TableState): void {
+  const allowed = straddlesAllowed(state.config).map((kind) => kind.what);
+  const listed = STRADDLES.map((kind) => kind.what);
+
+  for (const seat of state.seats) {
+    if (seat) {
+      assert.ok(seat.straddles.every((what) => allowed.includes(what)), `a player asks for a straddle the table does not allow: ${seat.straddles.join(', ')}`);
+      assert.deepEqual(seat.straddles, listed.filter((what) => seat.straddles.includes(what)), 'a player asks for a kind of straddle twice, or out of order');
+    }
+  }
+
+  const hand = state.hand;
+  if (!hand) {
+    return;
+  }
+
+  const { straddles, passedOver } = hand;
+  const dealtIn = hand.players.map((player) => player.seat);
+  const told = JSON.stringify(straddles);
+
+  assert.ok(!hand.bombPot || straddles.length + passedOver.length === 0, 'a bomb pot has a straddle in it');
+  assert.ok(dealtIn.length > 2 || straddles.length === 0, 'a hand dealt to two has a straddle in it');
+  assert.ok(straddles.length <= STRADDLES_IN_A_ROW, `more straddles in a row than a hand may have: ${told}`);
+  assert.equal(new Set(straddles.map((straddle) => straddle.seat)).size, straddles.length, `a player straddles twice in one hand: ${told}`);
+
+  straddles.forEach(({ seat, what, amount }, nth) => {
+    const before = straddles[nth - 1];
+
+    assert.ok(dealtIn.includes(seat) && seat !== hand.sbSeat && seat !== hand.bbSeat, `seat ${seat} straddles from a blind or without being dealt in`);
+    assert.equal(what === 'double straddle', nth > 0, `a hand's straddles are not one line: ${told}`);
+    assert.equal(amount, 2 * (before ? before.amount : hand.bigBlind), `a straddle is not twice what it is posted on top of: ${told}`);
+  });
+
+  const straddlers = new Set(straddles.map((straddle) => straddle.seat));
+  assert.ok(passedOver.every((passed) => dealtIn.includes(passed.seat) && !straddlers.has(passed.seat)), 'a player who straddles, or is not in the hand, is told they were passed over');
+
+  // A hand saved before hands kept their events has none to go by
+  const posts = hand.events.flatMap((event) => (event[0] === 'post' ? [event] : []));
+  if (posts.length === 0) {
+    return;
+  }
+
+  // Posted whole, after every other forced bet, in the order of the line, and by nobody with a blind in front of them
+  assert.deepEqual(posts.slice(posts.length - straddles.length).map((post) => ({ seat: post[1], what: post[2], amount: post[3] })), straddles, 'the straddles posted are not the hand\'s line of them, posted last');
+  assert.ok(posts.slice(0, posts.length - straddles.length).every((post) => !isStraddle(post[2])), 'a straddle was posted before another forced bet');
+  assert.ok(posts.every((post) => !straddlers.has(post[1]) || isStraddle(post[2]) || post[2] === 'ante'), 'a player straddles on top of a blind');
 }
 
 /**
@@ -296,6 +349,7 @@ export function assertInvariants(state: TableState, now: number): void {
   assertRolesHold(state);
   assertSeatingHolds(state);
   assertBlindsHold(state);
+  assertStraddlesHold(state);
   assertBombPotsHold(state);
   assertBoardsHold(state);
   assertNightHolds(state);

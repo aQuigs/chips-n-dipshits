@@ -7,7 +7,7 @@ export const SEAT_COUNT = 10;
  * Bumped when the shape of a saved table changes (a field renamed, retyped or removed), together with a
  * step in `upgradeState`. A field that is only added gets a default in `SAVED_DEFAULTS` instead.
  */
-export const STATE_SCHEMA = 3;
+export const STATE_SCHEMA = 4;
 
 /** What a table's amounts count, since every one of them is kept as a whole number: chips, or the cents of an amount written in dollars. */
 export type Unit = 'chips' | 'cents';
@@ -36,7 +36,11 @@ export interface TableConfig {
   maxBuyIn: number;
   /** Seconds a player has to act; 0 turns the clock off. */
   actionSeconds: number;
+  /** The straddle under the gun. This and the three after it each allow one kind of straddle: see `STRADDLES`. */
   allowStraddle: boolean;
+  allowDoubleStraddle: boolean;
+  allowButtonStraddle: boolean;
+  allowMississippiStraddle: boolean;
   allowRunItTwice: boolean;
   /** Paid by every other player dealt in to whoever wins with seven-deuce; 0 turns it off. */
   sevenDeuceBounty: number;
@@ -74,8 +78,8 @@ export interface Seat {
   away: boolean;
   /** Gives up the seat as soon as the current hand is over. */
   leaving: boolean;
-  /** Posts a straddle whenever under the gun. */
-  straddle: boolean;
+  /** The kinds of straddle this player posts whenever one is theirs to post. Only kinds the table allows. */
+  straddles: Straddle[];
   /** Approved chips waiting for the current hand to end. */
   pendingAdd: number;
   /** The seat the host is moving this player to once the hand they are dealt into ends; null for none. */
@@ -115,11 +119,37 @@ export type Street = 'preflop' | 'flop' | 'turn' | 'river';
 export type HandStage = 'betting' | 'ritVote' | 'runout' | 'done';
 
 /**
+ * The kinds of straddle, each by what its post is called: `straddle` is the one from under the gun.
+ * What each is, and who may post it, is its entry in `STRADDLES` (`straddles.ts`).
+ */
+export type Straddle = 'straddle' | 'double straddle' | 'button straddle' | 'Mississippi straddle';
+
+/**
  * What a forced bet is called, in the play-by-play and in a hand's events. A missed big blind and a
  * dead small blind are what a player who owes blinds posts to come back in before the big blind
  * reaches them, on top of the hand's own blinds.
  */
-export type Post = 'small blind' | 'big blind' | 'missed big blind' | 'dead small blind' | 'straddle' | 'ante' | 'big blind ante' | 'bomb pot';
+export type Post = 'small blind' | 'big blind' | 'missed big blind' | 'dead small blind' | Straddle | 'ante' | 'big blind ante' | 'bomb pot';
+
+/** A straddle of a hand: who posts it, which kind it is and how much. */
+export interface StraddlePost {
+  seat: number;
+  what: Straddle;
+  amount: number;
+}
+
+/**
+ * Why a player dealt into a hand posts no straddle in it, though they asked for one their seat could
+ * have posted:
+ * - `two players`: nobody straddles a hand dealt to two.
+ * - `blind`: they are posting a blind, which a straddle is never posted on top of.
+ * - `right`: the player in seat `ahead` had the right before them, and straddles.
+ * - `short`: they cannot cover the `amount` it costs.
+ */
+export type NoStraddle = { why: 'two players' | 'blind' } | { why: 'right'; ahead: number } | { why: 'short'; amount: number };
+
+/** A player a hand's straddle passed over, by seat, and why. */
+export type PassedOver = { seat: number } & NoStraddle;
 
 /** The terms of a bomb pot; a hand with none is an ordinary one. */
 export interface BombPot {
@@ -198,7 +228,10 @@ export interface Hand {
   /** The seat the small blind falls on. Nobody posts it when no player dealt in sits there. */
   sbSeat: number;
   bbSeat: number;
-  straddleSeat: number | null;
+  /** The hand's straddles in the order they were posted, each bigger than the one before: none in most hands. */
+  straddles: StraddlePost[];
+  /** The players whose straddle the hand did not take, for each of them to be told why. */
+  passedOver: PassedOver[];
   /** The seven-deuce bounty this hand was dealt under; like the blinds, a new setting waits for the next hand. */
   bounty: number;
   /** What kind of hand this is: a bomb pot and its terms, or null for an ordinary hand. Settled when it is dealt. */
@@ -348,7 +381,8 @@ export type Command =
   | { type: 'sitIn' }
   /** Sits a player back in and says how they settle the blinds they owe: posted on the first hand they can be dealt (`post`), or by waiting for the big blind. */
   | { type: 'comeIn'; post: boolean }
-  | { type: 'setStraddle'; on: boolean }
+  /** Says whether the player posts one kind of straddle whenever it is theirs to post. */
+  | { type: 'setStraddle'; kind: Straddle; on: boolean }
   | { type: 'fold'; turn?: number }
   | { type: 'check'; turn?: number }
   | { type: 'call'; turn?: number }

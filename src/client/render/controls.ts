@@ -1,7 +1,8 @@
 import { editableAmount, formatAmount, hasDecimals, parseAmount, shortAmount } from '../../engine/amounts.ts';
 import type { Denominated } from '../../engine/amounts.ts';
 import { bombPotName } from '../../engine/bombPots.ts';
-import type { Command } from '../../engine/types.ts';
+import { straddlesAllowed } from '../../engine/straddles.ts';
+import type { Command, PassedOver } from '../../engine/types.ts';
 import type { HandView, SeatView, TableView } from '../../engine/view.ts';
 import { HOTKEYS } from '../hotkeys.ts';
 import { h, holdWhile } from '../ui.ts';
@@ -11,6 +12,8 @@ export interface ControlHandlers {
   /** Resolves once the server has answered, or failed to. */
   send(command: Command): Promise<unknown>;
   openRebuy(): void;
+  /** Opens the player's own choice of straddles, at a table that allows more than one kind. */
+  openStraddles(): void;
 }
 
 interface SizePreset {
@@ -236,10 +239,43 @@ function settlingOf(view: TableView, seat: SeatView, handlers: ControlHandlers):
   }
 }
 
-function waitingEl(text: string, view: TableView, owed: string | null = null): HTMLElement {
+/** What the bar says to a player who asked to straddle and posted none in the hand on the table. */
+function passedOverText(view: TableView, passed: PassedOver): string {
+  const reason = (): string => {
+    switch (passed.why) {
+      case 'two players':
+        return 'there are only two players';
+      case 'blind':
+        return 'you posted a blind';
+      case 'right':
+        return `${view.seats[passed.ahead]?.name ?? 'Another player'} had the right before you`;
+      case 'short':
+        return `you could not cover the ${formatAmount(passed.amount, view.config)}`;
+    }
+  };
+
+  return `No straddle this hand: ${reason()}`;
+}
+
+/** A line the bar has for the viewer alone, under what everyone is waiting for: about blinds they owe, or a straddle they did not get to post. */
+interface OwnNote {
+  about: 'owed' | 'straddle';
+  text: string;
+}
+
+function waitingEl(text: string, view: TableView, own: OwnNote | null = null): HTMLElement {
   const note = nextHandNote(view);
 
-  return h('div.waiting', null, text, note.length > 0 ? h('div.next-hand', null, note.map((part) => h('span', null, part))) : null, owed ? h('div.owed-note', null, owed) : null);
+  return h('div.waiting', null, text, note.length > 0 ? h('div.next-hand', null, note.map((part) => h('span', null, part))) : null, own ? h(`div.${own.about}-note`, null, own.text) : null);
+}
+
+/** The viewer's own line: a player in a hand owes nothing, so there is never more than one thing to say. */
+function ownNote(owed: string | null, hand: HandView | null, view: TableView): OwnNote | null {
+  if (owed) {
+    return { about: 'owed', text: owed };
+  }
+
+  return hand?.passedOver ? { about: 'straddle', text: passedOverText(view, hand.passedOver) } : null;
 }
 
 function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandlers): HTMLElement {
@@ -265,7 +301,7 @@ function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandle
       ),
     );
   } else {
-    main = waitingEl(waitingText(view, hand), view, settling.note);
+    main = waitingEl(waitingText(view, hand), view, ownNote(settling.note, hand, view));
   }
 
   const showCards = hand?.canShow ? commandButton('button.chip-btn', 'show', 'Show my cards', () => handlers.send({ type: 'showCards' })) : null;
@@ -291,8 +327,16 @@ function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandle
 
   extras.push(...settling.buttons);
 
-  if (view.config.allowStraddle) {
-    extras.push(toggle('Straddle', seat.straddle, 'straddle', (on) => handlers.send({ type: 'setStraddle', on })));
+  const straddles = straddlesAllowed(view.config);
+  const [only] = straddles;
+
+  // One kind is a switch, as it always was. Several would not fit under a phone's table, so they are chosen in a dialog
+  if (only && straddles.length === 1) {
+    extras.push(toggle('Straddle', seat.straddles.includes(only.what), 'straddle', (on) => handlers.send({ type: 'setStraddle', kind: only.what, on })));
+  } else if (only) {
+    const on = seat.straddles.length;
+
+    extras.push(h('button.chip-btn', { type: 'button', 'data-action': 'straddles', onclick: handlers.openStraddles }, `Straddles: ${on > 0 ? `${on} on` : 'off'}`));
   }
 
   if (showCards) {
@@ -347,11 +391,11 @@ export function controlsSignature(view: TableView): string {
   const hand = view.hand;
 
   return JSON.stringify([
-    seat && [seat.stack, seat.pendingAdd, seat.sittingOut, seat.away, seat.straddle, seat.leaving, seat.owesBigBlind, seat.owesSmallBlind, seat.comesIn],
-    hand && [hand.number, hand.stage, hand.street, hand.toAct, hand.turn, hand.currentBet, hand.pot, hand.options, hand.canVote, hand.canShow],
+    seat && [seat.stack, seat.pendingAdd, seat.sittingOut, seat.away, seat.straddles, seat.leaving, seat.owesBigBlind, seat.owesSmallBlind, seat.comesIn],
+    hand && [hand.number, hand.stage, hand.street, hand.toAct, hand.turn, hand.currentBet, hand.pot, hand.options, hand.canVote, hand.canShow, hand.passedOver],
     [view.running, view.nextHandAt !== null, view.handCount === 0, nightOver(view), hand?.stage === 'done' && onLastHand(view)],
     view.requests.filter((request) => request.playerId === view.you.id),
-    [view.config.allowStraddle, view.config.maxBuyIn, view.config.smallBlind, view.config.bigBlind],
+    [straddlesAllowed(view.config).map((kind) => kind.what), view.config.maxBuyIn, view.config.smallBlind, view.config.bigBlind],
     nextHandNote(view),
   ]);
 }

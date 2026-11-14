@@ -19,6 +19,9 @@ test('the default settings are the registry\'s defaults, and the table accepts t
     maxBuyIn: 2000,
     actionSeconds: 30,
     allowStraddle: true,
+    allowDoubleStraddle: false,
+    allowButtonStraddle: false,
+    allowMississippiStraddle: false,
     allowRunItTwice: true,
     sevenDeuceBounty: 0,
     bombPotAmount: 100,
@@ -127,7 +130,7 @@ test('random settings are always ones the table accepts, and between them reach 
 
 test('changing a setting that waits for the next hand leaves the hand in play as it is', () => {
   const waiting = CONFIG_KEYS.filter((key) => CONFIG_SPECS[key].nextHand);
-  assert.deepEqual(waiting, ['smallBlind', 'bigBlind', 'ante', 'anteFrom', 'missedBlinds', 'sevenDeuceBounty', 'bombPotAmount', 'bombPotEvery', 'bombPotBoards']);
+  assert.deepEqual(waiting, ['smallBlind', 'bigBlind', 'ante', 'anteFrom', 'allowStraddle', 'allowDoubleStraddle', 'allowButtonStraddle', 'allowMississippiStraddle', 'missedBlinds', 'sevenDeuceBounty', 'bombPotAmount', 'bombPotEvery', 'bombPotBoards']);
 
   const rng = seededRng(3);
 

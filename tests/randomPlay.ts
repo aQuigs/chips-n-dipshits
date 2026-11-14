@@ -1,7 +1,7 @@
 /* Random play on a test table: what the simulation runs, and what plays a saved table on after it is read back. */
 import assert from 'node:assert/strict';
 
-import { addMember, CONFIG_KEYS, LIMITS, nextDeadline, owes, SEAT_COUNT, viewFor } from '../src/engine/index.ts';
+import { addMember, CONFIG_KEYS, LIMITS, nextDeadline, owes, SEAT_COUNT, straddlesAllowed, viewFor } from '../src/engine/index.ts';
 import type { Command, GameError, Rng } from '../src/engine/index.ts';
 import type { TestTable } from './helpers.ts';
 import { randomConfig } from './randomConfig.ts';
@@ -79,7 +79,15 @@ export const FUZZ_COMMANDS: ((fuzz: Fuzz) => void)[] = [
     attempt(t, someoneRunningTheGame(t, rng), { type: chance(rng, 80) ? 'approve' : 'deny', playerId });
   },
 
-  ({ t, rng, who }) => attempt(t, who, { type: 'setStraddle', on: chance(rng, 50) }),
+  ({ t, rng }) => {
+    // Everyone with a seat at once, about every kind the table allows: one player asking for one kind would hardly
+    // ever be in the seat it is posted from
+    for (const seat of t.state.seats) {
+      for (const kind of seat ? straddlesAllowed(t.state.config) : []) {
+        attempt(t, t.ids.indexOf(seat!.playerId), { type: 'setStraddle', kind: kind.what, on: chance(rng, 75) });
+      }
+    }
+  },
   ({ t, who }) => attempt(t, who, { type: 'showCards' }),
   ({ t, rng, playerId }) => attempt(t, someoneRunningTheGame(t, rng), { type: 'setStack', playerId, stack: rng.int(2000) }),
   ({ t, rng, playerId }) => attempt(t, someoneRunningTheGame(t, rng), { type: 'kick', playerId }),

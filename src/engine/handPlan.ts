@@ -13,8 +13,8 @@
  * button and the blinds are, is written by this module alone.
  */
 import type { Rng } from './cards.ts';
-import { forcedBets, positionsOf } from './forcedBets.ts';
-import type { ForcedBet, Positions } from './forcedBets.ts';
+import { handPosts, positionsOf } from './forcedBets.ts';
+import type { HandPosts, Positions } from './forcedBets.ts';
 import { eligibleSeats, seatsClockwiseAfter, stepsClockwise } from './seats.ts';
 import type { BlindSeats, BombPot, Seat, TableState } from './types.ts';
 
@@ -29,11 +29,7 @@ export interface Owed {
   posts: boolean;
 }
 
-export interface HandPlan extends Positions {
-  /** The seat the button is on, which nobody need be playing from. */
-  button: number;
-  /** Every forced bet of the hand, in the order they are posted. */
-  bets: ForcedBet[];
+export interface HandPlan extends Positions, HandPosts {
   /** Players there to play who are not dealt in, and what each is waiting for. */
   held: { seat: number; for: HeldFor }[];
   /** Where the blinds are once the hand is dealt, for the next hand to go on from. */
@@ -132,7 +128,7 @@ function carriedOn(state: TableState, ready: readonly number[], last: BlindSeats
   const seating = seatingFrom(state, ready, last);
   const { sbSeat, bbSeat, dealtIn, posting, held } = seating;
   const button = buttonOf(seating);
-  const positions: Positions = { order: seatsClockwiseAfter(dealtIn, button), sbSeat, bbSeat, posting };
+  const positions: Positions = { button, order: seatsClockwiseAfter(dealtIn, button), sbSeat, bbSeat, posting };
 
   const owed = state.config.missedBlinds === 'owed';
   const passedByBigBlind = (seat: number) => stepsClockwise(last.big, seat) > 0 && stepsClockwise(last.big, seat) < stepsClockwise(last.big, bbSeat);
@@ -156,7 +152,7 @@ function carriedOn(state: TableState, ready: readonly number[], last: BlindSeats
     return seat.owesBigBlind || smallBlind ? [{ seat: index, bigBlind: seat.owesBigBlind, smallBlind, posts }] : [];
   });
 
-  return { button, ...positions, bets: forcedBets(state, positions), held, blinds: { small: sbSeat, big: bbSeat }, owing };
+  return { ...positions, ...handPosts(state, positions), held, blinds: { small: sbSeat, big: bbSeat }, owing };
 }
 
 /**
@@ -178,17 +174,17 @@ export function planHand(state: TableState, bombPot: BombPot | null, rng: Rng): 
   // No blinds to go on from, or none in this hand: everyone there to play is dealt in, and the button moves on a player
   const button = buttonMovedOn(state, ready, rng);
   const positions = positionsOf(ready, button);
-  const bets = forcedBets(state, positions, bombPot);
+  const plan = { ...positions, ...handPosts(state, positions, bombPot) };
 
   // A bomb pot has no blinds, so none move, none are missed and none are made up: the next hand finds them as they were
   if (bombPot) {
     const owing = state.seats.flatMap((seat, index): Owed[] => (seat && owes(seat) ? [{ seat: index, bigBlind: seat.owesBigBlind, smallBlind: seat.owesSmallBlind, posts: seat.postsOwed }] : []));
 
-    return { button, ...positions, bets, held: [], blinds: state.blinds, owing };
+    return { ...plan, held: [], blinds: state.blinds, owing };
   }
 
   // A new game: a table's first hand, or the one after a shuffle. Nobody owes anything, and the blinds start left of the button
-  return { button, ...positions, bets, held: [], blinds: { small: positions.sbSeat, big: positions.bbSeat }, owing: [] };
+  return { ...plan, held: [], blinds: { small: plan.sbSeat, big: plan.bbSeat }, owing: [] };
 }
 
 /** Takes on what a plan decided about the table itself, as its hand is dealt: where the button and the blinds are, and who owes what from here. */

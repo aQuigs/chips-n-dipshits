@@ -3,6 +3,7 @@ import { formatAmount, validAmount } from '../amounts.ts';
 import { choosePosting } from '../handPlan.ts';
 import { leaveSeat, submit } from '../seating.ts';
 import { seatIndexOf } from '../seats.ts';
+import { chooseStraddle, isStraddle, straddleKind } from '../straddles.ts';
 import { GameError, SEAT_COUNT } from '../types.ts';
 import { wholeNumber, yesOrNo } from '../validate.ts';
 import type { Handler } from './handler.ts';
@@ -86,10 +87,15 @@ export const setStraddle: Handler<'setStraddle'> = {
   by: 'seat',
   run: ({ state, command, seat }) => {
     const on = yesOrNo(command.on, 'Straddle');
-    if (on && !state.config.allowStraddle) {
-      throw new GameError('Straddles are turned off at this table');
+    if (!isStraddle(command.kind)) {
+      throw new GameError('That is no kind of straddle');
     }
 
-    seat.straddle = on;
+    const kind = straddleKind(command.kind);
+    if (on && !state.config[kind.setting]) {
+      throw new GameError(`${kind.subject} is turned off at this table`);
+    }
+
+    chooseStraddle(seat, kind.what, on);
   },
 };

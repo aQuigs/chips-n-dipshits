@@ -1,5 +1,7 @@
 import { formatAmount, validAmount } from './amounts.ts';
 import type { Denominated } from './amounts.ts';
+import { STRADDLES } from './straddles.ts';
+import type { StraddleKind } from './straddles.ts';
 import { GameError } from './types.ts';
 import type { TableConfig } from './types.ts';
 import { LIMITS, text, webAddress, wholeNumber, yesOrNo } from './validate.ts';
@@ -79,6 +81,13 @@ export interface ChoiceSpec<V extends string = string> extends SpecBase {
 export type ConfigSpec = TextSpec | LinkSpec | NumberSpec | ToggleSpec | ChoiceSpec;
 
 export type ConfigKey = keyof TableConfig;
+
+/** The switch that allows one kind of straddle, worded by the kind's entry in `STRADDLES`. */
+function straddleSwitch(setting: StraddleKind['setting']): ToggleSpec {
+  const kind = STRADDLES.find((entry) => entry.setting === setting)!;
+
+  return { kind: 'toggle', label: kind.label, subject: kind.subject, default: kind.byDefault, group: 'house', nextHand: true };
+}
 
 /** The kind of spec a setting of a given type takes; a string that is one of a few fixed values is a choice. */
 type SpecFor<V> = [V] extends [boolean] ? ToggleSpec : [V] extends [number] ? NumberSpec : [V] extends [string] ? (string extends V ? TextSpec | LinkSpec : ChoiceSpec<V>) : never;
@@ -164,7 +173,10 @@ export const CONFIG_SPECS: { [K in ConfigKey]-?: SpecFor<TableConfig[K]> } = {
     atCreate: true,
     inPresets: false,
   },
-  allowStraddle: { kind: 'toggle', label: 'Allow straddles', subject: 'Straddles', default: true, group: 'house' },
+  allowStraddle: straddleSwitch('allowStraddle'),
+  allowDoubleStraddle: straddleSwitch('allowDoubleStraddle'),
+  allowButtonStraddle: straddleSwitch('allowButtonStraddle'),
+  allowMississippiStraddle: straddleSwitch('allowMississippiStraddle'),
   allowRunItTwice: { kind: 'toggle', label: 'Offer run it twice when everyone is all in', subject: 'Run it twice', default: true, group: 'house' },
   missedBlinds: {
     kind: 'choice',

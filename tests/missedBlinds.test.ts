@@ -246,12 +246,12 @@ test('with an ante the returning player antes like everyone, and a big-blind ant
 
 test('with a straddle on, the returning player has the difference to call, and the action starts left of the straddle', () => {
   const t = backToPost();
-  t.cmd(2, { type: 'setStraddle', on: true });
+  t.cmd(2, { type: 'setStraddle', kind: 'straddle', on: true });
   t.deal();
   const hand = t.state.hand!;
 
   assert.deepEqual(posts(t), ['4 missed big blind 20', '4 dead small blind 10 dead', '0 small blind 10', '1 big blind 20', '2 straddle 40']);
-  assert.deepEqual([hand.straddleSeat, hand.currentBet, hand.minRaise, t.toAct], [2, 40, 40, 3]);
+  assert.deepEqual([hand.straddles.map((straddle) => straddle.seat), hand.currentBet, hand.minRaise, t.toAct], [[2], 40, 40, 3]);
 
   t.fold(3);
   assert.deepEqual([options(t, 4).canCheck, options(t, 4).callAmount, options(t, 4).minRaiseTo], [false, 20, 80]);
@@ -264,7 +264,7 @@ test('a player posting a missed big blind under the gun does not straddle on top
   t.deal({ button: 0 });
   t.foldOut();
   t.cmd(3, { type: 'sitOut' });
-  t.cmd(3, { type: 'setStraddle', on: true });
+  t.cmd(3, { type: 'setStraddle', kind: 'straddle', on: true });
 
   // Round until the big blind is back on seat 2, with seat 3 next to act after it
   for (let hand = 0; hand < 4; hand++) {
@@ -274,7 +274,8 @@ test('a player posting a missed big blind under the gun does not straddle on top
 
   t.cmd(3, { type: 'comeIn', post: true });
   t.deal();
-  assert.deepEqual([t.state.hand!.button, t.state.hand!.bbSeat, t.state.hand!.straddleSeat], [0, 2, null]);
+  assert.deepEqual([t.state.hand!.button, t.state.hand!.bbSeat, t.state.hand!.straddles], [0, 2, []]);
+  assert.deepEqual(t.state.hand!.passedOver, [{ seat: 3, why: 'blind' }]);
   assert.deepEqual(posts(t), ['3 missed big blind 20', '3 dead small blind 10 dead', '1 small blind 10', '2 big blind 20']);
   assert.equal(t.toAct, 3);
   assert.equal(options(t, 3).canCheck, true);

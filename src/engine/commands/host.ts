@@ -9,6 +9,7 @@ import { callLastHands, endNight, nightIsOver, onLastHand, restartNight } from '
 import { movePlayer, shuffleEveryone } from '../reseating.ts';
 import { grant, isDealtIn, leaveSeat, turnAway } from '../seating.ts';
 import { addFeed, memberNamed, recordLedger, seatedMember, seatIndexOf } from '../seats.ts';
+import { dropStraddlesNotAllowed, STRADDLES, straddlesAllowed } from '../straddles.ts';
 import { transfer } from '../transfers.ts';
 import { GameError, SEAT_COUNT } from '../types.ts';
 import type { TableConfig } from '../types.ts';
@@ -232,12 +233,11 @@ export const updateConfig: Handler<'updateConfig'> = {
       (name, r) => `${name} asked to sit down with ${formatAmount(r.amount, state.config)}, which the new buy-in limits don't allow`,
     );
 
-    if (!state.config.allowStraddle) {
-      for (const seat of state.seats) {
-        if (seat) {
-          seat.straddle = false;
-        }
-      }
+    if (STRADDLES.some((kind) => state.config[kind.setting] !== before[kind.setting])) {
+      const allowed = straddlesAllowed(state.config).map((kind) => kind.label);
+
+      dropStraddlesNotAllowed(state);
+      addFeed(state, ctx.now, 'system', null, allowed.length > 0 ? `Straddles allowed${when}: ${allowed.join(', ')}` : `No straddles are allowed${when}`);
     }
 
     if (state.config.missedBlinds !== before.missedBlinds) {

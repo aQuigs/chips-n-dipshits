@@ -99,6 +99,27 @@ const DEALT: HandEvent[] = [
   ['deal'],
 ];
 
+// Six players with the button on seat 0 and the blinds in: seat 3 is under the gun and seat 5 the cutoff
+const SIX_POSTED: HandEvent[] = [
+  ['start', 1, 0, 10, 20, [0, 1, 2, 3, 4, 5].map((seat): [number, string, number] => [seat, `P${seat}`, 1000])],
+  ['post', 1, 'small blind', 10, 990],
+  ['post', 2, 'big blind', 20, 980],
+];
+
+// The same six with a straddle and a double on top of the blinds, and everyone in for the double
+const DOUBLE_STRADDLED: HandEvent[] = [
+  ...SIX_POSTED,
+  ['post', 3, 'straddle', 40, 960],
+  ['post', 4, 'double straddle', 80, 920],
+  ['deal'],
+  ['call', 5, 80, 920],
+  ['call', 0, 80, 920],
+  ['call', 1, 70, 920],
+  ['call', 2, 60, 920],
+  ['call', 3, 40, 920],
+  ['check', 4],
+];
+
 // The same hand with everyone in for 20 and the flop out
 const ON_THE_FLOP: HandEvent[] = [...DEALT, ['call', 0, 20, 980], ['call', 1, 10, 980], ['check', 2], ['street', 0, ['As', 'Kd', '2c']]];
 
@@ -141,6 +162,12 @@ test('each kind of hand event moves what it should, or nothing', () => {
     ['a big-blind ante', DEALT.slice(0, 3), ['post', 2, 'big blind ante', 20, 960, 'dead'], ['chips seat2>pot @0']],
     ['a missed big blind, in front of a seat that is not the big blind’s', DEALT.slice(0, 1), ['post', 0, 'missed big blind', 20, 980], ['bet seat0>bet0 @0']],
     ['a missed small blind posted dead', [DEALT[0]!, ['post', 0, 'missed big blind', 20, 980]], ['post', 0, 'dead small blind', 10, 970, 'dead'], ['chips seat0>pot @0']],
+    ['a straddle under the gun, in front of its seat like a blind', SIX_POSTED, ['post', 3, 'straddle', 40, 960], ['bet seat3>bet3 @0']],
+    ['a double straddle, in front of the next seat', [...SIX_POSTED, ['post', 3, 'straddle', 40, 960]], ['post', 4, 'double straddle', 80, 920], ['bet seat4>bet4 @0']],
+    ['a button straddle, in front of the button', SIX_POSTED, ['post', 0, 'button straddle', 40, 960], ['bet seat0>bet0 @0']],
+    ['a Mississippi straddle, in front of the seat it is posted from', SIX_POSTED, ['post', 5, 'Mississippi straddle', 40, 960], ['bet seat5>bet5 @0']],
+    ['the flop after a straddle and a double, with every bet going to the pot', DOUBLE_STRADDLED, ['street', 0, ['As', 'Kd', '2c']], [...[0, 1, 2, 3, 4, 5].map((seat) => `chips 80 bet${seat}>pot @0`), 'board >board0.0 @0', 'board >board0.1 @60', 'board >board0.2 @120']],
+    ['a straddle nobody called going back above the big blind', [...SIX_POSTED, ['post', 3, 'straddle', 40, 960], ['deal'], ['fold', 4], ['fold', 5], ['fold', 0], ['fold', 1], ['fold', 2]], ['return', 3, 20], ['chips 20 bet3>seat3 @0']],
     ['the deal', DEALT.slice(0, 3), ['deal'], ['deal deck>cards1 @0', 'deal deck>cards2 @60', 'deal deck>cards0 @120']],
     ['a fold', DEALT, ['fold', 1], ['muck cards1>deck @0']],
     ['a check', ON_THE_FLOP, ['check', 1], []],

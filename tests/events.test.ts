@@ -20,7 +20,7 @@ function recordOf(t: TestTable): HandRecord {
 
 test('a hand is told in events from the blinds to the pot, with what every bet left its player', () => {
   const t = new TestTable({ stacks: [1000, 1000, 1000, 1000] });
-  t.cmd(3, { type: 'setStraddle', on: true });
+  t.cmd(3, { type: 'setStraddle', kind: 'straddle', on: true });
   t.deal({ button: 0, holes: { 3: '8s 8h' }, board: 'Kd 7c 2s 9h 4d' });
 
   t.call(0);

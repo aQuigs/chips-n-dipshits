@@ -1,7 +1,7 @@
 import type { Command } from '../engine/types.ts';
 import type { TableView } from '../engine/view.ts';
-import type { ApiError, ApiRequest, ApiResponse, Auth } from '../server/api.ts';
-import type { Transport } from './platform.ts';
+import type { ApiError, ApiRequest, ApiResponse, Auth, Built } from '../server/api.ts';
+import type { Transport } from './transport.ts';
 
 // How long the server may sit on a poll before answering "nothing new"
 const HOLD_MS = 20_000;
@@ -56,20 +56,54 @@ export function isRefusal(response: ApiResponse | null): response is ApiError {
   return response !== null && !response.ok && (response.code === 'unauthorized' || response.code === 'not_found');
 }
 
-/** One request; null when the server could not be reached, or took so long that the request must be lost. */
-export async function ask(transport: Transport, request: ApiRequest): Promise<ApiResponse | null> {
-  const patience = REQUEST_TIMEOUT_MS + (request.op === 'poll' ? (request.holdMs ?? 0) : 0);
-  let timer = 0;
-  const lost = new Promise<null>((resolve) => {
-    timer = setTimeout(() => resolve(null), patience);
-  });
+/**
+ * The page's one line to the server: every request it makes goes out here with the page's build on it,
+ * and every answer comes back with the server's. An answer from another build means the game was
+ * updated after this page was loaded, so the page may no longer understand what the server says or
+ * what its own buttons would do. From then on nothing more is sent, and whoever is waiting for an
+ * answer, then or later, is left waiting: nothing goes on to draw the answer, try again, or take a
+ * refusal in it for the player's seat being gone.
+ */
+export class ServerLine {
+  private readonly transport: Transport;
+  private readonly build: string;
+  private readonly onOutdated: () => void;
+  private outdated = false;
 
-  try {
-    return await Promise.race([transport.send(request), lost]);
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timer);
+  /** `onOutdated` is called once, when the first answer from another build arrives. */
+  constructor(transport: Transport, build: string, onOutdated: () => void) {
+    this.transport = transport;
+    this.build = build;
+    this.onOutdated = onOutdated;
+  }
+
+  /** One request; null when the server could not be reached, or took so long that the request must be lost. */
+  async ask(request: ApiRequest): Promise<ApiResponse | null> {
+    const response = this.outdated ? null : await this.answerTo(request);
+
+    if (response && response.build !== this.build && !this.outdated) {
+      this.outdated = true;
+      this.onOutdated();
+    }
+
+    // Checked again for the request that was on its way when the answer to another gave the update away
+    return this.outdated ? new Promise(() => undefined) : response;
+  }
+
+  private async answerTo(request: ApiRequest): Promise<(ApiResponse & Built) | null> {
+    const patience = REQUEST_TIMEOUT_MS + (request.op === 'poll' ? (request.holdMs ?? 0) : 0);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const lost = new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), patience);
+    });
+
+    try {
+      return await Promise.race([this.transport.send({ ...request, build: this.build }), lost]);
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 }
 
@@ -121,7 +155,7 @@ export class TableConnection {
   readonly session: Session;
   trouble: Trouble | null = null;
 
-  private readonly transport: Transport;
+  private readonly server: ServerLine;
   private readonly clock: ServerClock;
   private readonly listener: TableListener;
 
@@ -133,8 +167,8 @@ export class TableConnection {
   private pollRun = 0;
   private closed = false;
 
-  constructor(transport: Transport, session: Session, clock: ServerClock, listener: TableListener) {
-    this.transport = transport;
+  constructor(server: ServerLine, session: Session, clock: ServerClock, listener: TableListener) {
+    this.server = server;
     this.session = session;
     this.clock = clock;
     this.listener = listener;
@@ -187,7 +221,7 @@ export class TableConnection {
       this.setTurnLock('sent');
     }
 
-    const response = await ask(this.transport, { op: 'act', tableId, auth, command });
+    const response = await this.server.ask({ op: 'act', tableId, auth, command });
 
     if (this.closed) {
       return 'unanswered';
@@ -232,7 +266,7 @@ export class TableConnection {
     while (run === this.pollRun) {
       const asked = Date.now();
       const held = this.view?.version ?? -1;
-      const response = await ask(this.transport, { op: 'poll', tableId, auth, since: whole ? -1 : held, holdMs: HOLD_MS });
+      const response = await this.server.ask({ op: 'poll', tableId, auth, since: whole ? -1 : held, holdMs: HOLD_MS });
 
       if (run !== this.pollRun) {
         return;

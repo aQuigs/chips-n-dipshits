@@ -2367,6 +2367,106 @@ const CHECKS: Check[] = [
       }
     },
   ],
+  [
+    'a page from before an update says so over the table, keeps the keyboard and the taps, and a reload comes back to the seat',
+    async (rig) => {
+      for (const screen of ['phone', 'phoneSideways', 'desktop'] as const) {
+        const build = `updated-${screen}`;
+        const table = rig.table(
+          [
+            { name: 'Quigs', stack: 1000 },
+            { name: 'Stu', stack: 1000 },
+          ],
+          { actionSeconds: 30 },
+        );
+
+        // Heads-up the button acts first: the page is on the clock, with every button of a turn to press
+        table.deal({ button: 0 });
+        const page = await table.open('Quigs', screen);
+        const press = pressOn(page, screen);
+        const sent = movesSent(page);
+        const inNotice = `!!document.activeElement.closest('.outdated')`;
+
+        await page.waitForSelector('.turn [data-action="call"]:enabled');
+        await press('[data-action="menu"]');
+        await page.waitForSelector('.app .dialog');
+
+        // The game is updated, and the page hears of it with the table's next news
+        rig.deploy(build);
+        table.act('Stu', { type: 'chat', text: 'still there?' });
+        await page.waitForSelector('.outdated');
+
+        assert.equal(await text(page, '.outdated h2'), 'The game was updated');
+        assert.equal(await text(page, '.outdated p'), 'Reload to keep playing. Your place at the table is kept.');
+        assert.equal(await page.locator('.app .dialog').count(), 0, 'the menu that was open is still up under the notice');
+        assert.equal(await page.locator('.feed li:has-text("still there?")').count(), 0, 'what the newer build sent was drawn');
+
+        const [notice] = await boxes(page, '.outdated .dialog');
+        const [cover] = await boxes(page, '.outdated');
+        const parts = await boxes(page, '.outdated h2, .outdated p, .outdated [data-action="reload"]');
+        const [button] = await boxes(page, '.outdated [data-action="reload"]');
+        const { width, height } = SCREENS[screen];
+
+        assertOnScreen([notice!, ...parts], screen, 'the notice');
+        assert.equal(parts.length, 3);
+        assert.ok(cover!.left <= 0 && cover!.top <= 0 && cover!.right >= width && cover!.bottom >= height, `the notice leaves some of the page uncovered: ${JSON.stringify(cover)}`);
+        for (const part of parts) {
+          assert.ok(part.left >= notice!.left && part.right <= notice!.right && part.top >= notice!.top && part.bottom <= notice!.bottom, `part of the notice is outside its box: ${JSON.stringify(part)}`);
+        }
+        parts.forEach((part, index) => assertApart([part], parts.slice(index + 1), 'two parts of the notice'));
+        assert.deepEqual(await squeezed(page, '.outdated h2, .outdated p, .outdated [data-action="reload"]'), []);
+        assert.ok(button!.bottom - button!.top >= 44 && button!.right - button!.left >= 120, `the reload button is too small to tap: ${JSON.stringify(button)}`);
+        await shot(page, `outdated-${screen}`);
+
+        // The keyboard is in the notice and stays there
+        assert.equal(await page.evaluate(inNotice), true, 'the notice came up with the keyboard left on the page behind it');
+        assert.equal(await page.evaluate(`[...document.querySelectorAll('.cnd > *:not(.outdated)')].every((element) => element.inert)`), true, 'the page behind the notice can still be reached');
+
+        let landedInNotice = 0;
+        for (let tab = 0; tab < 10; tab++) {
+          await page.keyboard.press('Tab');
+          assert.equal(await page.evaluate(`document.activeElement === document.body || ${inNotice}`), true, `Tab number ${tab + 1} reached the page behind the notice`);
+          landedInNotice += (await page.evaluate(inNotice)) ? 1 : 0;
+        }
+        assert.ok(landedInNotice >= 4, `only ${landedInNotice} of 10 Tabs landed on the reload button`);
+
+        // No key of the turn plays, Escape puts nothing away, and a tap where a button of the turn is lands on the notice
+        await page.evaluate('document.activeElement.blur()');
+        await settle(page);
+        for (const key of ['f', 'c', '1', 'Escape']) {
+          await page.keyboard.press(key);
+        }
+
+        const [fold] = await boxes(page, '.turn [data-action="fold"]');
+        if (fold && !overlap(fold, notice!)) {
+          await page.mouse.click((fold.left + fold.right) / 2, (fold.top + fold.bottom) / 2);
+        }
+
+        // A button that had been pressed would be held while its move is on its way
+        assert.equal(await page.locator('.turn [data-action="fold"]:enabled').count(), 1, 'a key or a tap pressed a button behind the notice');
+
+        // The clock on the table behind stops with the page: running on, it would say the table is being followed
+        const clock = await text(page, '.seat.me [data-countdown]');
+        await page.waitForTimeout(1300);
+        assert.equal(await text(page, '.seat.me [data-countdown]'), clock, 'the clock behind the notice is still counting down');
+
+        assert.equal(await page.locator('.outdated').count(), 1);
+        assert.deepEqual(sent, [], 'a move was sent from behind the notice');
+        assert.equal(table.view('Stu').hand!.toAct, 0, 'the hand moved on');
+
+        // On its own site the page reloads itself, and its browser remembers the seat
+        assert.equal(await page.locator('.outdated [data-action="reload"]').evaluate((element) => element.tagName), 'BUTTON');
+        await press('.outdated [data-action="reload"]');
+        await page.waitForSelector('.seat.me');
+        await page.waitForSelector('.feed li:has-text("still there?")', { state: 'attached' });
+
+        assert.equal(await page.evaluate('window.CND_BUILD'), build, 'the page that came back is not the updated one');
+        assert.equal(await page.locator('.outdated').count(), 0);
+        assert.equal(await page.locator('.turn [data-action="call"]:enabled').count(), 1, 'back at the table, it is not this player’s turn anymore');
+        await page.context().close();
+      }
+    },
+  ],
 ];
 
 await mkdir(OUT, { recursive: true });

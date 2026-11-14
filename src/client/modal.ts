@@ -31,7 +31,7 @@ export class Modal {
 
     // A redraw takes the focused button with it, and focus left on nothing would start again from the top of the page
     if (showing && !this.overlay.contains(document.activeElement)) {
-      this.overlay.querySelector<HTMLElement>('[role="dialog"]')?.focus();
+      this.overlay.querySelector<HTMLElement>('[role$="dialog"]')?.focus();
     }
 
     if (!showing && this.showing) {

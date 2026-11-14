@@ -1,5 +1,13 @@
 import type { Command, HandRecord, Stakes, TableConfig, TableView } from '../engine/index.ts';
 
+/**
+ * Which build of the game a page or a server is. On the way between them every request carries the
+ * page's and every answer the server's (`BuildGate`), beside what `ApiRequest` and `ApiResponse` hold.
+ */
+export interface Built {
+  build: string;
+}
+
 /** Proof of which member a request comes from. */
 export interface Auth {
   id: string;
@@ -27,9 +35,10 @@ export type ApiRequest =
  * not_found: no such table.
  * unauthorized: the id and token don't match a member.
  * busy: the table could not be locked in time; try again.
+ * stale: the page is from another build of the game than the server, and has to be loaded again.
  * internal: a bug or an outage.
  */
-export type ErrorCode = 'invalid' | 'not_found' | 'unauthorized' | 'busy' | 'internal';
+export type ErrorCode = 'invalid' | 'not_found' | 'unauthorized' | 'busy' | 'stale' | 'internal';
 
 export interface ApiError {
   ok: false;

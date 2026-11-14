@@ -18,6 +18,7 @@ const BUILT_PAGE = fileURLToPath(new URL('../dist/gas/index.html', import.meta.u
 // Apps Script answers in seconds, not milliseconds, and the first request wakes the script up
 const STEP_TIMEOUT_MS = 60_000;
 const APP_SCRIPT = /<script[^>]*>([\s\S]*?)<\/script>/g;
+const BUILD_OF_PAGE = /window\.CND_BUILD = "([^"]*)";/;
 
 interface Visitor {
   page: Page;
@@ -60,8 +61,13 @@ try {
 
   await timed('front page', () => host.app.locator('#host-name').waitFor());
 
+  const built = await readFile(BUILT_PAGE, 'utf8');
   const served = await host.app.locator('script').last().evaluate((script) => script.textContent ?? '');
-  assert.equal(served, largestScript(await readFile(BUILT_PAGE, 'utf8')), "the script Apps Script serves is not the one in dist/gas; build and deploy again, or Apps Script has changed it on the way");
+  assert.equal(served, largestScript(built), "the script Apps Script serves is not the one in dist/gas; build and deploy again, or Apps Script has changed it on the way");
+
+  // A page that took itself for another build than the script would stop at its first request and ask to be reloaded
+  const servedBuild = await host.app.locator('script').last().evaluate('window.CND_BUILD');
+  assert.equal(servedBuild, BUILD_OF_PAGE.exec(built)?.[1], 'the page Apps Script serves does not say it is the build in dist/gas');
 
   await host.app.locator('#host-name').fill('Host check');
   await timed('create a table', async () => {

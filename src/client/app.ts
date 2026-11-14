@@ -3,7 +3,7 @@ import { anteText, blindsText } from '../engine/stakes.ts';
 import type { Command, HandRecord, TableConfig } from '../engine/types.ts';
 import type { TableView } from '../engine/view.ts';
 import type { ApiError, ApiRequest, ApiResponse, Auth } from '../server/api.ts';
-import { ask, isRefusal, nextRetry, ServerClock, sleep, TableConnection } from './connection.ts';
+import { isRefusal, nextRetry, ServerClock, ServerLine, sleep, TableConnection } from './connection.ts';
 import type { SendOutcome, Session } from './connection.ts';
 import { TableEffects } from './effects.ts';
 import { HotkeyPresser } from './hotkeyPresser.ts';
@@ -19,6 +19,7 @@ import type { Dialog, DialogHandlers } from './render/dialogs/index.ts';
 import { createFeed } from './render/feed.ts';
 import type { Feed } from './render/feed.ts';
 import { joinScreen, lobbyEl, noticeEl, welcomeBackEl } from './render/lobby.ts';
+import { outdatedEl } from './render/outdated.ts';
 import { hostOrCohost } from './render/roles.ts';
 import { tableEl } from './render/table.ts';
 import { createThemePicker } from './render/themePicker.ts';
@@ -72,7 +73,11 @@ export class App {
   private readonly toastEl = h('div.toast', { role: 'status', hidden: true });
 
   private readonly clock = new ServerClock();
+  private readonly server: ServerLine;
   private readonly hotkeys: HotkeyPresser;
+
+  /** The game was updated after this page was loaded: the notice is up, and nothing on the page does anything anymore. */
+  private outdated = false;
 
   /** The table this page is at, from sitting down at its screen until that screen is left. */
   private table: TableConnection | null = null;
@@ -102,7 +107,8 @@ export class App {
     this.prefs = new Preferences(PREFERENCES, platform.memory, root);
     this.prefs.watch('theme', (id) => this.applyTheme(id));
     this.prefs.watch('deck', (deck) => this.screen?.feed.showDeck(deck));
-    this.hotkeys = new HotkeyPresser(this.prefs, { root, controls: () => this.screen?.controls.element ?? null, dialogOpen: () => this.dialog !== null || (this.screen?.seatMoves.active ?? false) });
+    this.server = new ServerLine(platform.transport, platform.build, () => this.showOutdated());
+    this.hotkeys = new HotkeyPresser(this.prefs, { root, controls: () => this.screen?.controls.element ?? null, dialogOpen: () => this.outdated || this.dialog !== null || (this.screen?.seatMoves.active ?? false) });
 
     root.classList.add('cnd');
   }
@@ -140,7 +146,7 @@ export class App {
     setInterval(() => this.tickCountdowns(), COUNTDOWN_TICK_MS);
 
     document.addEventListener('keydown', (event) => {
-      if (event.key !== 'Escape') {
+      if (event.key !== 'Escape' || this.outdated) {
         return;
       }
 
@@ -348,7 +354,7 @@ export class App {
     this.leaveTableScreen();
     this.pointAddress(session.tableId, session.auth);
 
-    const table = new TableConnection(this.platform.transport, session, this.clock, {
+    const table = new TableConnection(this.server, session, this.clock, {
       view: (shown, wentBack) => this.showView(shown, wentBack),
       status: () => this.showStatus(),
       refused: (error) => this.dropSession(error),
@@ -416,7 +422,22 @@ export class App {
   // ---- Talking to the server ----
 
   private request(request: ApiRequest): Promise<ApiResponse | null> {
-    return ask(this.platform.transport, request);
+    return this.server.ask(request);
+  }
+
+  /**
+   * The server is another build of the game than this page. Whatever was on screen stays there, out of
+   * reach behind the notice: it is the last thing this page was sure to understand, and it shows the
+   * player what a reload brings them back to.
+   */
+  private showOutdated(): void {
+    this.outdated = true;
+    this.closeDialog();
+
+    const notice = outdatedEl(this.platform.links.reloadLink(), this.table !== null);
+
+    this.root.appendChild(notice);
+    new Modal(notice).update(true);
   }
 
   private async send(command: Command): Promise<SendOutcome> {
@@ -612,6 +633,11 @@ export class App {
   }
 
   private tickCountdowns(): void {
+    // A clock still running down would say the table behind the notice is the table as it is now
+    if (this.outdated) {
+      return;
+    }
+
     for (const element of this.root.querySelectorAll<HTMLElement>('[data-countdown]')) {
       element.textContent = String(secondsUntil(Number(element.dataset.countdown), this.clock.offset));
     }

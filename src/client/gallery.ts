@@ -5,7 +5,7 @@
 import { createDemoTable } from '../demo/demoTable.ts';
 import type { DemoTable } from '../demo/demoTable.ts';
 import { App } from './app.ts';
-import type { Links, Memory, Platform } from './platform.ts';
+import type { Links, Memory, Platform, Transport } from './platform.ts';
 import { createThemePicker } from './render/themePicker.ts';
 import { DEFAULT_THEME } from './themes.ts';
 import { h } from './ui.ts';
@@ -36,9 +36,13 @@ function demoPlatform(demo: DemoTable): Platform {
     tableLink: (tableId) => `${SAMPLE_ADDRESS}?table=${tableId}`,
     memberLink: (tableId, auth) => `${SAMPLE_ADDRESS}?table=${tableId}&me=${auth.id}.${auth.token}`,
     showTable: () => undefined,
+    reloadLink: () => null,
   };
 
-  return { transport: demo, links, memory: sessionMemory(), boot: {} };
+  // The table lives in the page, so it is the page's own build by definition
+  const transport: Transport = { send: async (request) => ({ ...(await demo.send(request)), build: request.build }) };
+
+  return { transport, links, memory: sessionMemory(), boot: {}, build: 'demo' };
 }
 
 /** A box of a fixed device size that shrinks, as a picture would, to the room it is given. */

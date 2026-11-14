@@ -17,6 +17,10 @@ const SLOW_ANSWER_MS = 3000;
 const SLOW_POLL_MS = 1500;
 const MOVES = ['fold', 'check', 'call', 'raise'];
 
+// Longer than the page waits before it asks again, whether it was answered at once or not at all
+const QUIET_MS = 2500;
+const NEWER_BUILD = 'newerbuild00';
+
 // Runs in the page before anything else: google.script as Apps Script provides it, with the page told
 // its table and member the way doGet tells it, and the address kept through the host
 const STAND_IN_HOST = `
@@ -397,6 +401,126 @@ try {
 
     // A poll is still on the slow road when this ends
     await second.unrouteAll({ behavior: 'ignoreErrors' });
+  }
+
+  // What a page of the newer build would send, for what the pages left behind can no longer do
+  const asNewerBuild = async (request: object) => {
+    const response = await fetch(`${server.url}api`, { method: 'POST', body: JSON.stringify({ ...request, build: NEWER_BUILD }) });
+
+    return (await response.json()) as { ok: boolean; view?: { hand: { toAct: number }; you: { seat: number } } };
+  };
+  const authOf = (member: string) => ({ id: member.split('.')[0], token: member.split('.')[1] });
+  const noticeText = (page: Page) => page.innerText('.outdated');
+
+  const lobby = await open(browser);
+  await lobby.goto(server.url);
+  await lobby.waitForSelector('#host-name');
+
+  console.log('The game is updated under a player about to move: the move is refused once, the page says so and goes quiet, and the seat is kept');
+  {
+    const member = inAddress(first, 'me')!;
+    const moves: string[] = [];
+    const afterNotice: string[] = [];
+    let noticeUp = false;
+
+    await first.route('**/api', (route) => {
+      const move = moveOf(route);
+
+      if (move) {
+        moves.push(move);
+      }
+
+      if (noticeUp) {
+        afterNotice.push(route.request().postData() ?? '');
+      }
+
+      return route.continue();
+    });
+
+    server.deploy(NEWER_BUILD);
+
+    await first.click('.turn [data-action="check"]');
+    await first.waitForSelector('.outdated');
+    noticeUp = true;
+
+    assert.match(await noticeText(first), /The game was updated/);
+    assert.match(await noticeText(first), /Reload to keep playing\. Your place at the table is kept\./);
+    assert.equal(await first.locator('.stage .table').count(), 1, 'the table as it last was is still behind the notice');
+    assert.equal(await first.locator('.toast:visible').count(), 0, 'the refusal is not also a toast');
+
+    // The table hears from someone on the newer build, which answers the poll this page still had waiting
+    assert.equal((await asNewerBuild({ op: 'act', tableId, auth: authOf(hostMember), command: { type: 'chat', text: 'back in a second' } })).ok, true);
+    await second.waitForSelector('.outdated');
+
+    // Nor do the keys of the turn, or coming back to the tab, get anything sent
+    for (const key of ['c', 'f', 'Enter', 'Escape']) {
+      await first.keyboard.press(key);
+    }
+    await first.evaluate(`document.dispatchEvent(new Event('visibilitychange'))`);
+    await sleep(QUIET_MS);
+
+    assert.deepEqual(afterNotice, [], 'nothing was sent once the notice was up');
+    assert.deepEqual(moves, ['check'], 'the move was sent once');
+    assert.equal(await first.locator('.outdated').count(), 1, 'Escape does not put the notice away');
+
+    const table = await asNewerBuild({ op: 'poll', tableId, auth: authOf(member), since: -1 });
+    assert.equal(table.view!.hand.toAct, table.view!.you.seat, 'the refused check was not played: it is still this player’s turn');
+
+    assert.equal(inAddress(first, 'table'), tableId, 'the address still names the table');
+    assert.equal(inAddress(first, 'me'), member, 'and the seat');
+    assert.equal(await remembered(first, tableId), member, 'and so does the browser');
+
+    console.log('In Apps Script’s frame the way back is a link that opens at the top, to the same table and seat');
+
+    const reload = first.locator('.outdated [data-action="reload"]');
+    assert.equal(await reload.evaluate((element) => element.tagName), 'A');
+    assert.equal(await reload.getAttribute('href'), `${server.url}?table=${tableId}&me=${member}`);
+    assert.equal(await reload.getAttribute('target'), '_top');
+
+    // The keyboard stays in the notice: Tab finds the link and nothing behind it
+    for (let press = 0; press < 6; press++) {
+      await first.keyboard.press('Tab');
+      assert.equal(await first.evaluate(`document.activeElement === document.body || !!document.activeElement.closest('.outdated')`), true, `Tab number ${press + 1} reached the page behind the notice`);
+    }
+
+    await first.unroute('**/api');
+    await reload.click();
+    await first.waitForSelector('.seat.me');
+
+    assert.equal(await first.evaluate('window.CND_BUILD'), NEWER_BUILD, 'the page that came back is the newer build');
+    assert.equal(inAddress(first, 'me'), member);
+    assert.equal(await first.locator('.outdated').count(), 0);
+
+    // And it plays: the check that was refused goes through from the page that is current
+    await first.click('.turn [data-action="check"]');
+    await first.waitForSelector('.turn', { state: 'detached' });
+    assert.equal(await first.locator('.outdated').count(), 0);
+  }
+
+  console.log('A player who was only watching learns from the table’s next news, without pressing anything');
+  {
+    const member = inAddress(second, 'me')!;
+
+    assert.match(await noticeText(second), /The game was updated/);
+    assert.equal(await second.locator('.outdated [data-action="reload"]').getAttribute('href'), `${server.url}?table=${tableId}&me=${member}`);
+    assert.equal(await remembered(second, tableId), member);
+  }
+
+  console.log('A lobby left open across the update creates no table, says so, and its link leads back to the lobby');
+  {
+    await lobby.fill('#host-name', 'Latecomer');
+    await lobby.click('[data-action="create-table"]');
+    await lobby.waitForSelector('.outdated');
+
+    assert.equal(await lobby.innerText('.outdated p'), 'Reload to keep playing.', 'with no table yet, it promises no place at one');
+    assert.equal(await lobby.locator('.stage').count(), 0, 'no table was made');
+    assert.equal(await lobby.locator('.toast:visible').count(), 0);
+    assert.equal(await lobby.locator('.outdated [data-action="reload"]').getAttribute('href'), server.url);
+
+    await lobby.click('.outdated [data-action="reload"]');
+    await lobby.waitForSelector('#host-name');
+    assert.equal(await lobby.evaluate('window.CND_BUILD'), NEWER_BUILD);
+    assert.equal(await lobby.locator('.outdated').count(), 0);
   }
 
   console.log('The Apps Script-hosted page holds up');

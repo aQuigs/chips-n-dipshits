@@ -22,6 +22,9 @@ const BIG_BLIND = 20;
 const MARK = BIG_POT_BIG_BLINDS * BIG_BLIND;
 const TURNING = MOVE_MS.facedown + MOVE_MS.reveal;
 
+/** How long after the view the last of the sweat's cards is face up. */
+const lasting = (sweat: Sweat): number => sweat.turns.at(-1)!.at + TURNING;
+
 /** A page at one seat: each view as it comes, on time, turned into the change its effects are handed. */
 class Page {
   private shown: TableView | null = null;
@@ -240,8 +243,8 @@ test('on two boards from the deal both last cards come in one view and are turne
     { board: 0, card: 4, at: FACE_DOWN_MS },
     { board: 1, card: 4, at: FACE_DOWN_MS + NEXT_BOARD_MS },
   ]);
-  assert.equal(sweat.ms, FACE_DOWN_MS + NEXT_BOARD_MS + TURNING);
-  assert.ok(sweat.ms <= MOST_SWEAT_MS);
+  assert.equal(lasting(sweat), FACE_DOWN_MS + NEXT_BOARD_MS + TURNING);
+  assert.ok(lasting(sweat) <= MOST_SWEAT_MS);
   assert.deepEqual(last.events.slice(0, sweat.upTo).map((event) => event[0]), ['street', 'street']);
 
   // Each card lies face down until its turn, and its face comes as the back goes
@@ -328,17 +331,17 @@ test('the hold fits the pause before the next hand at its shortest, and shrinks 
   const hand = result.view.hand!;
   const sweat = sweatOf(result)!;
   assert.equal(hand.deadline! - result.view.now, TIMING.showdownPauseMs);
-  assert.ok(sweat.ms + AFTER_SWEAT_MS <= hand.deadline! - result.view.now);
+  assert.ok(lasting(sweat) + AFTER_SWEAT_MS <= hand.deadline! - result.view.now);
 
   const leaving = (pause: number): Sweat | null => sweatOf({ ...result, view: { ...result.view, hand: { ...hand, deadline: result.view.now + pause } } });
 
   const shrunk = leaving(AFTER_SWEAT_MS + 800)!;
-  assert.ok(shrunk.ms <= 800 && shrunk.turns[0]!.at < FACE_DOWN_MS, `a hold of ${shrunk.ms} ms in a pause that leaves 800`);
+  assert.ok(lasting(shrunk) <= 800 && shrunk.turns[0]!.at < FACE_DOWN_MS, `a hold of ${lasting(shrunk)} ms in a pause that leaves 800`);
   assert.equal(leaving(AFTER_SWEAT_MS + TURNING + 100), null, 'a hold with no beat in it');
 
   // A view that was slow to reach the page has that much less of the pause left
   const slow = sweatOf({ ...result, now: result.view.now + TIMING.showdownPauseMs - AFTER_SWEAT_MS - 800 })!;
-  assert.ok(slow.ms <= 800, `a hold of ${slow.ms} ms for a view that came with 800 ms of room`);
+  assert.ok(lasting(slow) <= 800, `a hold of ${lasting(slow)} ms for a view that came with 800 ms of room`);
 });
 
 /** A stand-in for the page's motion: it writes down what is played, and says the table is still when told to. */
@@ -404,10 +407,10 @@ test('the result is held until the last card is up: the felt and the feed are he
   page.show(result);
 
   const sweat = sweatOf(result)!;
-  const held = page.suspense.held!;
-  assert.deepEqual(held.cards, [{ board: 0, card: 4 }]);
-  assert.deepEqual(held.holding, changes.at(-2)!.view.hand!.holding, 'the hint is not what the viewer held before the river');
-  assert.equal(held.line, result.feed[0]!.seq, 'the river’s line is not held');
+  const shown = page.suspense.shown(result.view);
+  assert.deepEqual(page.suspense.turning, [{ board: 0, card: 4 }]);
+  assert.deepEqual(shown.hand!.holding, changes.at(-2)!.view.hand!.holding, 'the hint is not what the viewer held before the river');
+  assert.deepEqual(shown.feed, result.view.feed.filter((entry) => entry.seq < result.feed[0]!.seq), 'the river’s line is not held');
   assert.deepEqual(page.told[0]!.events, result.events.slice(0, sweat.upTo));
   assert.deepEqual(page.told[0]!.view.hand!.events.slice(-sweat.upTo), page.told[0]!.events, 'the view told with the cards goes on past them');
   assert.deepEqual(page.told[0]!.feed, []);
@@ -416,7 +419,7 @@ test('the result is held until the last card is up: the felt and the feed are he
   page.moves.land();
   await settle();
 
-  assert.equal(page.suspense.held, null);
+  assert.deepEqual(page.suspense.turning, []);
   const later = page.told[1]!;
   assert.deepEqual(later.events, result.events.slice(sweat.upTo));
   assert.deepEqual(later.feed, result.feed);
@@ -432,17 +435,17 @@ test('a view with news of the hand ends the hold at once and the held result is 
   const page = holdingPage();
 
   page.show(changes.at(-1)!);
-  assert.ok(page.suspense.held);
+  assert.ok(page.suspense.turning.length > 0);
 
   // Nothing new: someone says something
   t.cmd(0, { type: 'chat', text: 'come on' });
   page.show(seat.change());
-  assert.ok(page.suspense.held, 'a line of chat ended the hold');
+  assert.ok(page.suspense.turning.length > 0, 'a line of chat ended the hold');
 
   // The next hand is dealt
   t.wait(t.state.hand!.deadline! - t.now);
   page.show(seat.change());
-  assert.equal(page.suspense.held, null);
+  assert.deepEqual(page.suspense.turning, []);
 
   page.moves.land();
   await settle();
@@ -464,7 +467,7 @@ test('more of the same hand during the hold, as a player showing their cards, en
   const shown = seat.change();
   page.show(shown);
 
-  assert.equal(page.suspense.held, null);
+  assert.deepEqual(page.suspense.turning, []);
   assert.deepEqual(page.told[1]!.events, [...result.events.slice(held), ...shown.events]);
   assert.deepEqual(page.told[1]!.view.hand!.events.slice(-page.told[1]!.events.length), page.told[1]!.events, 'what is told is not the last of the hand’s events');
   assert.deepEqual(page.told[1]!.feed, [...result.feed, ...shown.feed]);
@@ -499,7 +502,7 @@ test('with animations off, or on a device that asks for less motion, nothing is 
   for (const page of [holdingPage({ 'cnd.motion': 'off' }), holdingPage({}, true)]) {
     page.show(result);
 
-    assert.equal(page.suspense.held, null);
+    assert.deepEqual(page.suspense.turning, []);
     assert.deepEqual(page.told, [result], 'the view was not told whole at once');
     assert.deepEqual(page.moves.played, []);
   }

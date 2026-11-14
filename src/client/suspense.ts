@@ -6,7 +6,7 @@ import type { BoardCard, TableMotion } from './motion.ts';
 import type { TableChange } from './tableChange.ts';
 
 /** What the page holds back while the last cards of a runout are turned over. */
-export interface Held {
+interface Held {
   /** The cards being turned. */
   cards: BoardCard[];
   /** What the viewer's hand makes without those cards, for the hint under their own. */
@@ -92,9 +92,9 @@ export class Suspense {
     return { ...change, view: { ...view, hand: upTo }, events: events.slice(0, sweat.upTo), feed: feed.filter(told) };
   }
 
-  /** What is held back now; null while nothing is. */
-  get held(): Held | null {
-    return this.hold?.held ?? null;
+  /** The last cards of a runout being turned over, which the table draws but which say nothing yet of the viewer's hand. */
+  get turning(): BoardCard[] {
+    return this.hold?.held.cards ?? [];
   }
 
   /** The table as the page shows it: as it stood before its hand was settled while the result is held back, else as it is. */
@@ -136,7 +136,7 @@ export class Suspense {
   }
 }
 
-/** What the viewer's hand makes on each board without the cards being turned, as the view said before they came. */
+/** What the viewer's hand makes on each board without the cards being turned. */
 function withoutCards(view: TableView, hand: HandView, cards: readonly BoardCard[]): Holding | null {
   const hole = view.you.seat === null ? null : view.seats[view.you.seat]?.cards;
   if (!hand.holding || !hole || hole.includes(null)) {
@@ -151,7 +151,8 @@ function withoutCards(view: TableView, hand: HandView, cards: readonly BoardCard
 /**
  * The view as it stood before its hand was settled, which is how the page is drawn while the last cards
  * of a runout are turned over: no result, the pot in the middle, every stack and the ledger as they were,
- * nobody offered to show their cards, and the hint without the cards being turned.
+ * nobody offered to show their cards, the hint without the cards being turned, and nothing in the feed
+ * from the first line that tells of them.
  */
 function unsettled(view: TableView, hand: HandView, held: Held): TableView {
   const gained = new Map<number, number>();
@@ -172,5 +173,6 @@ function unsettled(view: TableView, hand: HandView, held: Held): TableView {
     hand: { ...hand, stage: 'runout', result: null, canShow: false, holding: held.holding },
     seats: view.seats.map((seat) => seat && { ...seat, stack: seat.stack - (gained.get(seat.seat) ?? 0) }),
     ledger: held.ledger,
+    feed: held.line === null ? view.feed : view.feed.filter((entry) => entry.seq < held.line!),
   };
 }

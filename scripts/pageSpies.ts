@@ -5,6 +5,7 @@
 import type { Page } from 'playwright';
 
 import type { Permission } from '../src/client/attentionWays.ts';
+import type { MoveName } from '../src/client/motion.ts';
 import type { Box } from './rig.ts';
 
 /** Run in the page: notifications that are written down, not shown, with the browser's answer so far and the one it gives when asked. */
@@ -112,8 +113,8 @@ export const SPOTS = `(() => {
 
 /** One thing the page set moving, as `MOTION` wrote it down. */
 export interface Flight {
-  /** The move it is part of, by its name (`MoveName`). */
-  name: string;
+  /** The move it is part of. */
+  name: MoveName;
   /** A card the table draws or one standing in for it, a seat's two cards standing in for ones it no longer draws, a pile of chips, or a piece of confetti. */
   what: 'card' | 'cards' | 'chips' | 'confetti';
   /** A stand-in for something the table no longer draws, there only for the move. */

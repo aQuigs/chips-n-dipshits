@@ -577,9 +577,7 @@ export class App {
     this.drawStage(screen, view);
     this.drawControls(screen, view);
 
-    const line = screen.suspense.held?.line ?? null;
-
-    screen.feed.update(line === null ? view.feed : view.feed.filter((entry) => entry.seq < line));
+    screen.feed.update(view.feed);
 
     this.drawDialog();
   }
@@ -655,7 +653,7 @@ export class App {
   private drawStage(screen: TableScreen, view: TableView): void {
     const myRequest = view.requests.find((request) => request.playerId === view.you.id);
     const picking = screen.seatMoves.picking;
-    const turning = screen.suspense.held?.cards ?? [];
+    const turning = screen.suspense.turning;
     const shows = [screen.shape, view.you, view.hostId, view.cohostIds, view.running, view.nextHandAt, view.nightEndedAt, view.config.actionSeconds, view.seats, view.hand, myRequest, picking, turning];
 
     screen.stage.draw(shows, () => {

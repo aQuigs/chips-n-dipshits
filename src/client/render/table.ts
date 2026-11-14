@@ -458,7 +458,7 @@ function potEl(table: Denominated, hand: HandView): HTMLElement | null {
  * of a runout being turned over: they are drawn, for the turn to show, but say nothing yet of the
  * viewer's hand.
  */
-export function tableEl(view: TableView, shape: Shape, clockOffset: number, handlers: TableHandlers, turning: readonly BoardCard[] = []): HTMLElement {
+export function tableEl(view: TableView, shape: Shape, clockOffset: number, handlers: TableHandlers, turning: readonly BoardCard[]): HTMLElement {
   const seatCount = view.seats.length;
   const hero = view.you.seat ?? 0;
   const nodes: HTMLElement[] = [];

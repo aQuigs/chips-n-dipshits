@@ -35,8 +35,6 @@ const PILE_LANDING = 0.8;
 /** The last card of each board, turned over in order, and how long after the view each starts to turn. */
 export interface Sweat {
   turns: (BoardCard & { at: number })[];
-  /** How long after the view the last of them is face up. */
-  ms: number;
   /** How many of the change's events come up to the cards: those after them are the result. */
   upTo: number;
 }
@@ -56,22 +54,12 @@ export interface BigPot {
  */
 export function sweatOf({ view, events, now }: TableChange): Sweat | null {
   const hand = view.hand;
-  const all = hand?.events ?? [];
-  const runout = all.findIndex((event) => event[0] === 'runs');
-  if (!hand || events.length === 0 || runout < 0 || hand.deadline === null) {
+  if (!hand || hand.deadline === null || !hand.events.some((event) => event[0] === 'runs')) {
     return null;
   }
 
-  const first = all.length - events.length;
-  const lastStreet = new Map<number, number>();
-
-  all.forEach((event, at) => event[0] === 'street' && lastStreet.set(event[1], at));
-
-  const last = events.flatMap((event, nth) => {
-    const at = first + nth;
-
-    return event[0] === 'street' && at > runout && at === lastStreet.get(event[1]) && hand.boards[event[1]]?.length === BOARD_SIZE ? [{ board: event[1], nth }] : [];
-  });
+  // A board's last card is in the street that deals it; a runout deals every card after the betting is over
+  const last = events.flatMap((event, nth) => (event[0] === 'street' && event[2].includes(hand.boards[event[1]]?.[BOARD_SIZE - 1] ?? '') ? [{ board: event[1], nth }] : []));
   if (last.length === 0) {
     return null;
   }
@@ -87,7 +75,7 @@ export function sweatOf({ view, events, now }: TableChange): Sweat | null {
 
   const turns = last.map(({ board }, nth) => ({ board, card: BOARD_SIZE - 1, at: Math.round(waits[nth]! * shrink) }));
 
-  return { turns, ms: turns.at(-1)!.at + turning, upTo: last.at(-1)!.nth + 1 };
+  return { turns, upTo: last.at(-1)!.nth + 1 };
 }
 
 /**

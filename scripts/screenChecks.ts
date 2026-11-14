@@ -594,7 +594,7 @@ const inTheAir = (page: Page) =>
  * bounded by the sweat, and confetti by its own flight thrown as the pot lands. Every other move is the
  * hand's own, bound by its budgets.
  */
-const CELEBRATION_MS: Record<string, number> = { facedown: MOST_SWEAT_MS, reveal: MOST_SWEAT_MS, confetti: MOST_VIEW_MS + MOVE_MS.confetti };
+const CELEBRATION_MS: Partial<Record<MoveName, number>> = { facedown: MOST_SWEAT_MS, reveal: MOST_SWEAT_MS, confetti: MOST_VIEW_MS + MOVE_MS.confetti };
 
 /** What the page has set moving since it was last asked, once all of it has landed. Moves held in the air are let go first. */
 async function flown(page: Page): Promise<Flight[]> {
@@ -607,7 +607,7 @@ async function flown(page: Page): Promise<Flight[]> {
     const most = CELEBRATION_MS[flight.name];
 
     assert.deepEqual(flight.properties.filter((property) => property !== 'transform' && property !== 'opacity'), [], `a ${flight.what} is moved by more than transform and opacity`);
-    assert.ok(flight.duration <= (most === undefined ? MOST_MOVE_MS : MOVE_MS[flight.name as MoveName]), `a ${flight.what} takes ${flight.duration} ms to move`);
+    assert.ok(flight.duration <= (most === undefined ? MOST_MOVE_MS : MOVE_MS[flight.name]), `a ${flight.what} takes ${flight.duration} ms to move`);
     assert.ok(flight.delay + flight.duration <= (most ?? MOST_VIEW_MS), `a ${flight.what} is still moving ${flight.delay + flight.duration} ms after the view`);
   }
 

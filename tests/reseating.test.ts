@@ -95,17 +95,19 @@ test('a move that waited is dropped, and the chat says so, when its seat was tak
   assertInvariants(t.state, t.now);
 });
 
-test('two moves waiting for the same seat: the first one takes it and the second stays put', () => {
-  const t = new TestTable({ stacks: [1000, 1000, 1000] });
+test('a seat a move is waiting for is kept from other moves, made at once or waiting, so the host\'s first choice stands', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 1000, 1000] });
+  t.cmd(3, { type: 'sitOut' });
   t.deal({ button: 0 });
 
-  move(t, 0, 1, 5);
   move(t, 0, 2, 5);
+  assert.throws(() => move(t, 0, 1, 5), { name: 'GameError', message: 'Seat 6 is kept for P2, who moves there after this hand' });
+  assert.throws(() => move(t, 0, 3, 5), { message: 'Seat 6 is kept for P2, who moves there after this hand' });
   foldOut(t);
 
-  assert.equal(seatOf(t, 1), 5);
-  assert.equal(seatOf(t, 2), 2);
-  assert.ok(t.feedText().includes('Seat 6 was taken, so P2 stays in seat 3'));
+  assert.equal(seatOf(t, 2), 5);
+  assert.equal(seatOf(t, 1), 1);
+  assert.equal(seatOf(t, 3), 3);
 });
 
 test('a player who leaves before their move happens takes it with them, and cannot be moved on their way out', () => {

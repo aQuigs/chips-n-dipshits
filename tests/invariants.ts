@@ -72,6 +72,10 @@ export function assertSeatingHolds(state: TableState): void {
   });
 
   assert.ok(state.hand || !state.shuffleAfterHand, 'a shuffle is still waiting with no hand on the table');
+
+  for (const player of state.hand?.players ?? []) {
+    assert.equal(state.seats[player.seat]?.playerId, player.playerId, 'a player dealt into the hand is no longer in the seat the hand knows them by');
+  }
 }
 
 /** The table comes back from being saved exactly as it was. */

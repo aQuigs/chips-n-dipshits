@@ -51,20 +51,14 @@ export class SeatMoves {
     this.host.changed();
   }
 
-  /** Stops picking, or drops a drag that is under way. Says whether there was anything to stop. */
-  cancel(): boolean {
+  /** Stops picking, or drops a drag that is under way. */
+  cancel(): void {
     if (this.drag) {
       this.endDrag();
-      return true;
+    } else if (this.picking !== null) {
+      this.picking = null;
+      this.host.changed();
     }
-
-    if (this.picking === null) {
-      return false;
-    }
-
-    this.picking = null;
-    this.host.changed();
-    return true;
   }
 
   /** What the table offers while a seat is being picked. */
@@ -118,10 +112,12 @@ export class SeatMoves {
 
     const seat = (event.target as Element).closest<HTMLElement>('.table.movable .seat[data-seat]');
     const from = Number(seat?.dataset.seat);
-    const playerId = this.host.view()?.seats[from]?.playerId;
-    if (!seat || playerId === undefined) {
+    const moved = this.host.view()?.seats[from];
+    if (!seat || !moved || moved.leaving) {
       return;
     }
+
+    const playerId = moved.playerId;
 
     this.drag = { playerId, from, pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, dragging: false };
     window.addEventListener('pointermove', this.onMove);
@@ -132,6 +128,12 @@ export class SeatMoves {
   private dragMove(event: PointerEvent): void {
     const drag = this.drag;
     if (!drag || event.pointerId !== drag.pointerId) {
+      return;
+    }
+
+    // The button was let go where no pointerup reached the page, such as outside the window
+    if (event.buttons === 0) {
+      this.endDrag();
       return;
     }
 

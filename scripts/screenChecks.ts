@@ -1639,6 +1639,7 @@ const CHECKS: Check[] = [
         await press('[data-action="menu"]');
         await press('.menu [data-action="players"]');
         assert.equal(await text(host, '.dialog li:has-text("WWWWWWWWWWWWWWWW") .move-note'), 'Moves to seat 8 after this hand');
+        assert.deepEqual(await host.locator('.dialog li:has-text("WWWWWWWWWWWWWWWW") button').allInnerTexts(), ['Set stack', 'Stay put', 'Make co-host', 'Make host', 'Remove'], 'a move that waits cannot be taken back');
         await press('[data-action="close"]');
 
         table.play(() => ({ type: 'fold' }), (view) => view.hand === null || view.hand.number > 1);

@@ -82,11 +82,16 @@ function players(view: TableView, handlers: DialogHandlers): HTMLElement {
 
   const nameOf = (playerId: string, name: string) => h('b', null, name, roleMark(view, playerId));
 
-  // Only to an open seat, and not for a player already on their way out
-  const move = (seat: SeatView) =>
-    view.seats.includes(null) && !seat.leaving
+  // Only to an open seat, not for a player already on their way out, and not while a shuffle is coming. A move that waits can be taken back
+  const move = (seat: SeatView) => {
+    if (seat.moveTo !== null) {
+      return h('button.btn.small', { type: 'button', 'data-action': 'keep-seat', onclick: () => void handlers.send({ type: 'moveSeat', playerId: seat.playerId, seat: seat.seat }) }, 'Stay put');
+    }
+
+    return view.seats.includes(null) && !seat.leaving && !view.shuffleAfterHand
       ? h('button.btn.small', { type: 'button', 'data-action': 'move', onclick: () => handlers.pickSeat(seat.playerId) }, 'Move')
       : null;
+  };
 
   const seatedIds = new Set(view.seats.flatMap((seat) => (seat ? [seat.playerId] : [])));
   const seated = view.seats.flatMap((seat) =>
@@ -156,6 +161,7 @@ export const playersDialog: DialogKind<'players'> = {
     view.hostId,
     view.cohostIds,
     view.hand?.number,
+    view.shuffleAfterHand,
     view.seats.map((seat) => seat && [seat.playerId, seat.name, seat.seat, seat.moveTo, seat.leaving, view.hand ? null : seat.stack]),
   ],
   draw: players,

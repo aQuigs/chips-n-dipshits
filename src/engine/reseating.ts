@@ -31,10 +31,7 @@ function move(state: TableState, ctx: Ctx, from: number, to: number): void {
 /** Every seated player gets a random one of the seats already taken, so the open seats, and the requests for them, stay as they were. */
 function shuffleNow(state: TableState, ctx: Ctx): void {
   const taken = state.seats.flatMap((seat, index) => (seat ? [index] : []));
-  const seats = shuffle(
-    taken.map((index) => state.seats[index]!),
-    ctx.rng,
-  );
+  const seats = shuffle(taken.map((index) => state.seats[index]!), ctx.rng);
 
   taken.forEach((index, order) => place(state, seats[order]!, index));
 
@@ -66,6 +63,12 @@ export function movePlayer(state: TableState, ctx: Ctx, by: string, from: number
 
   if (state.seats[to]) {
     throw new GameError(`Seat ${to + 1} is taken`);
+  }
+
+  // A second move into a seat that one is already waiting for would undo the host's first choice when the hand ends
+  const promised = state.seats.find((other) => other?.moveTo === to);
+  if (promised) {
+    throw new GameError(`Seat ${to + 1} is kept for ${memberOf(state, promised.playerId).name}, who moves there after this hand`);
   }
 
   if (isDealtIn(state, from)) {

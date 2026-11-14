@@ -227,7 +227,8 @@ function openSeatEl(view: TableView, seat: number, slot: number, shape: Shape, h
   const open = (kind: string, plate: HTMLElement) => h('div', { class: `${place.class} open ${kind}`, style: place.style, 'data-open-seat': seat }, plate);
   const moving = handlers.moving;
 
-  if (moving) {
+  // A seat that a move waiting for the hand will fill is not offered to another
+  if (moving && !view.seats.some((other) => other?.moveTo === seat)) {
     return open('target', h('button.plate', { type: 'button', 'data-move-to': seat, onclick: () => moving.to(seat) }, 'Move here'));
   }
 
@@ -368,7 +369,7 @@ export function tableEl(view: TableView, shape: Shape, clockOffset: number, hand
   const hand = view.hand;
 
   // Those who may move players can drag a seat to an open one
-  const movable = hostOrCohost(view) && view.seats.includes(null);
+  const movable = hostOrCohost(view) && view.seats.includes(null) && !view.shuffleAfterHand;
 
   return h(
     'div',

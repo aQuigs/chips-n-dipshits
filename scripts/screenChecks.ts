@@ -1784,6 +1784,11 @@ const CHECKS: Check[] = [
       const onDot = await boxes(quigs, '.seat-reaction[data-seat="6"]');
       assert.equal(onDot.length, 3);
       onDot.forEach((mark, index) => assertApart([mark], onDot.slice(index + 1), 'two things thrown at one seat'));
+      // At a seat by the table's edge they are moved in together, none cut off by the edge
+      const [table9] = await boxes(quigs, '.stage');
+      for (const mark of onDot) {
+        assert.ok(mark.left >= table9!.left && mark.right <= table9!.right, `a thing thrown at a seat by the edge is cut off: ${JSON.stringify(mark)} in ${JSON.stringify(table9)}`);
+      }
       assertOnScreen(onDot, 'smallPhone', 'three things on one seat');
       await shot(quigs, 'reactions-three-on-a-seat-smallPhone');
     },

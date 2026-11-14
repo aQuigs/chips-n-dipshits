@@ -17,10 +17,16 @@
   line-height: 1;
 }
 
-/* Held by the middle of its bottom edge at the top of its seat's plate; several on one seat stand side by side */
+/*
+ * Held by the middle of its bottom edge at the top of its seat's plate; several on one seat stand side by
+ * side (reactionMarks.ts). Each has a box of its own width, wider than any emoji font draws one, so how
+ * wide a device's emoji are never decides whether they overlap
+ */
 .seat-reaction {
   position: absolute;
-  transform: translate(calc(-50% + var(--nth, 0) * 1.05em), -60%);
+  width: 1.3em;
+  text-align: center;
+  transform: translate(-50%, -60%);
   filter: drop-shadow(0 2px 3px rgb(0 0 0 / 45%));
 }
 

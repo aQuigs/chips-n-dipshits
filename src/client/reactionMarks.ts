@@ -2,6 +2,9 @@ import { LANDED_MS, POPPED_MS } from './reactions.ts';
 import type { SeatMark, SeatMarks } from './reactions.ts';
 import { h } from './ui.ts';
 
+// How far apart marks on one seat stand, middle to middle, in their own size: more than the width of the box each has (reactions.css)
+const STEP_EM = 1.4;
+
 interface Showing {
   mark: SeatMark;
   element: HTMLElement;
@@ -57,18 +60,23 @@ export class ReactionMarks implements SeatMarks {
     const frame = this.layer.getBoundingClientRect();
     // The page may be drawn smaller than life, as the frames of the theme showcase are
     const zoom = frame.width / this.layer.offsetWidth || 1;
+    const width = frame.width / zoom;
+    const step = STEP_EM * parseFloat(getComputedStyle(this.showing[0]!.element).fontSize);
 
     for (const seat of new Set(this.showing.map(({ mark }) => mark.seat))) {
       const here = this.showing.filter(({ mark }) => mark.seat === seat);
       const plate = this.stage.querySelector(`.table .seat[data-seat="${seat}"] .plate`)?.getBoundingClientRect();
 
+      // Several on a seat at the table's edge are moved in together, so none is cut off
+      const half = (here.length * step) / 2;
+      const middle = plate ? Math.min(Math.max((plate.left + plate.width / 2 - frame.left) / zoom, half), width - half) : 0;
+
       here.forEach(({ element }, index) => {
         element.hidden = !plate;
 
         if (plate) {
-          element.style.setProperty('left', `${(plate.left + plate.width / 2 - frame.left) / zoom}px`);
+          element.style.setProperty('left', `${middle + (index - (here.length - 1) / 2) * step}px`);
           element.style.setProperty('top', `${(plate.top - frame.top) / zoom}px`);
-          element.style.setProperty('--nth', String(index - (here.length - 1) / 2));
         }
       });
     }

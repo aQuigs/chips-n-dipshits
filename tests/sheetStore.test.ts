@@ -962,6 +962,9 @@ test('after the longest night the fullest table still fits its row and the cache
     member.cashOut = LIMITS.chips - 1;
   }
 
+  // Every one of them a player the game knows
+  t.state.members.forEach((member, index) => (member.identity = `KNOWN${10_000 + index}`));
+
   // A hand that all ten are in, with some betting behind it
   t.deal({ button: 0 });
   for (let calls = 0; calls < 9; calls++) {

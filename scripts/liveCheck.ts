@@ -1,8 +1,9 @@
 /*
  * Plays a short game at the deployed address, in real browsers with no Google account, the way
  * friends will reach it. It is the check that the page Apps Script serves is the page that was
- * built, and that the script and its Sheet answer. It leaves one small table behind in the Sheet, and
- * a Presets tab if there was none, with the presets in it as it found them.
+ * built, and that the script and its Sheet answer. It leaves one small table behind in the Sheet, a
+ * Presets tab if there was none, with the presets in it as it found them, and in the Players tab the
+ * one player it plays as, whom its first run adds and every later run picks from the list.
  */
 import assert from 'node:assert/strict';
 import { mkdir, readFile } from 'node:fs/promises';
@@ -12,7 +13,7 @@ import { chromium } from 'playwright';
 import type { Browser, FrameLocator, Page } from 'playwright';
 
 import { LIMITS } from '../src/engine/index.ts';
-import type { Preset } from '../src/engine/index.ts';
+import type { KnownPlayer, Preset } from '../src/engine/index.ts';
 import { buildOf } from './bundle.ts';
 import { readDeployment } from './deployment.ts';
 
@@ -22,6 +23,9 @@ const BUILT_PAGE = fileURLToPath(new URL('../dist/gas/index.html', import.meta.u
 // Apps Script answers in seconds, not milliseconds, and the first request wakes the script up
 const STEP_TIMEOUT_MS = 60_000;
 const APP_SCRIPT = /<script[^>]*>([\s\S]*?)<\/script>/g;
+
+// Both browsers come in as this one known player, so that a run a day does not fill the list with them
+const CHECK_PLAYER = 'Live check';
 
 interface Visitor {
   page: Page;
@@ -50,13 +54,34 @@ async function timed(what: string, step: () => Promise<unknown>): Promise<void> 
 }
 
 /** Asks the script directly from inside the game's frame, the way the page itself does, as the page's build. */
-async function ask(visitor: Visitor, request: object): Promise<{ ok: boolean; presets?: Preset[]; error?: string }> {
+async function ask(visitor: Visitor, request: object): Promise<{ ok: boolean; presets?: Preset[]; players?: KnownPlayer[]; error?: string }> {
   const body = JSON.stringify(request);
 
   return visitor.app.locator('body').evaluate(`new Promise((resolve, reject) => google.script.run
     .withSuccessHandler((json) => resolve(JSON.parse(json)))
     .withFailureHandler(reject)
-    .api(JSON.stringify({ ...${body}, build: window.CND_BUILD })))`) as Promise<{ ok: boolean; presets?: Preset[]; error?: string }>;
+    .api(JSON.stringify({ ...${body}, build: window.CND_BUILD })))`) as Promise<{ ok: boolean; presets?: Preset[]; players?: KnownPlayer[]; error?: string }>;
+}
+
+async function checkPlayers(visitor: Visitor): Promise<KnownPlayer[]> {
+  const answer = await ask(visitor, { op: 'players' });
+  assert.ok(answer.ok && answer.players, `the players could not be listed: ${answer.error}`);
+
+  return answer.players.filter((player) => player.name === CHECK_PLAYER);
+}
+
+/**
+ * Answers "who are you?" as the check's one player: picked from the list when the Players tab has
+ * them, which is the list read back from the real Sheet, and typed as someone new when it does not,
+ * which is the tab being made and written to. `nameBox` is where a new player's name is typed.
+ */
+async function sayWho(visitor: Visitor, nameBox: string): Promise<void> {
+  if ((await checkPlayers(visitor)).length > 0) {
+    await visitor.app.locator(`.who-pill:text-is("${CHECK_PLAYER}")`).click();
+    await visitor.app.locator(nameBox).waitFor({ state: 'hidden' });
+  } else {
+    await visitor.app.locator(nameBox).fill(CHECK_PLAYER);
+  }
 }
 
 async function presetNames(visitor: Visitor): Promise<string[]> {
@@ -137,7 +162,7 @@ try {
   const servedBuild = await host.app.locator('script').last().evaluate('window.CND_BUILD');
   assert.equal(servedBuild, buildOf(built), 'the page Apps Script serves does not say it is the build in dist/gas');
 
-  await host.app.locator('#host-name').fill('Host check');
+  await timed('say who the host is', () => sayWho(host, '#host-name'));
   await timed('create a table', async () => {
     await host.app.locator('[data-action="create-table"]').click();
     await host.app.locator('#table-link').waitFor();
@@ -148,12 +173,17 @@ try {
   await host.page.waitForURL(/[?&]me=/);
   assert.ok(inAddress(host.page, 'table'), "the address names the table and the host's seat");
 
+  // The guest is the same player from another browser: a second member under a number, with a seat of their own
   const guest = await open(browser, invite, true);
-  await guest.app.locator('#join-name').fill('Guest check');
+  await guest.app.locator('#join-name').waitFor();
+  await timed('say who the guest is', () => sayWho(guest, '#join-name'));
   await timed('join by the invite link', async () => {
     await guest.app.locator('[data-action="join-table"]').click();
     await guest.app.locator('.stage .table').waitFor();
   });
+
+  const listed = await checkPlayers(host);
+  assert.equal(listed.length, 1, `the Players tab has ${listed.length} players called ${CHECK_PLAYER}, and the check keeps exactly one`);
 
   await timed('host sits down', async () => {
     await host.app.locator('[data-sit="0"]').click();

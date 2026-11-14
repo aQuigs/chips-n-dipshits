@@ -9,6 +9,8 @@ import { isRefusal, nextRetry, ServerClock, ServerLine, sleep, TableConnection }
 import type { SendOutcome, Session } from './connection.ts';
 import { TableEffects } from './effects.ts';
 import { HotkeyPresser } from './hotkeyPresser.ts';
+import { playerFor, RememberedPlayer } from './knownPlayers.ts';
+import type { Answer } from './knownPlayers.ts';
 import { Modal } from './modal.ts';
 import { browserOf } from './pageErrors.ts';
 import type { PageFailure } from './pageErrors.ts';
@@ -30,13 +32,14 @@ import type { Dialog, DialogHandlers } from './render/dialogs/index.ts';
 import { createFeed } from './render/feed.ts';
 import type { Feed } from './render/feed.ts';
 import { joinScreen, lobbyEl, noticeEl, putAwayEl, welcomeBackEl } from './render/lobby.ts';
-import type { LobbyScreen } from './render/lobby.ts';
+import type { AsksWho, LobbyScreen, Visitor } from './render/lobby.ts';
 import { nightOver } from './render/night.ts';
 import { outdatedEl } from './render/outdated.ts';
 import { hostOrCohost } from './render/roles.ts';
 import { handDrawn, tableEl } from './render/table.ts';
 import { createThemePicker } from './render/themePicker.ts';
 import { voiceLinkEl } from './render/voiceLink.ts';
+import type { Listed } from './render/whoField.ts';
 import type { Shape } from './render/table.ts';
 import { Attention } from './attention.ts';
 import { pageWays } from './pageAttention.ts';
@@ -107,6 +110,12 @@ export class App {
 
   private readonly clock = new ServerClock();
   private readonly server: ServerLine;
+
+  /** Which of the players the game knows this browser was last used as. */
+  private readonly me: RememberedPlayer;
+
+  /** Counts the times the list of players was asked for a screen, so that only the latest goes on trying. */
+  private playersAsked = 0;
   private readonly hotkeys: HotkeyPresser;
 
   /** The table this page is at, from sitting down at its screen until that screen is left. */
@@ -143,6 +152,7 @@ export class App {
     this.platform = platform;
     this.themeHost = themeHost;
     this.prefs = new Preferences(PREFERENCES, platform.memory, root);
+    this.me = new RememberedPlayer(platform.memory);
     this.prefs.watch('theme', (id) => this.applyTheme(id));
     for (const key of ['deck', 'gifs'] as const) {
       this.prefs.watch(key, () => this.screen?.feed.redraw());
@@ -247,13 +257,43 @@ export class App {
       this.pointAddress(null);
     }
 
-    const lobby = lobbyEl(this.rememberedName(), this.themePicker(), {
-      create: (name, config) => this.createTable(name, config),
+    const lobby = lobbyEl(this.visitor(), this.themePicker(), {
+      create: async (as, config) => {
+        if (!(await this.createTable(as, config))) {
+          void this.offerPlayers(lobby);
+        }
+      },
       openTable: (code) => this.openTable(code.trim().toUpperCase()),
     });
 
     this.mount(lobby.element);
     void this.offerPresets(lobby);
+    void this.offerPlayers(lobby);
+  }
+
+  /**
+   * Asks for the players the game knows as soon as a screen that asks "who are you?" is up, and again
+   * when an attempt from it came to nothing, since the usual reason is a name the list turned out to
+   * have. Like the presets they are only a help: the screen asks for a name without them, and a
+   * failure is tried again quietly for as long as the screen shows.
+   */
+  private async offerPlayers(screen: AsksWho): Promise<void> {
+    const asked = ++this.playersAsked;
+
+    for (let retryIn = 0; this.root.contains(screen.element) && asked === this.playersAsked; ) {
+      try {
+        const { players, remembered } = await this.listPlayers();
+
+        if (this.root.contains(screen.element)) {
+          screen.offerPlayers(players, remembered);
+        }
+
+        return;
+      } catch {
+        retryIn = nextRetry(retryIn);
+        await sleep(retryIn);
+      }
+    }
   }
 
   /**
@@ -373,12 +413,17 @@ export class App {
     this.leaveTableScreen();
     this.pointAddress(tableId);
 
-    const screen = joinScreen(tableId, this.rememberedName(), this.themePicker(), {
-      join: (name) => this.joinTable(tableId, name),
+    const screen = joinScreen(tableId, this.visitor(), this.themePicker(), {
+      join: async (as) => {
+        if (!(await this.joinTable(tableId, as))) {
+          void this.offerPlayers(screen);
+        }
+      },
       toLobby: () => this.showLobby(),
     });
 
     this.mount(screen.element);
+    void this.offerPlayers(screen);
 
     for (let retryIn = 0; ; ) {
       const response = await this.request({ op: 'info', tableId });
@@ -411,34 +456,56 @@ export class App {
     }
   }
 
-  private async createTable(name: string, config: Partial<TableConfig>): Promise<void> {
-    const response = await this.request({ op: 'create', name, config });
+  /** Resolves to whether the table was made. */
+  private async createTable(as: Answer, config: Partial<TableConfig>): Promise<boolean> {
+    const response = await this.request({ op: 'create', ...as, config });
     if (response?.ok && response.kind === 'joined') {
-      this.platform.memory.set(NAME_KEY, response.view.you.name);
       this.remember(response.view.id, response.auth);
       this.enterTable({ tableId: response.view.id, auth: response.auth }, response.view);
       this.openDialog({ kind: 'invite' });
-      return;
+      this.noteWho(as, response.view);
+      return true;
     }
 
     this.toast(response && !response.ok ? response.error : 'Could not create the table. Check your connection and try again.');
+    return false;
   }
 
-  private async joinTable(tableId: string, name: string): Promise<void> {
-    const response = await this.request({ op: 'join', tableId, name });
+  /** Resolves to whether the visitor is now somewhere other than the form they joined from. */
+  private async joinTable(tableId: string, as: Answer): Promise<boolean> {
+    const response = await this.request({ op: 'join', tableId, ...as });
     if (response?.ok && response.kind === 'joined') {
-      this.platform.memory.set(NAME_KEY, response.view.you.name);
       this.remember(tableId, response.auth);
       this.enterTable({ tableId, auth: response.auth }, response.view);
-      return;
+      this.noteWho(as, response.view);
+      return true;
     }
 
     if (response && !response.ok && response.putAway) {
       this.showPutAway(tableId, response);
-      return;
+      return true;
     }
 
     this.toast(response && !response.ok ? response.error : 'Could not join the table. Check your connection and try again.');
+    return false;
+  }
+
+  /**
+   * Remembers, beside the preferences, who the visitor has just become at a table: the name they
+   * typed, and the known player the table has them down as. One it has down as nobody was let in while
+   * the list of players could not be asked or had no room; they are told where to say it again, and
+   * whoever the browser remembered before is kept, since only the list itself says a player is gone.
+   */
+  private noteWho(as: Answer, view: TableView): void {
+    if (as.who.as === 'new') {
+      this.platform.memory.set(NAME_KEY, view.you.name);
+    }
+
+    if (view.you.identity !== null) {
+      this.me.set(playerFor(view.you.identity, as));
+    } else {
+      this.toast('You’re in. The list of players couldn’t take note of you just now: say who you are from the menu when you like.');
+    }
   }
 
   /**
@@ -989,6 +1056,11 @@ export class App {
         save: (name, settings, replace) => this.changePresets({ op: 'savePreset', tableId: session.tableId, auth: session.auth, name, settings, replace }),
         remove: (name) => this.changePresets({ op: 'deletePreset', tableId: session.tableId, auth: session.auth, name }),
       },
+      players: {
+        list: () => this.listPlayers(),
+        remembered: () => this.me.get(),
+        identify: (as) => this.identify(session, as),
+      },
       tableLink: () => this.platform.links.tableLink(session.tableId),
       memberLink: () => this.platform.links.memberLink(session.tableId, session.auth),
       prefs: this.prefs,
@@ -1021,6 +1093,35 @@ export class App {
     }
 
     throw new Error('The presets could not be loaded');
+  }
+
+  /** The players the game knows. What the browser remembers of who it is, is held to them on the way. */
+  private async listPlayers(): Promise<Listed> {
+    const response = await this.request({ op: 'players' });
+
+    if (response?.ok && response.kind === 'players') {
+      return { players: response.players, remembered: this.me.heldTo(response.players) };
+    }
+
+    throw new Error('The list of players could not be loaded');
+  }
+
+  /** Tells the table which known player this member is. Resolves to whether it took that; if not, the player is told why. */
+  private async identify(session: Session, as: Answer): Promise<boolean> {
+    const response = await this.request({ op: 'identify', tableId: session.tableId, auth: session.auth, ...as });
+
+    if (response?.ok && response.kind === 'view' && response.view.you.identity !== null) {
+      const now = playerFor(response.view.you.identity, as);
+
+      this.me.set(now);
+      this.toast(`Noted: on the list of players you are ${now.name}.`);
+      return true;
+    }
+
+    // A refusal here says nothing about the player's seat, so it never takes them from the table
+    this.toast(response && !response.ok ? response.error : 'No answer from the server. Try again in a moment.');
+
+    return false;
   }
 
   /** The presets after a change, or null when it was refused or got no answer, which the player is told. */
@@ -1064,8 +1165,8 @@ export class App {
     return parseMember(this.platform.memory.get(seatKey(tableId)));
   }
 
-  private rememberedName(): string {
-    return this.platform.memory.get(NAME_KEY) ?? '';
+  private visitor(): Visitor {
+    return { name: this.platform.memory.get(NAME_KEY) ?? '', player: this.me.get() };
   }
 
   private applyTheme(id: string): void {

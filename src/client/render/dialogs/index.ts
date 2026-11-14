@@ -20,6 +20,7 @@ import { straddlesDialog } from './straddles.ts';
 import { themeDialog } from './theme.ts';
 import { tonightDialog } from './tonight.ts';
 import { transferDialog } from './transfer.ts';
+import { whoDialog } from './who.ts';
 
 export type { DialogHandlers } from './dialog.ts';
 
@@ -43,6 +44,7 @@ const REGISTERED = [
   pauseGame,
   startGame,
   keepPlaying,
+  whoDialog,
   themeDialog,
   preferencesDialog,
   muteDialog,

@@ -48,4 +48,5 @@ export const STYLESHEETS = [
   'mutes.css',
   'gifs.css',
   'show-one.css',
+  'who.css',
 ];

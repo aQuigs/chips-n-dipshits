@@ -1,52 +1,57 @@
 import { CONFIG_SPECS, settingText, startingConfig } from '../../engine/config.ts';
 import type { ConfigKey } from '../../engine/config.ts';
+import type { KnownPlayer } from '../../engine/players.ts';
 import { fromPreset, PRESET_KEYS } from '../../engine/presets.ts';
 import type { Preset } from '../../engine/presets.ts';
 import { stakesText } from '../../engine/stakes.ts';
 import type { TableConfig } from '../../engine/types.ts';
 import type { TableInfo } from '../../server/api.ts';
+import type { Answer } from '../knownPlayers.ts';
 import { h } from '../ui.ts';
 import { configForm } from './configForm.ts';
 import { inputOf } from './forms.ts';
+import { whoField } from './whoField.ts';
+import type { WhoField } from './whoField.ts';
 
-const NAME_LENGTH = 16;
 const CODE_LENGTH = 12;
+
+/** What the browser remembers of whoever last used it: the name they last typed, and the known player they said they were. */
+export interface Visitor {
+  name: string;
+  player: KnownPlayer | null;
+}
+
+/** A screen that asks its visitor who they are before they are at a table. */
+export interface AsksWho {
+  element: HTMLElement;
+  /** Offers the known players to pick from, once they have been heard from. As `WhoField.offer`. */
+  offerPlayers: WhoField['offer'];
+}
 
 export interface LobbyHandlers {
   /** Resolves when the attempt is over, whichever way it went. */
-  create(name: string, config: Partial<TableConfig>): Promise<void>;
+  create(as: Answer, config: Partial<TableConfig>): Promise<void>;
   openTable(code: string): void;
 }
 
-export interface LobbyScreen {
-  element: HTMLElement;
+export interface LobbyScreen extends AsksWho {
   /** Offers the group's presets in the form for a new table, once they have been heard from. */
   offerPresets(presets: Preset[]): void;
 }
 
 export interface JoinHandlers {
   /** Resolves when the attempt is over, whichever way it went. */
-  join(name: string): Promise<void>;
+  join(as: Answer): Promise<void>;
   toLobby(): void;
 }
 
-export interface JoinScreen {
-  element: HTMLElement;
+export interface JoinScreen extends AsksWho {
   /** Fills in what the table is once the server has said, and lets the visitor join. */
   showTable(info: TableInfo): void;
 }
 
 function brand(): HTMLElement {
   return h('div.brand', null, h('h1', null, 'Chips n’ ', h('em', null, 'Dipshits')), h('p', null, 'No-limit hold’em for people who should know better.'));
-}
-
-function nameField(id: string, value: string): HTMLElement {
-  return h(
-    'label.field',
-    { for: id },
-    h('span', null, 'Your name'),
-    h('input', { type: 'text', id, name: id, value, maxlength: NAME_LENGTH, required: true, autocomplete: 'nickname', placeholder: 'What the table calls you' }),
-  );
 }
 
 function themeSection(themePicker: HTMLElement): HTMLElement {
@@ -72,7 +77,8 @@ async function whilePending(button: HTMLButtonElement, label: string, action: ()
 }
 
 /** The front door: start a table, or go to one with its code. */
-export function lobbyEl(rememberedName: string, themePicker: HTMLElement, handlers: LobbyHandlers): LobbyScreen {
+export function lobbyEl(visitor: Visitor, themePicker: HTMLElement, handlers: LobbyHandlers): LobbyScreen {
+  const who = whoField('host-name', visitor.name, visitor.player);
   const createButton = h('button.btn.primary', { type: 'submit', 'data-action': 'create-table' }, 'Create table');
 
   // The table's name starts out with the apostrophe the page's own title has
@@ -119,11 +125,11 @@ export function lobbyEl(rememberedName: string, themePicker: HTMLElement, handle
     {
       onsubmit: (event: Event) => {
         event.preventDefault();
-        void whilePending(createButton, 'Setting up…', () => handlers.create(inputOf(create, 'host-name').value, { ...unseen, ...settings.read(create) }));
+        void whilePending(createButton, 'Setting up…', () => handlers.create(who.answer(), { ...unseen, ...settings.read(create) }));
       },
     },
     h('h2', null, 'Start a table'),
-    nameField('host-name', rememberedName),
+    who.element,
     presetPick,
     settings.rows,
     h('p.note', null, 'You become the host. Clock, straddles, running it more than once and the 7-2 bounty are in the table settings.'),
@@ -151,6 +157,7 @@ export function lobbyEl(rememberedName: string, themePicker: HTMLElement, handle
 
   return {
     element: h('main.lobby', null, brand(), h('div.panels', null, create, join), themeSection(themePicker)),
+    offerPlayers: who.offer,
 
     offerPresets(presets) {
       if (presets.length === 0) {
@@ -171,7 +178,8 @@ export function lobbyEl(rememberedName: string, themePicker: HTMLElement, handle
 }
 
 /** Shown to someone who opened a table link but has not picked a name there yet. */
-export function joinScreen(tableId: string, rememberedName: string, themePicker: HTMLElement, handlers: JoinHandlers): JoinScreen {
+export function joinScreen(tableId: string, visitor: Visitor, themePicker: HTMLElement, handlers: JoinHandlers): JoinScreen {
+  const who = whoField('join-name', visitor.name, visitor.player);
   const about = h('div.about', null, h('h2', null, `Table ${tableId}`), h('p.note', null, 'Looking for the table…'));
   const joinButton = h('button.btn.primary', { type: 'submit', disabled: true, 'data-action': 'join-table' }, 'Join table');
 
@@ -180,17 +188,18 @@ export function joinScreen(tableId: string, rememberedName: string, themePicker:
     {
       onsubmit: (event: Event) => {
         event.preventDefault();
-        void whilePending(joinButton, 'Joining…', () => handlers.join(inputOf(event.target as HTMLFormElement, 'join-name').value));
+        void whilePending(joinButton, 'Joining…', () => handlers.join(who.answer()));
       },
     },
     about,
-    nameField('join-name', rememberedName),
+    who.element,
     joinButton,
     h('button.link', { type: 'button', onclick: handlers.toLobby }, 'Start my own table instead'),
   );
 
   return {
     element: h('main.lobby', null, brand(), h('div.panels.single', null, form, themeSection(themePicker))),
+    offerPlayers: who.offer,
 
     showTable(info) {
       about.replaceChildren(

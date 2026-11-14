@@ -82,6 +82,7 @@ function players(view: TableView, handlers: DialogHandlers): HTMLElement {
         );
 
   const badges = new Map(view.tonight.players.map((row) => [row.playerId, row.badges]));
+
   const nameOf = (playerId: string, name: string) => [h('b', null, name, roleMark(view, playerId)), badgeMarks(badges.get(playerId) ?? [])];
 
   // Only to an open seat, not for a player already on their way out, and not while a shuffle is coming. A move that waits can be taken back
@@ -143,6 +144,11 @@ function players(view: TableView, handlers: DialogHandlers): HTMLElement {
       ),
     );
 
+  // Whoever runs the table is the one who can ask a player to say who they are, so that their night counts for them.
+  // Said once and last, where it moves nothing the host reaches for
+  const unknown = view.members.filter((member) => member.identity === null).map((member) => member.name);
+  const unknownNote = unknown.length > 0 ? h('p.note.unknown-players', null, `Not on the list of players: ${unknown.join(', ')}. Each can say who they are under “Who you are” in the menu.`) : null;
+
   return frame(
     'Players',
     handlers,
@@ -155,6 +161,7 @@ function players(view: TableView, handlers: DialogHandlers): HTMLElement {
       view.seats.filter((seat) => seat && !seat.leaving).length > 1 ? h('button.btn', { type: 'button', 'data-action': 'transfer', onclick: () => handlers.open({ kind: 'transfer' }) }, 'Transfer chips between players') : null,
     ),
     watching.length > 0 ? h('section', null, h('h3', null, 'Watching'), h('ul.rows', null, watching.map((member) => watcherRow(member.id, member.name)))) : null,
+    unknownNote,
   );
 }
 

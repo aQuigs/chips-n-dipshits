@@ -204,6 +204,27 @@ async function standOrLie(page: Page, screen: ScreenName): Promise<void> {
 
 const TO_THE_CENT = 'This table plays to the cent, so an amount has at most two decimals';
 
+/** Waits for something the page does by itself that leaves no mark on the screen to wait for. */
+async function reached(done: () => boolean, what: string): Promise<void> {
+  for (const deadline = Date.now() + 15_000; !done(); ) {
+    assert.ok(Date.now() < deadline, `never happened: ${what}`);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
+
+/** A page that asks "who are you?", the front page or a table's link, once it has heard which players the game knows. */
+async function askedWho(rig: Rig, screen: ScreenName, path: string): Promise<Page> {
+  const page = await rig.page(screen, 'a visitor');
+  const heard = page.waitForResponse((response) => (response.request().postData() ?? '').includes('"op":"players"'));
+
+  await page.goto(`${rig.url}${path}`);
+  await heard;
+  await page.waitForSelector(path ? '[data-action="join-table"]:enabled' : '[data-action="create-table"]');
+  await page.evaluate('document.fonts.ready.then(() => undefined)');
+
+  return page;
+}
+
 const texts = (page: Page, selector: string) => page.locator(selector).allInnerTexts();
 
 /**
@@ -3565,7 +3586,7 @@ const CHECKS: Check[] = [
         assert.deepEqual(await stakes(), ['10', '20', '400', '2000']);
         assert.equal(await text(page, '#new-table-unit small'), "Can't be changed once the table is created");
 
-        await page.fill('#host-name', 'Quigs');
+        await page.fill('#host-name', `Quigs ${screen}`);
         await page.fill('#new-table-name', 'Friday nickels');
         await pick('Dollars and cents');
         assert.deepEqual(await stakes(), ['0.25', '0.50', '20.00', '100.00']);
@@ -4369,7 +4390,7 @@ const CHECKS: Check[] = [
         assert.equal(await page.inputValue('#new-table-ante'), '0');
         assert.equal(await page.isChecked('#new-table-ante-from input[value="everyone"]'), true);
 
-        await page.fill('#host-name', 'Quigs');
+        await page.fill('#host-name', `Quigs ${screen}`);
         await page.fill('#new-table-small-blind', '15');
         await page.fill('#new-table-ante', '5');
         await press('#new-table-ante-from label:has-text("The big blind")');
@@ -4768,7 +4789,7 @@ const CHECKS: Check[] = [
 
         assert.deepEqual(await values(), ['100', '0', 'one']);
 
-        await page.fill('#host-name', 'Quigs');
+        await page.fill('#host-name', `Quigs ${screen}`);
         await page.fill('#new-table-bomb-pot-amount', '300');
         await page.fill('#new-table-bomb-pot-every', '4');
         await press('#new-table-bomb-pot-boards label:has-text("Two boards")');
@@ -4936,7 +4957,7 @@ const CHECKS: Check[] = [
           await page.waitForSelector('#new-table-preset');
           assert.equal(await page.locator('#new-table-preset option').count(), 19);
 
-          await page.fill('#host-name', 'Quigs');
+          await page.fill('#host-name', `Quigs ${screen}`);
           await page.fill('#new-table-name', 'Friday nickels');
           await page.fill('#new-table-voice-link', 'https://discord.gg/abc');
           await page.selectOption('#new-table-preset', { label: 'Tuesday cents' });
@@ -6628,7 +6649,7 @@ const CHECKS: Check[] = [
         const press = pressOn(page, screen);
 
         assert.equal(await page.isChecked('#new-table-missed-blinds input[value="owed"]'), true);
-        await page.fill('#host-name', 'Quigs');
+        await page.fill('#host-name', `Quigs ${screen}`);
         await press('#new-table-missed-blinds label:has-text("Forgiven")');
 
         await page.locator('#new-table-missed-blinds').scrollIntoViewIfNeeded();
@@ -10090,6 +10111,399 @@ const CHECKS: Check[] = [
       assert.equal(await drawn(), before, 'the page changed what it shows');
       assert.equal(await page.locator('.toast:not([hidden])').count(), 0, 'the player was told something');
       await shot(page, 'page-failure-smallPhone');
+    },
+  ],
+  [
+    'while the game knows nobody, the front page and a table’s link ask only for a name, as they did before there was a list of players',
+    async (rig) => {
+      const table = rig.table([{ name: 'Quigs', stack: 1000 }]);
+
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        for (const [where, path, box] of [['lobby', '', '#host-name'], ['join', `?table=${table.id}`, '#join-name']] as const) {
+          const page = await askedWho(rig, screen, path);
+
+          assert.equal(await page.getAttribute('.who-ask', 'data-who'), 'name');
+          assert.equal(await page.locator('.who-pick:visible, .who-remembered:visible, .who-alike:visible').count(), 0, 'something of a list nobody is on is showing');
+          assert.equal(await text(page, '.who-name > span'), 'Your name');
+          assert.equal(await page.getAttribute(box, 'required'), '');
+
+          await shot(page, `who-nobody-${where}-${screen}`);
+          assertOnScreen(await boxes(page, `.who-name, ${box}`), screen, 'the name');
+          await assertNoSidewaysScroll(page);
+          await page.context().close();
+        }
+      }
+    },
+  ],
+  [
+    'with three players known, the page asks who you are above the name, the most recently seen first: a tap picks a player and puts the name away, “Someone new” brings it back as typed, and joining as one of them makes you that player',
+    async (rig) => {
+      const [ann, bob, bigAl] = ['Ann', 'Bob', 'Big Al'].map((name, index) => rig.players.add(name, rig.now() + index * 1000));
+      const table = rig.table([{ name: 'Quigs', stack: 1000 }]);
+
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        for (const [where, path, box] of [['lobby', '', '#host-name'], ['join', `?table=${table.id}`, '#join-name']] as const) {
+          const page = await askedWho(rig, screen, path);
+          const press = pressOn(page, screen);
+          const pressed = () => page.locator('.who-pill[aria-pressed="true"]').allInnerTexts();
+
+          assert.equal(await page.getAttribute('.who-ask', 'data-who'), 'pick');
+          assert.equal(await text(page, '.who-question'), 'Who are you?');
+          assert.deepEqual(await texts(page, '.who-list .who-pill'), ['Big Al', 'Bob', 'Ann']);
+          assert.deepEqual(await pressed(), ['Someone new'], 'nobody is taken for a player they did not pick');
+          assert.equal(await page.isVisible('.who-filter'), false, 'three names need no box to find one in');
+
+          await page.fill(box, 'Cy');
+          await shot(page, `who-three-${where}-${screen}`);
+          assert.deepEqual(await squeezed(page, '.who-pill, .who-question'), [], 'a name is cut off');
+          assertOnScreen(await boxes(page, `.who-question, .who-pill, ${box}`), screen, 'the question');
+          const pills = await boxes(page, '.who-pill');
+          pills.forEach((pill, index) => assertApart([pill], pills.slice(index + 1), 'two names'));
+          assert.ok(pills.every((pill) => pill.bottom - pill.top >= 40), 'a name is too small to tap');
+          await assertNoSidewaysScroll(page);
+
+          await press('.who-pill:text-is("Bob")');
+          assert.deepEqual(await pressed(), ['Bob']);
+          assert.equal(await page.isVisible(box), false, 'a known player is still asked for a name');
+          await shot(page, `who-picked-${where}-${screen}`);
+
+          await press('[data-action="someone-new"]');
+          assert.deepEqual(await pressed(), ['Someone new']);
+          assert.equal(await page.inputValue(box), 'Cy', 'the name that was typed is gone');
+          assert.equal(await page.evaluate('document.activeElement.id'), box.slice(1));
+
+          await press('.who-pill:text-is("Bob")');
+          await press(where === 'lobby' ? '[data-action="create-table"]' : '[data-action="join-table"]');
+          await page.waitForSelector('.stage .table');
+
+          const tableId = new URL(page.url()).searchParams.get('table')!;
+          const members = rig.store.read(tableId)!.members.filter((member) => member.identity === bob!.id);
+          assert.deepEqual(members.map((member) => member.name), where === 'lobby' || screen === 'smallPhone' ? ['Bob'] : ['Bob', 'Bob 2'], 'the second Bob at a table is a member of his own, under a number');
+          assert.deepEqual(JSON.parse((await page.evaluate(`localStorage.getItem('cnd.player')`)) as string), bob);
+          assert.equal(await toastShown(page), 0);
+          await page.context().close();
+        }
+      }
+
+      assert.deepEqual(rig.players.list().map((player) => player.id).sort(), [ann!.id, bob!.id, bigAl!.id].sort(), 'picking a player put someone on the list');
+    },
+  ],
+  [
+    'forty players, the longest names among them, on the smallest phone and a desktop: the list scrolls inside its own box, every name is whole, a box narrows it to the one looked for, and a name at its end can be picked',
+    async (rig) => {
+      const longest = ['WWWWWWWWWWWWWWWW', 'Ünïcödé Ñandú Ø!', 'Marge Simpson-Jr', 'iiiiiiiiiiiiiiii', '你好你好你好你好'];
+      const names = [...Array.from({ length: 35 }, (_name, index) => `Player ${index + 1}`), ...longest];
+      names.forEach((name, index) => rig.players.add(name, rig.now() + index * 1000));
+      const table = rig.table([{ name: 'Quigs', stack: 1000 }]);
+
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        const page = await askedWho(rig, screen, `?table=${table.id}`);
+        const press = pressOn(page, screen);
+        const listBox = async () => (await boxes(page, '.who-list'))[0]!;
+
+        assert.deepEqual(await texts(page, '.who-list .who-pill'), [...names].reverse());
+        assert.equal(await page.isVisible('.who-filter'), true);
+        await shot(page, `who-forty-${screen}`);
+
+        // The list is a box of its own a few rows tall, so the name and the button under it are never forty names away
+        const list = await listBox();
+        const scrolls = (await page.evaluate(`(() => { const list = document.querySelector('.who-list'); return [list.scrollHeight, list.clientHeight]; })()`)) as [number, number];
+        assert.ok(list.bottom - list.top <= 220 && scrolls[0] > scrolls[1], `the list is ${list.bottom - list.top} tall and holds ${scrolls[0]}`);
+        assertOnScreen([list, ...(await boxes(page, '.who-filter, .who-question'))], screen, 'the list of players');
+        assert.deepEqual(await squeezed(page, '.who-pill, .who-list'), [], 'a name is cut off, or the list scrolls sideways');
+        assert.ok((await boxes(page, '.who-list .who-pill')).every((pill) => pill.left >= list.left && pill.right <= list.right), 'a name runs out of the side of the list');
+        await assertNoSidewaysScroll(page);
+
+        await page.locator('[data-action="join-table"]').scrollIntoViewIfNeeded();
+        assertOnScreen(await boxes(page, '[data-action="someone-new"], #join-name, [data-action="join-table"]'), screen, 'what comes after the list');
+
+        // Any part of a name finds it, in small letters or capitals, and Enter picks the one name left without sending the form
+        await page.fill('.who-filter', 'ñandú');
+        assert.deepEqual(await texts(page, '.who-list .who-pill'), ['Ünïcödé Ñandú Ø!']);
+        await page.press('.who-filter', 'Enter');
+        assert.deepEqual(await texts(page, '.who-pill[aria-pressed="true"]'), ['Ünïcödé Ñandú Ø!']);
+        await press('[data-action="someone-new"]');
+        await page.fill('.who-filter', 'player 3');
+        assert.deepEqual(await texts(page, '.who-list .who-pill'), ['Player 35', 'Player 34', 'Player 33', 'Player 32', 'Player 31', 'Player 30', 'Player 3']);
+        await page.press('.who-filter', 'Enter');
+        assert.deepEqual(await texts(page, '.who-pill[aria-pressed="true"]'), ['Someone new'], 'Enter picked one of several names');
+        assert.equal(await page.locator('.stage').count(), 0, 'Enter in the box for finding a name joined the table');
+        await shot(page, `who-forty-found-${screen}`);
+
+        await page.fill('.who-filter', 'zz');
+        assert.equal(await text(page, '.who-list'), 'Nobody by that name. New here? Pick “Someone new”.');
+        assert.deepEqual(await squeezed(page, '.who-list .note'), []);
+        await page.fill('.who-filter', '');
+        assert.equal(await page.locator('.who-list .who-pill').count(), 40);
+
+        // The last name in the list, forty down, is brought into the box by the tap that picks it
+        await page.locator('.who-pill:text-is("Player 1")').scrollIntoViewIfNeeded();
+        await press('.who-pill:text-is("Player 1")');
+        assert.deepEqual(await texts(page, '.who-pill[aria-pressed="true"]'), ['Player 1']);
+        const [picked] = await boxes(page, '.who-pill[aria-pressed="true"]');
+        const around = await listBox();
+        assert.ok(picked!.top >= around.top - 1 && picked!.bottom <= around.bottom + 1, 'the name that was picked is not in sight');
+        assert.equal(await page.isVisible('#join-name'), false);
+        await shot(page, `who-forty-picked-${screen}`);
+
+        await press('[data-action="join-table"]');
+        await page.waitForSelector('.stage .table');
+        assert.ok(rig.store.read(table.id)!.members.some((member) => member.name.startsWith('Player 1') && member.identity === rig.players.list().find((player) => player.name === 'Player 1')!.id));
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'a browser that remembers a player says who it takes you for, the longest name whole, before the list is in and after; “Not me” opens the list with the name last typed, and a player the list no longer has is forgotten without a word',
+    async (rig) => {
+      const [wide] = ['WWWWWWWWWWWWWWWW', 'Bob', 'Ann'].map((name, index) => rig.players.add(name, rig.now() + index * 1000));
+      const table = rig.table([{ name: 'Quigs', stack: 1000 }]);
+      const remembers = (player: object, typed: string) => `localStorage.setItem('cnd.player', ${JSON.stringify(JSON.stringify(player))}); localStorage.setItem('cnd.name', '${typed}')`;
+
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        for (const [where, path, box, go] of [['lobby', '', '#host-name', '[data-action="create-table"]'], ['join', `?table=${table.id}`, '#join-name', '[data-action="join-table"]']] as const) {
+          // The name this browser last typed, which joining as someone new puts on the list: another one each time round
+          const typed = `Wendy ${rig.players.list().length}`;
+
+          // The list is kept from the page until the check has looked: what it says first comes from the browser alone
+          const page = await rig.page(screen, 'a returning player');
+          const press = pressOn(page, screen);
+          let letIn = () => {};
+          const held = new Promise<void>((resolve) => (letIn = resolve));
+
+          await page.addInitScript(remembers(wide!, typed));
+          await page.route('**/api', async (route) => {
+            if (JSON.parse(route.request().postData() ?? '{}').op === 'players') {
+              await held;
+            }
+
+            await route.continue();
+          });
+          await page.goto(`${rig.url}${path}`);
+          await page.waitForSelector('.who-remembered');
+          await page.evaluate('document.fonts.ready.then(() => undefined)');
+
+          for (const when of ['before the list is in', 'with the list in']) {
+            assert.equal(await page.getAttribute('.who-ask', 'data-who'), 'remembered', when);
+            assert.equal(await text(page, '.who-remembered span'), 'Playing as WWWWWWWWWWWWWWWW', when);
+            assert.equal(await text(page, '[data-action="not-me"]'), 'Not me');
+            assert.equal(await page.locator(`${box}:visible, .who-pick:visible`).count(), 0, `${when}: a remembered player is asked all the same`);
+
+            if (when === 'before the list is in') {
+              const heard = page.waitForResponse((response) => (response.request().postData() ?? '').includes('"op":"players"'));
+              letIn();
+              await heard;
+            }
+          }
+
+          await shot(page, `who-remembered-${where}-${screen}`);
+          assert.deepEqual(await squeezed(page, '.who-remembered, .who-remembered b, [data-action="not-me"]'), [], 'who the page takes you for is cut off');
+          assertOnScreen(await boxes(page, '.who-remembered, [data-action="not-me"]'), screen, 'who the page takes you for');
+          assertApart(await textBoxes(page, '.who-remembered span'), await boxes(page, '[data-action="not-me"]'), 'the name and “Not me”');
+          assert.ok((await boxes(page, '[data-action="not-me"]')).every((button) => button.bottom - button.top >= 32), '“Not me” is too small to tap');
+          await assertNoSidewaysScroll(page);
+
+          await press('[data-action="not-me"]');
+          assert.equal(await page.getAttribute('.who-ask', 'data-who'), 'pick');
+          assert.deepEqual((await texts(page, '.who-list .who-pill')).filter((name) => !name.startsWith('Wendy')), ['Ann', 'Bob', 'WWWWWWWWWWWWWWWW'], 'the player they are not is still there to go back to');
+          assert.deepEqual(await texts(page, '.who-pill[aria-pressed="true"]'), ['Someone new']);
+          assert.equal(await page.inputValue(box), typed);
+          assert.equal(await page.evaluate('document.activeElement.id'), box.slice(1));
+          await shot(page, `who-not-me-${where}-${screen}`);
+          assert.equal(JSON.parse((await page.evaluate(`localStorage.getItem('cnd.player')`)) as string).id, wide!.id, 'saying “not me” forgot the player before anyone else was picked');
+
+          // Joining as someone else is what makes the browser theirs
+          await press(go);
+          await page.waitForSelector('.stage .table');
+          assert.equal(JSON.parse((await page.evaluate(`localStorage.getItem('cnd.player')`)) as string).name, typed);
+          await page.context().close();
+        }
+      }
+
+      // A player whose row was taken out of the list: the page asks as it asks anyone, says nothing, and keeps the seat it has
+      const gone = await rig.page('smallPhone', 'a player who was removed');
+      await gone.addInitScript(`${remembers({ id: 'GONE234567', name: 'Ghost' }, 'Ghost')}; localStorage.setItem('cnd.seat.ABC234', 'MEMBER23.TOKEN')`);
+      const heard = gone.waitForResponse((response) => (response.request().postData() ?? '').includes('"op":"players"'));
+      await gone.goto(rig.url);
+      await heard;
+      await gone.waitForSelector('.who-pick');
+
+      assert.equal(await gone.locator('.who-remembered:visible, .toast:visible').count(), 0);
+      assert.deepEqual(await gone.evaluate(`[localStorage.getItem('cnd.player'), localStorage.getItem('cnd.seat.ABC234')]`), [null, 'MEMBER23.TOKEN']);
+      await shot(gone, 'who-forgotten-smallPhone');
+      await gone.context().close();
+    },
+  ],
+  [
+    'someone new typing a name the game knows is pointed at that player as they type, told whose name it is on trying anyway, and gets in as that player with one tap, nothing typed lost',
+    async (rig) => {
+      const bigAl = rig.players.add('Big Al', rig.now());
+      rig.players.add('Bob', rig.now() + 1000);
+      const table = rig.table([{ name: 'Quigs', stack: 1000 }]);
+
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        const page = await askedWho(rig, screen, `?table=${table.id}`);
+        const press = pressOn(page, screen);
+
+        await page.fill('#join-name', 'big a');
+        assert.equal(await page.isVisible('.who-alike'), false, 'a name is pointed out before it is one');
+
+        await page.fill('#join-name', 'big al');
+        assert.equal(await text(page, '.who-alike'), 'Big Al is on the list already. I’m Big Al');
+        await shot(page, `who-taken-name-${screen}`);
+        assert.deepEqual(await squeezed(page, '.who-alike, [data-action="pick-alike"]'), []);
+        assertOnScreen(await boxes(page, '.who-alike, [data-action="pick-alike"], #join-name'), screen, 'the pointer to the player of that name');
+        assertApart(await boxes(page, '[data-action="pick-alike"]'), await boxes(page, '#join-name, [data-action="join-table"]'), 'the pointer’s button and what is around it');
+        await assertNoSidewaysScroll(page);
+
+        // Trying anyway is refused in words that say what to do, and the form is as it was
+        await press('[data-action="join-table"]');
+        await page.waitForSelector('.toast:visible');
+        assert.equal(await text(page, '.toast'), 'Big Al is already on the list of players. If that is you, pick Big Al from the list. If not, add something to your name');
+        await shot(page, `who-taken-name-refused-${screen}`);
+        assert.deepEqual(await squeezed(page, '.toast'), []);
+        assertOnScreen(await boxes(page, '.toast'), screen, 'the reason');
+        assert.equal(await page.inputValue('#join-name'), 'big al');
+        assert.equal(rig.players.list().length, 2);
+        assert.equal(rig.store.read(table.id)!.members.filter((member) => member.identity === bigAl.id).length, screen === 'smallPhone' ? 0 : 1);
+
+        await press('[data-action="pick-alike"]');
+        assert.deepEqual(await texts(page, '.who-pill[aria-pressed="true"]'), ['Big Al']);
+        assert.equal(await page.locator('#join-name:visible, .who-alike:visible').count(), 0);
+
+        await press('[data-action="join-table"]');
+        await page.waitForSelector('.stage .table');
+        assert.equal(rig.store.read(table.id)!.members.filter((member) => member.identity === bigAl.id).length, screen === 'smallPhone' ? 1 : 2);
+        await page.context().close();
+      }
+
+      assert.equal(rig.players.list().length, 2);
+    },
+  ],
+  [
+    'while the list of players will not load, the page asks for a name and says nothing of it, a remembered player is still who the page takes them for, and both get in',
+    async (rig) => {
+      const bob = rig.players.add('Bob', rig.now());
+      const table = rig.table([{ name: 'Quigs', stack: 1000 }]);
+
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        for (const remembered of [false, true]) {
+          const page = await rig.page(screen, 'a visitor without the list');
+          const press = pressOn(page, screen);
+          let asked = 0;
+
+          if (remembered) {
+            await page.addInitScript(`localStorage.setItem('cnd.player', ${JSON.stringify(JSON.stringify(bob))})`);
+          }
+
+          await page.route('**/api', (route) => {
+            if (JSON.parse(route.request().postData() ?? '{}').op !== 'players') {
+              return route.continue();
+            }
+
+            asked += 1;
+
+            return route.abort('failed');
+          });
+          await page.goto(`${rig.url}?table=${table.id}`);
+          await page.waitForSelector('[data-action="join-table"]:enabled');
+          await page.evaluate('document.fonts.ready.then(() => undefined)');
+          await reached(() => asked >= 2, 'the page asks for the list again');
+
+          assert.equal(await page.getAttribute('.who-ask', 'data-who'), remembered ? 'remembered' : 'name');
+          assert.equal(await toastShown(page), 0, 'the page said something about a list it can do without');
+          assert.equal(await page.locator('.who-pick:visible').count(), 0);
+          await shot(page, `who-no-list-${remembered ? 'remembered-' : ''}${screen}`);
+
+          if (!remembered) {
+            await page.fill('#join-name', `Dee ${screen}`);
+          }
+
+          await press('[data-action="join-table"]');
+          await page.waitForSelector('.stage .table');
+          assert.equal(await toastShown(page), 0);
+
+          const member = rig.store.read(table.id)!.members.at(-1)!;
+          assert.deepEqual([member.name.replace(/ \d$/, ''), member.identity], remembered ? ['Bob', bob.id] : [`Dee ${screen}`, rig.players.list().find((player) => player.name === `Dee ${screen}`)!.id]);
+          await page.context().close();
+        }
+      }
+    },
+  ],
+  [
+    '“Who you are” in the menu lets a member the game does not know pick themselves or go on the list, whole on the smallest phone and a desktop, and the host’s list of players names those who have not until they do',
+    async (rig) => {
+      const bob = rig.players.add('Bob', rig.now());
+      rig.players.add('WWWWWWWWWWWWWWWW', rig.now() + 1000);
+
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        const table = rig.table([{ name: 'Quigs', stack: 1000 }, { name: 'Bobby', stack: 1000 }, { name: `Cy ${screen}`, stack: 1000 }]);
+        const identityOf = (name: string) => rig.store.read(table.id)!.members.find((member) => member.name === name)!.identity;
+        const unknown = '.dialog .unknown-players';
+
+        const host = await table.open('Quigs', screen);
+        const hostPress = pressOn(host, screen);
+        await hostPress('[data-action="menu"]');
+        await hostPress('.menu [data-action="players"]');
+        assert.equal(await text(host, unknown), `Not on the list of players: Quigs, Bobby, Cy ${screen}. Each can say who they are under “Who you are” in the menu.`);
+        await host.locator(unknown).scrollIntoViewIfNeeded();
+        await shot(host, `who-players-dialog-${screen}`);
+        assert.deepEqual(await squeezed(host, unknown), []);
+        assertOnScreen(await boxes(host, unknown), screen, 'who is not on the list');
+
+        // One of them picks himself from the list
+        const page = await table.open('Bobby', screen);
+        const press = pressOn(page, screen);
+        await press('[data-action="menu"]');
+        assert.equal(await text(page, '.menu [data-action="who"]'), 'Who you areNot on the list of players yet');
+        await press('.menu [data-action="who"]');
+        await page.waitForSelector('.dialog .who-pick');
+
+        assert.equal(await text(page, '.dialog h2'), 'Who you are');
+        assert.deepEqual((await texts(page, '.dialog .who-list .who-pill')).filter((name) => !name.startsWith('Cy ')), ['WWWWWWWWWWWWWWWW', 'Bob']);
+        assert.equal(await page.inputValue('#who-name'), 'Bobby', 'someone new starts from the name they go by here');
+        assert.equal(await text(page, '[data-action="say-who"]'), 'That’s me');
+        await shot(page, `who-dialog-${screen}`);
+        assert.deepEqual(await squeezed(page, '.dialog .note, .dialog .who-pill, [data-action="say-who"]'), []);
+        assertOnScreen(await boxes(page, '.dialog, .dialog .who-pill, #who-name, [data-action="say-who"]'), screen, 'the dialog');
+        await assertNoSidewaysScroll(page);
+
+        await press('.dialog .who-pill:text-is("Bob")');
+        await press('[data-action="say-who"]');
+        await page.waitForSelector('.dialog', { state: 'detached' });
+        assert.equal(await text(page, '.toast'), 'Noted: on the list of players you are Bob.');
+        assert.equal(identityOf('Bobby'), bob.id);
+
+        // The table hears of it as it hears of anything, and goes on calling him what it did
+        await page.waitForSelector('.feed li:has-text("Bobby is Bob on the list of players")', { state: 'attached' });
+        assert.equal(await text(page, '.seat.me .name'), 'Bobby', 'saying who he is changed what the table calls him');
+
+        await press('[data-action="menu"]');
+        assert.equal(await text(page, '.menu [data-action="who"]'), 'Who you areOn the list of players as Bob');
+
+        // Opened again it shows who he said he is, and can be said otherwise
+        await press('.menu [data-action="who"]');
+        await page.waitForSelector('.dialog .who-pick');
+        assert.deepEqual(await texts(page, '.dialog .who-pill[aria-pressed="true"]'), ['Bob']);
+        await press('[data-action="close"]');
+
+        // Another goes on the list as someone new, under the name he goes by here
+        const other = await table.open(`Cy ${screen}`, screen);
+        const otherPress = pressOn(other, screen);
+        await otherPress('[data-action="menu"]');
+        await otherPress('.menu [data-action="who"]');
+        await other.waitForSelector('.dialog .who-pick');
+        await otherPress('[data-action="say-who"]');
+        await other.waitForSelector('.dialog', { state: 'detached' });
+        assert.equal(identityOf(`Cy ${screen}`), rig.players.list().find((player) => player.name === `Cy ${screen}`)!.id);
+
+        // The host's list follows without being opened again
+        await host.waitForSelector(`${unknown}:text-is("Not on the list of players: Quigs. Each can say who they are under “Who you are” in the menu.")`);
+
+        for (const each of [host, page, other]) {
+          await each.context().close();
+        }
+      }
     },
   ],
 ];

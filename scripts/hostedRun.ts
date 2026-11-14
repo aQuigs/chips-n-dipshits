@@ -263,9 +263,12 @@ try {
     await host.waitForSelector('.dialog', { state: 'detached' });
 
     // The page that was open is told by the server, which is the one thing that may take a seat out of the address
-    await page.waitForSelector('#join-name');
+    await page.waitForSelector('[data-action="join-table"]');
     assert.equal(inAddress(page, 'me'), null, 'the address no longer names the member who was removed');
     assert.equal(await remembered(page, tableId), null);
+
+    // The seat is gone and who they are is not: the two are remembered apart, and only the seat was the server's to take
+    assert.equal(await page.innerText('.who-remembered b'), 'Lurker');
 
     // The link they were given still leads to the table, and says why it is asking for a name
     const later = await open(browser);
@@ -1037,6 +1040,177 @@ try {
 
     await lobby.context().close();
     await page.context().close();
+  }
+
+  console.log('Who are you: the first to arrive is asked only for a name, the page then says who it takes them for, "not me" asks again, a list that will not load stops nobody, and a seat is never touched by any of it');
+  {
+    // A game of its own, which starts out knowing nobody
+    const known = new MemoryPlayerStore(seededRng(17));
+    const game = new PokerService({ store: new MemoryStore(), presets: new MemoryPresetStore(), players: known, clock: { now: () => Date.now() }, rng: seededRng(16) });
+    const fresh = await startDevServer({ port: 0, page: async () => html, service: game });
+
+    const asks = (page: Page) => page.getAttribute('.who-ask', 'data-who');
+    const player = async (page: Page) => JSON.parse(((await page.evaluate(`localStorage.getItem('cnd.player')`)) as string | null) ?? 'null') as { id: string; name: string } | null;
+    const idOf = (name: string) => known.list().find((listed) => listed.name === name)!.id;
+    const pills = (page: Page) => page.locator('.who-list .who-pill').allInnerTexts();
+
+    /** Stops the page's requests for the list of players until `open` is called, or fails them all, and counts them. */
+    const listRequests = async (page: Page, how: 'held' | 'failed') => {
+      const held: (() => void)[] = [];
+      const state = { asked: 0, open: () => held.splice(0).forEach((go) => go()) };
+
+      await page.route('**/api', (route) => {
+        if (JSON.parse(route.request().postData() ?? '{}').op !== 'players') {
+          return route.continue();
+        }
+
+        state.asked += 1;
+
+        return how === 'failed' ? route.abort('failed') : new Promise<void>((resolve) => held.push(() => resolve(route.continue())));
+      });
+
+      return state;
+    };
+
+    try {
+      // The first visit: nobody is known, so the question is the one it always was
+      const host = await open(browser);
+      await host.goto(fresh.url);
+      await host.waitForSelector('#host-name');
+      await until('the list of players to be heard from', () => known.list().length === 0);
+      assert.equal(await asks(host), 'name');
+      assert.deepEqual([await host.isVisible('.who-pick'), await host.isVisible('.who-remembered')], [false, false]);
+
+      const first = await createTable(host, fresh.url, 'Quigs');
+      const seat = await remembered(host, first);
+      assert.deepEqual(await player(host), { id: idOf('Quigs'), name: 'Quigs' });
+      assert.equal(inAddress(host, 'me'), seat);
+
+      // A guest's join form before the list is in asks for a name; what is half typed, and the cursor, are still there when it arrives
+      const guest = await open(browser);
+      const list = await listRequests(guest, 'held');
+      await guest.goto(`${fresh.url}?table=${first}`);
+      await guest.waitForSelector('[data-action="join-table"]:not([disabled])');
+      await until('the guest to ask for the list', () => list.asked === 1);
+      assert.equal(await asks(guest), 'name');
+
+      await guest.click('#join-name');
+      await guest.keyboard.type('Bo');
+      list.open();
+      await guest.waitForSelector('.who-pick');
+      assert.deepEqual(await pills(guest), ['Quigs']);
+      assert.equal(await guest.getAttribute('[data-action="someone-new"]', 'aria-pressed'), 'true');
+      assert.equal(await guest.evaluate('document.activeElement.id'), 'join-name', 'the list arriving took the cursor out of the name');
+
+      await guest.keyboard.type('b');
+      assert.equal(await guest.inputValue('#join-name'), 'Bob');
+      await guest.click('[data-action="join-table"]');
+      await guest.waitForSelector('.stage .table');
+      assert.deepEqual(await player(guest), { id: idOf('Bob'), name: 'Bob' });
+
+      const guestSeat = await remembered(guest, first);
+      assert.ok(guestSeat);
+      await guest.unroute('**/api');
+
+      // The next visit says who it takes them for before the list is even in, and making a table needs no name typed
+      const again = await listRequests(host, 'held');
+      await host.goto(fresh.url);
+      await host.waitForSelector('.who-remembered');
+      assert.equal(await host.innerText('.who-remembered b'), 'Quigs');
+      assert.equal(await host.isVisible('#host-name'), false);
+      again.open();
+      await until('the list to come in', () => again.asked === 1);
+      await host.unroute('**/api');
+
+      await host.click('[data-action="create-table"]');
+      await host.waitForSelector('#table-link');
+      await host.click('[data-action="close"]');
+      const second = inAddress(host, 'table')!;
+      assert.notEqual(second, first);
+      assert.deepEqual(known.list().map((listed) => listed.name).sort(), ['Bob', 'Quigs'], 'a remembered player was put on the list again');
+      assert.equal(await remembered(host, first), seat, 'the seat at the first table was touched');
+
+      // Not me: the list, with the name last typed in its box and the player it reads like pointed out
+      await guest.goto(`${fresh.url}?table=${second}`);
+      await guest.waitForSelector('.who-remembered');
+      await guest.click('[data-action="not-me"]');
+      await guest.waitForSelector('.who-pick');
+      assert.deepEqual((await pills(guest)).sort(), ['Bob', 'Quigs']);
+      assert.equal(await guest.inputValue('#join-name'), 'Bob');
+      assert.equal(await guest.innerText('[data-action="pick-alike"]'), 'I’m Bob');
+
+      // Someone new under a name the list has is told whose it is, stays on the form with everything as typed, and nothing is lost
+      await guest.click('[data-action="join-table"]');
+      await guest.waitForSelector('.toast:has-text("Bob is already on the list of players")');
+      assert.equal(await guest.inputValue('#join-name'), 'Bob');
+      assert.deepEqual([await player(guest), await remembered(guest, first)], [{ id: idOf('Bob'), name: 'Bob' }, guestSeat]);
+
+      // Saying they are the host instead joins them as a member of their own: it is a name tag, and the host keeps the table
+      await guest.click('.who-pill:has-text("Quigs")');
+      assert.equal(await guest.isVisible('#join-name'), false);
+      await guest.click('[data-action="join-table"]');
+      await guest.waitForSelector('.stage .table');
+      assert.deepEqual(await player(guest), { id: idOf('Quigs'), name: 'Quigs' });
+      await guest.click('[data-action="menu"]');
+      await guest.waitForSelector('.menu [data-action="who"]');
+      assert.equal(await guest.locator('.menu [data-action="players"], .menu [data-action="settings"]').count(), 0, 'picking the host gave the guest the host’s menu');
+      assert.equal(await guest.innerText('.menu [data-action="who"] small'), 'On the list of players as Quigs');
+      await guest.click('[data-action="close"]');
+      assert.notEqual(inAddress(guest, 'me'), inAddress(host, 'me'));
+      assert.equal(await remembered(guest, first), guestSeat, 'saying otherwise took the seat at the first table out of the browser');
+      assert.equal(known.list().length, 2);
+
+      // A browser that knows nobody picks a name in the lobby and makes a table as that player, which is how the check of the deployed game comes in
+      const picker = await open(browser);
+      await picker.goto(fresh.url);
+      await picker.click('.who-pill:text-is("Bob")');
+      await picker.waitForSelector('#host-name', { state: 'hidden' });
+      await picker.click('[data-action="create-table"]');
+      await picker.waitForSelector('#table-link');
+      assert.deepEqual(await player(picker), { id: idOf('Bob'), name: 'Bob' });
+      assert.equal(known.list().length, 2);
+      await picker.context().close();
+
+      // A list that will not load: someone new is asked for a name and gets in, hearing nothing of it
+      const stranger = await open(browser);
+      const failing = await listRequests(stranger, 'failed');
+      await stranger.goto(`${fresh.url}?table=${second}`);
+      await stranger.waitForSelector('[data-action="join-table"]:not([disabled])');
+      await until('the list to be asked for again', () => failing.asked >= 2);
+      assert.equal(await asks(stranger), 'name');
+      assert.equal(await stranger.isVisible('.toast'), false, 'the page said something about a list it can do without');
+
+      await stranger.fill('#join-name', 'Dee');
+      await stranger.click('[data-action="join-table"]');
+      await stranger.waitForSelector('.stage .table');
+      assert.deepEqual(await player(stranger), { id: idOf('Dee'), name: 'Dee' });
+
+      // And someone remembered is still taken for who they were: only a list that did load says a player is gone
+      const asked = failing.asked;
+      await stranger.goto(fresh.url);
+      await stranger.waitForSelector('.who-remembered');
+      await until('the lobby to ask for the list and be failed', () => failing.asked >= asked + 2);
+      assert.equal(await stranger.innerText('.who-remembered b'), 'Dee');
+      assert.deepEqual(await player(stranger), { id: idOf('Dee'), name: 'Dee' });
+      await stranger.unroute('**/api');
+
+      // A remembered player the list no longer has is forgotten without a word, and the seats stay
+      const strangerSeat = await remembered(stranger, second);
+      await stranger.evaluate(`localStorage.setItem('cnd.player', JSON.stringify({ id: 'GONE234567', name: 'Ghost' }))`);
+      await stranger.goto(fresh.url);
+      await stranger.waitForSelector('.who-pick');
+      assert.equal(await stranger.isVisible('.who-remembered'), false);
+      assert.equal(await stranger.isVisible('.toast'), false);
+      assert.equal(await player(stranger), null);
+      assert.equal(await remembered(stranger, second), strangerSeat);
+      assert.equal(await stranger.inputValue('#host-name'), 'Dee');
+
+      for (const each of [host, guest, stranger]) {
+        await each.context().close();
+      }
+    } finally {
+      await fresh.close();
+    }
   }
 
   console.log('The Apps Script-hosted page holds up');

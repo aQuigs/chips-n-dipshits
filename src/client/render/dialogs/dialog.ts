@@ -4,6 +4,7 @@ import type { SendOutcome } from '../../connection.ts';
 import type { MuteList } from '../../mutes.ts';
 import type { Abilities, AppPreferences } from '../../prefs.ts';
 import type { PresetHandlers } from '../presets.ts';
+import type { PlayerHandlers } from '../whoField.ts';
 import { h, holdWhile } from '../../ui.ts';
 import type { Dialog } from './index.ts';
 
@@ -15,6 +16,7 @@ export interface DialogHandlers {
   copy(text: string): Promise<boolean>;
   loadHistory(): Promise<HandRecord[]>;
   presets: PresetHandlers;
+  players: PlayerHandlers;
   tableLink(): string;
   memberLink(): string;
   prefs: AppPreferences;

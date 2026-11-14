@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
-import { STATE_SCHEMA } from '../src/engine/index.ts';
+import { STATE_SCHEMA, TIMING } from '../src/engine/index.ts';
 import type { TableState } from '../src/engine/index.ts';
 import { restoreState } from '../src/server/store.ts';
 import { handRecords, seededRng, TestTable } from './helpers.ts';
@@ -95,4 +95,20 @@ test('a table saved before co-hosts loads with none, and its host can name one',
     t.cmd(0, { type: 'setCohost', playerId: t.ids[1]!, on: true });
     assert.equal(t.view(1).you.role, 'cohost', file);
   }
+});
+
+test('a table saved before tables could play dollars and cents is a whole-chip table, and goes on saying so', () => {
+  for (const file of FILES) {
+    assert.equal(load(file).config.unit, 'chips', file);
+  }
+
+  const t = TestTable.adopt(load('schema3-waiting-requests.json'));
+  for (const request of [...t.state.requests]) {
+    t.cmd(0, { type: 'approve', playerId: request.playerId });
+  }
+  t.cmd(0, { type: 'start' });
+  t.wait(TIMING.startDelayMs);
+
+  assert.ok(t.feedText().includes('P1 adds 500') && t.feedText().includes('P2 sits down with 600'), t.feedText().join(' / '));
+  assert.match(t.state.hand!.log[0]!, / · blinds 10\/20 · /);
 });

@@ -1,5 +1,4 @@
 import { rankOf, splitWrittenCards, SUIT_SYMBOLS, suitOf } from '../engine/cards.ts';
-import { formatChips } from '../engine/format.ts';
 import type { Card } from '../engine/cards.ts';
 
 type Child = Node | string | number | null | undefined | false | Child[];
@@ -94,43 +93,6 @@ export class Slot {
     this.element.replaceChildren();
     append(this.element, build());
   }
-}
-
-export const chips = formatChips;
-
-const SHORT_FROM = 10_000_000;
-const SHORT_UNITS: [size: number, letter: string][] = [
-  [1_000_000_000, 'B'],
-  [1_000_000, 'M'],
-];
-
-/**
- * Chips for a spot too narrow for nine digits, such as a seat. From ten million up it is two decimals
- * and a letter. What a player has is cut off, so nobody is shown more than they have; what a move
- * costs is rounded `up`, so no button says less than it takes.
- */
-export function shortChips(amount: number, rounding: 'down' | 'up' = 'down'): string {
-  if (amount < SHORT_FROM) {
-    return chips(amount);
-  }
-
-  const [size, letter] = SHORT_UNITS.find(([unit]) => amount >= unit)!;
-  const step = size / 100;
-  const shown = (rounding === 'up' ? Math.ceil(amount / step) : Math.floor(amount / step)) * step;
-
-  if (shown !== amount) {
-    // Rounding up can reach the next unit: 999,999,999 is shown as 1B, not 1000M
-    return shortChips(shown);
-  }
-
-  const whole = Math.floor(amount / size);
-  const fraction = String((amount % size) / step).padStart(2, '0').replace(/0+$/, '');
-
-  return `${whole}${fraction ? `.${fraction}` : ''}${letter}`;
-}
-
-export function signedChips(amount: number): string {
-  return amount > 0 ? `+${chips(amount)}` : chips(amount);
 }
 
 const RANK_LABELS: Record<number, string> = { 10: '10', 11: 'J', 12: 'Q', 13: 'K', 14: 'A' };

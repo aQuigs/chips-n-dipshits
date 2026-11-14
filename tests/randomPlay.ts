@@ -76,7 +76,8 @@ export const FUZZ_COMMANDS: ((fuzz: Fuzz) => void)[] = [
   ({ t, rng, who }) => attempt(t, who, { type: 'ritVote', agree: chance(rng, 70) }),
 
   ({ t, rng }) => {
-    const config = randomConfig(rng);
+    // Mostly a change the host could make. Now and then one that also asks for what was fixed at creation, which is refused whole
+    const config = randomConfig(rng, chance(rng, 90) ? t.state.config : undefined);
     const one = CONFIG_KEYS[rng.int(CONFIG_KEYS.length)]!;
 
     // Every setting at once, or one by itself, which the settings already in force may not allow

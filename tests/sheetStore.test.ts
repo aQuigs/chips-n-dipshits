@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { createTable } from '../src/engine/index.ts';
-import type { Effect, HandRecord, TableState } from '../src/engine/index.ts';
+import type { Effect, HandRecord, TableConfig, TableState } from '../src/engine/index.ts';
 import { SheetStore } from '../src/gas/sheetStore.ts';
 import { StoreBusyError } from '../src/server/store.ts';
 import { FakeCache, FakeLock, FakeSpreadsheet } from './fakes.ts';
@@ -40,8 +40,8 @@ function setup() {
   return { store, spreadsheet, cache, lock, counts, anotherRun, failFlush, failNextFlush: () => failFlush(1) };
 }
 
-function buyIn(amount: number): Effect {
-  return { type: 'ledger', entry: { at: 1_700_000_000_000, tableId: 'ABC234', playerId: 'P1', name: 'Ann', kind: 'buy-in', amount } };
+function buyIn(amount: number, tableId = 'ABC234'): Effect {
+  return { type: 'ledger', entry: { at: 1_700_000_000_000, tableId, playerId: 'P1', name: 'Ann', kind: 'buy-in', amount } };
 }
 
 /** What a test needs to see of one table's records: those still held in its row, and those that reached the Ledger tab. */
@@ -57,8 +57,8 @@ function records(spreadsheet: FakeSpreadsheet) {
   };
 }
 
-function table(id: string, version = 1): TableState {
-  const { state } = createTable(id, 'Host', {}, { now: 1000, rng: seededRng(3), effects: [] });
+function table(id: string, version = 1, config: Partial<TableConfig> = {}): TableState {
+  const { state } = createTable(id, 'Host', config, { now: 1000, rng: seededRng(3), effects: [] });
   state.version = version;
 
   return state;
@@ -324,7 +324,7 @@ test('ledger entries and finished hands are appended to their own tabs', () => {
   save(store, table('ABC234'), effects);
 
   const ledger = spreadsheet.getSheetByName('Ledger')!.cells;
-  assert.deepEqual(ledger[0], ['Time', 'Table', 'Player', 'Type', 'Chips', 'Player ID', 'Record ID']);
+  assert.deepEqual(ledger[0], ['Time', 'Table', 'Player', 'Type', 'Amount', 'Player ID', 'Record ID']);
   assert.deepEqual(ledger.slice(1).map((row) => row.slice(1)), [
     ['ABC234', '12', 'buy-in', 500, 'P1', 'ABC234:1:0'],
     ['ABC234', '12', 'cash-out', -650, 'P1', 'ABC234:1:2'],
@@ -333,6 +333,60 @@ test('ledger entries and finished hands are appended to their own tabs', () => {
 
   const hands = spreadsheet.getSheetByName('Hands')!.cells;
   assert.deepEqual(hands[1]!.slice(1, 4), ['ABC234', 1, 'Hand #1']);
+});
+
+test('the Ledger tab reads in dollars for a table that plays dollars and cents, and in chips for one that plays chips', () => {
+  const { store, spreadsheet } = setup();
+
+  save(store, table('ABC234'), [buyIn(150), buyIn(-650)]);
+  save(store, table('CNT234', 1, { unit: 'cents' }), [buyIn(150, 'CNT234'), buyIn(-650, 'CNT234'), buyIn(100_000_005, 'CNT234')]);
+  save(store, table('ABC234', 2), [buyIn(2000)]);
+
+  const ledger = spreadsheet.getSheetByName('Ledger')!;
+  const read = [2, 3, 4, 5, 6, 7].map((row) => [ledger.shown(row, 2), ledger.shown(row, 5)]);
+
+  assert.deepEqual(read, [
+    ['ABC234', '150'],
+    ['ABC234', '-650'],
+    ['CNT234', '1.50'],
+    ['CNT234', '-6.50'],
+    ['CNT234', '1000000.05'],
+    ['ABC234', '2000'],
+  ]);
+
+  // Numbers, not text, so someone can add the column up
+  const amounts = ledger.cells.slice(1).map((row) => row[4]);
+  assert.deepEqual(amounts, [150, -650, 1.5, -6.5, 1_000_000.05, 2000]);
+});
+
+test('a ledger entry in dollars and cents that had to wait in its row is written in dollars whichever way it goes out', () => {
+  const { store, spreadsheet, cache, anotherRun } = setup();
+  const cents = (version: number) => table('CNT234', version, { unit: 'cents' });
+
+  save(store, cents(1));
+  const ledger = spreadsheet.getSheetByName('Ledger') ?? spreadsheet.insertSheet('Ledger');
+
+  // With the next save
+  ledger.refuseWritesAfter(0);
+  save(store, cents(2), [buyIn(150, 'CNT234')]);
+  ledger.acceptWrites();
+  save(store, cents(3), [buyIn(275, 'CNT234')]);
+
+  // When the row is next read from the sheet
+  ledger.refuseWritesAfter(0);
+  save(store, cents(4), [buyIn(1205, 'CNT234')]);
+  ledger.acceptWrites();
+  cache.entries.clear();
+  anotherRun().read('CNT234');
+  assert.equal(ledger.shown(4, 5), '12.05', 'reading the row did not copy out what it held');
+
+  // When the table is next looked up without being saved
+  ledger.refuseWritesAfter(0);
+  save(store, cents(5), [buyIn(5, 'CNT234')]);
+  ledger.acceptWrites();
+  anotherRun().transact('CNT234', () => ({ save: null, effects: [], result: null }));
+
+  assert.deepEqual([2, 3, 4, 5].map((row) => ledger.shown(row, 5)), ['1.50', '2.75', '12.05', '0.05']);
 });
 
 test('a record that cannot be copied to its tab waits in the table\'s row and goes out with the next save', () => {

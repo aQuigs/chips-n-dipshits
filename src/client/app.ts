@@ -1,3 +1,4 @@
+import { formatAmount } from '../engine/amounts.ts';
 import type { Command, HandRecord, TableConfig } from '../engine/types.ts';
 import type { TableView } from '../engine/view.ts';
 import type { ApiError, ApiRequest, ApiResponse, Auth } from '../server/api.ts';
@@ -22,7 +23,7 @@ import { voiceLinkEl } from './render/voiceLink.ts';
 import type { Shape } from './render/table.ts';
 import { allowSound } from './sound.ts';
 import { fontsUrl, themeById } from './themes.ts';
-import { chips, h, holdWhile, secondsUntil, Slot } from './ui.ts';
+import { h, holdWhile, secondsUntil, Slot } from './ui.ts';
 
 const COUNTDOWN_TICK_MS = 250;
 const TOAST_MS = 4500;
@@ -490,7 +491,7 @@ export class App {
       state = view.handCount === 0 ? 'Not started' : 'Paused';
     }
 
-    const stakes = `${chips(view.config.smallBlind)}/${chips(view.config.bigBlind)} hold’em`;
+    const stakes = `${formatAmount(view.config.smallBlind, view.config)}/${formatAmount(view.config.bigBlind, view.config)} hold’em`;
 
     screen.topbar.draw([waiting, state, view.config.name, stakes, view.config.voiceLink], () => [
       h('button.icon.menu-button', { type: 'button', 'aria-label': 'Menu', 'data-action': 'menu', onclick: () => this.openDialog({ kind: 'menu' }) }, '☰', waiting > 0 ? h('span.dot', null, String(waiting)) : null),
@@ -511,7 +512,7 @@ export class App {
     screen.banners.draw([trouble, requests], () => [
       trouble ? h('div.banner.warn', null, troubleText[trouble]) : null,
       requests.map((request) => {
-        const what = request.kind === 'seat' ? `wants seat ${request.seat + 1} with ${chips(request.amount)}` : `wants to add ${chips(request.amount)}`;
+        const what = request.kind === 'seat' ? `wants seat ${request.seat + 1} with ${formatAmount(request.amount, view.config)}` : `wants to add ${formatAmount(request.amount, view.config)}`;
         const approve = h('button.btn.small.primary', { type: 'button', 'data-action': 'approve' }, 'Approve');
         const deny = h('button.btn.small', { type: 'button', 'data-action': 'deny' }, 'Deny');
 

@@ -6,7 +6,8 @@ import type { Card } from './cards.ts';
  *
  * Each is a short list that starts with what kind it is, because a hand's events are saved with the
  * table on every action, sent with every view and kept in the hand's record. Seats are seat numbers
- * and amounts are chips. Only cards that are face up for the whole table ever appear in one.
+ * and amounts count the table's smallest unit, as everywhere. Only cards that are face up for the whole
+ * table ever appear in one.
  */
 export type HandEvent =
   /** Always first, with everything needed to set the table up as it was before the blinds. */

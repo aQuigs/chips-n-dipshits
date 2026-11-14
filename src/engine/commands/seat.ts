@@ -1,4 +1,5 @@
 /* What a player asks for about their own seat. */
+import { formatAmount, validAmount } from '../amounts.ts';
 import { leaveSeat, submit } from '../seating.ts';
 import { seatIndexOf } from '../seats.ts';
 import { GameError, SEAT_COUNT } from '../types.ts';
@@ -18,7 +19,7 @@ export const requestSeat: Handler<'requestSeat'> = {
     }
 
     const { minBuyIn, maxBuyIn } = state.config;
-    const amount = wholeNumber(command.buyIn, 'Your buy-in', minBuyIn, maxBuyIn);
+    const amount = validAmount(command.buyIn, 'Your buy-in', state.config, minBuyIn, maxBuyIn);
 
     submit(state, ctx, { playerId: member.id, kind: 'seat', seat, amount });
   },
@@ -33,10 +34,10 @@ export const requestRebuy: Handler<'requestRebuy'> = {
 
     const room = state.config.maxBuyIn - seat.stack - seat.pendingAdd;
     if (room < 1) {
-      throw new GameError(`You already have the maximum buy-in of ${state.config.maxBuyIn}`);
+      throw new GameError(`You already have the maximum buy-in of ${formatAmount(state.config.maxBuyIn, state.config)}`);
     }
 
-    const amount = wholeNumber(command.amount, 'Your rebuy', 1, room);
+    const amount = validAmount(command.amount, 'Your rebuy', state.config, 1, room);
 
     submit(state, ctx, { playerId: member.id, kind: 'rebuy', seat: seatIndex, amount });
   },

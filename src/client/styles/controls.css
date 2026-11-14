@@ -116,7 +116,7 @@
   }
 }
 
-.amount input[type='number'] {
+.amount input[type='text'] {
   min-height: 40px;
   padding: 0 8px;
   border: 1px solid var(--line);
@@ -126,6 +126,15 @@
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   text-align: right;
+}
+
+/* What was typed can't be read as an amount, so there is nothing for the button to play */
+.amount input:invalid {
+  border-color: var(--bad);
+}
+
+.turn .btn[aria-disabled='true'] {
+  opacity: 0.55;
 }
 
 .waiting,

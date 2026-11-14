@@ -6,6 +6,7 @@ No-limit hold'em for a group of friends, played in the browser. There is no serv
 
 - Cash game for up to 10 players: blinds, side pots, all-ins, showdown with show or muck, an action clock, sitting out, rebuys.
 - Straddles, run it twice and a seven-deuce bounty, each switched on or off per table.
+- Stakes in whole chips or in dollars and cents, such as 0.25/0.50, chosen per table.
 - The host approves seats and rebuys, pauses the game, changes blinds and settings, adjusts stacks, removes players and can hand the table to someone else.
 - The host can add a link to the group's Meet, Discord or Zoom call, and everyone at the table gets a button that opens it, saying which site it leads to.
 - The host can name co-hosts, who can do all of that too except name co-hosts, hand the table over or remove the host. The host has a ★ by their name and co-hosts a ☆.
@@ -17,11 +18,11 @@ No-limit hold'em for a group of friends, played in the browser. There is no serv
 
 The choices the code makes where poker rooms differ:
 
-- Chips are whole numbers. There are no antes.
+- A table plays whole chips or dollars and cents, chosen when it is created and fixed from then on. Nothing is smaller than a chip or a cent. There are no antes.
 - The button moves to the next seat with a player in the hand. Heads-up, the button posts the small blind and acts first before the flop.
 - A big blind who is short still sets the full big blind as the price to call.
 - The smallest raise is the size of the last full raise. An all-in for less does not reopen the betting for players who have already acted.
-- The odd chip of a split pot goes to the first winner clockwise from the button.
+- The odd chip, or the odd cent, of a split pot goes to the first winner clockwise from the button.
 - At showdown the last player to bet or raise on the river shows first, otherwise the first player left of the button. A player who cannot win any pot they are in for mucks without showing; anyone may show afterwards.
 - When the betting is over with players all in and cards to come, hands are turned face up. Run it twice needs every player still in to agree within 12 seconds; one who leaves without answering has said no.
 - A straddle is twice the big blind from the player left of the big blind, who then acts last before the flop. It counts as a raise, so the smallest raise over it is to twice the straddle. There is none heads-up.
@@ -83,7 +84,8 @@ Things worth knowing before changing it:
 - Served by Apps Script, the page sits in a frame whose storage the browser may throw away, so a player's seat is kept in the address (`?table=…&me=…`). The page only takes it out when the server has said the seat is gone, never because a request failed. The address names one seat, so creating or joining another table from the lobby replaces it; the first table's personal link (under Invite players in its menu) is the way back.
 - A request can be answered, refused, or get no answer while having been carried out. A move that gets no answer is looked up, not sent again, and every move names the decision it answers, so the server refuses one that arrives late. A poll's answer older than what the page held when it asked means the table itself went back, as after restoring the Sheet, and is followed; one merely older than what is showing was overtaken and is dropped.
 - A saved table carries a schema number (`STATE_SCHEMA`), and `upgradeState` brings one saved by older code forward a step at a time when it is read, then fills in any field added since from `SAVED_DEFAULTS`. A field that is only added needs just its default there; change the shape any other way without adding a step and tables from before the change stop loading.
-- A table setting is one entry in the registry in `src/engine/config.ts`: its default, its limits and its field in the settings form all come from that entry.
+- A table setting is one entry in the registry in `src/engine/config.ts`: its default, its limits and its field in the settings form all come from that entry. One marked `atCreate: 'only'` is chosen when the table is created and shown closed afterwards.
+- Every amount is a whole number of the table's smallest unit, a chip or a cent, so 1.50 is kept as 150 and the rules never see a fraction. `src/engine/amounts.ts` is the one place an amount is written out (`formatAmount`) and the one place a typed amount is read (`parseAmount`); both take the table it belongs to. The Ledger tab gets the amount as a number in dollars for a table that plays cents.
 - A command is a handler in `src/engine/commands/`, in the module for who may send it, which is where its permission check is declared: `by: 'host or cohost'` for running the game, `by: 'host alone'` for deciding who runs it.
 - A hand keeps a list of events beside its narration (`src/engine/events.ts`): what was posted, bet, dealt, shown and won, in order, never a face-down card. `replayHand` plays a hand back from them alone.
 - A theme is a set of values for the design tokens in `src/client/styles/tokens.css`, plus an entry in `src/client/themes.ts`.

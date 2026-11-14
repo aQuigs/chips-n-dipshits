@@ -1,6 +1,7 @@
 import type { CacheLike, LockLike, RangeLike, SheetLike, SpreadsheetLike } from '../src/gas/sheetStore.ts';
 
 const TEXT_FORMAT = '@';
+const DECIMALS_OF_FORMAT = /^0(?:\.(0+))?$/;
 const CELL_LIMIT_CHARACTERS = 50_000;
 const HALF_AN_EMOJI = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
 const CACHE_VALUE_LIMIT_BYTES = 100_000;
@@ -10,7 +11,7 @@ const CACHE_KEY_LIMIT_CHARACTERS = 250;
  * A stand-in for a sheet that copies the behavior a store can get wrong: a string written to a cell
  * that isn't formatted as text is reinterpreted, as a formula if it starts with = or +, or as a number
  * if it looks like one. A cell takes 50,000 characters and no more, and half an emoji does not survive
- * being stored.
+ * being stored. A number shows only as many decimals as its cell's format has.
  */
 export class FakeSheet implements SheetLike {
   cells: unknown[][] = [];
@@ -85,6 +86,17 @@ export class FakeSheet implements SheetLike {
         });
       },
     };
+  }
+
+  /**
+   * A cell as someone looking at the sheet reads it. A number is drawn with the decimals its cell's
+   * format gives it, so 1.5 in a cell formatted for whole numbers reads 2.
+   */
+  shown(row: number, column: number): string {
+    const value = this.cells[row - 1]?.[column - 1] ?? '';
+    const decimals = DECIMALS_OF_FORMAT.exec(this.formats[row - 1]?.[column - 1] ?? '');
+
+    return typeof value === 'number' && decimals ? value.toFixed(decimals[1]?.length ?? 0) : String(value);
   }
 
   deleteRow(row: number): void {

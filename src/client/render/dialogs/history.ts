@@ -1,8 +1,10 @@
-import { cardText, chips, h } from '../../ui.ts';
+import { formatAmount } from '../../../engine/amounts.ts';
+import type { Denominated } from '../../../engine/amounts.ts';
+import { cardText, h } from '../../ui.ts';
 import { everyone, frame } from './dialog.ts';
 import type { DialogHandlers, DialogKind } from './dialog.ts';
 
-function history(handlers: DialogHandlers): HTMLElement {
+function history(table: Denominated, handlers: DialogHandlers): HTMLElement {
   const body = h('div.history', null, h('p.note', null, 'Loading…'));
 
   handlers.loadHistory().then(
@@ -16,7 +18,7 @@ function history(handlers: DialogHandlers): HTMLElement {
               const winners = hand.result.winnings.map((win) => {
                 const withBounty = win.amount + (bounty?.seat === win.seat ? collected : 0);
 
-                return `${hand.players.find((p) => p.seat === win.seat)?.name ?? '?'} +${chips(withBounty)}`;
+                return `${hand.players.find((p) => p.seat === win.seat)?.name ?? '?'} +${formatAmount(withBounty, table)}`;
               });
 
               return h('details', null, h('summary', null, `Hand #${hand.number}`, h('small', null, winners.join(', '))), h('pre', null, cardText(hand.summary, handlers.prefs.get('deck'))));
@@ -32,5 +34,5 @@ function history(handlers: DialogHandlers): HTMLElement {
 export const historyDialog: DialogKind<'history'> = {
   kind: 'history',
   menu: { label: 'Hand history', who: everyone },
-  draw: (_view, handlers) => history(handlers),
+  draw: (view, handlers) => history(view.config, handlers),
 };

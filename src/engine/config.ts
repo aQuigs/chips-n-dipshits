@@ -1,3 +1,5 @@
+import { validAmount } from './amounts.ts';
+import type { Denominated } from './amounts.ts';
 import { GameError } from './types.ts';
 import type { TableConfig } from './types.ts';
 import { LIMITS, text, webAddress, wholeNumber, yesOrNo } from './validate.ts';
@@ -17,8 +19,12 @@ interface SpecBase {
   group: ConfigGroup;
   /** Narrow enough to share a row with the next such field of its group. */
   half?: boolean;
-  /** Asked for when a table is created as well; the rest are only in the table settings. */
-  atCreate?: boolean;
+  /**
+   * Asked for when a table is created as well; the rest are only in the table settings. `'only'` is
+   * for what can't change once there is a table: it is chosen then, shown closed in the table settings
+   * from then on, and a change to it is refused.
+   */
+  atCreate?: boolean | 'only';
   /** A change leaves the hand in play as it is, which finishes on the value it was dealt under. */
   nextHand?: boolean;
 }
@@ -38,7 +44,11 @@ export interface LinkSpec extends SpecBase {
   placeholder: string;
 }
 
-/** A whole number: of chips, of anything else that is counted, or of seconds. */
+/**
+ * A whole number: of anything that is counted, of seconds, or for `chips` an amount, which counts the
+ * table's smallest unit. Its limits count the same, so at a table that plays dollars and cents a
+ * lowest of 1 is 0.01.
+ */
 export interface NumberSpec extends SpecBase {
   kind: 'chips' | 'count' | 'seconds';
   default: number;
@@ -56,7 +66,12 @@ export interface ToggleSpec extends Omit<SpecBase, 'hint'> {
 export interface ChoiceSpec<V extends string = string> extends SpecBase {
   kind: 'choice';
   default: V;
-  options: { value: V; label: string }[];
+  options: {
+    value: V;
+    label: string;
+    /** Where other settings start on a new table that picks this, in place of their defaults. */
+    suggests?: Partial<TableConfig>;
+  }[];
 }
 
 export type ConfigSpec = TextSpec | LinkSpec | NumberSpec | ToggleSpec | ChoiceSpec;
@@ -75,6 +90,19 @@ type SpecFor<V> = [V] extends [boolean] ? ToggleSpec : [V] extends [number] ? Nu
  * things are wrong at once. The form goes by `group` first, and by this order within a group.
  */
 export const CONFIG_SPECS: { [K in ConfigKey]-?: SpecFor<TableConfig[K]> } = {
+  unit: {
+    kind: 'choice',
+    label: 'Play with',
+    subject: 'What the table plays with',
+    hint: "Can't be changed once the table is created",
+    default: 'chips',
+    options: [
+      { value: 'chips', label: 'Whole chips' },
+      { value: 'cents', label: 'Dollars and cents', suggests: { smallBlind: 25, bigBlind: 50, minBuyIn: 2000, maxBuyIn: 10_000 } },
+    ],
+    group: 'stakes',
+    atCreate: 'only',
+  },
   smallBlind: { kind: 'chips', label: 'Small blind', subject: 'The small blind', default: 10, min: 1, group: 'stakes', half: true, atCreate: true, nextHand: true },
   bigBlind: { kind: 'chips', label: 'Big blind', subject: 'The big blind', default: 20, min: 1, group: 'stakes', half: true, atCreate: true, nextHand: true },
   minBuyIn: { kind: 'chips', label: 'Minimum buy-in', subject: 'The minimum buy-in', default: 400, min: 1, group: 'stakes', half: true, atCreate: true },
@@ -125,6 +153,10 @@ export const CONFIG_SPECS: { [K in ConfigKey]-?: SpecFor<TableConfig[K]> } = {
 
 export const CONFIG_KEYS = Object.keys(CONFIG_SPECS) as ConfigKey[];
 
+export function fixedAtCreation(key: ConfigKey): boolean {
+  return CONFIG_SPECS[key].atCreate === 'only';
+}
+
 export interface ConfigRule {
   /** The settings the rule reads. It is checked as soon as each of them is fine by itself. */
   keys: ConfigKey[];
@@ -147,14 +179,40 @@ export const CONFIG_RULES: ConfigRule[] = [
 
 export const DEFAULT_CONFIG = Object.fromEntries(CONFIG_KEYS.map((key) => [key, CONFIG_SPECS[key].default])) as unknown as TableConfig;
 
-/** One setting as its spec allows it, or a refusal that names it. */
-export function validSetting(spec: ConfigSpec, value: unknown): string | number | boolean {
+function fieldsOf(input: unknown): Record<string, unknown> {
+  return (typeof input === 'object' && input !== null ? input : {}) as Record<string, unknown>;
+}
+
+/**
+ * Where a new table's settings start, given the choices made for it: the defaults, with what each
+ * choice suggests in their place. The create form fills itself in from this and a table created with
+ * settings left out takes them from it, so the two agree.
+ */
+export function startingConfig(chosen?: unknown): TableConfig {
+  const given = fieldsOf(chosen);
+  const start: Partial<Record<ConfigKey, unknown>> = { ...DEFAULT_CONFIG };
+
+  for (const key of CONFIG_KEYS) {
+    const spec = CONFIG_SPECS[key];
+    const option = spec.kind === 'choice' ? spec.options.find((o) => o.value === given[key]) : undefined;
+
+    if (option) {
+      Object.assign(start, { [key]: option.value }, option.suggests);
+    }
+  }
+
+  return start as TableConfig;
+}
+
+/** One setting as its spec allows it, or a refusal that names it and writes amounts the way `table` does. */
+export function validSetting(spec: ConfigSpec, value: unknown, table: Denominated): string | number | boolean {
   switch (spec.kind) {
     case 'text':
       return text(value, spec.subject, spec.maxLength);
     case 'link':
       return webAddress(value, spec.subject, spec.maxLength);
     case 'chips':
+      return validAmount(value, spec.subject, table, spec.min, spec.max);
     case 'count':
     case 'seconds':
       return wholeNumber(value, spec.subject, spec.min, spec.max);
@@ -171,13 +229,22 @@ export function validSetting(spec: ConfigSpec, value: unknown): string | number 
   }
 }
 
-/** Checks a full set of table settings, filling anything missing from the current ones. */
+/**
+ * Checks a change to a table's settings, filling anything left out from the current ones. What was
+ * chosen for good when the table was created may only be sent as it is.
+ */
 export function validatedConfig(input: unknown, current: TableConfig): TableConfig {
-  const given = (typeof input === 'object' && input !== null ? input : {}) as Record<string, unknown>;
+  const given = fieldsOf(input);
   const config: Partial<Record<ConfigKey, string | number | boolean>> = {};
 
   for (const key of CONFIG_KEYS) {
-    config[key] = validSetting(CONFIG_SPECS[key], given[key] === undefined ? current[key] : given[key]);
+    const spec = CONFIG_SPECS[key];
+
+    config[key] = validSetting(spec, given[key] === undefined ? current[key] : given[key], current);
+
+    if (fixedAtCreation(key) && config[key] !== current[key]) {
+      throw new GameError(`${spec.subject} was chosen when the table was created and can't be changed`);
+    }
 
     for (const { keys, complaint } of CONFIG_RULES) {
       const wrong = keys.includes(key) && keys.every((read) => read in config) ? complaint(config as unknown as TableConfig) : null;
@@ -188,4 +255,13 @@ export function validatedConfig(input: unknown, current: TableConfig): TableConf
   }
 
   return config as unknown as TableConfig;
+}
+
+/**
+ * Checks the settings a table is created with, filling anything left out from where its choices say
+ * to start. That start already holds each choice sent, so none of them counts as a change to what was
+ * chosen for good; a setting fixed at creation that is not a choice would need the same.
+ */
+export function newConfig(input: unknown): TableConfig {
+  return validatedConfig(input, startingConfig(input));
 }

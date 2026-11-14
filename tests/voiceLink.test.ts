@@ -5,7 +5,7 @@ import { CONFIG_SPECS, DEFAULT_CONFIG, LIMITS, validatedConfig, validSetting } f
 import { callHost } from '../src/client/callHost.ts';
 import { seededRng } from './helpers.ts';
 
-const voiceLink = (value: unknown) => validSetting(CONFIG_SPECS.voiceLink, value) as string;
+const voiceLink = (value: unknown) => validSetting(CONFIG_SPECS.voiceLink, value, DEFAULT_CONFIG) as string;
 
 const refusal = (value: unknown) => {
   try {

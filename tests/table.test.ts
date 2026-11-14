@@ -624,3 +624,63 @@ test('a table saved by the version before this one is brought up to date, and an
   saved.schema = STATE_SCHEMA + 1;
   assert.throws(() => restoreState(JSON.stringify(saved)), new RegExp(`schema ${STATE_SCHEMA + 1}`));
 });
+
+test('a table created to play dollars and cents starts at stakes that suit it, and says everything in dollars', () => {
+  const { state } = createTable('ABC123', 'Quigs', { unit: 'cents' }, freshCtx());
+  assert.deepEqual(state.config, { ...DEFAULT_CONFIG, unit: 'cents', smallBlind: 25, bigBlind: 50, minBuyIn: 2000, maxBuyIn: 10_000 });
+
+  const t = new TestTable({ stacks: [10_000, 2000], config: { unit: 'cents', minBuyIn: 2000, maxBuyIn: 10_000 } });
+  const watcher = t.ids.push(addMember(t.state, 'Ann', t.ctx()).id) - 1;
+
+  assert.throws(() => t.cmd(watcher, { type: 'requestSeat', seat: 5, buyIn: 1999 }), { message: 'Your buy-in must be an amount to the cent from 20.00 to 100.00' });
+  assert.throws(() => t.cmd(watcher, { type: 'requestSeat', seat: 5, buyIn: 20.5 }), { message: 'Your buy-in must be an amount to the cent from 20.00 to 100.00' });
+  assert.throws(() => t.cmd(0, { type: 'requestRebuy', amount: 1 }), { message: 'You already have the maximum buy-in of 100.00' });
+  assert.throws(() => t.cmd(1, { type: 'requestRebuy', amount: 8001 }), { message: 'Your rebuy must be an amount to the cent from 0.01 to 80.00' });
+  assert.throws(() => t.cmd(0, { type: 'setStack', playerId: t.ids[1]!, stack: -1 }), { message: 'The stack must be an amount to the cent from 0.00 to 10,000,000.00' });
+
+  t.cmd(1, { type: 'requestRebuy', amount: 2550 });
+  t.cmd(0, { type: 'approve', playerId: t.ids[1]! });
+  t.cmd(0, { type: 'setStack', playerId: t.ids[1]!, stack: 1234 });
+  t.cmd(watcher, { type: 'requestSeat', seat: 5, buyIn: 2000 });
+  t.cmd(0, { type: 'updateConfig', config: { smallBlind: 50, bigBlind: 100, sevenDeuceBounty: 500, minBuyIn: 5000 } });
+  t.cmd(1, { type: 'standUp' });
+
+  const said = t.feedText();
+  for (const line of [
+    'P0 sits down with 100.00',
+    'P1 sits down with 20.00',
+    'P1 adds 25.50',
+    "The host set P1's stack to 12.34",
+    'Blinds are 0.50/1.00',
+    'The seven-deuce bounty is 5.00',
+    "Ann asked to sit down with 20.00, which the new buy-in limits don't allow",
+    'P1 leaves the table with 12.34',
+  ]) {
+    assert.ok(said.includes(line), `"${line}" is missing from: ${said.join(' / ')}`);
+  }
+
+  // The amounts themselves stay whole numbers of cents, in the state, the view and the ledger
+  assert.equal(t.view(0).seats[0]!.stack, 10_000);
+  assert.deepEqual(
+    ledgerEntries(t.effects).map((entry) => entry.amount),
+    [10_000, 2000, 2550, -3316, -1234],
+  );
+  assertChipsConserved(t.state);
+});
+
+test('whole chips or dollars and cents is chosen when the table is created and never after', () => {
+  for (const [from, to] of [['chips', 'cents'], ['cents', 'chips']] as const) {
+    const t = new TestTable({ stacks: [10_000, 10_000], config: { unit: from } });
+    const refused = { message: "What the table plays with was chosen when the table was created and can't be changed" };
+
+    assert.throws(() => t.cmd(0, { type: 'updateConfig', config: { unit: to } }), refused);
+
+    t.deal({ button: 0 });
+    assert.throws(() => t.cmd(0, { type: 'updateConfig', config: { unit: to, bigBlind: 400 } }), refused, 'nor during a hand');
+    assert.equal(t.state.config.bigBlind, from === 'cents' ? 50 : 20, 'a refused change changes nothing else either');
+
+    // Sent as it is, which is no change, it is no reason to refuse the rest
+    t.cmd(0, { type: 'updateConfig', config: { unit: from, bigBlind: 400 } });
+    assert.deepEqual([t.state.config.unit, t.state.config.bigBlind], [from, 400]);
+  }
+});

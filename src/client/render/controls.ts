@@ -1,6 +1,8 @@
+import { editableAmount, formatAmount, hasDecimals, parseAmount, shortAmount } from '../../engine/amounts.ts';
+import type { Denominated } from '../../engine/amounts.ts';
 import type { Command } from '../../engine/types.ts';
 import type { HandView, SeatView, TableView } from '../../engine/view.ts';
-import { chips, h, holdWhile, shortChips } from '../ui.ts';
+import { h, holdWhile } from '../ui.ts';
 
 export interface ControlHandlers {
   /** Resolves once the server has answered, or failed to. */
@@ -34,16 +36,16 @@ function commandButton(spec: `button.${string}`, action: string, label: string, 
 }
 
 /** What a move button says: the move and its amount as two pieces, so a narrow button breaks between them instead of cutting the amount off. */
-function moveLabel(move: string, amount: number): (HTMLElement | string)[] {
+function moveLabel(move: string, amount: number, table: Denominated): (HTMLElement | string)[] {
   // The space is for whoever reads the button as text; laid out, the two pieces are spaced by the button
-  return [h('span', null, move), ' ', h('span.amount-of', { title: chips(amount) }, shortChips(amount, 'up'))];
+  return [h('span', null, move), ' ', h('span.amount-of', { title: formatAmount(amount, table) }, shortAmount(amount, table, 'up'))];
 }
 
 /**
  * The buttons for the player on the clock. Keeps the chosen raise size itself, so it survives until
  * the turn changes. Every move names the decision it answers, so it can't be played on a later one.
  */
-function turnPanel(hand: HandView, stack: number, handlers: ControlHandlers): HTMLElement {
+function turnPanel(table: Denominated, hand: HandView, stack: number, handlers: ControlHandlers): HTMLElement {
   const options = hand.options!;
   const { minRaiseTo, maxRaiseTo, callAmount, callCost } = options;
   const opening = hand.currentBet === 0;
@@ -51,10 +53,11 @@ function turnPanel(hand: HandView, stack: number, handlers: ControlHandlers): HT
 
   const raiseButton = h('button.btn.raise', { type: 'button', 'data-action': 'raise' });
   const slider = h('input', { type: 'range', id: 'raise-slider', min: minRaiseTo, max: maxRaiseTo, step: 1, 'aria-label': 'Bet size' });
-  const amount = h('input', { type: 'number', id: 'raise-amount', min: minRaiseTo, max: maxRaiseTo, step: 1, inputmode: 'numeric', 'aria-label': 'Bet size' });
+  const amount = h('input', { type: 'text', id: 'raise-amount', inputmode: hasDecimals(table) ? 'decimal' : 'numeric', autocomplete: 'off', 'aria-label': 'Bet size' });
 
   let raiseTo = minRaiseTo;
 
+  // The slider and the size buttons work in the table's smallest unit, so whatever they pick is an amount that can be bet
   const choose = (value: number, from?: HTMLInputElement): void => {
     raiseTo = clamp(Math.round(value) || minRaiseTo, minRaiseTo, maxRaiseTo);
 
@@ -63,16 +66,49 @@ function turnPanel(hand: HandView, stack: number, handlers: ControlHandlers): HT
     }
 
     if (from !== amount) {
-      amount.value = String(raiseTo);
+      amount.value = editableAmount(raiseTo, table);
     }
 
-    raiseButton.replaceChildren(...moveLabel(raiseTo === maxRaiseTo ? 'All in' : opening ? 'Bet' : 'Raise to', raiseTo));
+    amount.setCustomValidity('');
+    raiseButton.removeAttribute('aria-disabled');
+    raiseButton.replaceChildren(...moveLabel(raiseTo === maxRaiseTo ? 'All in' : opening ? 'Bet' : 'Raise to', raiseTo, table));
+  };
+
+  /**
+   * What is in the box can't be read as an amount. No other amount is put in its place: the button
+   * names none and plays none until the box reads. The reason is said when the button is pressed, not
+   * while typing: "1," is on its way to "1,000".
+   */
+  const refuse = (problem: string): void => {
+    amount.setCustomValidity(problem);
+    raiseButton.setAttribute('aria-disabled', 'true');
+    raiseButton.replaceChildren(h('span', null, opening ? 'Bet' : 'Raise'));
+  };
+
+  const readBox = (): void => {
+    // An empty box is the smallest raise, as it has always been
+    const typed = parseAmount(amount.value.trim() || '0', table);
+
+    if (typed.ok) {
+      choose(typed.amount, amount);
+    } else {
+      refuse(typed.problem);
+    }
   };
 
   slider.addEventListener('input', () => choose(Number(slider.value), slider));
-  amount.addEventListener('input', () => choose(Number(amount.value), amount));
-  amount.addEventListener('blur', () => choose(raiseTo));
-  raiseButton.addEventListener('click', () => void handlers.send({ type: 'raise', to: raiseTo, turn }));
+  amount.addEventListener('input', readBox);
+  // Only the box is tidied. The box loses the keyboard as a press on Raise begins, and a button redrawn under that press never hears it
+  amount.addEventListener('blur', () => {
+    if (amount.validity.valid) {
+      amount.value = editableAmount(raiseTo, table);
+    }
+  });
+  raiseButton.addEventListener('click', () => {
+    if (amount.reportValidity()) {
+      void handlers.send({ type: 'raise', to: raiseTo, turn });
+    }
+  });
   choose(minRaiseTo);
 
   const presetButtons = PRESETS.map((preset) => {
@@ -85,7 +121,7 @@ function turnPanel(hand: HandView, stack: number, handlers: ControlHandlers): HT
   const callLabel = callAmount >= stack ? 'Call all in' : 'Call';
   const passButton = options.canCheck
     ? h('button.btn.call', { type: 'button', 'data-action': 'check', onclick: () => void handlers.send({ type: 'check', turn }) }, 'Check')
-    : h('button.btn.call', { type: 'button', 'data-action': 'call', onclick: () => void handlers.send({ type: 'call', turn }) }, moveLabel(callLabel, callCost));
+    : h('button.btn.call', { type: 'button', 'data-action': 'call', onclick: () => void handlers.send({ type: 'call', turn }) }, moveLabel(callLabel, callCost, table));
 
   return h(
     'div.turn',
@@ -139,7 +175,7 @@ function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandle
 
   let main: HTMLElement;
   if (hand?.options) {
-    main = turnPanel(hand, seat.stack, handlers);
+    main = turnPanel(view.config, hand, seat.stack, handlers);
   } else if (hand?.canVote) {
     main = h(
       'div.turn',
@@ -181,7 +217,7 @@ function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandle
 
   if (myRequest?.kind === 'rebuy') {
     extras.push(
-      commandButton('button.chip-btn', 'cancel-request', `Rebuy of ${chips(myRequest.amount)} waiting for the host · Cancel`, () => handlers.send({ type: 'cancelRequest' })),
+      commandButton('button.chip-btn', 'cancel-request', `Rebuy of ${formatAmount(myRequest.amount, view.config)} waiting for the host · Cancel`, () => handlers.send({ type: 'cancelRequest' })),
     );
   } else if (room > 0) {
     extras.push(h('button.chip-btn', { type: 'button', class: seat.stack === 0 ? 'strong' : '', 'data-action': 'rebuy', onclick: handlers.openRebuy }, 'Add chips'));
@@ -203,7 +239,7 @@ export function controlsEl(view: TableView, handlers: ControlHandlers): HTMLElem
     return h(
       'div.controls',
       null,
-      h('div.waiting', null, `Asked the host for seat ${myRequest.seat + 1} with ${chips(myRequest.amount)}`),
+      h('div.waiting', null, `Asked the host for seat ${myRequest.seat + 1} with ${formatAmount(myRequest.amount, view.config)}`),
       h('div.extras', null, commandButton('button.chip-btn', 'cancel-request', 'Cancel request', () => handlers.send({ type: 'cancelRequest' }))),
     );
   }

@@ -244,6 +244,7 @@ export class PokerService {
       table: {
         id: state.id,
         name: state.config.name,
+        unit: state.config.unit,
         smallBlind: state.config.smallBlind,
         bigBlind: state.config.bigBlind,
         players,

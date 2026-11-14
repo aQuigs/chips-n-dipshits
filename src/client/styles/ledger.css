@@ -10,16 +10,26 @@
 
 .ledger th,
 .ledger td {
-  padding: 7px 8px;
+  padding: 7px 5px;
   border-bottom: 1px solid var(--line);
   text-align: right;
   white-space: nowrap;
 }
 
+/* On a phone a heading of two words wraps before it pushes the last column, what each player is up or down, off the screen */
 .ledger th {
   color: var(--muted);
   font-size: 12px;
   font-weight: 600;
+  white-space: normal;
+  vertical-align: bottom;
+}
+
+@container app (min-width: 600px) {
+  .ledger th,
+  .ledger td {
+    padding: 7px 8px;
+  }
 }
 
 .ledger th:first-child,

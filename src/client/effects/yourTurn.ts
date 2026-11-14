@@ -6,9 +6,9 @@ export function yourTurn(): TableEffect {
   let turns: YourTurn | null = null;
 
   return {
-    run(change, { seat, attention }) {
+    run(change, { attention }) {
       turns ??= new YourTurn(attention);
-      turns.see(change, seat);
+      turns.see(change);
     },
     dispose: () => turns?.end(),
   };

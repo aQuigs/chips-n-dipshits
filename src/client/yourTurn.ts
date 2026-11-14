@@ -22,9 +22,9 @@ export class YourTurn {
     this.attention = attention;
   }
 
-  /** Called with every view put on screen, and the viewer's seat in it. */
-  see({ before, view, current }: TableChange, seat: number | null): void {
-    const turn = turnOf(view, seat);
+  /** Called with every view put on screen. */
+  see({ before, view, current }: TableChange): void {
+    const turn = turnOf(view, view.you.seat);
 
     if (this.standing && this.standing.turn !== turn) {
       this.end();

@@ -33,7 +33,6 @@ class PageTouch implements Touch {
 
 let shared: Touch | null = null;
 
-/** The page's one set of listeners for a touch. */
 export function pageTouch(): Touch {
   shared ??= new PageTouch(document);
 

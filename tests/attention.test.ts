@@ -43,18 +43,21 @@ function recordingWays(): Record<Key, RecordingWay> {
 }
 
 /** One seat's page on a table named Friday Night: each view as it arrives, handed to the turn effect. */
-class Page {
+class Page<W extends AttentionWays = Record<Key, RecordingWay>> {
   readonly prefs: AppPreferences = new Preferences(PREFERENCES, mapMemory());
-  readonly ways = recordingWays();
-  readonly attention = new Attention(this.prefs, this.ways);
-  readonly turns = new YourTurn(this.attention);
+  readonly ways: W;
+  readonly attention: Attention;
+  readonly turns: YourTurn;
   private shown: TableView | null = null;
   private readonly table: TestTable;
   private readonly seat: number;
 
-  constructor(table: TestTable, seat: number) {
+  constructor(table: TestTable, seat: number, ways: W = recordingWays() as AttentionWays as W) {
     this.table = table;
     this.seat = seat;
+    this.ways = ways;
+    this.attention = new Attention(this.prefs, ways);
+    this.turns = new YourTurn(this.attention);
   }
 
   /** `late` is how long the view took to arrive. */
@@ -62,14 +65,14 @@ class Page {
     const view = structuredClone(this.table.view(this.seat));
     const change = tableChange(this.shown, view, this.table.now + (options.late ?? 0), options.wentBack);
     this.shown = change.view;
-    this.turns.see(change, view.you.seat);
+    this.turns.see(change);
   }
 
-  calls(key: Key = 'flash'): Call[] {
+  calls(this: Page, key: Key = 'flash'): Call[] {
     return this.ways[key].calls;
   }
 
-  ends(key: Key = 'flash'): Call[] {
+  ends(this: Page, key: Key = 'flash'): Call[] {
     return this.ways[key].ends;
   }
 }
@@ -263,7 +266,7 @@ class Browser {
   answer: Permission = 'granted';
   readonly buzzes: number[][] = [];
   readonly shown: { title: string; tag: string; open: boolean; click: () => void }[] = [];
-  readonly requests: number[] = [];
+  requests = 0;
   readonly played: SoundName[] = [];
   readonly root = { dataset: {} as Record<string, string | undefined>, offsetWidth: 0 };
   readonly tab = { title: "Chips n' Dipshits" };
@@ -272,11 +275,10 @@ class Browser {
   private ticking: (() => void) | null = null;
 
   parts(overrides: Partial<WayParts> = {}): WayParts {
-    const touch = { touched: () => this.touched };
     const notices: Notices = {
       permission: () => this.permission,
       request: async () => {
-        this.requests.push(1);
+        this.requests += 1;
         this.permission = this.answer;
 
         return this.permission;
@@ -292,7 +294,7 @@ class Browser {
 
     return {
       sounds: new Sounds({ play: (sound) => void this.played.push(sound) }, new Preferences(PREFERENCES, mapMemory()), { now: () => 0, inView: () => !this.hidden }),
-      touch: { get touched() { return touch.touched(); }, onTouch: () => undefined },
+      touch: this,
       root: this.root,
       sight: { away: () => this.hidden, onBack: (listener) => this.shownListeners.push(listener) },
       ownsTab: true,
@@ -313,6 +315,8 @@ class Browser {
     };
   }
 
+  onTouch(): void {}
+
   tick(): void {
     this.ticking?.();
   }
@@ -327,27 +331,25 @@ class Browser {
   }
 }
 
-let browser: Browser;
-
 const FRIDAY: Call = { why: 'turn', table: { id: 'TEST01', name: 'Friday Night' } };
 
 const abilities = (ways: AttentionWays) => Object.fromEntries(KEYS.map((key) => [key, ways[key].ability()]));
 
 test('on a computer that owns its tab every way but the buzz can be had', () => {
-  browser = new Browser();
+  const browser = new Browser();
 
   assert.deepEqual(abilities(waysFor(browser.parts())), { sound: 'yes', buzz: 'no', flash: 'yes', notify: 'yes', tabTitle: 'yes' });
 });
 
 test('on a phone the buzz can be had and a notification cannot', () => {
-  browser = new Browser();
+  const browser = new Browser();
 
   assert.deepEqual(abilities(waysFor(browser.parts({ handheld: true }))), { sound: 'yes', buzz: 'yes', flash: 'yes', notify: 'no', tabTitle: 'yes' });
   assert.equal(waysFor(browser.parts({ handheld: true, vibrate: null })).buzz.ability(), 'no', 'a phone with no vibration');
 });
 
 test('in Google’s frame neither a notification nor the tab’s title is offered, so neither is asked for nor touched', async () => {
-  browser = new Browser();
+  const browser = new Browser();
   browser.permission = 'default';
 
   const ways = waysFor(browser.parts({ ownsTab: false }));
@@ -360,33 +362,26 @@ test('in Google’s frame neither a notification nor the tab’s title is offere
   attention.call(FRIDAY);
   assert.equal(await attention.ask('notify'), 'no', 'a tap on a switch that is not there');
 
-  assert.deepEqual(browser.requests, []);
+  assert.equal(browser.requests, 0);
   assert.deepEqual(browser.shown, []);
   assert.equal(browser.tab.title, "Chips n' Dipshits");
   assert.equal(browser.ticks, false);
 });
 
 test('a browser with no notifications leaves them out', () => {
-  browser = new Browser();
+  const browser = new Browser();
 
   assert.equal(waysFor(browser.parts({ notices: null })).notify.ability(), 'no');
 });
 
 test('the browser’s word on notifications is what the switch shows, and only a tap asks it', async () => {
-  browser = new Browser();
+  const browser = new Browser();
   browser.permission = 'default';
 
   const table = headsUp();
-  const prefs = new Preferences(PREFERENCES, mapMemory());
-  const attention = new Attention(prefs, waysFor(browser.parts()));
-  const turns = new YourTurn(attention);
-  let shown: TableView | null = null;
-  const arrive = () => {
-    const change = tableChange(shown, structuredClone(table.view(0)), table.now);
-
-    shown = change.view;
-    turns.see(change, 0);
-  };
+  const page = new Page(table, 0, waysFor(browser.parts()));
+  const attention = page.attention;
+  const arrive = () => page.arrive();
 
   assert.equal(attention.of('notify'), 'ask');
 
@@ -394,13 +389,13 @@ test('the browser’s word on notifications is what the switch shows, and only a
   arrive();
   table.deal({ button: 0 });
   arrive();
-  assert.deepEqual(browser.requests, [], 'the turn asked the browser');
+  assert.equal(browser.requests, 0, 'the turn asked the browser');
   assert.deepEqual(browser.shown, []);
 
   browser.answer = 'denied';
   assert.equal(await attention.ask('notify'), 'blocked');
   assert.equal(attention.of('notify'), 'blocked', 'the refusal is the browser’s to remember');
-  assert.deepEqual(browser.requests, [1]);
+  assert.equal(browser.requests, 1);
 
   table.call(0);
   table.check(1);
@@ -410,7 +405,7 @@ test('the browser’s word on notifications is what the switch shows, and only a
 });
 
 test('a notification says whose table and that it is their turn, only while the page is out of sight, and goes when the turn does', () => {
-  browser = new Browser();
+  const browser = new Browser();
   const ways = waysFor(browser.parts());
 
   ways.notify.call(FRIDAY);
@@ -428,7 +423,7 @@ test('a notification says whose table and that it is their turn, only while the 
 });
 
 test('a second notification for the table takes the place of the first, and coming back or tapping it closes it', () => {
-  browser = new Browser();
+  const browser = new Browser();
   const ways = waysFor(browser.parts());
 
   browser.hidden = true;
@@ -447,7 +442,7 @@ test('a second notification for the table takes the place of the first, and comi
 });
 
 test('the tab’s title blinks that it is the player’s turn while they are away, and is put back when the turn ends or they come back', () => {
-  browser = new Browser();
+  const browser = new Browser();
   const ways = waysFor(browser.parts());
   const own = browser.tab.title;
 
@@ -476,7 +471,7 @@ test('the tab’s title blinks that it is the player’s turn while they are awa
 });
 
 test('the buzz waits for the first touch and for the page to be in sight', () => {
-  browser = new Browser();
+  const browser = new Browser();
   const ways = waysFor(browser.parts({ handheld: true }));
 
   ways.buzz.call(FRIDAY);
@@ -493,7 +488,7 @@ test('the buzz waits for the first touch and for the page to be in sight', () =>
 });
 
 test('the flash marks the app with the reason until the call ends, and the chime plays the turn’s sound', () => {
-  browser = new Browser();
+  const browser = new Browser();
   const ways = waysFor(browser.parts());
 
   ways.flash.call(FRIDAY);

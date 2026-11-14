@@ -42,7 +42,7 @@ const BLOCKED = 'Blocked in this browser’s settings';
  * An on/off switch, showing on only while the device can do what it switches on. Where the browser
  * wants the player's leave first, the tap that switches it on is what asks.
  */
-function onOff(prefs: AnyPreferences, abilities: Abilities, key: string, pref: OnOffPref): HTMLElement | null {
+function onOff(prefs: AnyPreferences, abilities: Abilities, key: string, id: string, pref: OnOffPref): HTMLElement | null {
   if (abilities.of(key) === 'no') {
     return null;
   }
@@ -50,7 +50,7 @@ function onOff(prefs: AnyPreferences, abilities: Abilities, key: string, pref: O
   const note = h('small');
   const button = h(
     'button.toggle.pref',
-    { type: 'button', role: 'switch', id: `pref-${key}`, 'data-pref': key, class: pref.compact ? 'compact' : null, title: pref.compact ? pref.hint : null },
+    { type: 'button', role: 'switch', id, 'data-pref': key, class: pref.compact ? 'compact' : null, title: pref.compact ? pref.hint : null },
     h('i'),
     h('span', null, pref.label, note),
   );
@@ -92,7 +92,7 @@ function control(prefs: AnyPreferences, abilities: Abilities, key: string, pref:
 
   switch (pref.kind) {
     case 'onOff':
-      return onOff(prefs, abilities, key, pref);
+      return onOff(prefs, abilities, key, id, pref);
 
     case 'choice': {
       if (pref.preview) {
@@ -139,21 +139,25 @@ function preferences(handlers: DialogHandlers): HTMLElement {
   const groups = new Map<string, HTMLElement[]>();
 
   for (const [key, pref] of Object.entries(prefs.registry)) {
-    const drawn = pref.group ? control(prefs, handlers.abilities, key, pref) : null;
-    if (!pref.group || !drawn) {
+    if (!pref.group) {
+      continue;
+    }
+
+    const drawn = control(prefs, handlers.abilities, key, pref);
+    if (!drawn) {
       continue;
     }
 
     const controls = groups.get(pref.group) ?? [];
     const row = controls.at(-1);
+    const compact = pref.kind === 'onOff' && pref.compact;
 
     groups.set(pref.group, controls);
 
-    // Small switches side by side, wrapping as the dialog's width allows
-    if (pref.compact && row?.classList.contains('switches')) {
+    if (compact && row?.classList.contains('switches')) {
       row.append(drawn);
     } else {
-      controls.push(pref.compact ? h('div.switches', null, drawn) : drawn);
+      controls.push(compact ? h('div.switches', null, drawn) : drawn);
     }
 
     if (pref.glossary) {

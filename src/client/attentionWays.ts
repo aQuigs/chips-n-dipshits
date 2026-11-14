@@ -26,7 +26,7 @@ export interface Sight {
 }
 
 /** The chime, through the sounds, which hold it to the sound switch and volume. */
-export function chimeWay(sounds: Sounds): AttentionWay {
+function chimeWay(sounds: Sounds): AttentionWay {
   return {
     ability: () => 'yes',
     call: (call) => sounds.play(SOUND_FOR[call.why]),
@@ -34,13 +34,20 @@ export function chimeWay(sounds: Sounds): AttentionWay {
   };
 }
 
+// What stands for a way this device or page can't do
+const UNABLE: AttentionWay = { ability: () => 'no', call: () => undefined, end: () => undefined };
+
 /** `vibrate` is null on a device that can't. */
-export function buzzWay(vibrate: ((pattern: number[]) => void) | null, touch: Touch, sight: Sight): AttentionWay {
+function buzzWay(vibrate: ((pattern: number[]) => void) | null, touch: Touch, sight: Sight): AttentionWay {
+  if (!vibrate) {
+    return UNABLE;
+  }
+
   return {
-    ability: () => (vibrate ? 'yes' : 'no'),
+    ability: () => 'yes',
     call: () => {
       // Browsers refuse it before a touch, with a warning, and ignore it out of sight
-      if (vibrate && touch.touched && !sight.away()) {
+      if (touch.touched && !sight.away()) {
         vibrate(BUZZ_PATTERN);
       }
     },
@@ -49,7 +56,7 @@ export function buzzWay(vibrate: ((pattern: number[]) => void) | null, touch: To
 }
 
 /** The element the flash is drawn on, as `styles/attention.css` draws it. */
-export interface FlashHost {
+interface FlashHost {
   dataset: Record<string, string | undefined>;
   /** Read only to make the browser lay out the page, so a flash that follows another starts over. */
   readonly offsetWidth: number;
@@ -59,7 +66,7 @@ export interface FlashHost {
  * Marks `host` with the reason for as long as it stands. The stylesheet plays the flash once when the
  * mark appears, or shows a steady highlight for as long as it is there when motion is turned down.
  */
-export function flashWay(host: FlashHost): AttentionWay {
+function flashWay(host: FlashHost): AttentionWay {
   return {
     ability: () => 'yes',
     call: (call) => {
@@ -74,7 +81,6 @@ export function flashWay(host: FlashHost): AttentionWay {
 /** What the browser says to notifications from the page, as `Notification.permission` has it. */
 export type Permission = 'granted' | 'default' | 'denied';
 
-/** The browser's notifications. */
 export interface Notices {
   permission(): Permission;
   request(): Promise<Permission>;
@@ -87,44 +93,55 @@ export type Focus = () => void;
 
 const ABILITY_OF: Record<Permission, Ability> = { granted: 'yes', default: 'ask', denied: 'blocked' };
 
-/** A notification while the player is away, taken back when the call ends or the player comes back. `notices` is null where the page can't have them. */
-export function notifyWay(notices: Notices | null, sight: Sight, focus: Focus): AttentionWay {
-  let shown: { call: Call; close: () => void } | null = null;
+/**
+ * Shows something for a call only while the player is away, and takes it back when the call ends or they
+ * come back. `show` returns the way to take it back.
+ */
+function whileAway(sight: Sight, show: (call: Call) => () => void): Pick<AttentionWay, 'call' | 'end'> {
+  let shown: { call: Call; takeBack: () => void } | null = null;
 
-  const close = () => {
-    shown?.close();
+  const takeBack = () => {
+    shown?.takeBack();
     shown = null;
   };
 
-  sight.onBack(close);
+  sight.onBack(takeBack);
 
   return {
-    ability: () => (notices ? ABILITY_OF[notices.permission()] : 'no'),
-    ask: async () => (notices ? ABILITY_OF[await notices.request()] : 'no'),
     call: (call) => {
-      if (!notices || !sight.away()) {
-        return;
+      if (sight.away()) {
+        takeBack();
+        shown = { call, takeBack: show(call) };
       }
-
-      close();
-
-      shown = {
-        call,
-        close: notices.show(WORDS_FOR[call.why](call.table.name), `cnd-${call.table.id}`, () => {
-          focus();
-          close();
-        }),
-      };
     },
     end: (call) => {
-      if (shown && shown.call.why === call.why && shown.call.table.id === call.table.id) {
-        close();
+      if (shown?.call === call) {
+        takeBack();
       }
     },
   };
 }
 
-/** The tab's title. */
+/** `notices` is null where the page can't have them. */
+function notifyWay(notices: Notices | null, sight: Sight, focus: Focus): AttentionWay {
+  if (!notices) {
+    return UNABLE;
+  }
+
+  return {
+    ability: () => ABILITY_OF[notices.permission()],
+    ask: async () => ABILITY_OF[await notices.request()],
+    ...whileAway(sight, (call) => {
+      const close = notices.show(WORDS_FOR[call.why](call.table.name), `cnd-${call.table.id}`, () => {
+        focus();
+        close();
+      });
+
+      return close;
+    }),
+  };
+}
+
 export interface TabTitle {
   title: string;
 }
@@ -133,43 +150,28 @@ export interface Timers {
   every(ms: number, act: () => void): () => void;
 }
 
-/** While the player is away, the tab's title says why the page wants them, blinking, until they come back. `tab` is null where the page doesn't own it. */
-export function tabTitleWay(tab: TabTitle | null, sight: Sight, timers: Timers): AttentionWay {
-  let showing: { call: Call; own: string; stop: () => void } | null = null;
-
-  const restore = () => {
-    if (showing && tab) {
-      showing.stop();
-      tab.title = showing.own;
-    }
-
-    showing = null;
-  };
-
-  sight.onBack(restore);
+/** The tab's title says why the page wants the player, blinking. `tab` is null where the page doesn't own it. */
+function tabTitleWay(tab: TabTitle | null, sight: Sight, timers: Timers): AttentionWay {
+  if (!tab) {
+    return UNABLE;
+  }
 
   return {
-    ability: () => (tab ? 'yes' : 'no'),
-    call: (call) => {
-      if (!tab || !sight.away()) {
-        return;
-      }
-
-      restore();
-
+    ability: () => 'yes',
+    ...whileAway(sight, (call) => {
       const own = tab.title;
       const words = WORDS_FOR[call.why](call.table.name);
       let swaps = 0;
       const swap = () => (tab.title = `${TITLE_MARKS[swaps++ % TITLE_MARKS.length]} ${words}`);
 
       swap();
-      showing = { call, own, stop: timers.every(TITLE_SWAP_MS, swap) };
-    },
-    end: (call) => {
-      if (showing?.call.why === call.why && showing.call.table.id === call.table.id) {
-        restore();
-      }
-    },
+      const stop = timers.every(TITLE_SWAP_MS, swap);
+
+      return () => {
+        stop();
+        tab.title = own;
+      };
+    }),
   };
 }
 

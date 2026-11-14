@@ -18,11 +18,12 @@ interface PrefBase<Kind extends string, Value> {
   css?: 'attribute' | 'property';
   /** Lines drawn under the control in the Preferences dialog, each a term and what it stands for: the keys a preference turns on, say. */
   glossary?: readonly { term: string; meaning: string }[];
+}
+
+export interface OnOffPref extends PrefBase<'onOff', boolean> {
   /** Drawn as a small switch beside the others of its group, its label alone saying what it does and its hint kept for a pointer resting on it. */
   compact?: boolean;
 }
-
-export type OnOffPref = PrefBase<'onOff', boolean>;
 
 export interface ChoicePref extends PrefBase<'choice', string> {
   options: readonly { value: string; label: string }[];

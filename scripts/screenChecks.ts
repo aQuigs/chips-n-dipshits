@@ -12,7 +12,6 @@ import { fileURLToPath } from 'node:url';
 import type { Page } from 'playwright';
 
 import { BUZZ_PATTERN } from '../src/client/attentionWays.ts';
-import type { Permission } from '../src/client/attentionWays.ts';
 import { KEYS_SETTLE_MS } from '../src/client/hotkeys.ts';
 import { RECIPES } from '../src/client/soundRecipes.ts';
 import { THEMES } from '../src/client/themes.ts';
@@ -21,6 +20,7 @@ import type { Command, TableConfig, TableView } from '../src/engine/index.ts';
 import { contrast } from '../tests/colorVision.ts';
 import { boxes, overlap, Rig, SCREENS, setStageHeight, squeezed, textBoxes } from './rig.ts';
 import type { Box, RigPlayer, ScreenName } from './rig.ts';
+import { complaints, NOTICES, TITLES } from './pageSpies.ts';
 import { STAND_IN_HOST } from './standInHost.ts';
 
 const OUT = fileURLToPath(new URL('../screenshots/', import.meta.url));
@@ -426,38 +426,6 @@ const SIGHT = `(() => {
   };
 })()`;
 
-/** Run in the page: notifications that are written down, not shown, with the browser's answer so far and the one it gives when asked. */
-const NOTICES = (permission: Permission, answer = permission) => `(() => {
-  window.notices = [];
-  window.asks = [];
-  window.Notification = class {
-    static permission = ${JSON.stringify(permission)};
-    static requestPermission() {
-      window.asks.push(navigator.userActivation.isActive);
-      window.Notification.permission = ${JSON.stringify(answer)};
-      return Promise.resolve(window.Notification.permission);
-    }
-    constructor(title, options) {
-      Object.assign(this, { title, options, open: true });
-      window.notices.push(this);
-    }
-    close() {
-      this.open = false;
-    }
-  };
-})()`;
-
-// Run in the page: every title the page gives its tab
-const TITLES = `(() => {
-  window.titles = [];
-  const own = Object.getOwnPropertyDescriptor(Document.prototype, 'title');
-  Object.defineProperty(Document.prototype, 'title', {
-    get() { return own.get.call(this); },
-    set(value) { window.titles.push(value); own.set.call(this, value); },
-    configurable: true,
-  });
-})()`;
-
 // Run in the page: every buzz asked for, and whether the page had been touched by then
 const BUZZ = `(() => {
   window.buzzes = [];
@@ -469,19 +437,6 @@ const BUZZ = `(() => {
     configurable: true,
   });
 })()`;
-
-/** The page's console warnings and errors from now on. */
-function complaints(page: Page): string[] {
-  const said: string[] = [];
-
-  page.on('console', (message) => {
-    if (message.type() === 'error' || message.type() === 'warning') {
-      said.push(message.text());
-    }
-  });
-
-  return said;
-}
 
 type Check = [name: string, run: (rig: Rig) => Promise<void>];
 
@@ -832,14 +787,8 @@ const CHECKS: Check[] = [
 
       const page = await table.open('Pam', 'phone', LISTEN);
       const press = pressOn(page, 'phone');
-      const warnings: string[] = [];
+      const warnings = complaints(page);
       let heard = 0;
-
-      page.on('console', (message) => {
-        if (message.type() === 'error' || message.type() === 'warning') {
-          warnings.push(message.text());
-        }
-      });
 
       /** Waits for the page to play as many sounds as are expected, gives it a moment to play more, and says what it played. */
       const next = async (count: number, settled: string) => {

@@ -14,6 +14,7 @@ import { KEYS_SETTLE_MS } from '../src/client/hotkeys.ts';
 import { startDevServer } from '../src/dev/server.ts';
 import { UNSTAMPED_BUILD } from '../src/server/build.ts';
 import { clientPage } from './bundle.ts';
+import { complaints, NOTICES, TITLES } from './pageSpies.ts';
 import { STAND_IN_HOST } from './standInHost.ts';
 
 const STEP_TIMEOUT_MS = 20_000;
@@ -26,37 +27,15 @@ const QUIET_MS = 2500;
 const NEWER_BUILD = 'newerbuild00';
 
 
-// Runs in Apps Script's frame, not in the page around it: the page out of sight, notifications that would be
-// allowed, and every call that asks for them, makes one or names the tab written down
-const ATTENTION_SPIES = `
-(() => {
-  if (window.top === window) {
-    return;
-  }
-
-  window.asked = { permission: 0, notices: 0, titles: [] };
+// Runs in Apps Script's frame, not in the page around it: the page out of sight, a browser that would allow
+// notifications, which Chrome never does in another site's frame, and every ask, notification and title written down
+const IN_GOOGLES_FRAME = `
+if (window.top !== window) {
   Object.defineProperty(document, 'hidden', { get: () => true });
   Object.defineProperty(document, 'visibilityState', { get: () => 'hidden' });
-
-  // A browser that would say yes, which Chrome never does in another site's frame, so only the page's own knowledge holds it back
-  window.Notification = class {
-    static permission = 'granted';
-    static requestPermission() {
-      window.asked.permission += 1;
-      return Promise.resolve('granted');
-    }
-    constructor() {
-      window.asked.notices += 1;
-    }
-    close() {}
-  };
-
-  const title = Object.getOwnPropertyDescriptor(Document.prototype, 'title');
-  Object.defineProperty(Document.prototype, 'title', {
-    get() { return title.get.call(this); },
-    set(value) { window.asked.titles.push(value); title.set.call(this, value); },
-  });
-})();
+  ${NOTICES('granted')};
+  ${TITLES};
+}
 `;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -553,18 +532,13 @@ try {
   {
     const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
     await context.addInitScript(STAND_IN_HOST);
-    await context.addInitScript(ATTENTION_SPIES);
+    await context.addInitScript(IN_GOOGLES_FRAME);
 
     const outside = await context.newPage();
-    const said: string[] = [];
+    const said = complaints(outside);
     outside.setDefaultTimeout(STEP_TIMEOUT_MS);
     outside.on('pageerror', (error) => {
       throw error;
-    });
-    outside.on('console', (message) => {
-      if (message.type() === 'error' || message.type() === 'warning') {
-        said.push(message.text());
-      }
     });
 
     const dealer = await open(browser);
@@ -601,7 +575,7 @@ try {
     await frame.waitForSelector('#app[data-attention="turn"]', { state: 'attached' });
     await sleep(500);
 
-    assert.deepEqual(await frame.evaluate('window.asked'), { permission: 0, notices: 0, titles: [] });
+    assert.deepEqual(await frame.evaluate('({ asks: window.asks, notices: window.notices.length, titles: window.titles })'), { asks: [], notices: 0, titles: [] });
     assert.equal(await outside.title(), "Google's page");
 
     // Preferences offers neither, so there is no switch to tap that would ask

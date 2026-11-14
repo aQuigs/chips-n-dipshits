@@ -143,7 +143,7 @@ export function assertViewsKeepSecrets(state: TableState, now: number): void {
       const own = new Set([...mine!.cards, ...hand!.boards[run]!]);
       assert.ok(read.plays.every((card) => own.has(card)), `${viewer.name}'s hint plays a card that is not theirs or the board's`);
 
-      // The hint can never disagree with the showdown
+      // The view reads the player's own seat and the right board: whether the hand is right is checked over random deals in handNames.test.ts
       const shown = hand!.result?.hands.find((entry) => entry.seat === mine!.seat && entry.run === run);
       if (shown && hand!.boards[run]!.length === 5) {
         assert.equal(evaluateHand(read.plays).score, evaluateHand(shown.cards).score, `${viewer.name}'s hint makes a different hand from the one shown`);

@@ -185,26 +185,61 @@ async function hintSays(page: Page, ...names: string[]): Promise<void> {
   await page.waitForFunction(`document.getAnimations().every((animation) => animation.animationName !== 'deal')`);
 }
 
-/** That the hint is whole, on the screen and clear of everything else on the table, and the seat's own text is not squeezed by it. */
-async function assertHintFits(page: Page, screen: ScreenName): Promise<void> {
-  const hint = await boxes(page, HINT);
+/** That the hint is whole, inside the table's part of the screen and clear of everything else on the table, and the seat's own text is not squeezed by it. */
+async function assertHintFits(page: Page): Promise<void> {
+  // The text, not the pill around it: the seats beside are drawn over the pill's ends
+  const hint = await textBoxes(page, `${HINT} .read`);
+  const [stage] = await boxes(page, '.stage');
 
-  assertOnScreen(hint, screen, 'the hand hint');
+  assert.ok(hint.length > 0, 'the hand hint: nothing to look at');
+  for (const box of hint) {
+    assert.ok(box.left >= stage!.left - 1 && box.right <= stage!.right + 1 && box.top >= stage!.top - 1 && box.bottom <= stage!.bottom + 1, `the hand hint runs off the table: ${JSON.stringify(box)} in ${JSON.stringify(stage)}`);
+  }
+
   assert.deepEqual(await squeezed(page, `${HINT}, ${HINT} .read, .seat.me .plate .name span, .plate .stack`), [], 'the hint, or the seat it is under, is cut off');
   assertApart(hint, await boxes(page, '.board .card, .seat:not(.me) .plate, .seat:not(.me) .hole .card, .bet, .pot'), 'the hand hint and the table');
+
+  // The hint makes the viewer's seat taller and the lift raises cards, so both are checked against the middle of the table
+  assertApart(await boxes(page, '.seat.me .hole .card'), await boxes(page, '.board .card, .pot, .message.result > div'), 'the viewer\'s cards and the middle of the table');
+  await assertBetsApart(page);
 }
 
-/** That the playing cards stand out by being lifted, which reads the same in any theme or deck, and the rest are faded. */
+/**
+ * Runs `look` on a phone's table standing up and lying down, which one it is being left to how the
+ * buttons under it wrap: standing at the least height it stands at, lying at the most, and, while
+ * someone can act and the buttons for it take room, lying at a short one.
+ */
+async function inEveryShape(page: Page, look: (shape: string) => Promise<void>, { buttonsUp = true } = {}): Promise<void> {
+  const { width } = page.viewportSize()!;
+  const shapes: [string, number][] = [
+    ['tall', Math.ceil(width / 1.15) + 1],
+    ['wide', Math.floor(width / 1.15) - 1],
+  ];
+
+  if (buttonsUp) {
+    shapes.push(['wide', Math.round(width * 0.75)]);
+  }
+
+  for (const [shape, height] of shapes) {
+    await setStageHeight(page, height);
+    await page.waitForSelector(`.table.${shape}`);
+    await page.waitForFunction(`document.getAnimations().every((animation) => animation.animationName !== 'deal')`);
+    await look(`${shape}-${height}`);
+  }
+}
+
+/** That the playing cards stand apart from the rest by where they sit, which reads the same in any theme or deck, and the rest are faded. */
 async function assertMarked(page: Page): Promise<void> {
-  const raised = await page.evaluate(`[...document.querySelectorAll('.table .card.plays')].every((card) => getComputedStyle(card).transform !== 'none')`);
   const faded = await page.evaluate(`[...document.querySelectorAll('.table .card.idle')].every((card) => Number(getComputedStyle(card).opacity) < 1)`);
-  assert.equal(raised, true, 'a card that plays is not lifted');
   assert.equal(faded, true, 'a card that does not play is not faded');
 
-  const [playing] = await boxes(page, '.board .card.plays');
-  const [resting] = await boxes(page, '.board .card.idle');
-  if (playing && resting) {
-    assert.ok(resting.top - playing.top >= 3, `a playing board card sits only ${resting.top - playing.top}px above one that does not`);
+  for (const where of ['.board[data-run="0"]', '.board[data-run="1"]', '.seat.me .hole']) {
+    const [playing] = await boxes(page, `${where} .card.plays`);
+    const [resting] = await boxes(page, `${where} .card.idle`);
+
+    if (playing && resting) {
+      assert.ok(resting.top - playing.top >= 3, `in ${where} a card that plays sits only ${resting.top - playing.top}px above one that does not`);
+    }
   }
 }
 
@@ -1885,7 +1920,7 @@ const CHECKS: Check[] = [
         await hintSays(page, 'King-seven offsuit');
         assert.deepEqual(await marking(page), { plays: [], idle: [] }, 'cards are picked out before there is a hand to make');
         await shot(page, `hint-preflop-${screen}`);
-        await assertHintFits(page, screen);
+        await assertHintFits(page);
 
         table.play(passive, (view) => view.hand!.street === 'flop');
         await hintSays(page, 'Two pair, kings and sevens');
@@ -1898,7 +1933,15 @@ const CHECKS: Check[] = [
         assert.deepEqual(await marking(page), { plays: sortedCards('Ks 7d Kh 7s Ah'), idle: sortedCards('2c 9d') });
         await assertMarked(page);
         await shot(page, `hint-river-${screen}`);
-        await assertHintFits(page, screen);
+        await assertHintFits(page);
+
+        if (screen !== 'desktop') {
+          await inEveryShape(page, async (shape) => {
+            await shot(page, `hint-river-${screen}-${shape}`);
+            await assertMarked(page);
+            await assertHintFits(page);
+          });
+        }
 
         await page.context().close();
       }
@@ -1924,6 +1967,10 @@ const CHECKS: Check[] = [
       assert.deepEqual(await marking(page), { plays: sortedCards('As Ks Qs Js Ts'), idle: ['2c', '3d'] });
       await assertMarked(page);
       await shot(page, 'hint-board-plays-phone');
+      await inEveryShape(page, async () => {
+        await assertMarked(page);
+        await assertHintFits(page);
+      });
       await page.context().close();
 
       const bounty = heads();
@@ -1932,7 +1979,7 @@ const CHECKS: Check[] = [
       await hintSays(page, 'Seven-deuce offsuit');
       assert.equal(await text(page, `${HINT} .bounty`), 'Bounty hand');
       await shot(page, 'hint-bounty-small-phone');
-      await assertHintFits(page, 'smallPhone');
+      await inEveryShape(page, () => assertHintFits(page));
       await page.context().close();
 
       const twice = heads();
@@ -1946,15 +1993,30 @@ const CHECKS: Check[] = [
       assert.equal(await page.locator('.board[data-run="0"] .card.plays').count(), 3, 'the first board\'s jack, nine and seven play');
       assert.equal(await page.locator('.board[data-run="1"] .card.plays').count(), 3, 'the second board\'s king, eight and five play');
       await shot(page, 'hint-run-twice-phone');
-      await assertMarked(page);
-      await assertHintFits(page, 'phone');
+      await inEveryShape(page, async (shape) => {
+        await shot(page, `hint-run-twice-phone-${shape}`);
+        await assertMarked(page);
+        await assertHintFits(page);
+      }, { buttonsUp: false });
 
       // Over, the result in the middle names each board's hands, and the hint gives it the room
       twice.play(allIn, (view) => view.hand!.stage === 'done');
       await page.waitForSelector('.message.result');
       assert.equal(await page.locator(HINT).count(), 0);
       assert.equal(await page.locator('.board[data-run="1"] .card.plays').count(), 3, 'the cards that play stay picked out');
-      assertApart(await boxes(page, '.message.result > div'), await boxes(page, '.seat .plate, .seat .hole .card'), 'a result line and a seat');
+      await inEveryShape(page, async () => {
+        assertApart(await boxes(page, '.message.result > div'), await boxes(page, '.seat .plate, .seat .hole .card'), 'a result line and a seat');
+      }, { buttonsUp: false });
+      await page.context().close();
+
+      // Two boards that disagree on a card in hand leave it unmarked: lifted under one line, it would say it plays under the other
+      const split = heads();
+      split.deal({ button: 0, holes: { 0: 'Ah 3c', 1: 'Kd Kh' }, board: 'Ad Kc Qs Jd 9h', secondBoard: '3d 3s' });
+      split.play(passive, (view) => view.hand!.street === 'flop');
+      page = await split.open('Quigs', 'phone');
+      split.play(allIn, (view) => view.hand!.boards[1]?.length === 4);
+      await hintSays(page, 'Pair of aces', 'Two pair, aces and threes');
+      assert.deepEqual(await page.evaluate(`[...document.querySelectorAll('.seat.me .hole .card')].map((card) => card.className.match(/plays|idle/)?.[0] ?? 'unmarked')`), ['plays', 'unmarked']);
       await page.context().close();
 
       // The longest kind of name, at a full table on the smallest phone
@@ -1964,7 +2026,10 @@ const CHECKS: Check[] = [
       page = await full.open('Quigs', 'smallPhone');
       await hintSays(page, 'Full house, sevens over threes');
       await shot(page, 'hint-long-small-phone');
-      await assertHintFits(page, 'smallPhone');
+      await inEveryShape(page, async (shape) => {
+        await shot(page, `hint-long-small-phone-${shape}`);
+        await assertHintFits(page);
+      });
       await page.context().close();
     },
   ],

@@ -15,10 +15,13 @@
   gap: 0.1em;
 }
 
-/* On a phone held upright the seats beside the viewer's come close under it, so a long name wraps inside the seat instead of running under them */
-.table.tall .seat.me .hint {
-  max-width: calc(var(--seat-w) + 1.5em);
-  padding-inline: 0.5em;
+/*
+ * Lying down, the seats either side of the viewer's sit a quarter of the table away at the same height,
+ * so a name wider than the room between them wraps instead of running under them. Standing up, nothing
+ * else is that low.
+ */
+.table.wide .seat.me .hint {
+  max-width: max(var(--seat-w), 46cqw - var(--seat-w));
   white-space: normal;
 }
 
@@ -31,7 +34,7 @@
 }
 
 .hint .name {
-  text-wrap: balance;
+  text-wrap-style: balance;
 }
 
 .hint .run {
@@ -52,9 +55,17 @@
   text-transform: uppercase;
 }
 
-/* Lifted and set apart by shape, not color, so the marking reads the same in every theme and deck */
-[data-hand-hint='on'] .card.plays {
+/*
+ * Set apart by place, not color, so the marking reads the same in every theme and deck, and the rest
+ * fade. On the board the cards that play rise; in the viewer's hand the ones that don't sink behind the
+ * seat, so the seat reaches no nearer the middle than it does without the hint.
+ */
+[data-hand-hint='on'] .board .card.plays {
   transform: translateY(calc(var(--card-w) * -0.16));
+}
+
+[data-hand-hint='on'] .hole .card.idle {
+  transform: translateY(calc(var(--card-w) * 0.24));
 }
 
 [data-hand-hint='on'] .card.idle {

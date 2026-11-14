@@ -1,7 +1,7 @@
 import { formatAmount, shortAmount } from '../../engine/amounts.ts';
 import type { Denominated } from '../../engine/amounts.ts';
-import type { Card } from '../../engine/cards.ts';
 import { midSentence } from '../../engine/handNames.ts';
+import type { HandRead } from '../../engine/handNames.ts';
 import type { HandView, Holding, SeatView, TableView } from '../../engine/view.ts';
 import { cardEl, h } from '../ui.ts';
 import { hostOrCohost, roleMark } from './roles.ts';
@@ -160,11 +160,23 @@ function hintEl(holding: Holding): HTMLElement {
   );
 }
 
-/** Picks out, among cards that could make the viewer's hand, the ones that do and the ones that don't. */
-function markPlaying(cards: HTMLElement[], plays: ReadonlySet<Card>): HTMLElement[] {
-  if (plays.size > 0) {
-    for (const card of cards) {
-      card.classList.add(plays.has(card.dataset.card ?? '') ? 'plays' : 'idle');
+/**
+ * Picks out, among cards that could make the viewer's hand, the ones that do and the ones that don't,
+ * given the reads they belong to. A hole card under two boards is marked only when the boards agree on it.
+ */
+function markPlaying(cards: HTMLElement[], reads: readonly (HandRead | undefined)[]): HTMLElement[] {
+  const made = reads.filter((read): read is HandRead => read !== undefined && read.plays.length > 0);
+  if (made.length === 0) {
+    return cards;
+  }
+
+  for (const card of cards) {
+    const playsIn = made.filter((read) => read.plays.includes(card.dataset.card ?? '')).length;
+
+    if (playsIn === made.length) {
+      card.classList.add('plays');
+    } else if (playsIn === 0) {
+      card.classList.add('idle');
     }
   }
 
@@ -197,8 +209,7 @@ function seatEl(view: TableView, seat: SeatView, slot: number, shape: Shape, clo
 
   // Folded hands leave the table, except the viewer's own, which stays to look at
   const showCards = seat.cards !== null && (!seat.folded || isMe || seat.shown);
-  const playing = new Set(holding?.reads.flatMap((read) => read.plays));
-  const hole = showCards ? h('div.hole', null, markPlaying(seat.cards!.map((card) => cardEl(card)), playing)) : h('div.hole.none');
+  const hole = showCards ? h('div.hole', null, markPlaying(seat.cards!.map((card) => cardEl(card)), holding?.reads ?? [])) : h('div.hole.none');
 
   let timer: HTMLElement | null = null;
   if (acting && hand.deadline !== null && view.config.actionSeconds > 0) {
@@ -270,7 +281,7 @@ function openSeatEl(view: TableView, seat: number, slot: number, shape: Shape, h
 
 function boardEl(hand: HandView): HTMLElement {
   const boards = hand.boards.map((board, run) => {
-    const dealt = markPlaying(board.map((card) => cardEl(card)), new Set(hand.holding?.reads[run]?.plays));
+    const dealt = markPlaying(board.map((card) => cardEl(card)), [hand.holding?.reads[run]]);
     const slots = Array.from({ length: BOARD_SIZE }, (_slot, index) => dealt[index] ?? h('div.card.slot'));
 
     return h('div.board', { 'data-run': run }, slots);

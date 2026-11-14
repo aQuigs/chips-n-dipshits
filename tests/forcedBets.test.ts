@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { forcedBets, openingBet, positionsOf } from '../src/engine/index.ts';
-import type { ForcedBet, TableConfig } from '../src/engine/index.ts';
+import type { BombPot, ForcedBet, TableConfig } from '../src/engine/index.ts';
 import { TestTable } from './helpers.ts';
 
 /** The list as short text, one entry per forced bet: who, what, how much and how it counts. */
@@ -10,14 +10,14 @@ function listed(bets: ForcedBet[]): string[] {
   return bets.map((bet) => `P${bet.seat} ${bet.what} ${bet.amount} ${bet.as}`);
 }
 
-/** The forced bets of the next hand at a table with these stacks, the button on seat 0 and blinds of 10 and 20. */
-function forcedAt(stacks: number[], config: Partial<TableConfig> = {}, straddlers: number[] = []): string[] {
+/** The forced bets of the next hand at a table with these stacks, the button on seat 0 and blinds of 10 and 20. `bombPot` makes that hand one. */
+function forcedAt(stacks: number[], config: Partial<TableConfig> = {}, straddlers: number[] = [], bombPot: BombPot | null = null): string[] {
   const t = new TestTable({ stacks, config });
   for (const seat of straddlers) {
     t.state.seats[seat]!.straddle = true;
   }
 
-  return listed(forcedBets(t.state, positionsOf(stacks.map((_stack, seat) => seat), 0)));
+  return listed(forcedBets(t.state, positionsOf(stacks.map((_stack, seat) => seat), 0), bombPot));
 }
 
 const FOUR = [1000, 1000, 1000, 1000];
@@ -113,4 +113,18 @@ test('the betting starts from the biggest live bet, and from the later of two th
   // An ante is no bet, however big it is
   assert.equal(opening({ ante: 500 }), 'P2 big blind 20');
   assert.equal(opening({ ante: 500, anteFrom: 'bigBlind' }, [3]), 'P3 straddle 40');
+});
+
+test('a bomb pot is one stake from everyone dealt in, clockwise from the left of the button, and nothing else', () => {
+  const everyone = ['P1 bomb pot 100 contribution', 'P2 bomb pot 100 contribution', 'P3 bomb pot 100 contribution', 'P0 bomb pot 100 contribution'];
+
+  assert.deepEqual(forcedAt(FOUR, {}, [], { amount: 100 }), everyone);
+  assert.deepEqual(forcedAt([1000, 1000], {}, [], { amount: 250 }), ['P1 bomb pot 250 contribution', 'P0 bomb pot 250 contribution']);
+
+  // No blinds, so no straddle either, and the bomb pot takes the place of whichever ante the table plays
+  assert.deepEqual(forcedAt(FOUR, { ante: 5 }, [3], { amount: 100 }), everyone);
+  assert.deepEqual(forcedAt(FOUR, { ante: 20, anteFrom: 'bigBlind' }, [0, 1, 2, 3], { amount: 100 }), everyone);
+
+  // The list asks for the whole amount from a stack that cannot cover it, as for any forced bet
+  assert.deepEqual(forcedAt([1000, 3, 1000, 100], {}, [], { amount: 100 }), everyone);
 });

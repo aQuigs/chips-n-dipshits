@@ -39,7 +39,10 @@
 
 .controls.seated > .waiting {
   display: grid;
+  /* One line, or two when there is word of the next hand, together in the middle */
   place-items: center;
+  align-content: center;
+  gap: 4px;
   text-align: center;
 }
 

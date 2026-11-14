@@ -21,6 +21,8 @@ test('the default settings are the registry\'s defaults, and the table accepts t
     allowStraddle: true,
     allowRunItTwice: true,
     sevenDeuceBounty: 0,
+    bombPotAmount: 100,
+    bombPotEvery: 0,
   });
   assert.deepEqual(validatedConfig({}, DEFAULT_CONFIG), DEFAULT_CONFIG);
   assert.deepEqual(newConfig({}), DEFAULT_CONFIG);
@@ -123,7 +125,7 @@ test('random settings are always ones the table accepts, and between them reach 
 
 test('changing a setting that waits for the next hand leaves the hand in play as it is', () => {
   const waiting = CONFIG_KEYS.filter((key) => CONFIG_SPECS[key].nextHand);
-  assert.deepEqual(waiting, ['smallBlind', 'bigBlind', 'ante', 'anteFrom', 'sevenDeuceBounty']);
+  assert.deepEqual(waiting, ['smallBlind', 'bigBlind', 'ante', 'anteFrom', 'sevenDeuceBounty', 'bombPotAmount', 'bombPotEvery']);
 
   const rng = seededRng(3);
 
@@ -155,7 +157,7 @@ test('changing a setting that waits for the next hand leaves the hand in play as
 test('a new table starts from what its choices suggest, and anything sent with them wins', () => {
   const cents = startingConfig({ unit: 'cents' });
 
-  assert.deepEqual(cents, { ...DEFAULT_CONFIG, unit: 'cents', smallBlind: 25, bigBlind: 50, minBuyIn: 2000, maxBuyIn: 10_000 });
+  assert.deepEqual(cents, { ...DEFAULT_CONFIG, unit: 'cents', smallBlind: 25, bigBlind: 50, minBuyIn: 2000, maxBuyIn: 10_000, bombPotAmount: 250 });
   assert.deepEqual(newConfig({ unit: 'cents', smallBlind: 5, name: 'Nickels' }), { ...cents, smallBlind: 5, name: 'Nickels' });
   assert.deepEqual(startingConfig({ unit: 'euros' }), DEFAULT_CONFIG, 'a choice that is not one of the options suggests nothing');
   assert.deepEqual(startingConfig(), DEFAULT_CONFIG);

@@ -34,6 +34,10 @@ export interface TableConfig {
   allowRunItTwice: boolean;
   /** Paid by every other player dealt in to whoever wins with seven-deuce; 0 turns it off. */
   sevenDeuceBounty: number;
+  /** What everyone dealt into a bomb pot puts in. */
+  bombPotAmount: number;
+  /** One hand in this many is a bomb pot without being called; 0 for only when one is called. */
+  bombPotEvery: number;
 }
 
 export interface Member {
@@ -90,7 +94,12 @@ export type Street = 'preflop' | 'flop' | 'turn' | 'river';
 export type HandStage = 'betting' | 'ritVote' | 'runout' | 'done';
 
 /** What a forced bet is called, in the play-by-play and in a hand's events. */
-export type Post = 'small blind' | 'big blind' | 'straddle' | 'ante' | 'big blind ante';
+export type Post = 'small blind' | 'big blind' | 'straddle' | 'ante' | 'big blind ante' | 'bomb pot';
+
+/** The terms of a bomb pot; a hand with none is an ordinary one. */
+export interface BombPot {
+  amount: number;
+}
 
 export type PlayerAction = Post | 'fold' | 'check' | 'call' | 'bet' | 'raise';
 
@@ -163,6 +172,8 @@ export interface Hand {
   straddleSeat: number | null;
   /** The seven-deuce bounty this hand was dealt under; like the blinds, a new setting waits for the next hand. */
   bounty: number;
+  /** What kind of hand this is: a bomb pot and its terms, or null for an ordinary hand. Settled when it is dealt. */
+  bombPot: BombPot | null;
   /** Undealt cards; the next card comes off the end. */
   deck: Card[];
   /** One board, or two when the hand is run twice. */
@@ -229,6 +240,10 @@ export interface TableState {
   hand: Hand | null;
   /** The host has shuffled the seats, which happens once the hand on the table ends. */
   shuffleAfterHand: boolean;
+  /** The host has called a bomb pot, which the next hand dealt will be. */
+  bombPotCalled: boolean;
+  /** Hands dealt since the last bomb pot, counted only while one comes every so many hands. */
+  handsSinceBombPot: number;
   feed: FeedEntry[];
   feedSeq: number;
 }
@@ -261,6 +276,7 @@ export interface HandRecord {
   /** The dealer's play-by-play, one line per event. */
   summary: string;
   boards: Card[][];
+  bombPot: BombPot | null;
   players: HandRecordPlayer[];
   result: HandResult;
   /** Everything that happened, in order; empty when the hand can't be followed from its start. */
@@ -301,6 +317,7 @@ export type Command =
   | { type: 'moveSeat'; playerId: string; seat: number }
   | { type: 'shuffleSeats' }
   | { type: 'transferChips'; from: string; to: string; amount: number }
+  | { type: 'setBombPot'; on: boolean }
   | { type: 'updateConfig'; config: Partial<TableConfig> }
   | { type: 'transferHost'; playerId: string }
   | { type: 'setCohost'; playerId: string; on: boolean };

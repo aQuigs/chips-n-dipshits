@@ -1,5 +1,6 @@
 import { bettingOptions } from './betting.ts';
 import type { BettingOptions } from './betting.ts';
+import { bombPotDue, bombPotHangsOnCall } from './bombPots.ts';
 import { isSevenDeuce } from './cards.ts';
 import type { Card } from './cards.ts';
 import type { HandEvent } from './events.ts';
@@ -10,7 +11,7 @@ import type { Role } from './hosts.ts';
 import { buildPots } from './pots.ts';
 import type { Pot } from './pots.ts';
 import { memberOf, seatIndexOf } from './seats.ts';
-import type { FeedEntry, Hand, HandPlayer, HandResult, HandStage, PlayerAction, RequestKind, Street, TableConfig, TableState } from './types.ts';
+import type { BombPot, FeedEntry, Hand, HandPlayer, HandResult, HandStage, PlayerAction, RequestKind, Street, TableConfig, TableState } from './types.ts';
 
 /** A hole card as one viewer sees it: the card, or null when it is face down for them. */
 export type VisibleCard = Card | null;
@@ -59,6 +60,7 @@ export interface HandView {
   bbSeat: number;
   straddleSeat: number | null;
   bigBlind: number;
+  bombPot: BombPot | null;
   /** Every chip in the middle, bets in front of players included. */
   pot: number;
   pots: Pot[];
@@ -118,6 +120,10 @@ export interface TableView {
   hand: HandView | null;
   /** The seats are shuffled when the hand ends. */
   shuffleAfterHand: boolean;
+  /** The bomb pot the next hand dealt will be as things stand, or null for an ordinary hand. */
+  nextBombPot: BombPot | null;
+  /** That bomb pot is one only because it was called: called off, the next hand is an ordinary one. */
+  bombPotCalled: boolean;
   feed: FeedEntry[];
   /** Requests waiting on the host: all of them for the host and co-hosts, only their own for everyone else. */
   requests: RequestView[];
@@ -178,6 +184,7 @@ export function viewFor(state: TableState, playerId: string, now: number): Table
       bbSeat: hand.bbSeat,
       straddleSeat: hand.straddleSeat,
       bigBlind: hand.bigBlind,
+      bombPot: hand.bombPot,
       pot: hand.players.reduce((sum, p) => sum + p.committed + p.dead, 0),
       pots: buildPots(hand.players),
       currentBet: hand.currentBet,
@@ -210,6 +217,8 @@ export function viewFor(state: TableState, playerId: string, now: number): Table
     seats,
     hand: handView,
     shuffleAfterHand: state.shuffleAfterHand,
+    nextBombPot: bombPotDue(state),
+    bombPotCalled: bombPotHangsOnCall(state),
     feed: state.feed,
     requests: visibleRequests.map((request) => ({ ...request, name: memberOf(state, request.playerId).name })),
     ledger: ledgerOf(state),

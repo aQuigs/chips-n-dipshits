@@ -24,6 +24,7 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
   const handsWithAnteIn = { chips: 0, cents: 0 };
   let shortAntes = 0;
   const transfersIn = { chips: 0, cents: 0 };
+  const bombPots = { chips: 0, cents: 0, called: 0, byCount: 0, overAnAnte: 0, short: 0, allInWhenDealt: 0 };
 
   for (let seed = 1; seed <= TABLES; seed++) {
     const rng = seededRng(seed * 7919);
@@ -45,7 +46,18 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
         assertInvariants(t.state, t.now);
       }
 
+      const before = { hands: t.state.handCount, called: t.state.bombPotCalled };
       randomStep(t, rng);
+
+      // A hand is dealt by time passing, never by the step that called a bomb pot or changed a setting
+      const dealt = t.state.handCount > before.hands ? t.state.hand?.bombPot : null;
+      if (dealt) {
+        bombPots[t.state.config.unit] += 1;
+        bombPots[before.called ? 'called' : 'byCount'] += 1;
+        bombPots.overAnAnte += t.state.config.ante > 0 ? 1 : 0;
+        bombPots.short += t.state.hand!.players.some((p) => p.committed < dealt.amount) ? 1 : 0;
+        bombPots.allInWhenDealt += t.state.hand!.stage !== 'betting' ? 1 : 0;
+      }
     }
 
     assertChipsConserved(t.state);
@@ -83,4 +95,9 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
   assert.ok(shortAntes >= TABLES / 4, antes);
 
   assert.ok(transfersIn.chips >= TABLES && transfersIn.cents >= TABLES, `${transfersIn.chips} transfers at whole-chip tables and ${transfersIn.cents} at tables of dollars and cents`);
+
+  const bombs = `bomb pots: ${JSON.stringify(bombPots)}`;
+  assert.ok(bombPots.chips >= TABLES && bombPots.cents >= TABLES, bombs);
+  assert.ok(bombPots.called >= TABLES / 2 && bombPots.byCount >= TABLES, bombs);
+  assert.ok(bombPots.overAnAnte >= TABLES && bombPots.short >= TABLES / 2 && bombPots.allInWhenDealt >= TABLES / 4, bombs);
 });

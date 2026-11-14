@@ -21,7 +21,9 @@ function history(table: Denominated, handlers: DialogHandlers): HTMLElement {
                 return `${hand.players.find((p) => p.seat === win.seat)?.name ?? '?'} +${formatAmount(withBounty, table)}`;
               });
 
-              return h('details', null, h('summary', null, `Hand #${hand.number}`, h('small', null, winners.join(', '))), h('pre', null, cardText(hand.summary, handlers.prefs.get('deck'))));
+              const title = `Hand #${hand.number}${hand.bombPot ? ' · bomb pot' : ''}`;
+
+              return h('details', null, h('summary', null, title, h('small', null, winners.join(', '))), h('pre', null, cardText(hand.summary, handlers.prefs.get('deck'))));
             })),
       );
     },

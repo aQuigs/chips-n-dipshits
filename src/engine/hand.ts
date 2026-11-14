@@ -1,5 +1,6 @@
 import { formatAmount } from './amounts.ts';
 import { bettingIsClosed, bettingOptions, owesAction } from './betting.ts';
+import { claimBombPot } from './bombPots.ts';
 import { FLOP_SIZE, isSevenDeuce, prettyCards, shuffledDeck } from './cards.ts';
 import type { Card } from './cards.ts';
 import type { HandEvent } from './events.ts';
@@ -12,7 +13,7 @@ import { buildPots, splitAmount } from './pots.ts';
 import { addFeed, addPendingChips, clockwiseAfter, clockwiseFrom, eligibleSeats, seatsClockwiseAfter, vacateSeat } from './seats.ts';
 import { stakesText } from './stakes.ts';
 import { GameError } from './types.ts';
-import type { BountyResult, Ctx, Hand, HandPlayer, HandResult, PotAward, PotResult, ShownHand, Street, TableState } from './types.ts';
+import type { AnteFrom, BombPot, BountyResult, Ctx, Hand, HandPlayer, HandResult, PotAward, PotResult, ShownHand, Street, TableState } from './types.ts';
 
 export const TIMING = {
   /** Added to the action clock so a click made at the buzzer still counts after the round trip. */
@@ -185,15 +186,18 @@ export function startHand(state: TableState, ctx: Ctx): void {
     throw new Error('A hand needs at least two players');
   }
 
-  const { smallBlind, bigBlind, ante, anteFrom, sevenDeuceBounty } = state.config;
+  const { smallBlind, bigBlind, sevenDeuceBounty } = state.config;
   const button = state.buttonSeat === null ? eligible[ctx.rng.int(eligible.length)]! : seatsClockwiseAfter(eligible, state.buttonSeat)[0]!;
 
   const positions = positionsOf(eligible, button);
   const { order, sbSeat, bbSeat } = positions;
+  const bombPot = claimBombPot(state);
 
   // Worked out while every stack is still whole: what the hand starts with is settled before any of it is posted
-  const forced = forcedBets(state, positions);
-  const opening = openingBet(forced);
+  const forced = forcedBets(state, positions, bombPot);
+
+  // A bomb pot has no bet to call before the flop, and no betting there
+  const opening = bombPot ? null : openingBet(forced);
 
   const players: HandPlayer[] = eligible.map((seat) => {
     const playerId = state.seats[seat]!.playerId;
@@ -237,6 +241,7 @@ export function startHand(state: TableState, ctx: Ctx): void {
     bbSeat,
     straddleSeat: forced.find((bet) => bet.what === 'straddle')?.seat ?? null,
     bounty: sevenDeuceBounty,
+    bombPot,
     deck,
     boards: [[]],
     runs: 1,
@@ -245,8 +250,8 @@ export function startHand(state: TableState, ctx: Ctx): void {
     street: 'preflop',
     stage: 'betting',
     players,
-    currentBet: opening.amount,
-    minRaise: opening.amount,
+    currentBet: opening?.amount ?? 0,
+    minRaise: opening?.amount ?? bigBlind,
     toAct: null,
     lastAggressor: null,
     deadline: null,
@@ -257,13 +262,35 @@ export function startHand(state: TableState, ctx: Ctx): void {
   state.hand = hand;
 
   const stacks = players.map((p): [number, string, number] => [p.seat, p.name, p.startStack]);
+  const terms = bombPot ? `bomb pot ${formatAmount(bombPot.amount, state.config)}` : `blinds ${stakesText(state.config)}`;
 
-  record(hand, ante > 0 ? ['start', hand.number, button, smallBlind, bigBlind, stacks, ante, anteFrom] : ['start', hand.number, button, smallBlind, bigBlind, stacks]);
-  narrate(state, ctx, `Hand #${hand.number} · blinds ${stakesText(state.config)} · ${playerAt(hand, button)!.name} has the button`);
+  record(hand, ['start', hand.number, button, smallBlind, bigBlind, stacks, ...startTerms(state, bombPot)]);
+  narrate(state, ctx, `Hand #${hand.number} · ${terms} · ${playerAt(hand, button)!.name} has the button`);
   postForcedBets(state, ctx, forced);
 
   record(hand, ['deal']);
-  advance(state, ctx, opening.seat);
+
+  if (opening) {
+    advance(state, ctx, opening.seat);
+    return;
+  }
+
+  // The flop comes whoever is all in. What nobody could match goes back first, so it is dealt to the pot it is played for
+  refundUncalledBet(state, ctx);
+  dealNextStreet(state, ctx);
+  advance(state, ctx, button);
+}
+
+/** What a hand's first event says beyond the blinds, each part left out of a hand it plays no part in. */
+function startTerms(state: TableState, bombPot: BombPot | null): [ante?: number, anteFrom?: AnteFrom, bombPot?: BombPot] {
+  const { ante, anteFrom } = state.config;
+
+  // A bomb pot is played without the table's ante
+  if (bombPot) {
+    return [0, anteFrom, bombPot];
+  }
+
+  return ante > 0 ? [ante, anteFrom] : [];
 }
 
 function actionDeadline(state: TableState, now: number): number | null {
@@ -858,6 +885,7 @@ function clearHand(state: TableState, ctx: Ctx): void {
       number: hand.number,
       summary: hand.log.join('\n'),
       boards: hand.boards,
+      bombPot: hand.bombPot,
       players: hand.players.map((p) => ({
         seat: p.seat,
         name: p.name,

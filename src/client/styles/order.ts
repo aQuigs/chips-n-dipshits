@@ -29,4 +29,5 @@ export const STYLESHEETS = [
   'seat-moves.css',
   'hand-hint.css',
   'outdated.css',
+  'bomb-pots.css',
 ];

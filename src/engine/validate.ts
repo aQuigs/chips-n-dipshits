@@ -11,6 +11,8 @@ export const LIMITS = {
   maxActionSeconds: 300,
   /** Long enough for a Teams or Zoom invitation with its passcode, short enough to stay out of the way in every view. */
   linkLength: 500,
+  /** Rarer than this in a night's play is as good as never. */
+  handsPerBombPot: 100,
 };
 
 export function isWholeIn(value: unknown, min: number, max: number): value is number {

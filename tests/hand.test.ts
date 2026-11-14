@@ -2,28 +2,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { TIMING } from '../src/engine/index.ts';
-import { handRecords, TestTable } from './helpers.ts';
+import { ACES, BOARD, checkAround, chipsIn, handRecords, KINGS, options, QUEENS, TestTable } from './helpers.ts';
 import { assertChipsConserved, assertInvariants } from './invariants.ts';
-
-const BOARD = '2c 7d 9h Jc 3s';
-const ACES = 'As Ah';
-const KINGS = 'Ks Kh';
-const QUEENS = 'Qs Qh';
-
-function options(t: TestTable, seat: number) {
-  const found = t.view(seat).hand?.options;
-  assert.ok(found, `seat ${seat} should be on the clock`);
-
-  return found;
-}
-
-function checkAround(t: TestTable, seats: number[], streets: number): void {
-  for (let street = 0; street < streets; street++) {
-    for (const seat of seats) {
-      t.check(seat);
-    }
-  }
-}
 
 test('three-handed: blinds sit left of the button and the button acts first before the flop', () => {
   const t = new TestTable({ stacks: [1000, 1000, 1000] });
@@ -1064,11 +1044,6 @@ test('dollars and cents: an uncalled bet, a short all-in and a seven-deuce bount
 
 const EVERYONE_ANTES = { ante: 5 } as const;
 const BIG_BLIND_ANTE = { ante: 20, anteFrom: 'bigBlind' } as const;
-
-/** What each player has in front of them, has staked in all, and has put in as dead money. */
-function chipsIn(t: TestTable): number[][] {
-  return t.state.hand!.players.map((p) => [p.bet, p.committed, p.dead]);
-}
 
 test('everyone antes: each player dealt in puts one in the pot before the blinds, and calling the big blind costs what it did', () => {
   const t = new TestTable({ stacks: [1000, 1000, 1000, 1000], config: EVERYONE_ANTES });

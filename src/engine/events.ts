@@ -1,5 +1,5 @@
 import type { Card } from './cards.ts';
-import type { AnteFrom, Post } from './types.ts';
+import type { AnteFrom, BombPot, Post } from './types.ts';
 
 /**
  * What happened in a hand, one entry per thing the dealer would call out, as data: the same story as
@@ -11,8 +11,12 @@ import type { AnteFrom, Post } from './types.ts';
  * table ever appear in one.
  */
 export type HandEvent =
-  /** Always first, with everything needed to set the table up as it was before the blinds. The ante and who pays it are left out of a hand without one. */
-  | [kind: 'start', hand: number, button: number, smallBlind: number, bigBlind: number, players: [seat: number, name: string, stack: number][], ante?: number, anteFrom?: AnteFrom]
+  /**
+   * Always first, with everything needed to set the table up as it was before the blinds. The ante and
+   * who pays it are left out of a hand without one. `bombPot` is there only for a bomb pot, whose ante
+   * is 0: the table's own is not posted in one.
+   */
+  | [kind: 'start', hand: number, button: number, smallBlind: number, bigBlind: number, players: [seat: number, name: string, stack: number][], ante?: number, anteFrom?: AnteFrom, bombPot?: BombPot]
   /**
    * A forced bet. Left out, `as` means a live one, in front of the player like any bet. With `as`, the
    * chips went straight into the pot, as the player's own stake or as dead money: see `ForcedBet`.
@@ -56,6 +60,7 @@ export interface ReplayPosition {
   button: number;
   smallBlind: number;
   bigBlind: number;
+  bombPot: BombPot | null;
   seats: ReplaySeat[];
   /** Chips in the middle, bets in front of players not included. */
   pot: number;
@@ -74,12 +79,13 @@ export function replayHand(events: readonly HandEvent[], count = events.length):
     return null;
   }
 
-  const [, number, button, smallBlind, bigBlind, players] = first;
+  const [, number, button, smallBlind, bigBlind, players, , , bombPot = null] = first;
   const position: ReplayPosition = {
     number,
     button,
     smallBlind,
     bigBlind,
+    bombPot,
     seats: players.map(([seat, name, stack]) => ({ seat, name, stack, bet: 0, folded: false, cards: null })),
     pot: 0,
     boards: [[]],

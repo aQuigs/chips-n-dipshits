@@ -118,6 +118,8 @@ export function createTable(id: string, hostName: unknown, configInput: unknown,
     turn: 0,
     hand: null,
     shuffleAfterHand: false,
+    bombPotCalled: false,
+    handsSinceBombPot: 0,
     feed: [],
     feedSeq: 0,
   };

@@ -82,6 +82,13 @@ export function assertSeatingHolds(state: TableState): void {
   }
 }
 
+/** A bomb pot has its flop out from the first moment anyone sees it, which a finished hand's record cannot show. */
+export function assertBombPotsHold(state: TableState): void {
+  const hand = state.hand;
+
+  assert.ok(!hand?.bombPot || (hand.street !== 'preflop' && hand.boards[0]!.length >= 3), 'a bomb pot is on the table without its flop');
+}
+
 /** The table comes back from being saved exactly as it was. */
 export function assertSurvivesSaving(state: TableState): void {
   const json = JSON.stringify(state);
@@ -208,6 +215,7 @@ export function assertInvariants(state: TableState, now: number): void {
   assertChipsConserved(state);
   assertRolesHold(state);
   assertSeatingHolds(state);
+  assertBombPotsHold(state);
   assertSurvivesSaving(state);
   assertViewsKeepSecrets(state, now);
   assertFitsTheStore(state);
@@ -273,6 +281,41 @@ export function assertEventsRetellTheHand(record: HandRecord): void {
   });
 }
 
+/**
+ * A hand recorded as a bomb pot was played as one: everyone dealt in posted the amount, or all they
+ * had, as their stake; nobody posted anything else; and nothing was done before the flop. A hand that
+ * is not one has no such post.
+ */
+export function assertBombPotIsPlayedAsOne(record: HandRecord): void {
+  const { events, bombPot } = record;
+  const posts = events.flatMap((event) => (event[0] === 'post' ? [{ seat: event[1], what: event[2], amount: event[3], as: event[5] }] : []));
+
+  if (!bombPot) {
+    assert.ok(posts.every((post) => post.what !== 'bomb pot'), `hand ${record.number} is no bomb pot, and someone posted one`);
+    assert.ok(events[0]?.[8] === undefined, `hand ${record.number} is no bomb pot, and starts as one`);
+    return;
+  }
+
+  // A hand that outgrew what is recorded has no events to go by
+  if (events.length === 0) {
+    return;
+  }
+
+  const [start] = events;
+  assert.ok(start?.[0] === 'start' && start[6] === 0, `hand ${record.number}: a bomb pot starts with an ante`);
+  assert.deepEqual(start[8], bombPot, `hand ${record.number}: the first event does not say what bomb pot it is`);
+  assert.deepEqual(
+    posts.sort((a, b) => a.seat - b.seat),
+    record.players.map((p) => ({ seat: p.seat, what: 'bomb pot', amount: Math.min(bombPot.amount, p.startStack), as: 'contribution' })),
+    `hand ${record.number}: not everyone posted the bomb pot, or someone posted something else`,
+  );
+
+  const flop = events.findIndex((event) => event[0] === 'street');
+  const dealt = events[flop];
+  assert.ok(dealt?.[0] === 'street' && dealt[2].length === 3, `hand ${record.number}: a bomb pot without a flop`);
+  assert.ok(events.slice(1, flop).every((event) => event[0] === 'post' || event[0] === 'deal' || event[0] === 'return'), `hand ${record.number}: something was done before the flop of a bomb pot`);
+}
+
 /** Checks every finished hand among the effects, and says how many there were. */
 export function assertHandRecordsHold(effects: Effect[]): number {
   const records = handRecords(effects);
@@ -280,6 +323,7 @@ export function assertHandRecordsHold(effects: Effect[]): number {
   for (const record of records) {
     assertRecordBalances(record);
     assertEventsRetellTheHand(record);
+    assertBombPotIsPlayedAsOne(record);
   }
 
   return records.length;

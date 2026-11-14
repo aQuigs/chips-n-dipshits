@@ -381,7 +381,7 @@ function potEl(table: Denominated, hand: HandView): HTMLElement | null {
   const sidePots = hand.pots.length > 1 && hand.stage !== 'betting';
   const breakdown = sidePots ? hand.pots.map((pot, index) => `${index === 0 ? 'Main' : `Side ${index}`} ${formatAmount(pot.amount, table)}`).join(' · ') : null;
 
-  return h('div.pot', null, h('span.label', null, 'Pot'), formatAmount(hand.pot, table), breakdown ? h('div.sidepots', null, breakdown) : null);
+  return h('div.pot', null, h('span.label', null, hand.bombPot ? 'Bomb pot' : 'Pot'), formatAmount(hand.pot, table), breakdown ? h('div.sidepots', null, breakdown) : null);
 }
 
 /** The poker table as one viewer sees it, with their own seat at the bottom. */

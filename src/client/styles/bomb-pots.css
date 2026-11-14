@@ -1,0 +1,6 @@
+/* ---- Bomb pots: the word under the table that the next hand is one ---- */
+
+.next-hand {
+  color: var(--text);
+  font-weight: 600;
+}

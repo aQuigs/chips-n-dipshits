@@ -2080,6 +2080,78 @@ const CHECKS: Check[] = [
       await page.context().close();
     },
   ],
+  [
+    'a move that waits for the hand sits whole beside the hand hint on the viewer\'s own seat, standing and lying, and that seat still moves by a pick or a drag',
+    async (rig) => {
+      const sixAtTheRiver = () => {
+        const table = rig.table(['Quigs', 'Stu', 'Pam', 'Big Al', 'Zed', 'Pocket Pam'].map((name) => ({ name, stack: 1000 })));
+        table.deal({ button: 0, holes: { 0: 'Ks 7d' }, board: 'Kh 7s 2c 9d Ah' });
+        table.play(passive, (view) => view.hand!.street === 'river');
+
+        return table;
+      };
+      const marked = { plays: sortedCards('Ks 7d Kh 7s Ah'), idle: sortedCards('2c 9d') };
+
+      // On a phone the host picks a seat for themselves, and the move waits for the hand
+      const picked = sixAtTheRiver();
+      let page = await picked.open('Quigs', 'phone');
+      await hintSays(page, 'Two pair, kings and sevens');
+      await page.tap('[data-action="menu"]');
+      await page.tap('.menu [data-action="players"]');
+      await page.tap('.dialog li:has-text("Quigs") [data-action="move"]');
+      await page.waitForSelector('.dialog', { state: 'detached' });
+      assert.deepEqual(await marking(page), marked, 'picking a seat changed the marking');
+      await page.tap('[data-move-to="7"]');
+      await page.waitForSelector('.seat.me .move-note');
+      assert.equal(picked.view('Quigs').seats[0]?.moveTo, 7);
+
+      await inEveryShape(page, async (shape) => {
+        await shot(page, `hint-move-waiting-phone-${shape}`);
+        assert.deepEqual(await marking(page), marked);
+        await assertMarked(page);
+        await assertHintFits(page);
+
+        const [note] = await boxes(page, '.seat.me .move-note');
+        const [plate] = await boxes(page, '.seat.me .plate');
+        assert.ok(note!.left >= plate!.left && note!.right <= plate!.right && note!.top >= plate!.top && note!.bottom <= plate!.bottom, 'the note of a move sticks out of the seat');
+        assertApart(await textBoxes(page, `${HINT} .read`), [note!], 'the hand hint and the note of a move');
+        assert.deepEqual(await squeezed(page, '.seat.me .move-note'), [], 'the note of a move is cut off');
+      });
+      await page.context().close();
+
+      // On the desktop the host drags their own seat, marked cards and all, onto an open one
+      for (const shape of ['wide', 'tall'] as const) {
+        const dragged = sixAtTheRiver();
+        page = await dragged.open('Quigs', 'desktop');
+        if (shape === 'tall') {
+          await setStageHeight(page, 900);
+        }
+        await page.waitForSelector(`.table.${shape}`);
+        await hintSays(page, 'Two pair, kings and sevens');
+
+        const middle = async (selector: string) => {
+          const [box] = await boxes(page, selector);
+          assert.ok(box, `${selector} is not on the screen`);
+
+          return { x: (box.left + box.right) / 2, y: (box.top + box.bottom) / 2 };
+        };
+        const from = await middle('.seat.me .plate');
+        const to = await middle('[data-open-seat="7"] .plate');
+
+        await page.mouse.move(from.x, from.y);
+        await page.mouse.down();
+        await page.mouse.move(to.x, to.y, { steps: 8 });
+        assert.equal(await page.locator('.seat.drop[data-open-seat="7"]').count(), 1, 'the open seat under the mouse is not picked out');
+        await page.mouse.up();
+
+        await page.waitForSelector('.seat.me .move-note');
+        assert.equal(dragged.view('Quigs').seats[0]?.moveTo, 7);
+        assert.deepEqual(await marking(page), marked, 'the marking was lost with the drag');
+        await shot(page, `hint-move-dragged-desktop-${shape}`);
+        await page.context().close();
+      }
+    },
+  ],
 ];
 
 await mkdir(OUT, { recursive: true });

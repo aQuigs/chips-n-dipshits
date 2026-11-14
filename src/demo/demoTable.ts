@@ -195,6 +195,10 @@ export function createDemoTable(options: DemoOptions = {}): DemoTable {
       return { type: 'ritVote', agree: true };
     }
 
+    if (hand?.canAnswerChop) {
+      return { type: 'answerChop', agree: random() < 0.5, turn: hand.turn };
+    }
+
     if (seat?.away || seat?.sittingOut) {
       return { type: 'sitIn' };
     }

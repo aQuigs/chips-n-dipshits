@@ -1,15 +1,16 @@
 import type { Attention, Call } from './attention.ts';
 import type { TableChange } from './tableChange.ts';
+import { onTheClock } from '../engine/betting.ts';
 import type { TableView } from '../engine/view.ts';
 
 /**
- * The decision the viewer at `seat` is on the clock for, or null while it is someone else's or nobody's.
+ * The decision the viewer at `seat` is on the clock for, a bet or the answer to a chop, or null while it is someone else's or nobody's.
  * The number is the hand's own for the decision, and the one way the page tells one turn from another.
  */
 export function turnOf(view: TableView | null, seat: number | null): number | null {
   const hand = view?.hand;
 
-  return seat !== null && hand?.stage === 'betting' && hand.toAct === seat ? hand.turn : null;
+  return seat !== null && hand && onTheClock(hand) === seat ? hand.turn : null;
 }
 
 /**

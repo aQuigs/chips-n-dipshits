@@ -22,7 +22,7 @@ const CLOCK_SAMPLES = 8;
  * The moves of a hand. Only one may be on its way at a time, and it must not be repeated on a guess.
  * A kind of move added here is at once shown as sent, its buttons gone, while it is out (`ShownTable.moveIs`).
  */
-export const MOVES = new Set<Command['type']>(['fold', 'check', 'call', 'raise', 'ritVote']);
+export const MOVES = new Set<Command['type']>(['fold', 'check', 'call', 'raise', 'offerChop', 'answerChop', 'ritVote']);
 
 /** Why the table isn't being heard from: no answer at all, or an answer saying the server couldn't cope. */
 export type Trouble = 'unreachable' | 'struggling';

@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import { eligibleSeats, isStraddle, nightIsOver, SEAT_COUNT } from '../src/engine/index.ts';
 import type { Straddle } from '../src/engine/index.ts';
 import { handRecords, ledgerEntries, seededRng, TestTable } from './helpers.ts';
-import { assertChipsConserved, assertHandRecordsHold, assertInvariants, assertLedgerAgrees } from './invariants.ts';
+import { assertChipsConserved, assertHandRecordsHold, chopAnswers, assertInvariants, assertLedgerAgrees } from './invariants.ts';
 import { fixedSettings, randomConfig } from './randomConfig.ts';
 import { chance, randomStep } from './randomPlay.ts';
 
@@ -29,10 +29,11 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
   const doubleBoards = { chips: 0, cents: 0, shownDown: 0, ranOut: 0, withSidePots: 0, wonUncontested: 0 };
   const nights = { afterLastHand: 0, endedOutright: 0, startedAgain: 0, signals: 0 };
   const blinds = { missedBigBlinds: 0, deadSmallBlinds: 0, shortOfOwed: 0, noSmallBlind: 0, deadButtons: 0, keptWaiting: 0, forgivenTables: 0 };
+  const chops = { offered: 0, agreed: 0, turnedDown: 0 };
   const straddles: Record<Straddle | 'passedOver' | 'overAnAnte' | 'shownDown', number> = { straddle: 0, 'double straddle': 0, 'button straddle': 0, 'Mississippi straddle': 0, passedOver: 0, overAnAnte: 0, shownDown: 0 };
 
   for (let seed = 1; seed <= TABLES; seed++) {
-    const rng = seededRng(seed * 7919);
+    const rng = seededRng(seed * 7877);
     const players = 2 + rng.int(SEAT_COUNT - 1);
     const stacks = Array.from({ length: players }, () => (chance(rng, 15) ? 1 + rng.int(30) : 100 + rng.int(1900)));
 
@@ -97,6 +98,11 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
         doubleBoards.withSidePots += record.result.pots.length > 1 ? 1 : 0;
       }
 
+      const answers = chopAnswers(record);
+      chops.offered += record.events.some((event) => event[0] === 'chopOffer') ? 1 : 0;
+      chops.agreed += answers.some((answer) => answer.agree) ? 1 : 0;
+      chops.turnedDown += answers.some((answer) => !answer.agree) ? 1 : 0;
+
       const posts = record.events.flatMap((event) => (event[0] === 'post' ? [event] : []));
       const owed = posts.filter((post) => post[2] === 'missed big blind' || post[2] === 'dead small blind');
       blinds.missedBigBlinds += posts.some((post) => post[2] === 'missed big blind') ? 1 : 0;
@@ -157,6 +163,10 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
   const straddling = `straddles: ${JSON.stringify(straddles)}`;
   assert.ok(straddles.straddle >= TABLES / 10 && straddles['button straddle'] >= TABLES / 10 && straddles['Mississippi straddle'] >= TABLES / 10, straddling);
   assert.ok(straddles.passedOver >= TABLES && straddles.overAnAnte >= TABLES / 6 && straddles.shownDown >= TABLES / 6, straddling);
+
+  // Random play is mostly two-handed or has an ante or a straddle in the pot, where nobody chops: tests/chop.test.ts chops by the hundred
+  const chopping = `chops: ${JSON.stringify(chops)}`;
+  assert.ok(chops.offered >= TABLES / 20 && chops.agreed >= TABLES / 30 && chops.turnedDown >= 1, chopping);
 
   const doubles = `double-board bomb pots: ${JSON.stringify(doubleBoards)}`;
   assert.ok(doubleBoards.chips >= TABLES / 2 && doubleBoards.cents >= TABLES / 2, doubles);

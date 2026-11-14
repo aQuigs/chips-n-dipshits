@@ -147,12 +147,18 @@ function stepsOf(event: HandEvent, before: ReplayPosition, after: ReplayPosition
     case 'bounty':
       return [{ moves: event[2].map(([payer, amount]) => chips(seatOf(payer), seatOf(event[1]), amount)) }];
 
+    // Each blind goes back from in front of its seat, as a bet nobody called does
+    case 'chop':
+      return [{ moves: event[1].map(([seat, amount]) => chips(betOf(seat), seatOf(seat), amount)) }];
+
     // A check is heard, not seen, and a mucked hand stays face down where it is until the next deal
     case 'start':
     case 'check':
     case 'timeout':
     case 'vote':
     case 'muck':
+    case 'chopOffer':
+    case 'chopAnswer':
       return [];
 
     default:

@@ -144,3 +144,8 @@ export function passesTo<P extends Bettor>(hand: BettingRound<P>, seat: number):
 
   return clockwiseAfter(hand.players, seat).find((p) => owesAction(hand, p)) ?? null;
 }
+
+/** The seat on the clock: deciding a bet, or answering an offer to chop the blinds. Null while the hand waits for nobody in particular. */
+export function onTheClock(hand: { stage: Hand['stage']; toAct: number | null }): number | null {
+  return hand.stage === 'betting' || hand.stage === 'chop' ? hand.toAct : null;
+}

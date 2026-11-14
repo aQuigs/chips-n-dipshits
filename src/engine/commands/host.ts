@@ -1,6 +1,7 @@
 /* What the host may do, and of that what co-hosts may do too: each handler's `by` says which. */
 import { formatAmount, validAmount } from '../amounts.ts';
 import { bombPotName, bombPotOf } from '../bombPots.ts';
+import { stopChoppingUnasked } from '../chop.ts';
 import { validatedConfig } from '../config.ts';
 import { restartActionClock } from '../hand.ts';
 import { forgive, forgiveEveryone, owes } from '../handPlan.ts';
@@ -238,6 +239,14 @@ export const updateConfig: Handler<'updateConfig'> = {
 
       dropStraddlesNotAllowed(state);
       addFeed(state, ctx.now, 'system', null, allowed.length > 0 ? `Straddles allowed${when}: ${allowed.join(', ')}` : `No straddles are allowed${when}`);
+    }
+
+    if (state.config.allowChop !== before.allowChop) {
+      if (!state.config.allowChop) {
+        stopChoppingUnasked(state);
+      }
+
+      addFeed(state, ctx.now, 'system', null, state.config.allowChop ? 'The blinds may chop when it folds to them' : 'The blinds no longer chop');
     }
 
     if (state.config.missedBlinds !== before.missedBlinds) {

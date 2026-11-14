@@ -11,6 +11,7 @@ import type { APIResponse, Browser, BrowserContext, BrowserContextOptions, Page,
 import { MOVES } from '../src/client/connection.ts';
 import { startDevServer } from '../src/dev/server.ts';
 import type { DevServer } from '../src/dev/server.ts';
+import { onTheClock } from '../src/engine/index.ts';
 import type { Command, TableConfig, TableState, TableView } from '../src/engine/index.ts';
 import type { ApiRequest, ApiResponse, Auth } from '../src/server/api.ts';
 import { MemoryPresetStore } from '../src/server/memoryPresetStore.ts';
@@ -190,7 +191,8 @@ export class RigTable {
       const hand = view.hand;
       const voter = hand?.stage === 'ritVote' ? view.seats.find((seat) => seat && seat.inHand && !seat.folded && seat.ritVote === null) : null;
       // Named from the table, not from where players were first seated: the host may have moved them since
-      const name = hand?.stage === 'betting' && hand.toAct !== null ? view.seats[hand.toAct]?.name : voter?.name;
+      const onClock = hand ? onTheClock(hand) : null;
+      const name = onClock !== null ? view.seats[onClock]?.name : voter?.name;
       const command = name ? move(this.view(name), name) : null;
 
       if (name && command) {

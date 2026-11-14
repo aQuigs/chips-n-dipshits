@@ -3,6 +3,7 @@ export * from './betting.ts';
 export * from './boards.ts';
 export * from './bombPots.ts';
 export * from './cards.ts';
+export * from './chop.ts';
 export * from './config.ts';
 export * from './events.ts';
 export * from './forcedBets.ts';

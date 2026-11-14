@@ -51,6 +51,8 @@ export interface TableConfig {
   /** On two boards, each board wins half of every pot. */
   bombPotBoards: BombPotBoards;
   missedBlinds: MissedBlinds;
+  /** When everyone else folds before the flop, the small blind may offer the big blind to take the blinds back: see `chop.ts`. */
+  allowChop: boolean;
 }
 
 export interface Member {
@@ -90,6 +92,8 @@ export interface Seat {
   owesSmallBlind: boolean;
   /** Chose to post what they owe on the first hand they can be dealt, rather than wait for the big blind. False whenever nothing is owed. */
   postsOwed: boolean;
+  /** Chops the blinds whenever the other blind would too, without being asked: see `chop.ts`. Only at a table that allows chops. */
+  alwaysChop: boolean;
 }
 
 /** Where a hand's blinds fall, as seats: one may have nobody posting from it. */
@@ -114,9 +118,10 @@ export type Street = 'preflop' | 'flop' | 'turn' | 'river';
  * betting: someone is on the clock.
  * ritVote: everyone is all in and deciding whether to run the board twice.
  * runout: everyone is all in and the remaining board is being dealt, one street per step.
+ * chop: the small blind offered to chop the blinds, and the big blind is on the clock to answer.
  * done: chips are awarded and the result stays up until the deadline.
  */
-export type HandStage = 'betting' | 'ritVote' | 'runout' | 'done';
+export type HandStage = 'betting' | 'chop' | 'ritVote' | 'runout' | 'done';
 
 /**
  * The kinds of straddle, each by what its post is called: `straddle` is the one from under the gun.
@@ -206,8 +211,10 @@ export interface BountyResult {
 }
 
 export interface HandResult {
-  /** Everyone else folded, so there was no showdown. */
+  /** There was no showdown: everyone else folded, or the blinds chopped. */
   uncontested: boolean;
+  /** The blinds chopped, the small blind's seat and the big blind's: each took back what they posted, and nobody won anything. Left out of every other hand. */
+  chopped?: [smallBlind: number, bigBlind: number];
   pots: PotResult[];
   /** Chips each seat won from the pots, bounty excluded. */
   winnings: { seat: number; amount: number }[];
@@ -233,6 +240,8 @@ export interface Hand {
   bounty: number;
   /** What kind of hand this is: a bomb pot and its terms, or null for an ordinary hand. Settled when it is dealt. */
   bombPot: BombPot | null;
+  /** The small blind has offered to chop the blinds, which they may do once a hand. */
+  chopOffered: boolean;
   /** Undealt cards; the next card comes off the end. */
   deck: Card[];
   /** The boards on the table. They and the three fields after them are kept by `boards.ts`, and written nowhere else. */
@@ -414,6 +423,12 @@ export type Command =
   | { type: 'check'; turn?: number }
   | { type: 'call'; turn?: number }
   | { type: 'raise'; to: number; turn?: number }
+  /** The small blind's offer to chop the blinds, made instead of a move on their turn. */
+  | { type: 'offerChop'; turn?: number }
+  /** The big blind's answer to an offer to chop. */
+  | { type: 'answerChop'; agree: boolean; turn?: number }
+  /** Says whether the player chops the blinds whenever the other blind would too. */
+  | { type: 'setAlwaysChop'; on: boolean }
   | { type: 'ritVote'; agree: boolean }
   | { type: 'showCards' }
   | { type: 'chat'; text: string }

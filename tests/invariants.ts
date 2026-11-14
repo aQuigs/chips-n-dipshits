@@ -4,7 +4,7 @@
  */
 import assert from 'node:assert/strict';
 
-import { BOARD_SIZE, boardsDealt, evaluateHand, FEED_LIMIT, FLOP_SIZE, isStraddle, LIMITS, nightIsOver, owes, PLAYING_THE_BOARD, reaches, replayHand, roleOf, STRADDLES, STRADDLES_IN_A_ROW, straddlesAllowed, viewFor } from '../src/engine/index.ts';
+import { blindsOnly, BOARD_SIZE, boardsDealt, evaluateHand, FEED_LIMIT, FLOP_SIZE, handFacts, isStraddle, LIMITS, nightIsOver, owes, PLAYING_THE_BOARD, reaches, replayHand, roleOf, STRADDLES, STRADDLES_IN_A_ROW, straddlesAllowed, viewFor, wonAPot } from '../src/engine/index.ts';
 import type { Effect, FeedEntry, HandPlayer, HandRecord, TableState } from '../src/engine/index.ts';
 import { CACHE_VALUE_BYTES, utf8Bytes } from '../src/gas/sheetStore.ts';
 import { restoreState } from '../src/server/store.ts';
@@ -208,6 +208,23 @@ export function assertBoardsHold(state: TableState): void {
 }
 
 /**
+ * An offer to chop stands only in a hand the blinds could chop, with the big blind on the clock to
+ * answer it, and only once a hand. Nobody always chops at a table that doesn't chop.
+ */
+export function assertChopHolds(state: TableState): void {
+  const hand = state.hand;
+
+  if (hand?.stage === 'chop') {
+    assert.ok(hand.chopOffered && blindsOnly(hand), 'an offer to chop stands in a hand the blinds could not chop');
+    assert.equal(hand.toAct, hand.bbSeat, 'someone other than the big blind is answering a chop');
+  }
+
+  if (!state.config.allowChop) {
+    assert.ok(state.seats.every((seat) => !seat?.alwaysChop), 'a player always chops at a table that does not');
+  }
+}
+
+/**
  * Once the night is over nothing is dealt or bought until play starts again, and while the last hands
  * are called there is always a hand still to finish before the night ends.
  */
@@ -379,6 +396,7 @@ export function assertInvariants(state: TableState, now: number): void {
   assertBoardsHold(state);
   assertNightHolds(state);
   assertNumbersHold(state);
+  assertChopHolds(state);
   assertSurvivesSaving(state);
   assertViewsKeepSecrets(state, now);
   assertFitsTheStore(state);
@@ -526,7 +544,48 @@ export function assertBombPotIsPlayedAsOne(record: HandRecord): void {
   assert.ok(record.boards.length === boards || (boards === 1 && events.some((event) => event[0] === 'runs' && event[1] > 1)), `hand ${record.number}: a bomb pot dealt on ${boards} boards ended on ${record.boards.length}`);
 }
 
+/**
+ * A chopped hand gave each blind back to the seat that posted it, the small blind and the big blind
+ * and nothing else, and ended there: every stack as it was dealt, no pot, no winner, no bounty, nothing
+ * shown, no flop. Only a chopped hand has a chop among its events.
+ */
+export function assertChopIsWhole(record: HandRecord): void {
+  const { events, result } = record;
+  const chop = events.find((event) => event[0] === 'chop');
+  const where = `hand ${record.number}`;
+
+  if (!result.chopped) {
+    assert.equal(chop, undefined, `${where} has a chop among its events and was not chopped`);
+    return;
+  }
+
+  assert.ok(result.uncontested && result.pots.length === 0 && result.winnings.length === 0 && result.hands.length === 0 && result.bounty === null, `${where} was chopped and has a result`);
+  assert.ok(record.players.length >= 3 && record.players.every((player) => player.endStack === player.startStack && player.cards === null), `${where} was chopped and moved chips or showed cards`);
+  assert.deepEqual(record.boards, [[]], `${where} was chopped after the flop`);
+
+  // A hand that outgrew what is recorded has no events to go by, which a chopped hand never does
+  const posts = events.flatMap((event) => (event[0] === 'post' ? [[event[1], event[3], event[2]]] : []));
+  assert.ok(chop?.[0] === 'chop', `${where} was chopped and its events do not say so`);
+  assert.deepEqual(chop[1].map(([seat, amount], nth) => [seat, amount, nth === 0 ? 'small blind' : 'big blind']), posts, `${where} chopped other chips than the two blinds`);
+  assert.equal(chop, events.at(-1), `${where} went on after the chop`);
+  assert.deepEqual(result.chopped, chop[1].map(([seat]) => seat), `${where} names other seats as the blinds than the chop`);
+
+  // In the facts, a hand played by everyone, which both blinds were still in and nobody won
+  const facts = handFacts(record);
+  assert.equal(facts.ended, 'chop', `${where} was chopped and its facts say it ended otherwise`);
+  assert.equal(facts.pot, 0, `${where} was chopped and its facts have a pot`);
+  for (const player of facts.players) {
+    const blind = result.chopped.includes(player.seat);
+    assert.deepEqual([player.folded, player.net, player.putIn, wonAPot(player)], [!blind, 0, 0, false], `${where}: the facts of seat ${player.seat} are not those of a chop`);
+  }
+}
+
+/** Each answer to an offer to chop in a hand, and whether it was the clock that gave it. */
+export const chopAnswers = (record: HandRecord) =>
+  record.events.flatMap((event, nth) => (event[0] === 'chopAnswer' ? [{ agree: event[2], timedOut: record.events[nth - 1]?.[0] === 'timeout' }] : []));
+
 /** Checks every finished hand among the effects, and says how many there were. */
+
 export function assertHandRecordsHold(effects: Effect[]): number {
   const records = handRecords(effects);
 
@@ -535,6 +594,7 @@ export function assertHandRecordsHold(effects: Effect[]): number {
     assertEventsRetellTheHand(record);
     assertBombPotIsPlayedAsOne(record);
     assertBoardsShareThePots(record);
+    assertChopIsWhole(record);
   }
 
   return records.length;

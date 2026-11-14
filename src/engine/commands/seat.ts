@@ -99,3 +99,15 @@ export const setStraddle: Handler<'setStraddle'> = {
     chooseStraddle(seat, kind.what, on);
   },
 };
+
+export const setAlwaysChop: Handler<'setAlwaysChop'> = {
+  by: 'seat',
+  run: ({ state, command, seat }) => {
+    const on = yesOrNo(command.on, 'Always chop');
+    if (on && !state.config.allowChop) {
+      throw new GameError("This table doesn't chop the blinds");
+    }
+
+    seat.alwaysChop = on;
+  },
+};

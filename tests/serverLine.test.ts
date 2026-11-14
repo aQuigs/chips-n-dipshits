@@ -145,3 +145,50 @@ test('a table connection whose move the newer build refused tells nobody, sends 
   await sleep(30);
   assert.deepEqual(sent.map((request) => request.op), ['act']);
 });
+
+test('an offer to chop or its answer that got no answer is looked up with a fresh poll, and no second move is sent until the table is heard from', async () => {
+  const sent: ApiRequest[] = [];
+  let answerPolls: (() => void) | null = null;
+  const transport: Transport = {
+    send: async (request) => {
+      sent.push(request);
+
+      if (request.op === 'act') {
+        return null as unknown as ApiResponse & Built;
+      }
+
+      // The lookup is held until the test lets the table be heard from
+      await new Promise<void>((resolve) => (answerPolls = resolve));
+
+      return { ok: true, kind: 'unchanged', now: Date.now(), build: PAGE_BUILD };
+    },
+  };
+  const told: string[] = [];
+  const connection = new TableConnection(new ServerLine(transport, PAGE_BUILD, () => undefined), { tableId: 'T', auth: { id: 'P', token: 'X' } }, new ServerClock(), {
+    view: () => undefined,
+    move: () => undefined,
+    status: () => undefined,
+    refused: () => told.push('refused'),
+    notice: (message) => told.push(message),
+  });
+
+  for (const command of [{ type: 'offerChop', turn: 7 }, { type: 'answerChop', agree: true, turn: 8 }] as const) {
+    sent.length = 0;
+    told.length = 0;
+
+    assert.equal(await connection.send(command), 'unanswered', command.type);
+    assert.equal(connection.turnLocked, true, `${command.type} left the moves open`);
+    assert.deepEqual(told, ['No answer from the table. Checking whether that was played…']);
+
+    // Tapped again while it is looked up: refused on the page, never sent
+    assert.equal(await connection.send(command), 'refused');
+    await sleep(10);
+    assert.deepEqual(sent.map((request) => (request.op === 'poll' ? [request.op, request.since] : request.op === 'act' ? [request.op, request.command.type] : [request.op])), [['act', command.type], ['poll', -1]]);
+
+    answerPolls!();
+    await sleep(10);
+    assert.equal(connection.turnLocked, false, 'the table was heard from and the moves stayed locked');
+  }
+
+  connection.close();
+});

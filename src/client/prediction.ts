@@ -32,12 +32,13 @@ function bettorsOf(seats: readonly (SeatView | null)[]): Bettor[] {
  * - the viewer's own seat: their bet, their stack, whether they folded or are all in, and the move's label;
  * - the pot's total;
  * - the move as the hand's next event, which is all the effects hear of it;
- * - that the decision is made: no options, no clock running, no hint under cards that were folded;
+ * - that the decision is made: no options, no offer to chop, no clock running, no hint under cards that were folded;
  * - who the action passes to, with the next decision's number, when it simply passes on.
  *
  * What it does not know it leaves empty or as the view had it. Nobody is to act (`toAct` null) when
  * the move ends the street or the hand, or the next player is one the server acts for (away, or on
- * their way out): what comes then is for the cards and the server to say. No clock is given, since
+ * their way out), or the fold leaves two blinds who always chop (`foldChops`), whose hand ends then and there:
+ * what comes then is for the cards and the server to say. No clock is given, since
  * the next one starts when the server hears the move. The side pots (`pots`), the play-by-play and
  * everything about anyone else are untouched.
  */
@@ -83,7 +84,7 @@ export function predict(view: TableView, move: TurnMove): TableView | null {
   const next = passesTo({ players: bettorsOf(seats), currentBet }, seat.seat);
   const nextSeat = next && seats[next.seat];
   // The server plays the turn of a player who is away or on their way out, in the same breath as this move
-  const waitedFor = nextSeat && !nextSeat.away && !nextSeat.leaving ? nextSeat.seat : null;
+  const waitedFor = nextSeat && !nextSeat.away && !nextSeat.leaving && !(action.type === 'fold' && hand.foldChops) ? nextSeat.seat : null;
 
   return {
     ...view,
@@ -96,6 +97,8 @@ export function predict(view: TableView, move: TurnMove): TableView | null {
       turn: waitedFor === null ? hand.turn : hand.turn + 1,
       deadline: null,
       options: null,
+      canOfferChop: false,
+      foldChops: false,
       holding: action.type === 'fold' ? null : hand.holding,
       events: eventsWith(hand.events, event),
     },

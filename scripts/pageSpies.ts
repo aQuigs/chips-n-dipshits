@@ -5,7 +5,9 @@
 import type { Page, Request, Response } from 'playwright';
 
 import type { Permission } from '../src/client/attentionWays.ts';
+import { MOVES } from '../src/client/connection.ts';
 import type { MoveName } from '../src/client/motion.ts';
+import type { Command } from '../src/engine/index.ts';
 import type { Box } from './rig.ts';
 
 /** Run in the page: notifications that are written down, not shown, with the browser's answer so far and the one it gives when asked. */
@@ -60,11 +62,11 @@ export const ownComplaints = (said: string[]) => said.filter((line) => !line.sta
 export function moveIn(request: Request): string | null {
   const body = JSON.parse(request.postData() ?? '{}') as { op?: string; command?: { type: string; agree?: boolean } };
 
-  if (body.op !== 'act' || !body.command || !['fold', 'check', 'call', 'raise', 'ritVote'].includes(body.command.type)) {
+  if (body.op !== 'act' || !body.command || !MOVES.has(body.command.type as Command['type'])) {
     return null;
   }
 
-  return body.command.type === 'ritVote' ? `ritVote ${body.command.agree}` : body.command.type;
+  return body.command.agree === undefined ? body.command.type : `${body.command.type} ${body.command.agree}`;
 }
 
 /** The moves a page sends from now on, in order, whatever becomes of them on the way. */

@@ -189,6 +189,9 @@ test('each kind of hand event moves what it should, or nothing', () => {
     ['a pot won', ON_THE_FLOP, ['win', 1, 60, 0, 0], ['chips 60 pot>seat1 @0']],
     ['a pot won with a bet in front', [...DEALT, ['fold', 0], ['fold', 1]], ['win', 2, 30, 0, 0], ['chips 10 bet1>pot @0', 'chips 20 bet2>pot @0', 'chips 30 pot>seat2 @0']],
     ['a bounty', [...ON_THE_FLOP, ['win', 1, 60, 0, 0]], ['bounty', 1, [[0, 50], [2, 50]]], ['chips 50 seat0>seat1 @0', 'chips 50 seat2>seat1 @0']],
+    ['an offer to chop', [...DEALT, ['fold', 0]], ['chopOffer', 1], []],
+    ['an answer to it', [...DEALT, ['fold', 0], ['chopOffer', 1]], ['chopAnswer', 2, true], []],
+    ['the blinds chopped, each going back to its own seat', [...DEALT, ['fold', 0], ['chopOffer', 1], ['chopAnswer', 2, true]], ['chop', [[1, 10], [2, 20]]], ['chips 10 bet1>seat1 @0', 'chips 20 bet2>seat2 @0']],
   ];
 
   for (const [what, had, event, moves] of cases) {

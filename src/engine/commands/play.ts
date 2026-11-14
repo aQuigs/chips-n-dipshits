@@ -3,7 +3,7 @@
  * their vote or their cards to show is for the hand to say, in its own words.
  */
 import type { BettingAction } from '../betting.ts';
-import { act, showCards as showCardsOf, voteRunItTwice } from '../hand.ts';
+import { act, answerChop as answerChopIn, offerChop as offerChopIn, showCards as showCardsOf, voteRunItTwice } from '../hand.ts';
 import { seatIndexOf } from '../seats.ts';
 import { GameError } from '../types.ts';
 import type { Ctx, Member, TableState } from '../types.ts';
@@ -34,6 +34,16 @@ export const check: Handler<'check'> = { by: 'member', run: (sent) => bet(sent, 
 export const call: Handler<'call'> = { by: 'member', run: (sent) => bet(sent, { type: 'call' }, sent.command.turn) };
 
 export const raise: Handler<'raise'> = { by: 'member', run: (sent) => bet(sent, { type: 'raise', to: sent.command.to }, sent.command.turn) };
+
+export const offerChop: Handler<'offerChop'> = {
+  by: 'member',
+  run: ({ state, ctx, member, command }) => offerChopIn(state, ctx, seatIndexOf(state, member.id), turnOf(command.turn)),
+};
+
+export const answerChop: Handler<'answerChop'> = {
+  by: 'member',
+  run: ({ state, ctx, member, command }) => answerChopIn(state, ctx, seatIndexOf(state, member.id), yesOrNo(command.agree, 'Your answer'), turnOf(command.turn)),
+};
 
 export const ritVote: Handler<'ritVote'> = {
   by: 'member',

@@ -24,6 +24,9 @@ const SCHEMA_3 = FILES.filter((file) => /^schema[23]-/.test(file));
 // The rest of those were saved as schema 3 began, before any of it was added
 const OLDEST = SCHEMA_3.filter((file) => file !== LAST_OF_SCHEMA_3);
 
+// Saved before the game knew its players from night to night
+const BEFORE_IDENTITIES = FILES.filter((file) => /^schema[2-5]-/.test(file));
+
 const HANDS_TO_PLAY = 4;
 const STEP_LIMIT = 3000;
 
@@ -77,7 +80,7 @@ FILES.forEach((file, index) => {
 });
 
 test('every table saved before the game knew its players loads with members nobody knows, one of whom can then say who they are', () => {
-  for (const file of FILES) {
+  for (const file of BEFORE_IDENTITIES) {
     const raw = JSON.parse(readFileSync(new URL(file, FOLDER), 'utf8')) as { members: object[] };
     assert.ok(raw.members.length > 0 && raw.members.every((member) => !('identity' in member)), `${file} was saved with identities`);
 

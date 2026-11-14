@@ -234,6 +234,28 @@ function doneWithCardsShown(): TestTable {
   return t;
 }
 
+/**
+ * On the river, seat 2 holding seven-deuce with the bounty on and two players still in: the
+ * hand finishes on the bounty it was dealt under, whatever the table's settings are by then.
+ */
+function bettingWithSevenDeuce(): TestTable {
+  const t = table([1000, 1000, 1000], 39);
+  watcher(t);
+
+  t.cmd(0, { type: 'start' });
+  t.deal({ button: 0, holes: { 0: 'Kh Qh', 1: '9c 9d', 2: '7h 2c' }, board: '7s 7d Kc 3h 9s' });
+
+  t.call(0);
+  t.fold(1);
+  t.check(2);
+  t.check(2);
+  t.check(0);
+  t.raise(2, 40);
+  t.call(0);
+
+  return t;
+}
+
 /** Tables as the code of one time saved them. */
 interface TableSet {
   /** The schema that code saved. */
@@ -280,6 +302,14 @@ const SETS: TableSet[] = [
     tables: {
       'runout-three-boards': runoutOnThreeBoards,
       'done-cards-shown': doneWithCardsShown,
+    },
+  },
+  // Schema 6 as it ended: the last code for which a table's bounty was one amount, for seven-deuce
+  {
+    schema: 6,
+    tables: {
+      'betting-seven-deuce': bettingWithSevenDeuce,
+      'done-bounty-paid': doneWithBountyPaid,
     },
   },
 ];

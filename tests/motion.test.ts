@@ -191,6 +191,8 @@ test('each kind of hand event moves what it should, or nothing', () => {
     ['a bounty', [...ON_THE_FLOP, ['win', 1, 60, 0, 0]], ['bounty', 1, [[0, 50], [2, 50]]], ['chips 50 seat0>seat1 @0', 'chips 50 seat2>seat1 @0']],
     ['an offer to chop', [...DEALT, ['fold', 0]], ['chopOffer', 1], []],
     ['an answer to it', [...DEALT, ['fold', 0], ['chopOffer', 1]], ['chopAnswer', 2, true], []],
+    ['the cards that would have come, hunted after everyone folded on the flop', [...ON_THE_FLOP, ['bet', 1, 40, 940], ['fold', 2], ['fold', 0], ['return', 1, 40], ['win', 1, 60, 0, 0]], ['hunt', [['9h', '4c']]], ['hunt >board0.3 @0', 'hunt >board0.4 @60']],
+    ['the whole board hunted after a hand that ended before the flop', [...DEALT, ['fold', 0], ['fold', 1], ['return', 2, 10], ['win', 2, 20, 0, 0]], ['hunt', [['As', 'Kd', '2c', '9h', '4c']]], [0, 1, 2, 3, 4].map((card) => `hunt >board0.${card} @${card * 60}`)],
     ['the blinds chopped, each going back to its own seat', [...DEALT, ['fold', 0], ['chopOffer', 1], ['chopAnswer', 2, true]], ['chop', [[1, 10], [2, 20]]], ['chips 10 bet1>seat1 @0', 'chips 20 bet2>seat2 @0']],
   ];
 

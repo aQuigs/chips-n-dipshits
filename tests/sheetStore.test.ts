@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { addMember, BADGES, createTable, DEFAULT_CONFIG, LIMITS, presetSettings, REACTIONS, REACTIONS_LIVE } from '../src/engine/index.ts';
+import { addMember, BADGES, createTable, DEFAULT_CONFIG, LIMITS, prettyCards, presetSettings, REACTIONS, REACTIONS_LIVE } from '../src/engine/index.ts';
 import type { Effect, HandRecord, TableConfig, TableState } from '../src/engine/index.ts';
 import { SheetPresetStore } from '../src/gas/sheetPresetStore.ts';
 import { SheetStore } from '../src/gas/sheetStore.ts';
@@ -9,7 +9,7 @@ import { MemoryPresetStore } from '../src/server/memoryPresetStore.ts';
 import type { PresetStore, SavedPreset } from '../src/server/presetStore.ts';
 import { StoreBusyError } from '../src/server/store.ts';
 import { FakeCache, FakeLock, FakeSpreadsheet } from './fakes.ts';
-import { seededRng, TestTable } from './helpers.ts';
+import { cards, seededRng, TestTable } from './helpers.ts';
 import { fullestChat } from './invariants.ts';
 
 function setup() {
@@ -970,6 +970,14 @@ test('after the longest night the fullest table still fits its row and the cache
   t.state.reactions = Array.from({ length: REACTIONS_LIVE }, (_reaction, index) => ({ from: t.ids[index]!, kind: longest.id, at: 9_999_999_999_999, to: t.ids[index + 1]! }));
   const reactions = JSON.stringify(t.state.reactions).length;
   assert.ok(reactions <= 300, `the reactions take ${reactions} characters`);
+
+  // And the most a rabbit hunt adds to the hand: every card of three boards, in the hand, its events and its log
+  const withoutHunt = JSON.stringify(t.state).length;
+  const hunted = [cards('As Ks Qs Js Ts'), cards('Ah Kh Qh Jh Th'), cards('Ad Kd Qd Jd Td')];
+  t.state.hand!.hunted = hunted;
+  t.state.hand!.events.push(['hunt', hunted]);
+  t.state.hand!.log.push(`${name(0)} hunts the rabbit, cards that did not count: ${hunted.map((board, index) => `${['first', 'second', 'third'][index]} board ${prettyCards(board)}`).join(', ')}`);
+  assert.ok(JSON.stringify(t.state).length - withoutHunt <= 400, `a hunt adds ${JSON.stringify(t.state).length - withoutHunt} characters`);
 
   const numbers = JSON.stringify(t.state.tonight).length;
   assert.ok(numbers <= LIMITS.members * 400, `the night's numbers for ${LIMITS.members} players take ${numbers} characters`);

@@ -88,6 +88,7 @@ const BY_SOMEONE_ELSE: [HandEvent, SoundName | null][] = [
   [['chopOffer', 1], null],
   [['chopAnswer', 1, true], null],
   [['chop', [[1, 10], [2, 20]]], 'chips'],
+  [['hunt', [['9h', '4c']]], 'street'],
 ];
 
 test('each kind of hand event makes its sound, or none', () => {

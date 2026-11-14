@@ -8968,6 +8968,12 @@ const CHECKS: Check[] = [
       const kibitz = await table.open('Kibitz', 'desktop');
       const pages = [['Quigs', quigs], ['Stu', stu], ['a watcher', kibitz]] as const;
 
+      // A toast is for news, and a page tells news from a view it judges fresh by its own clock, which runs
+      // while the rig's stands still: a page slow between steps would take the high hand changing for old news
+      for (const [, page] of pages) {
+        await page.clock.setFixedTime(Date.now());
+      }
+
       for (const [who, page] of pages) {
         assert.deepEqual(await markedOn(page), [], `${who}: the high hand is marked before the hand is off the table`);
         assert.equal(await page.locator('.feed li:has-text("high hand")').count(), 0, `${who}: the high hand is told before the hand is off the table`);

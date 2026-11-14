@@ -2,6 +2,8 @@ import { silentSounds } from './sound.ts';
 import type { SoundMaker, SoundName } from './sound.ts';
 import { RECIPES } from './soundRecipes.ts';
 import type { Voice } from './soundRecipes.ts';
+import { pageTouch } from './pageTouch.ts';
+import type { Touch } from './touch.ts';
 
 const SILENCE = 0.0001;
 const NOISE_SECONDS = 1;
@@ -16,12 +18,8 @@ class WebAudioSounds implements SoundMaker {
   private audio: AudioContext | null = null;
   private noise: AudioBuffer | null = null;
 
-  constructor(page: Document) {
-    // A touch only counts as the visitor's own gesture once the finger lifts, which is the click. Each is
-    // heard on its way down, before what it lands on can spend the gesture the browser allows sound for
-    for (const gesture of ['pointerdown', 'click', 'keydown']) {
-      page.addEventListener(gesture, () => this.wake(), { capture: true });
-    }
+  constructor(touch: Touch) {
+    touch.onTouch(() => this.wake());
   }
 
   play(sound: SoundName, volume: number, delay: number): void {
@@ -107,11 +105,6 @@ class WebAudioSounds implements SoundMaker {
 
   /** Sets the audio up, or wakes it, from inside a visitor's gesture, the only place a browser allows it. */
   private wake(): void {
-    // A finger going down is not yet a gesture the browser accepts, and setting up audio then draws a warning
-    if (navigator.userActivation && !navigator.userActivation.isActive) {
-      return;
-    }
-
     try {
       this.audio ??= new AudioContext();
 
@@ -128,7 +121,7 @@ let shared: SoundMaker | null = null;
 
 /** The page's one maker of sounds, shared by every app on it: a browser allows a page only so many audio contexts. */
 export function pageSounds(): SoundMaker {
-  shared ??= typeof AudioContext === 'function' ? new WebAudioSounds(document) : silentSounds;
+  shared ??= typeof AudioContext === 'function' ? new WebAudioSounds(pageTouch()) : silentSounds;
 
   return shared;
 }

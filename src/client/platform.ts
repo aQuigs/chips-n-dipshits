@@ -44,6 +44,11 @@ export interface Platform {
   boot: Boot;
   /** Which build of the game this page is, as the build wrote it into the page. */
   build: string;
+  /**
+   * Whether the page is its tab's own, as opposed to a frame inside another site's page. Only then may
+   * it name the tab or ask for notifications: in Apps Script's frame the browser refuses both.
+   */
+  ownsTab: boolean;
 }
 
 interface ScriptRunner {
@@ -186,7 +191,7 @@ export function detectPlatform(boot: Boot, build: string): Platform {
   const memory = browserMemory();
 
   if (typeof google !== 'undefined' && google?.script?.run) {
-    return { transport: new AppsScriptTransport(google), links: appsScriptLinks(google, boot), memory, boot, build };
+    return { transport: new AppsScriptTransport(google), links: appsScriptLinks(google, boot), memory, boot, build, ownsTab: false };
   }
 
   const query = new URLSearchParams(location.search);
@@ -197,5 +202,6 @@ export function detectPlatform(boot: Boot, build: string): Platform {
     memory,
     boot: { ...boot, table: boot.table ?? query.get('table'), me: boot.me ?? query.get('me') },
     build,
+    ownsTab: window.top === window,
   };
 }

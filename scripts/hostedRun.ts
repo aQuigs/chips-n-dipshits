@@ -4,6 +4,8 @@
  * overlap. A stand-in for Apps Script's host object is put in the page, on top of the local server.
  */
 import assert from 'node:assert/strict';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 
 import { chromium } from 'playwright';
 import type { Browser, Page, Route } from 'playwright';
@@ -12,6 +14,7 @@ import { KEYS_SETTLE_MS } from '../src/client/hotkeys.ts';
 import { startDevServer } from '../src/dev/server.ts';
 import { UNSTAMPED_BUILD } from '../src/server/build.ts';
 import { clientPage } from './bundle.ts';
+import { STAND_IN_HOST } from './standInHost.ts';
 
 const STEP_TIMEOUT_MS = 20_000;
 const SLOW_ANSWER_MS = 3000;
@@ -22,35 +25,36 @@ const MOVES = ['fold', 'check', 'call', 'raise'];
 const QUIET_MS = 2500;
 const NEWER_BUILD = 'newerbuild00';
 
-// Runs in the page before anything else: google.script as Apps Script provides it, with the page told
-// its table and member the way doGet tells it, and the address kept through the host
-const STAND_IN_HOST = `
+
+// Runs in Apps Script's frame, not in the page around it: the page out of sight, and every call that asks
+// the browser for notifications, makes one or names the tab written down
+const ATTENTION_SPIES = `
 (() => {
-  const query = new URLSearchParams(location.search);
-  const boot = { baseUrl: location.origin + '/', table: query.get('table'), me: query.get('me') };
-  Object.defineProperty(window, 'CND_BOOT', { get: () => boot, set: () => {}, configurable: true });
+  if (window.top === window) {
+    return;
+  }
 
-  const runner = (succeed, fail) => ({
-    withSuccessHandler: (handler) => runner(handler, fail),
-    withFailureHandler: (handler) => runner(succeed, handler),
-    api(body) {
-      fetch('/api', { method: 'POST', body })
-        .then((response) => response.text())
-        .then((text) => succeed && succeed(text), (error) => fail && fail(error));
-    },
-  });
+  window.asked = { permission: 0, notices: 0, titles: [] };
+  Object.defineProperty(document, 'hidden', { get: () => true });
+  Object.defineProperty(document, 'visibilityState', { get: () => 'hidden' });
 
-  window.google = {
-    script: {
-      get run() { return runner(null, null); },
-      history: {
-        replace(_state, parameters) {
-          const search = new URLSearchParams(parameters).toString();
-          history.replaceState(null, '', location.pathname + (search ? '?' + search : ''));
-        },
-      },
-    },
+  const Real = window.Notification;
+  window.Notification = class extends Real {
+    constructor(...args) {
+      window.asked.notices += 1;
+      super(...args);
+    }
+    static requestPermission(...args) {
+      window.asked.permission += 1;
+      return Real.requestPermission(...args);
+    }
   };
+
+  const title = Object.getOwnPropertyDescriptor(Document.prototype, 'title');
+  Object.defineProperty(Document.prototype, 'title', {
+    get() { return title.get.call(this); },
+    set(value) { window.asked.titles.push(value); title.set.call(this, value); },
+  });
 })();
 `;
 
@@ -542,6 +546,67 @@ try {
     await lobby.waitForSelector('#host-name');
     assert.equal(await lobby.evaluate('window.CND_BUILD'), NEWER_BUILD);
     assert.equal(await lobby.locator('.outdated').count(), 0);
+  }
+
+  console.log("A turn that begins in Apps Script's frame, every preference as a new player has it, flashes the table, asks the browser for nothing, leaves the tab's title alone and says nothing in the console");
+  {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+    await context.addInitScript(STAND_IN_HOST);
+    await context.addInitScript(ATTENTION_SPIES);
+
+    const outside = await context.newPage();
+    const said: string[] = [];
+    outside.setDefaultTimeout(STEP_TIMEOUT_MS);
+    outside.on('pageerror', (error) => {
+      throw error;
+    });
+    outside.on('console', (message) => {
+      if (message.type() === 'error' || message.type() === 'warning') {
+        said.push(message.text());
+      }
+    });
+
+    const dealer = await open(browser);
+    const framedTable = await createTable(dealer, server.url, 'Marge');
+    await sit(dealer, 0);
+
+    // Google's page on a site of its own, with the game in a sandboxed frame from another, as Apps Script serves it
+    const google = createServer((_request, response) => {
+      response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      response.end(`<!doctype html><title>Google's page</title><iframe sandbox="allow-scripts allow-same-origin allow-forms allow-popups" src="${server.url}?table=${framedTable}" style="width: 100%; height: 760px; border: 0"></iframe>`);
+    });
+    await new Promise<void>((resolve) => google.listen(0, 'localhost', resolve));
+    await outside.goto(`http://localhost:${(google.address() as AddressInfo).port}/`);
+    const frame = (await (await outside.waitForSelector('iframe')).contentFrame())!;
+
+    await frame.fill('#join-name', 'Homer');
+    await frame.click('[data-action="join-table"]');
+    await frame.click('[data-sit="1"]');
+    await frame.click('[data-action="confirm-sit"]');
+    await dealer.click('.banner [data-action="approve"]');
+    await frame.waitForSelector('.seat.me');
+    await dealer.click('.message [data-action="start"]');
+
+    // Heads-up, whoever has the button acts first; the action reaches the frame either way
+    const dealerFirst = await Promise.race([
+      dealer.waitForSelector('.turn [data-action="fold"]:enabled').then(() => true),
+      frame.waitForSelector('.turn [data-action="fold"]:enabled').then(() => false),
+    ]);
+    if (dealerFirst) {
+      await dealer.click('.turn [data-action="call"]');
+    }
+
+    await frame.waitForSelector('.turn button:enabled');
+    await frame.waitForSelector('#app[data-attention="turn"]', { state: 'attached' });
+    await sleep(500);
+
+    assert.deepEqual(await frame.evaluate('window.asked'), { permission: 0, notices: 0, titles: [] });
+    assert.equal(await outside.title(), "Google's page");
+    assert.deepEqual(said, [], 'the frame complained in the console');
+
+    await context.close();
+    await dealer.context().close();
+    google.close();
   }
 
   console.log('The Apps Script-hosted page holds up');

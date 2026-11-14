@@ -1,7 +1,7 @@
 import type { Command, HandRecord } from '../../../engine/types.ts';
 import type { TableView } from '../../../engine/view.ts';
 import type { SendOutcome } from '../../connection.ts';
-import type { AppPreferences } from '../../prefs.ts';
+import type { Abilities, AppPreferences } from '../../prefs.ts';
 import type { PresetHandlers } from '../presets.ts';
 import { h, holdWhile } from '../../ui.ts';
 import type { Dialog } from './index.ts';
@@ -17,6 +17,8 @@ export interface DialogHandlers {
   tableLink(): string;
   memberLink(): string;
   prefs: AppPreferences;
+  /** What this device can do of what the preferences switch on. */
+  abilities: Abilities;
   toLobby(): void;
   /** Leaves the dialog for the table, where an open seat is picked for the player. */
   pickSeat(playerId: string): void;

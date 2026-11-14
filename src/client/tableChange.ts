@@ -17,10 +17,15 @@ export interface TableChange {
   feed: FeedEntry[];
   /**
    * What has just happened in the hand on the table: its events past those the view before had, or
-   * all of them when the hand began since. None when the view is catching the viewer up, which is
-   * the first view and any view that brought something they missed.
+   * all of them when the hand began since. None when the view is not `current`.
    */
   events: HandEvent[];
+  /**
+   * The view shows the table as it is happening, so whatever changed in it is news. False when it is
+   * catching the viewer up: the first view, a table that went back, and any view that brought
+   * something they missed.
+   */
+  current: boolean;
 }
 
 /**
@@ -34,7 +39,7 @@ export interface TableChange {
  */
 export function tableChange(before: TableView | null, view: TableView, now: number, wentBack = false): TableChange {
   if (!before || wentBack) {
-    return { before, view, feed: [], events: [] };
+    return { before, view, feed: [], events: [], current: false };
   }
 
   // A line is known by its number and its time together: a table put back to an earlier state numbers its next lines like ones it had
@@ -44,9 +49,9 @@ export function tableChange(before: TableView | null, view: TableView, now: numb
 
   // Events carry no time of their own. A line that is already old, or a view that is, says this view
   // holds things the viewer missed, and its events cannot be told apart from those
-  const caughtUp = feed.length === lines.length && now - view.now <= FRESH_MS;
+  const current = feed.length === lines.length && now - view.now <= FRESH_MS;
 
-  return { before, view, feed, events: caughtUp ? newEvents(before, view) : [] };
+  return { before, view, feed, events: current ? newEvents(before, view) : [], current };
 }
 
 function newEvents(before: TableView, view: TableView): HandEvent[] {

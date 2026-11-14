@@ -43,7 +43,8 @@ function demoPlatform(demo: DemoTable): Platform {
   // The table lives in the page, so it is the page's own build by definition
   const transport: Transport = { send: async (request) => ({ ...(await demo.send(request)), build: request.build }) };
 
-  return { transport, links, memory: sessionMemory(), boot: {}, build: 'demo' };
+  // The bots' game is a showcase, never a reason to call the visitor back to the tab
+  return { transport, links, memory: sessionMemory(), boot: {}, build: 'demo', ownsTab: false };
 }
 
 /** A box of a fixed device size that shrinks, as a picture would, to the room it is given. */

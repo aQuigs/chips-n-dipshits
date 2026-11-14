@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
-import { owes, replayHand, setIdentity, STATE_SCHEMA, TIMING, upgradeRecord } from '../src/engine/index.ts';
+import { countHand, handFacts, newTonight, owes, replayHand, setIdentity, STATE_SCHEMA, TIMING, upgradeRecord } from '../src/engine/index.ts';
 import type { HandRecord, TableState } from '../src/engine/index.ts';
 import { restoreState } from '../src/server/store.ts';
 import { checkAround, handRecords, seededRng, TestTable } from './helpers.ts';
@@ -26,6 +26,9 @@ const OLDEST = SCHEMA_3.filter((file) => file !== LAST_OF_SCHEMA_3);
 
 // Saved before the game knew its players from night to night
 const BEFORE_IDENTITIES = FILES.filter((file) => /^schema[2-5]-/.test(file));
+
+// Saved when a table's bounty was one amount, for seven-deuce
+const BEFORE_BOUNTY_LISTS = FILES.filter((file) => /^schema[2-6]-/.test(file));
 
 const HANDS_TO_PLAY = 4;
 const STEP_LIMIT = 3000;
@@ -511,4 +514,91 @@ test('a hand record saved when cards never shown were kept as none reads them as
   const record = upgradeRecord({ players: [{ seat: 0, cards: null }, { seat: 1, cards: ['As', 'Kd'] }], events: [] } as unknown as HandRecord);
 
   assert.deepEqual(record.players.map((player) => player.cards), [[null, null], ['As', 'Kd']]);
+});
+
+test('every table saved when its bounty was one amount for seven-deuce has it as the one hand on its list, in its settings and on the hand in play', () => {
+  for (const file of BEFORE_BOUNTY_LISTS) {
+    const raw = JSON.parse(readFileSync(new URL(file, FOLDER), 'utf8')) as { config: Record<string, unknown>; hand: Record<string, unknown> | null };
+    assert.equal(raw.config.sevenDeuceBounty, 25, file);
+
+    const state = load(file);
+    assert.deepEqual(state.config.bounties, [['72', 25]], file);
+    assert.ok(!('sevenDeuceBounty' in state.config), file);
+
+    if (state.hand) {
+      assert.deepEqual(state.hand.bounties, [['72', 25]], file);
+      assert.ok(!('bounty' in state.hand), file);
+    }
+  }
+
+  // One saved with the bounty off has none at all
+  const raw = JSON.parse(readFileSync(new URL('schema6-betting-seven-deuce.json', FOLDER), 'utf8'));
+  raw.config.sevenDeuceBounty = 0;
+  raw.hand.bounty = 0;
+  const off = restoreState(JSON.stringify(raw));
+  assert.deepEqual([off.config.bounties, off.hand!.bounties], [[], []]);
+  assert.equal(TestTable.adopt(off).view(2).hand!.holding!.bounty, null, 'seven-deuce pointed out at a table with no bounty');
+});
+
+test('a hand saved in play with a seven-deuce bounty pays it as it was dealt, though the list changes before it ends, and the next hand is dealt under the new list', () => {
+  const t = TestTable.adopt(load('schema6-betting-seven-deuce.json'));
+  assert.deepEqual(t.view(2).hand!.holding!.bounty, ['72', 25]);
+
+  t.cmd(0, { type: 'updateConfig', config: { bounties: [['J4s', 100]] } });
+  t.raise(2, 100);
+  t.call(0);
+
+  assert.deepEqual(t.state.hand!.result!.bounty, { seat: 2, hand: '72', payments: [{ seat: 0, amount: 25 }, { seat: 1, amount: 25 }] });
+  assert.ok(t.feedText().includes('P2 collects 50 for the 72 bounty'), t.feedText().join(' / '));
+
+  // Cleared, and the next hand dealt by the table's clock
+  t.wait(t.state.hand!.deadline! - t.now);
+  assert.deepEqual(handRecords(t.effects)[0]!.events.at(-1), ['bounty', 2, [[0, 25], [1, 25]], '72']);
+  assertHandRecordsHold(t.effects);
+
+  t.wait(t.state.nextHandAt! - t.now);
+  assert.deepEqual(t.state.hand!.bounties, [['J4s', 100]]);
+});
+
+test('a hand saved once its seven-deuce bounty was paid says, in its result and its events, that the bounty was for 72', () => {
+  const state = load('schema6-done-bounty-paid.json');
+
+  assert.equal(state.hand!.result!.bounty!.hand, '72');
+  assert.deepEqual(state.hand!.events.filter((event) => event[0] === 'bounty'), [['bounty', 3, [[0, 25], [1, 25], [2, 25]], '72']]);
+
+  const t = TestTable.adopt(state);
+  t.finishHand();
+  const [record] = handRecords(t.effects);
+  assert.equal(record!.result.bounty!.hand, '72');
+  assertHandRecordsHold(t.effects);
+});
+
+test('a hand record saved before a bounty named its hand reads as a seven-deuce bounty everywhere a record is read: its result, its events, its facts, the night’s numbers and its replay', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 1000], config: { bounties: [['72', 25]] } });
+  t.deal({ button: 0, holes: { 0: '7h 2c' } });
+  t.raise(0, 60);
+  t.fold(1);
+  t.fold(2);
+  t.finishHand();
+
+  const [record] = handRecords(t.effects);
+  const asOnceSaved = JSON.parse(JSON.stringify(record)) as HandRecord;
+  delete (asOnceSaved.result.bounty as { hand?: string }).hand;
+  asOnceSaved.events = asOnceSaved.events.map((event) => (event[0] === 'bounty' ? (event.slice(0, 3) as unknown as typeof event) : event));
+  assert.ok(!JSON.stringify(asOnceSaved).includes('"72"'));
+
+  const read = upgradeRecord(asOnceSaved);
+  assert.deepEqual(read, record);
+  assert.deepEqual(handFacts(read), handFacts(record!));
+  assert.deepEqual(replayHand(read.events), replayHand(record!.events));
+
+  const [counted, countedNamed] = [newTonight(), newTonight()];
+  countHand(counted, handFacts(read));
+  countHand(countedNamed, handFacts(record!));
+  assert.deepEqual(counted, countedNamed);
+
+  // A record that already names its hand is read as it was saved
+  const named = JSON.parse(JSON.stringify(record).replaceAll('"72"', '"J4s"')) as HandRecord;
+  assert.equal(upgradeRecord(named).result.bounty!.hand, 'J4s');
+  assert.equal(upgradeRecord(named).events.at(-1)![3], 'J4s');
 });

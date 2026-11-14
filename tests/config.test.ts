@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { CONFIG_KEYS, CONFIG_SPECS, DEFAULT_CONFIG, newConfig, sameSetting, startingConfig, validatedConfig, validSetting } from '../src/engine/index.ts';
-import type { ChoiceSpec, NumberSpec } from '../src/engine/index.ts';
+import type { Bounty, ChoiceSpec, NumberSpec } from '../src/engine/index.ts';
 import { seededRng, sevenDeuceBounty, TestTable } from './helpers.ts';
 import { randomConfig, randomSetting } from './randomConfig.ts';
 
@@ -110,24 +110,32 @@ test('a setting that is a count or one of several choices is checked like the re
 
 test('random settings are always ones the table accepts, and between them reach every setting\'s edges', () => {
   const rng = seededRng(11);
-  const seen = new Map(CONFIG_KEYS.map((key) => [key, new Set<unknown>()]));
+  const seen = new Map(CONFIG_KEYS.map((key) => [key, new Set<string>()]));
 
   for (let draw = 0; draw < 500; draw++) {
     const config = randomConfig(rng);
 
     assert.deepEqual(newConfig(config), config);
     for (const key of CONFIG_KEYS) {
-      seen.get(key)!.add(config[key]);
+      seen.get(key)!.add(JSON.stringify(config[key]));
     }
   }
 
   for (const key of CONFIG_KEYS) {
     const spec = CONFIG_SPECS[key];
-    const values = seen.get(key)!;
+    const values = [...seen.get(key)!].map((value) => JSON.parse(value) as unknown);
 
-    assert.ok(values.size > 1, `${key} was never changed`);
+    assert.ok(values.length > 1, `${key} was never changed`);
     if (spec.kind === 'chips' || spec.kind === 'count' || spec.kind === 'seconds') {
-      assert.ok(values.has(spec.min) && values.has(spec.default), `${key} was never at its lowest or its default`);
+      assert.ok(values.includes(spec.min) && values.includes(spec.default), `${key} was never at its lowest or its default`);
+    }
+
+    // Empty, as long as it can be, and holding two bounties for the same cards
+    if (spec.kind === 'handAmounts') {
+      const lists = values as Bounty[][];
+      assert.ok(lists.some((list) => list.length === 0) && lists.some((list) => list.length === spec.most), `${key} was never empty or full`);
+      assert.ok(lists.some((list) => list.some(([hand]) => hand === '72') && list.some(([hand]) => hand === '72s')), `${key} never held 72 and 72s together`);
+      assert.ok(lists.some((list) => list.some(([, amount]) => amount === spec.min)), `${key} never held a bounty at its lowest`);
     }
   }
 });

@@ -109,6 +109,8 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
   // Hands by how many times they were run
   const runs = [0, 0, 0, 0];
   let bounties = 0;
+  // Paid for a hand that is not seven-deuce
+  let otherBounties = 0;
   const tablesPlaying = { chips: 0, cents: 0 };
   const handsWithAnte = { everyone: 0, bigBlind: 0 };
   const handsWithAnteIn = { chips: 0, cents: 0 };
@@ -207,6 +209,7 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
       showdowns += record.result.uncontested ? 0 : 1;
       runs[handFacts(record).timesRun]! += 1;
       bounties += record.result.bounty ? 1 : 0;
+      otherBounties += record.result.bounty && !record.result.bounty.hand.startsWith('72') ? 1 : 0;
 
       if (record.bombPot?.boards === 2) {
         doubleBoards.shownDown += record.result.uncontested ? 0 : 1;
@@ -261,11 +264,11 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
   }
 
   // The run only proves something if it actually reached the interesting parts of the game
-  const reached = `${handsPlayed} hands, ${showdowns} showdowns, ${runs[2]} run twice, ${runs[3]} run three times, ${bounties} bounties`;
+  const reached = `${handsPlayed} hands, ${showdowns} showdowns, ${runs[2]} run twice, ${runs[3]} run three times, ${bounties} bounties, ${otherBounties} of them for a hand other than seven-deuce`;
   assert.ok(handsPlayed >= TABLES * 30, reached);
   assert.ok(showdowns >= TABLES * 10, reached);
   assert.ok(runs[2]! >= TABLES / 2 && runs[3]! >= TABLES / 2, reached);
-  assert.ok(bounties >= 1, reached);
+  assert.ok(bounties >= TABLES / 4 && otherBounties >= TABLES / 4, reached);
   assert.ok(tablesPlaying.chips >= TABLES / 4 && tablesPlaying.cents >= TABLES / 4, `${tablesPlaying.chips} tables played whole chips and ${tablesPlaying.cents} dollars and cents`);
 
   const antes = `${handsWithAnte.everyone} hands where everyone anted and ${handsWithAnte.bigBlind} with a big-blind ante, ${handsWithAnteIn.chips} of them in whole chips and ${handsWithAnteIn.cents} in dollars and cents, ${shortAntes} with a player short of the ante`;

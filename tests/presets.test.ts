@@ -69,6 +69,46 @@ test('a preset saved when run it twice was a switch runs it as it did: on is up 
   assert.equal(fromPreset({ ...beforeThree, allowRunItTwice: true, maxRuns: 3 }).config.maxRuns, 3);
 });
 
+test('a preset saved when the bounty was one amount for seven-deuce has it as the one hand on its list, none when it was 0, and a list saved beside it wins', () => {
+  const { bounties: _list, ...beforeLists } = kept({});
+
+  for (const [amount, bounties] of [[25, [['72', 25]]], [0, []]] as const) {
+    const saved = { ...beforeLists, sevenDeuceBounty: amount };
+    const used = fromPreset(saved);
+
+    assert.deepEqual(used.notes, []);
+    assert.deepEqual(used.config.bounties, bounties);
+    assert.ok(!('sevenDeuceBounty' in used.config));
+    assert.deepEqual(fromPreset(sharedPreset({ name: 'Old', settings: saved }).settings).config.bounties, bounties, 'as the page has it from the server');
+  }
+
+  assert.deepEqual(fromPreset(beforeLists).config.bounties, [], 'a preset older than either starts where a new table does');
+  assert.deepEqual(fromPreset({ ...beforeLists, sevenDeuceBounty: 25, bounties: [['J4s', 50]] }).config.bounties, [['J4s', 50]]);
+
+  // An amount the table can't pay goes back to no bounties, as the one amount went back to 0
+  const fraction = fromPreset({ ...beforeLists, sevenDeuceBounty: 2.5 });
+  assert.deepEqual(fraction.config.bounties, []);
+  assert.deepEqual(fraction.notes, ['Bounty hands is back to none: the preset’s is no longer allowed.']);
+
+  const { bounties: _none, ...centsBeforeLists } = kept({ unit: 'cents' });
+  assert.deepEqual(fromPreset({ ...centsBeforeLists, sevenDeuceBounty: 250 }).config.bounties, [['72', 250]]);
+});
+
+test('a preset keeps its list of bounties as it was saved, and a table playing it is known to only with the same list', () => {
+  const settings = kept({ bounties: [['27', 10], ['j4s', 50]] as never });
+  assert.deepEqual(settings.bounties, [['72', 10], ['J4s', 50]]);
+  assert.deepEqual(fromPreset(settings).config.bounties, [['72', 10], ['J4s', 50]]);
+
+  const preset = { name: 'Bounties', settings };
+  assert.equal(matchingPreset([preset], { ...DEFAULT_CONFIG, bounties: [['72', 10], ['J4s', 50]] }), preset);
+  assert.equal(matchingPreset([preset], { ...DEFAULT_CONFIG, bounties: [['72', 10]] }), null);
+  assert.equal(matchingPreset([preset], { ...DEFAULT_CONFIG, bounties: [['J4s', 50], ['72', 10]] }), null, 'in another order is another list');
+
+  const twice = fromPreset({ ...kept({}), bounties: [['72', 10], ['27', 20]] });
+  assert.deepEqual(twice.config.bounties, []);
+  assert.deepEqual(twice.notes, ['Bounty hands is back to none: the preset’s is no longer allowed.']);
+});
+
 test('a preset saved when there was one kind of straddle plays as it did: under the gun if it allowed that, and no other kind', () => {
   for (const allowStraddle of [true, false]) {
     const { allowDoubleStraddle: _double, allowButtonStraddle: _button, allowMississippiStraddle: _mississippi, ...beforeMoreStraddles } = kept({ allowStraddle });

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { addMember, AUTO_SHOWS, BADGES, createTable, DEFAULT_CONFIG, LIMITS, prettyCards, presetSettings, REACTIONS, REACTIONS_LIVE } from '../src/engine/index.ts';
-import type { Effect, HandRecord, KnownPlayer, Rng, TableConfig, TableState } from '../src/engine/index.ts';
+import type { Bounty, Effect, HandRecord, KnownPlayer, Rng, TableConfig, TableState } from '../src/engine/index.ts';
 import { ERRORS_TAB, REPORTS_PER_RUN, SheetErrorLog } from '../src/gas/sheetErrorLog.ts';
 import { SheetPlayerStore } from '../src/gas/sheetPlayerStore.ts';
 import { SheetPresetStore } from '../src/gas/sheetPresetStore.ts';
@@ -939,10 +939,12 @@ test('a row cleared by hand is free again, and a note typed further down the tab
 
 test('the largest preset the game can make fits its cell with room to spare, and one too long for a cell is refused whole', () => {
   const { store, tab } = presetSetup();
-  const longest = presetSettings({ ...DEFAULT_CONFIG, name: 'W'.repeat(LIMITS.tableNameLength), smallBlind: LIMITS.chips, bigBlind: LIMITS.chips, minBuyIn: LIMITS.chips, maxBuyIn: LIMITS.chips });
+  const bounties = ['AKs', 'AKo', 'AQs', 'AQo', 'AJs', 'AJo', 'ATs', 'ATo'].slice(0, LIMITS.bounties).map((hand): Bounty => [hand, LIMITS.chips]);
+  const longest = presetSettings({ ...DEFAULT_CONFIG, name: 'W'.repeat(LIMITS.tableNameLength), smallBlind: LIMITS.chips, bigBlind: LIMITS.chips, minBuyIn: LIMITS.chips, maxBuyIn: LIMITS.chips, bounties });
+  assert.equal(longest.bounties!.length, LIMITS.bounties);
 
   store.save(preset('W'.repeat(LIMITS.presetNameLength), longest), false);
-  assert.ok(String(tab().cells[1]![1]).length < 1000);
+  assert.ok(String(tab().cells[1]![1]).length < 1000, `the largest preset takes ${String(tab().cells[1]![1]).length} characters`);
 
   assert.throws(() => store.save(preset('Huge', { name: 'x'.repeat(50_000) }), false), /maximum of 50000 characters/);
   assert.deepEqual(names(store), ['W'.repeat(LIMITS.presetNameLength)], 'nothing of the refused one was left behind');
@@ -954,7 +956,10 @@ test('after the longest night the fullest table still fits its row and the cache
 
   // Sixteen characters of three bytes each, no two names alike
   const name = (index: number) => '好'.repeat(LIMITS.nameLength - 1) + String.fromCodePoint(0x4e00 + index);
-  const t = new TestTable({ stacks: Array.from({ length: 10 }, () => LIMITS.chips), names: Array.from({ length: 10 }, (_name, seat) => name(seat)), config: { maxBuyIn: LIMITS.chips } });
+  // As many bounties as a table can have, each of the longest kind and amount, which the hand in play keeps too
+  const bounties = ['AKs', 'AKo', 'AQs', 'AQo', 'AJs', 'AJo', 'ATs', 'ATo'].slice(0, LIMITS.bounties).map((hand): Bounty => [hand, LIMITS.chips]);
+  assert.equal(bounties.length, LIMITS.bounties);
+  const t = new TestTable({ stacks: Array.from({ length: 10 }, () => LIMITS.chips), names: Array.from({ length: 10 }, (_name, seat) => name(seat)), config: { maxBuyIn: LIMITS.chips, bounties } });
 
   for (let gone = 10; gone < LIMITS.members; gone++) {
     const member = addMember(t.state, name(gone), t.ctx());
@@ -1006,6 +1011,9 @@ test('after the longest night the fullest table still fits its row and the cache
   t.state.hand!.events.push(['hunt', hunted]);
   t.state.hand!.log.push(`${name(0)} hunts the rabbit, cards that did not count: ${hunted.map((board, index) => `${['first', 'second', 'third'][index]} board ${prettyCards(board)}`).join(', ')}`);
   assert.ok(JSON.stringify(t.state).length - withoutHunt <= 400, `a hunt adds ${JSON.stringify(t.state).length - withoutHunt} characters`);
+
+  const listed = JSON.stringify(t.state.config.bounties).length + JSON.stringify(t.state.hand!.bounties).length;
+  assert.ok(listed <= 320, `the bounties, in the settings and on the hand, take ${listed} characters`);
 
   const numbers = JSON.stringify(t.state.tonight).length;
   assert.ok(numbers <= LIMITS.members * 400, `the night's numbers for ${LIMITS.members} players take ${numbers} characters`);

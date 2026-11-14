@@ -2380,14 +2380,19 @@ const CHECKS: Check[] = [
           { actionSeconds: 30 },
         );
 
-        // Heads-up the button acts first: the page is on the clock, with every button of a turn to press
-        table.deal({ button: 0 });
+        // On the river with the big blind's check in: the page is on the clock, with every button of a turn to
+        // press, and its hand hint has lifted the cards that play and let the others sink and fade
+        table.deal({ button: 0, holes: { 0: 'Ks 7d', 1: 'Qc Qd' }, board: 'Kh 7s 2c 9d Ah' });
+        table.play(passive, (view) => view.hand!.street === 'river');
+        table.act('Stu', { type: 'check' });
+
         const page = await table.open('Quigs', screen);
         const press = pressOn(page, screen);
         const sent = movesSent(page);
         const inNotice = `!!document.activeElement.closest('.outdated')`;
 
-        await page.waitForSelector('.turn [data-action="call"]:enabled');
+        await page.waitForSelector('.turn [data-action="fold"]:enabled');
+        await hintSays(page, 'Two pair, kings and sevens');
         await press('[data-action="menu"]');
         await page.waitForSelector('.app .dialog');
 
@@ -2416,6 +2421,25 @@ const CHECKS: Check[] = [
         parts.forEach((part, index) => assertApart([part], parts.slice(index + 1), 'two parts of the notice'));
         assert.deepEqual(await squeezed(page, '.outdated h2, .outdated p, .outdated [data-action="reload"]'), []);
         assert.ok(button!.bottom - button!.top >= 44 && button!.right - button!.left >= 120, `the reload button is too small to tap: ${JSON.stringify(button)}`);
+
+        // Nothing of the table shows through on top: not a lifted card, the hint, a bet or a toast
+        const onTop = (await page.evaluate(`(() => {
+          const found = [];
+
+          for (let x = 4; x < innerWidth; x += innerWidth / 12) {
+            for (let y = 4; y < innerHeight; y += innerHeight / 16) {
+              const top = document.elementFromPoint(x, y);
+
+              if (!top || !top.closest('.outdated')) {
+                found.push((top ? top.className || top.tagName : 'nothing') + ' at ' + Math.round(x) + ',' + Math.round(y));
+              }
+            }
+          }
+
+          return found;
+        })()`)) as string[];
+        assert.deepEqual(onTop, [], 'part of the page behind the notice is drawn over it');
+        assert.equal((await marking(page)).plays.length, 5, 'the table behind the notice no longer shows the hand as it was');
         await shot(page, `outdated-${screen}`);
 
         // The keyboard is in the notice and stays there
@@ -2465,7 +2489,7 @@ const CHECKS: Check[] = [
 
         assert.equal(await page.evaluate('window.CND_BUILD'), build, 'the page that came back is not the updated one');
         assert.equal(await page.locator('.outdated').count(), 0);
-        assert.equal(await page.locator('.turn [data-action="call"]:enabled').count(), 1, 'back at the table, it is not this player’s turn anymore');
+        assert.equal(await page.locator('.turn [data-action="fold"]:enabled').count(), 1, 'back at the table, it is not this player’s turn anymore');
         await page.context().close();
       }
     },

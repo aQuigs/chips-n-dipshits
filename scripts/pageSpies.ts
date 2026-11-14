@@ -166,8 +166,8 @@ export const SPOTS = `(() => {
 export interface Flight {
   /** The move it is part of. */
   name: MoveName;
-  /** A card the table draws or one standing in for it, a seat's two cards standing in for ones it no longer draws, a pile of chips, or a piece of confetti. */
-  what: 'card' | 'cards' | 'chips' | 'confetti';
+  /** A card the table draws or one standing in for it, a seat's two cards standing in for ones it no longer draws, a pile of chips, a piece of confetti, or something thrown. */
+  what: 'card' | 'cards' | 'chips' | 'confetti' | 'mark';
   /** A stand-in for something the table no longer draws, there only for the move. */
   standIn: boolean;
   /** Whose it is, where the table says: the seat of a card or of a bet it draws. */
@@ -228,7 +228,7 @@ export const MOTION = `(() => {
 
     window.flights.push({
       name: options.id,
-      what: this.classList.contains('bet') ? 'chips' : this.classList.contains('hole') ? 'cards' : this.classList.contains('confetti') ? 'confetti' : 'card',
+      what: this.classList.contains('bet') ? 'chips' : this.classList.contains('hole') ? 'cards' : this.classList.contains('confetti') ? 'confetti' : this.classList.contains('thrown') ? 'mark' : 'card',
       standIn: this.classList.contains('stand-in'),
       seat: number(seatOf(this)),
       board: number(this.closest('[data-run]')?.dataset.run),

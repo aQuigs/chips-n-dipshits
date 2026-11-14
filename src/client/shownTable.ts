@@ -1,4 +1,4 @@
-import type { Command } from '../engine/types.ts';
+import type { Command, Reaction } from '../engine/types.ts';
 import type { TableView } from '../engine/view.ts';
 import type { TurnLock } from './connection.ts';
 import type { BoardCard, TableMotion } from './motion.ts';
@@ -138,6 +138,20 @@ export class ShownTable {
     }
   }
 
+  /**
+   * The player's own reaction or throw, told the moment they make it, as the effects are told anything
+   * else that happens: nothing else on the table changes. The view the server sends back with it has
+   * it too, and tells it to nobody, since a page never takes its viewer's own reactions from a view.
+   * It is no news of the table, so nothing that answers news, such as a turn not yet announced, answers it.
+   */
+  react(reaction: Reaction): void {
+    const view = this.view();
+
+    if (view) {
+      this.out.tell({ before: view, view, feed: [], events: [], current: false, wentBack: false, nightEnded: false, earned: [], tookHighHand: false, reactions: [reaction], now: this.now() });
+    }
+  }
+
   /** Takes the player's move off the table without a word, as when the page learns it can no longer follow the game. */
   forget(): void {
     this.putBack();
@@ -169,7 +183,7 @@ export class ShownTable {
 
     const view = this.view()!;
 
-    this.show({ before, view, feed: [], events: newEvents(before, view), current: true, wentBack: false, nightEnded: false, earned: [], tookHighHand: false, now: this.now() });
+    this.show({ before, view, feed: [], events: newEvents(before, view), current: true, wentBack: false, nightEnded: false, earned: [], tookHighHand: false, reactions: [], now: this.now() });
   }
 
   private putBack(): { name: string; unanswered: boolean } | null {

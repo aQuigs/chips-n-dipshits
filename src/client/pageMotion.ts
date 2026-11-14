@@ -1,5 +1,5 @@
 import { confettiBurst } from './confetti.ts';
-import { MOVE_MS, stillMotion } from './motion.ts';
+import { ASIDE_MOVES, MOVE_MS, stillMotion } from './motion.ts';
 import type { MotionPlayer, Move, MoveName, Watching } from './motion.ts';
 import { drawnTable } from './render/table.ts';
 import type { DrawnTable, Point } from './render/table.ts';
@@ -8,7 +8,7 @@ import { h } from './ui.ts';
 /** How a move looks at its far end: the end away from where what moves is drawn. */
 interface Look {
   /** What moves: what the table has standing where the move ends, a stand-in of this kind for what it no longer draws, or a piece of confetti. */
-  mover: 'standing' | 'chips' | 'cards' | 'card' | 'confetti';
+  mover: 'standing' | 'chips' | 'cards' | 'card' | 'mark' | 'confetti';
   /** A stand-in that shows only once it sets off, where others lie at their start while they wait. */
   appears?: boolean;
   easing: string;
@@ -34,6 +34,8 @@ const LOOKS: Record<MoveName, Look> = {
   reveal: { mover: 'standing', easing: 'ease-out', shape: 'rotateY(90deg)', opacity: 0 },
   // Thrown out fast and slowing, each piece with a spin of its own (`burst`)
   confetti: { mover: 'confetti', easing: 'cubic-bezier(0.1, 0.7, 0.3, 1)', shape: '', opacity: 0, appears: true },
+  // Lobbed hard and tumbling all the way, whole until it hits
+  throw: { mover: 'mark', easing: 'cubic-bezier(0.3, 0, 0.6, 1)', shape: 'rotate(-540deg) scale(1.3)', opacity: 1 },
 };
 
 // The share of a move over which what moves fades in as it leaves, or out as it lands
@@ -56,6 +58,8 @@ interface Piece {
 interface Flight {
   animation: Animation;
   standIn: boolean;
+  /** Played beside the table's own moves (`ASIDE_MOVES`): nothing waits for it. */
+  aside: boolean;
 }
 
 /**
@@ -63,7 +67,8 @@ interface Flight {
  * opacity are animated, and by animations that write nothing into the page: what the table draws
  * moves without leaving its place in the layout, and when a move ends the element is as it was drawn.
  *
- * While anything is in flight the stage carries `data-moving`, which is what a browser check waits on.
+ * While anything of the table is in flight the stage carries `data-moving`, which is what a browser check
+ * waits on. A move beside it (`ASIDE_MOVES`) is not counted.
  */
 class PageMotion implements MotionPlayer {
   private readonly stage: HTMLElement;
@@ -139,7 +144,7 @@ class PageMotion implements MotionPlayer {
   }
 
   idle(): Promise<void> {
-    return this.flights.size === 0 ? Promise.resolve() : new Promise((resolve) => this.waiting.push(resolve));
+    return this.moving() ? new Promise((resolve) => this.waiting.push(resolve)) : Promise.resolve();
   }
 
   seen(): boolean {
@@ -169,7 +174,7 @@ class PageMotion implements MotionPlayer {
     }
 
     const far = table.middle(move.to);
-    const element = far && move.from ? table.standIn(look.mover, move.from, move.amount) : null;
+    const element = far && move.from ? table.standIn(look.mover, move.from, move.amount, move.mark) : null;
 
     return element ? [{ name: move.name, element, look, far, ms, after: move.after }] : [];
   }
@@ -212,7 +217,7 @@ class PageMotion implements MotionPlayer {
     // The move's name goes on the animation, for a browser check to tell which it is
     const easing = look.appears ? 'linear' : look.easing;
     const animation = element.animate(frames, { id: name, duration: ms, delay: after, easing, fill: standIn ? 'both' : 'backwards' });
-    const flight = { animation, standIn };
+    const flight = { animation, standIn, aside: ASIDE_MOVES.has(name) };
 
     animation.addEventListener('finish', () => {
       if (this.flights.get(element) === flight) {
@@ -222,7 +227,10 @@ class PageMotion implements MotionPlayer {
     });
 
     this.flights.set(element, flight);
-    this.stage.dataset.moving = '';
+
+    if (!flight.aside) {
+      this.stage.dataset.moving = '';
+    }
   }
 
   private end(element: HTMLElement, flight: Flight): void {
@@ -246,7 +254,7 @@ class PageMotion implements MotionPlayer {
   }
 
   private settle(): void {
-    if (this.flights.size > 0) {
+    if (this.moving()) {
       return;
     }
 
@@ -254,10 +262,15 @@ class PageMotion implements MotionPlayer {
 
     // Told once whatever is being done to the page is done: a view that ends what was moving sets its own moving next
     queueMicrotask(() => {
-      if (this.flights.size === 0) {
+      if (!this.moving()) {
         this.waiting.splice(0).forEach((resolve) => resolve());
       }
     });
+  }
+
+  /** Whether anything of the table is in flight. */
+  private moving(): boolean {
+    return [...this.flights.values()].some((flight) => !flight.aside);
   }
 }
 

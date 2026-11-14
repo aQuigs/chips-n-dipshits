@@ -14,10 +14,11 @@ import type { Role } from './hosts.ts';
 import { handsLeft, nightIsOver, onLastHand } from './night.ts';
 import { buildPots } from './pots.ts';
 import type { Pot } from './pots.ts';
+import { liveReactions } from './reactions.ts';
 import { memberOf, seatIndexOf } from './seats.ts';
 import { tonightView } from './tonight.ts';
 import type { TonightView } from './tonight.ts';
-import type { BombPot, FeedEntry, Hand, HandPlayer, HandResult, HandStage, PassedOver, PlayerAction, RequestKind, Straddle, StraddlePost, Street, TableConfig, TableState } from './types.ts';
+import type { BombPot, FeedEntry, Hand, HandPlayer, HandResult, HandStage, PassedOver, PlayerAction, Reaction, RequestKind, Straddle, StraddlePost, Street, TableConfig, TableState } from './types.ts';
 
 /** A hole card as one viewer sees it: the card, or null when it is face down for them. */
 export type VisibleCard = Card | null;
@@ -155,6 +156,8 @@ export interface TableView {
   /** When the night ended, or null while it goes on. */
   nightEndedAt: number | null;
   feed: FeedEntry[];
+  /** The reactions still live, oldest first, the same for every viewer. */
+  reactions: Reaction[];
   /** Requests waiting on the host: all of them for the host and co-hosts, only their own for everyone else. */
   requests: RequestView[];
   ledger: LedgerRow[];
@@ -266,6 +269,7 @@ export function viewFor(state: TableState, playerId: string, now: number): Table
     handsLeft: handsLeft(state),
     nightEndedAt: state.nightEndedAt,
     feed: state.feed,
+    reactions: liveReactions(state.reactions, now),
     requests: visibleRequests.map((request) => ({ ...request, name: memberOf(state, request.playerId).name })),
     ledger,
     tonight: tonightView(state, ledger, nightIsOver(state)),

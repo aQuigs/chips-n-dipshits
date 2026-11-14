@@ -24,6 +24,14 @@ const CLOCK_SAMPLES = 8;
  */
 export const MOVES = new Set<Command['type']>(['fold', 'check', 'call', 'raise', 'offerChop', 'answerChop', 'ritVote']);
 
+/**
+ * Commands of the moment, a reaction or a throw: one at a time, and one that gets no answer is dropped,
+ * neither looked up nor sent again, since by the time anyone could know it its moment has passed. Nothing
+ * any answer to one says, not even that the seat or the table is gone, touches the player's seat: the
+ * poll, which is always out, hears the same and is what acts on it.
+ */
+export const FLEETING = new Set<Command['type']>(['react']);
+
 /** Why the table isn't being heard from: no answer at all, or an answer saying the server couldn't cope. */
 export type Trouble = 'unreachable' | 'struggling';
 
@@ -173,6 +181,7 @@ export class TableConnection {
   /** The newest view taken up, which is the one on screen. */
   private view: TableView | null = null;
   private turnLock: TurnLock = 'open';
+  private fleetingOut = false;
 
   /** Bumped to retire the running poll loop, when a fresh one starts or the table is left. */
   private pollRun = 0;
@@ -188,6 +197,11 @@ export class TableConnection {
   /** A move is on its way or unaccounted for, so the buttons that play one must not be pressed. */
   get turnLocked(): boolean {
     return this.turnLock !== 'open';
+  }
+
+  /** A reaction is on its way, so another must wait for its answer. */
+  get reacting(): boolean {
+    return this.fleetingOut;
   }
 
   /** Takes up a view, unless it is no newer than the one held and the table hasn't `wentBack`. */
@@ -220,6 +234,10 @@ export class TableConnection {
   }
 
   async send(command: Command): Promise<SendOutcome> {
+    if (FLEETING.has(command.type)) {
+      return this.sendFleeting(command);
+    }
+
     const { tableId, auth } = this.session;
     const move = MOVES.has(command.type);
 
@@ -262,6 +280,38 @@ export class TableConnection {
     }
 
     return response.ok ? 'taken' : 'refused';
+  }
+
+  private async sendFleeting(command: Command): Promise<SendOutcome> {
+    if (this.fleetingOut) {
+      return 'refused';
+    }
+
+    this.setFleeting(true);
+    const response = await this.server.ask({ op: 'act', tableId: this.session.tableId, auth: this.session.auth, command });
+
+    if (this.closed) {
+      return 'unanswered';
+    }
+
+    this.setFleeting(false);
+
+    if (!response) {
+      return 'unanswered';
+    }
+
+    if (response.ok && response.kind === 'view') {
+      this.take(response.view);
+    }
+
+    // Nothing is said even of the table's own refusal: the page showed the reaction at the tap, from a view
+    // a poll behind, and a line saying it never happened would only contradict what the player saw
+    return response.ok ? 'taken' : 'refused';
+  }
+
+  private setFleeting(out: boolean): void {
+    this.fleetingOut = out;
+    this.listener.status();
   }
 
   private fail(error: ApiError): void {

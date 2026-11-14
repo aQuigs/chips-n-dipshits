@@ -20,6 +20,7 @@ export * from './hosts.ts';
 export * from './night.ts';
 export * from './pots.ts';
 export * from './presets.ts';
+export * from './reactions.ts';
 export * from './runVote.ts';
 export * from './seats.ts';
 export * from './seeded.ts';

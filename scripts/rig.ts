@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
 import type { APIResponse, Browser, BrowserContext, BrowserContextOptions, Page, Route } from 'playwright';
 
-import { MOVES } from '../src/client/connection.ts';
+import { FLEETING, MOVES } from '../src/client/connection.ts';
 import { startDevServer } from '../src/dev/server.ts';
 import type { DevServer } from '../src/dev/server.ts';
 import { onTheClock } from '../src/engine/index.ts';
@@ -392,8 +392,8 @@ export class RigBrowser {
   }
 }
 
-/** Which of a page's requests a gate stands in the way of: the moves of a hand, or the polls for news of the table. */
-export type Gated = 'moves' | 'polls';
+/** Which of a page's requests a gate stands in the way of: the moves of a hand, the polls for news of the table, or reactions. */
+export type Gated = 'moves' | 'polls' | 'reactions';
 
 /** Where a closed gate stops things: on their way to the server, which then has heard nothing, or on the way back from it. */
 export type GateSide = 'requests' | 'answers';
@@ -512,7 +512,7 @@ export class Gate {
 
   private meet(route: Route): Promise<void> | void {
     const body = JSON.parse(route.request().postData() ?? '{}') as ApiRequest;
-    const mine = this.what === 'polls' ? body.op === 'poll' : body.op === 'act' && MOVES.has(body.command.type);
+    const mine = this.what === 'polls' ? body.op === 'poll' : body.op === 'act' && (this.what === 'reactions' ? FLEETING : MOVES).has(body.command.type);
 
     if (this.side === null || !mine) {
       return route.fallback();

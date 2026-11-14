@@ -127,6 +127,7 @@ export function createTable(id: string, hostName: unknown, configInput: unknown,
     tonight: newTonight(),
     feed: [],
     feedSeq: 0,
+    reactions: [],
   };
 
   const host = newMember(state, hostName, ctx.rng);

@@ -1,7 +1,7 @@
 /* Random play on a test table: what the simulation runs, and what plays a saved table on after it is read back. */
 import assert from 'node:assert/strict';
 
-import { addMember, CONFIG_KEYS, LIMITS, mayOfferChop, MOST_RUNS, nextDeadline, owes, SEAT_COUNT, straddlesAllowed, viewFor } from '../src/engine/index.ts';
+import { addMember, CONFIG_KEYS, LIMITS, mayOfferChop, MOST_RUNS, nextDeadline, owes, REACTIONS, SEAT_COUNT, seededRng, straddlesAllowed, viewFor } from '../src/engine/index.ts';
 import type { Command, GameError, Rng } from '../src/engine/index.ts';
 import type { TestTable } from './helpers.ts';
 import { randomConfig } from './randomConfig.ts';
@@ -173,6 +173,39 @@ export const FUZZ_COMMANDS: ((fuzz: Fuzz) => void)[] = [
   },
 ];
 
+/**
+ * Commands that touch nothing of the game, sent beside it at random: only one that changes no hand, turn,
+ * clock, stack or record, and draws nothing from the table's rng, belongs here. They draw on a generator
+ * of their own, so a game played with them is the game played without them, move for move, which
+ * `tests/simulation.test.ts` holds them to. A command that plays the game goes in `FUZZ_COMMANDS`, even
+ * when that moves a coverage floor: this list is not a way around one.
+ */
+export const ASIDE_COMMANDS: ((fuzz: Fuzz) => void)[] = [
+  ({ t, rng }) => {
+    // A few at once, so that both limits are met; thrown mostly at someone seated, now and then at the thrower or someone only watching
+    for (let sent = 1 + rng.int(3); sent > 0; sent--) {
+      const kind = pick(rng, REACTIONS)!;
+      const to = chance(rng, 80) ? t.state.seats[pick(rng, seated(t)) ?? 0]?.playerId : pick(rng, t.ids);
+
+      attempt(t, rng.int(t.ids.length), { type: 'react', kind: kind.id, to: kind.thrown ? to : undefined });
+    }
+  },
+];
+
+const ASIDE_SEED = 4421;
+const asides = new WeakMap<TestTable, Rng>();
+
+function randomAside(t: TestTable): void {
+  const rng = asides.get(t) ?? seededRng(ASIDE_SEED);
+  asides.set(t, rng);
+
+  if (chance(rng, 10)) {
+    const who = rng.int(t.ids.length);
+
+    ASIDE_COMMANDS[rng.int(ASIDE_COMMANDS.length)]!({ t, rng, who, playerId: t.ids[who]! });
+  }
+}
+
 function randomSideEvent(t: TestTable, rng: Rng): void {
   const who = rng.int(t.ids.length);
 
@@ -210,8 +243,12 @@ function playRandomAction(t: TestTable, rng: Rng): void {
   }
 }
 
-/** One random thing happens at the table: a legal move by whoever it is on, a clock running out, or something on the side. */
-export function randomStep(t: TestTable, rng: Rng): void {
+/** One random thing happens at the table: a legal move by whoever it is on, a clock running out, or something on the side. With `asides`, now and then one of `ASIDE_COMMANDS` too. */
+export function randomStep(t: TestTable, rng: Rng, asides = true): void {
+  if (asides) {
+    randomAside(t);
+  }
+
   if (chance(rng, 6)) {
     randomSideEvent(t, rng);
     return;

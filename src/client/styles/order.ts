@@ -42,4 +42,5 @@ export const STYLESHEETS = [
   'badges.css',
   'chances.css',
   'high-hand.css',
+  'reactions.css',
 ];

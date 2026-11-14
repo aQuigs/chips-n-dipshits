@@ -5,9 +5,11 @@ import { handMoves } from './effects/handMoves.ts';
 import { handSounds } from './effects/handSounds.ts';
 import { honorToasts } from './effects/honorToasts.ts';
 import { nightRecap } from './effects/nightRecap.ts';
+import { reactions } from './effects/reactions.ts';
 import { yourTurn } from './effects/yourTurn.ts';
 import type { TableMotion } from './motion.ts';
 import type { AppPreferences } from './prefs.ts';
+import type { SeatMarks } from './reactions.ts';
 import type { Dialog } from './render/dialogs/index.ts';
 import type { Sounds } from './sound.ts';
 import type { TableChange } from './tableChange.ts';
@@ -35,6 +37,8 @@ export interface EffectContext {
   attention: Attention;
   /** The way to move something across the table, held to the viewer's switch and to a device that asks for less motion. */
   motion: TableMotion;
+  /** What shows something over a seat for a few seconds, which the table being drawn again leaves where it is. */
+  marks: SeatMarks;
   dialogs: DialogOffers;
   /** Shows the viewer a line at the top of the screen for a few seconds. */
   toast(message: string): void;
@@ -63,6 +67,7 @@ const TABLE_EFFECTS: (() => TableEffect)[] = [
   yourTurn,
   nightRecap,
   honorToasts,
+  reactions,
 ];
 
 /** The effects of one table screen. */

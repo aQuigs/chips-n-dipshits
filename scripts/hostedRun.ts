@@ -537,6 +537,60 @@ try {
       await first.waitForSelector('.turn [data-action="check"]:enabled');
     }
 
+    console.log('A reaction whose request or its answer is lost is dropped: shown at the tap, never sent again or looked up, nothing said, and the seat kept');
+    {
+      const askedOf = (page: Page) => {
+        const asked = { reactions: 0, lookups: 0 };
+
+        page.on('request', (request) => {
+          const body = JSON.parse(request.postData() ?? '{}') as { op?: string; since?: number; command?: { type: string } };
+
+          asked.reactions += body.op === 'act' && body.command?.type === 'react' ? 1 : 0;
+          asked.lookups += body.op === 'poll' && body.since === -1 ? 1 : 0;
+        });
+
+        return asked;
+      };
+      const asked = [askedOf(first), askedOf(second)];
+      const lost = { first: await Gate.on(first, 'reactions'), second: await Gate.on(second, 'reactions') };
+      const seatsOf = async (page: Page) => [inAddress(page, 'me'), await remembered(page, tableId)];
+      const seats = [await seatsOf(first), await seatsOf(second)];
+
+      // What the moves before had the pages say is gone first
+      await first.waitForSelector('.toast', { state: 'hidden' });
+      await second.waitForSelector('.toast', { state: 'hidden' });
+
+      // Lost on its way: the server never hears it, and only the page that sent it showed it
+      await lost.first.close('requests');
+      await first.click('[data-action="reactions"]');
+      await first.click('[data-react="laugh"]');
+      await first.waitForSelector('.seat-reaction[data-reaction="laugh"]');
+      await lost.first.holding();
+      await lost.first.lose();
+
+      // Lost on its way back: the server heard it, so the other player sees it land
+      await lost.second.close('answers');
+      await second.click('[data-action="reactions"]');
+      await second.click('[data-react="tomato"]');
+      await second.click(`[data-throw-at="${inAddress(first, 'me')!.split('.')[0]}"]`);
+      await second.waitForSelector('.seat-reaction[data-reaction="tomato"]');
+      await lost.second.holding();
+      await lost.second.lose();
+      await first.waitForSelector('.seat-reaction[data-reaction="tomato"]');
+
+      // Long enough for a page that went looking to have asked
+      await sleep(QUIET_MS);
+      assert.deepEqual(asked, [{ reactions: 1, lookups: 0 }, { reactions: 1, lookups: 0 }], 'a lost reaction was sent again or looked up');
+      assert.deepEqual([await seatsOf(first), await seatsOf(second)], seats, 'a lost reaction touched a seat');
+
+      for (const page of [first, second]) {
+        assert.deepEqual(await page.locator('.toast:visible').allInnerTexts(), [], 'a lost reaction was spoken of');
+      }
+
+      await lost.first.open();
+      await lost.second.open();
+    }
+
     assert.deepEqual(sent, [['raise', 'check', 'raise', 'check'], ['call', 'check', 'check']], 'each move was sent once: the refused bet and the lost check were tapped again by the player');
     assert.deepEqual(said.map(ownComplaints), [[], []], 'a page complained in the console');
 

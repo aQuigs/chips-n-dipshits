@@ -107,6 +107,7 @@ const DECLARED: { [T in CommandType]: { by: 'member' | 'seat' } | { by: HostLeve
   ritVote: { by: 'member' },
   showCards: { by: 'member' },
   chat: { by: 'member' },
+  react: { by: 'seat' },
 
   start: { by: 'host or cohost', sample: () => ({ type: 'start' }) },
   pause: { by: 'host or cohost', sample: () => ({ type: 'pause' }), setup: (t) => t.cmd(HOST, { type: 'start' }) },

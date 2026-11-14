@@ -1,4 +1,5 @@
 import { formatAmount } from '../engine/amounts.ts';
+import { liveReactions, REACTION_TOO_SOON, reactionRefusal } from '../engine/reactions.ts';
 import { anteText, blindsText } from '../engine/stakes.ts';
 import type { Preset } from '../engine/presets.ts';
 import type { Command, HandRecord, TableConfig } from '../engine/types.ts';
@@ -12,6 +13,8 @@ import { Modal } from './modal.ts';
 import { Motion, motionAbility } from './motion.ts';
 import { pageMotion, pageWatching } from './pageMotion.ts';
 import { pagePace } from './pagePace.ts';
+import { ReactionMarks } from './reactionMarks.ts';
+import { ReactionPicker } from './render/reactionPicker.ts';
 import type { Platform } from './platform.ts';
 import { PREFERENCES, Preferences } from './prefs.ts';
 import { movePromptEl, SeatMoves } from './seatMoves.ts';
@@ -61,6 +64,9 @@ interface TableScreen {
   modal: Modal;
   feed: Feed;
   motion: Motion;
+  /** Reactions over the seats, and the picker for them, on a layer over the table that drawing the table leaves alone. */
+  marks: ReactionMarks;
+  picker: ReactionPicker;
   effects: TableEffects;
   /** What the screen shows of the table, which every view passes through on its way here. */
   shown: ShownTable;
@@ -182,6 +188,8 @@ export class App {
 
       if (this.dialog) {
         this.closeDialog();
+      } else if (this.screen?.picker.isOpen) {
+        this.screen.picker.close();
       } else if (this.screen?.seatMoves.active) {
         this.screen.seatMoves.cancel();
 
@@ -410,16 +418,21 @@ export class App {
     });
     this.table = table;
 
-    const feed = createFeed((text) => void this.send({ type: 'chat', text }), this.prefs.get('deck'));
+    const picker = new ReactionPicker({ react: (kind, to) => this.react(kind, to), refusal: (view) => this.reactionRefusal(view) });
+    const feed = createFeed((text) => void this.send({ type: 'chat', text }), this.prefs.get('deck'), picker.toggleElement);
     const stage = new Slot(h('div.stage'));
     const overlay = new Slot(h('div.overlay', { hidden: true }));
     const motion = new Motion(pageMotion(stage.element), this.prefs, this.watching);
+    const above = h('div.above');
+    const marks = new ReactionMarks(above, stage.element);
+    above.append(picker.panelElement);
     const effects = new TableEffects({
       prefs: this.prefs,
       stage: stage.element,
       sounds: this.sounds,
       attention: this.attention,
       motion,
+      marks,
       dialogs: { offer: (dialog, still) => this.offerDialog(dialog, still) },
       toast: (message) => this.toast(message),
     });
@@ -432,6 +445,8 @@ export class App {
       modal: new Modal(overlay.element),
       feed,
       motion,
+      marks,
+      picker,
       effects,
       shown: new ShownTable(motion, () => this.clock.now(), () => Date.now(), pagePace(), {
         draw: () => this.drawShown(),
@@ -455,7 +470,7 @@ export class App {
     });
 
     this.screen = screen;
-    this.mount(h('div.app', null, screen.topbar.element, screen.banners.element, stage.element, screen.controls.element, feed.element, screen.overlay.element));
+    this.mount(h('div.app', null, screen.topbar.element, screen.banners.element, stage.element, above, screen.controls.element, feed.element, screen.overlay.element));
     screen.resizeObserver.observe(stage.element);
 
     if (view) {
@@ -475,6 +490,8 @@ export class App {
     this.screen?.effects.dispose();
     this.screen?.shown.end();
     this.screen?.motion.dispose();
+    this.screen?.marks.dispose();
+    this.screen?.picker.dispose();
     this.screen?.seatMoves.dispose();
     this.screen = null;
     this.dialog = null;
@@ -567,6 +584,7 @@ export class App {
     const view = this.shownView();
     if (view) {
       this.drawBanners(this.screen, view);
+      this.screen.picker.draw(view);
     }
   }
 
@@ -594,6 +612,7 @@ export class App {
     this.drawTopbar(screen, view);
     this.drawBanners(screen, view);
     this.drawStage(screen, view);
+    screen.picker.draw(view);
     this.drawControls(screen, view);
 
     screen.feed.update(view.feed);
@@ -622,6 +641,24 @@ export class App {
 
     // Freshly built buttons are free; a move still on its way keeps them locked
     lockTurn(screen.controls.element, this.turnLocked());
+  }
+
+  /** Why a reaction now would be refused, as the table would say it, or null when one would go: the same rule, by the page's reckoning of the table's clock. */
+  private reactionRefusal(view: TableView): string | null {
+    const now = this.clock.now();
+
+    return this.table?.reacting ? REACTION_TOO_SOON : reactionRefusal(liveReactions(view.reactions, now), view.you.id, now);
+  }
+
+  /** The player's own reaction shows at once, and is sent; one that gets no answer is simply gone. */
+  private react(kind: string, to?: string): void {
+    const view = this.shownView();
+    if (!this.screen || !view || this.reactionRefusal(view) !== null) {
+      return;
+    }
+
+    this.screen.shown.react({ from: view.you.id, kind, at: this.clock.now(), to });
+    void this.send({ type: 'react', kind, to });
   }
 
   private drawTopbar(screen: TableScreen, view: TableView): void {
@@ -738,8 +775,15 @@ export class App {
       element.textContent = String(secondsUntil(Number(element.dataset.countdown), this.clock.offset));
     }
 
-    // A move that has waited too long for its answer says so by the clock, with no view to draw it
     const screen = this.screen;
+    const view = this.shownView();
+
+    // The wait before the next reaction ends by the clock, with no view to draw it
+    if (screen?.picker.isOpen && view) {
+      screen.picker.draw(view);
+    }
+
+    // A move that has waited too long for its answer says so by the clock, with no view to draw it
     if (screen && (screen.shown.waiting === 'unconfirmed') !== screen.stage.element.hasAttribute('data-unconfirmed')) {
       this.drawShown();
     }

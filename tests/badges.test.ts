@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { addMember, BADGES, badgeOf, countHand, earnBadges, handFacts } from '../src/engine/index.ts';
+import { PICKER_MARK } from '../src/client/reactions.ts';
+import { addMember, BADGES, badgeOf, countHand, earnBadges, handFacts, REACTIONS } from '../src/engine/index.ts';
 import type { HandFacts, TableState } from '../src/engine/index.ts';
 import { restoreState } from '../src/server/store.ts';
 import { ACES, BOARD, checkAround, handRecords, KINGS, QUEENS, TestTable } from './helpers.ts';
@@ -427,15 +428,19 @@ test('every badge has an id of its own, a name, a mark and a description', () =>
  * a blank box in its place, and beside a name the mark is all there is, so a new badge's mark joins this
  * list only once it is checked to be as old.
  */
-const OLD_MARKS = new Set(['💎', '🚽', '🍀', '💰', '🔥', '💀', '🍦', '💩', '🍔', '❄️', '🏧']);
+const OLD_MARKS = new Set(['💎', '🚽', '🍀', '💰', '🔥', '💀', '🍦', '💩', '🍔', '❄️', '🏧', '😂', '😭', '😡', '😱', '🙏', '👏', '🍅', '🐟', '🐔', '🍺', '🌹', '😃']);
 
-test('every mark is one emoji that every phone has', () => {
+test('every mark is one emoji that every phone has: each badge’s, each reaction’s and the reactions button’s', () => {
   const graphemes = new Intl.Segmenter('en', { granularity: 'grapheme' });
+  const marks = [...BADGES, ...REACTIONS, { id: 'the reactions button', mark: PICKER_MARK }];
 
-  for (const badge of BADGES) {
-    assert.equal([...graphemes.segment(badge.mark)].length, 1, `${badge.id}: ${badge.mark} is more than one mark`);
-    assert.ok(OLD_MARKS.has(badge.mark), `${badge.id}: ${badge.mark} is not known to be drawn on every phone`);
+  for (const { id, mark } of marks) {
+    assert.equal([...graphemes.segment(mark)].length, 1, `${id}: ${mark} is more than one mark`);
+    assert.ok(OLD_MARKS.has(mark), `${id}: ${mark} is not known to be drawn on every phone`);
   }
+
+  assert.equal(new Set(REACTIONS.map((kind) => kind.mark)).size, REACTIONS.length, 'two reactions look the same');
+  assert.equal(new Set(REACTIONS.map((kind) => kind.id)).size, REACTIONS.length, 'two reactions share an id');
 });
 
 test('a badge earned is told to the table in the play-by-play, with what earned it', () => {

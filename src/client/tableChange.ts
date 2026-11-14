@@ -1,10 +1,16 @@
 import type { EarnedBadge } from '../engine/badges.ts';
 import type { HandEvent } from '../engine/events.ts';
-import type { FeedEntry } from '../engine/types.ts';
+import type { FeedEntry, Reaction } from '../engine/types.ts';
 import type { TableView } from '../engine/view.ts';
 
 // Older than this when it reaches the page, a thing is something the viewer missed, as while their phone slept, not something happening
 const FRESH_MS = 10_000;
+
+/**
+ * Older than this when it reaches the page, a reaction has had its moment. It reaches the other pages at
+ * their next poll, which on Apps Script is two or three seconds after it is made, and is seen for three.
+ */
+export const REACTION_FRESH_MS = 6000;
 
 /** What a view that has just been put on screen brought with it. */
 export interface TableChange {
@@ -40,6 +46,12 @@ export interface TableChange {
   earned: EarnedBadge[];
   /** The viewer has come to hold the high hand, and this is the first `current` view to show it. */
   tookHighHand: boolean;
+  /**
+   * Other players' reactions and throws that are news: not in the view before, and only moments old.
+   * The viewer's own are told when they make them (`ShownTable.react`), never again when the server
+   * sends them back.
+   */
+  reactions: Reaction[];
 }
 
 /** What is told once, even past a late view: by the first view on time that shows it, and never by a page that opened after it. */
@@ -83,7 +95,7 @@ const newBadges = (view: TableView, told: Told): EarnedBadge[] => badgesOf(view)
  */
 export function tableChange(before: TableView | null, view: TableView, now: number, wentBack = false, told = toldIn(before)): TableChange {
   if (!before || wentBack) {
-    return { before, view, feed: [], events: [], current: false, wentBack, nightEnded: false, earned: [], tookHighHand: false, now };
+    return { before, view, feed: [], events: [], current: false, wentBack, nightEnded: false, earned: [], tookHighHand: false, reactions: [], now };
   }
 
   // A line is known by its number and its time together: a table put back to an earlier state numbers its next lines like ones it had
@@ -101,7 +113,21 @@ export function tableChange(before: TableView | null, view: TableView, now: numb
   const held = heldHighHand(view);
   const tookHighHand = current && held !== null && held !== told.highHand;
 
-  return { before, view, feed, events: current ? newEvents(before, view) : [], current, wentBack, nightEnded, earned: current ? newBadges(view, told) : [], tookHighHand, now };
+  return { before, view, feed, events: current ? newEvents(before, view) : [], current, wentBack, nightEnded, earned: current ? newBadges(view, told) : [], tookHighHand, reactions: newReactions(before, view, now), now };
+}
+
+/** A reaction is known by who made it and when: nobody makes two at once. */
+const reactionKey = (reaction: Reaction): string => `${reaction.from}@${reaction.at}`;
+
+/**
+ * The reactions `view` has that `before` did not, made by someone else, that are still fresh. Each
+ * carries its own time, so a late view loses only what has had its moment, and what one view has
+ * shown, on time or too late, the next does not show again.
+ */
+function newReactions(before: TableView, view: TableView, now: number): Reaction[] {
+  const known = new Set(before.reactions.map(reactionKey));
+
+  return view.reactions.filter((reaction) => reaction.from !== view.you.id && !known.has(reactionKey(reaction)) && now - reaction.at <= REACTION_FRESH_MS);
 }
 
 /**

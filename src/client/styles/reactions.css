@@ -1,0 +1,174 @@
+/* ---- Reactions and throws: shown over the seats, and the picker for them, opened from the chat's bar ---- */
+
+/* Lies exactly over the table, in the same part of the screen, and is never drawn into by it. Only what is on it takes a tap */
+.above {
+  grid-area: stage;
+  position: relative;
+  z-index: 1;
+  min-height: 0;
+  overflow: clip;
+  pointer-events: none;
+  container-type: size;
+}
+
+.seat-reaction,
+.thrown {
+  font-size: clamp(24px, 8cqmin, 40px);
+  line-height: 1;
+}
+
+/* Held by the middle of its bottom edge at the top of its seat's plate; several on one seat stand side by side */
+.seat-reaction {
+  position: absolute;
+  transform: translate(calc(-50% + var(--nth, 0) * 1.05em), -60%);
+  filter: drop-shadow(0 2px 3px rgb(0 0 0 / 45%));
+}
+
+.seat-reaction.moving.popped {
+  animation: reaction-pop var(--stays) ease-out both;
+}
+
+.seat-reaction.moving.landed {
+  animation: reaction-land var(--stays) ease-out both;
+}
+
+/* Up with a bounce, a slow rise, and gone */
+@keyframes reaction-pop {
+  0% {
+    opacity: 0;
+    translate: 0 30%;
+    scale: 0.4;
+  }
+
+  8% {
+    opacity: 1;
+    scale: 1.2;
+  }
+
+  14% {
+    translate: 0 0;
+    scale: 1;
+  }
+
+  85% {
+    opacity: 1;
+    translate: 0 -25%;
+  }
+
+  100% {
+    opacity: 0;
+    translate: 0 -35%;
+  }
+}
+
+/* Squashed flat as it hits, back to shape, then slides off */
+@keyframes reaction-land {
+  0% {
+    scale: 1.4 0.6;
+  }
+
+  10% {
+    scale: 0.9 1.1;
+  }
+
+  18% {
+    scale: 1;
+  }
+
+  85% {
+    opacity: 1;
+    translate: 0 0;
+  }
+
+  100% {
+    opacity: 0;
+    translate: 0 40%;
+  }
+}
+
+
+.react-toggle {
+  flex: none;
+  margin-right: 8px;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel-raised);
+  font-size: 18px;
+  line-height: 1;
+}
+
+.react-toggle[aria-expanded='true'] {
+  border-color: var(--accent);
+}
+
+/* Over the top of the table, never past its bottom: the bar of moves is below it, out of reach */
+.react-panel {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: grid;
+  gap: 6px;
+  width: min(312px, calc(100% - 12px));
+  max-height: calc(100% - 12px);
+  padding: 8px 10px 10px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-raised);
+  box-shadow: 0 8px 30px rgb(0 0 0 / 40%);
+  color: var(--text);
+  pointer-events: auto;
+}
+
+.react-heading {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.react-row {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.react-choice {
+  height: 44px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: var(--panel);
+  font-size: 24px;
+  line-height: 1;
+}
+
+.react-choice:hover:not(:disabled) {
+  border-color: var(--line);
+}
+
+.react-targets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.react-targets .btn {
+  min-height: 36px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.react-back {
+  justify-self: start;
+}
+
+.react-note {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.react-note:empty {
+  display: none;
+}

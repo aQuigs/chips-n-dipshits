@@ -1,14 +1,15 @@
 import { formatAmount } from '../../../engine/amounts.ts';
 import { boardsDealt, bombPotOf } from '../../../engine/bombPots.ts';
+import { nightOver, onLastHand } from '../night.ts';
 import { hostOrCohost } from '../roles.ts';
 import type { MenuAction } from './menu.ts';
 
-/** Not offered while the next hand is a bomb pot anyway, called or by the table's count. */
+/** Not offered while the next hand is a bomb pot anyway, called or by the table's count, nor when no next hand is coming. */
 export const callBombPot: MenuAction = {
   action: 'bomb-pot',
   menu: {
     label: 'Bomb pot next hand',
-    who: (view) => hostOrCohost(view) && view.nextBombPot === null,
+    who: (view) => hostOrCohost(view) && view.nextBombPot === null && !nightOver(view) && !onLastHand(view),
     note: (view) => `${formatAmount(view.config.bombPotAmount, view.config)} each, no blinds, starts on ${boardsDealt(bombPotOf(view.config)) > 1 ? 'two flops' : 'the flop'}`,
   },
   pick(handlers) {

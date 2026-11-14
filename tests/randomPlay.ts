@@ -1,7 +1,7 @@
 /* Random play on a test table: what the simulation runs, and what plays a saved table on after it is read back. */
 import assert from 'node:assert/strict';
 
-import { addMember, CONFIG_KEYS, nextDeadline, SEAT_COUNT, viewFor } from '../src/engine/index.ts';
+import { addMember, CONFIG_KEYS, LIMITS, nextDeadline, SEAT_COUNT, viewFor } from '../src/engine/index.ts';
 import type { Command, GameError, Rng } from '../src/engine/index.ts';
 import type { TestTable } from './helpers.ts';
 import { randomConfig } from './randomConfig.ts';
@@ -94,6 +94,16 @@ export const FUZZ_COMMANDS: ((fuzz: Fuzz) => void)[] = [
   // Called more often than taken back, so that some are dealt
   ({ t, rng }) => attempt(t, chance(rng, 80) ? someoneRunningTheGame(t, rng) : rng.int(t.ids.length), { type: 'setBombPot', on: chance(rng, 75) }),
   ({ t, rng, who }) => attempt(t, who, { type: 'ritVote', agree: chance(rng, 70) }),
+
+  // The last hands are called, changed and called off, the night is ended outright, and play is started again after it
+  ({ t, rng }) => attempt(t, chance(rng, 85) ? someoneRunningTheGame(t, rng) : rng.int(t.ids.length), { type: 'setLastHands', hands: chance(rng, 50) ? null : rng.int(LIMITS.lastHands + 1), from: Math.max(0, t.state.handCount - rng.int(2)) }),
+  ({ t, rng }) => {
+    // Rarely: a table between hands is mostly one short of players, whose night would otherwise end at every turn
+    if (chance(rng, 4)) {
+      attempt(t, chance(rng, 85) ? someoneRunningTheGame(t, rng) : rng.int(t.ids.length), { type: 'endNight' });
+    }
+  },
+  ({ t, rng }) => attempt(t, someoneRunningTheGame(t, rng), { type: chance(rng, 80) ? 'playOn' : 'start' }),
 
   ({ t, rng }) => {
     // Mostly a change the host could make. Now and then one that also asks for what was fixed at creation, which is refused whole

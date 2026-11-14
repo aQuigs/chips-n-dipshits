@@ -1,0 +1,39 @@
+/* ---- Last hands: picking how many are left, the count under the table, and the night being over ---- */
+
+.hand-counts {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.hand-counts .chip-btn,
+.this-hand .chip-btn {
+  min-height: 44px;
+  font-size: 16px;
+}
+
+.this-hand .chip-btn {
+  width: 100%;
+}
+
+.hand-counts .chip-btn[aria-pressed='true'],
+.this-hand .chip-btn[aria-pressed='true'] {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+/* The count and word of a bomb pot share the line, each kept whole when there is no room for both */
+.next-hand {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 12px;
+}
+
+.controls.seated .next-hand {
+  justify-content: center;
+}
+
+.message.night-over > div {
+  font-size: 1.25em;
+}

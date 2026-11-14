@@ -8,6 +8,7 @@ import type { Handler } from './handler.ts';
 
 export const requestSeat: Handler<'requestSeat'> = {
   by: 'member',
+  inPlayOnly: true,
   run: ({ state, ctx, member, command }) => {
     if (seatIndexOf(state, member.id) >= 0) {
       throw new GameError('You already have a seat');
@@ -27,6 +28,7 @@ export const requestSeat: Handler<'requestSeat'> = {
 
 export const requestRebuy: Handler<'requestRebuy'> = {
   by: 'seat',
+  inPlayOnly: true,
   run: ({ state, ctx, member, command, seat, seatIndex }) => {
     if (seat.leaving) {
       throw new GameError('You are giving up your seat when this hand ends');

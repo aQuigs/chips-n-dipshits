@@ -14,6 +14,8 @@ export const LIMITS = {
   /** Rarer than this in a night's play is as good as never. */
   handsPerBombPot: 100,
   presetNameLength: 30,
+  /** The most hands the host can call as the last ones: more than this is a night still going, not ending. */
+  lastHands: 10,
   /** How many presets the group may keep. Few enough to pick from on a phone. */
   presets: 20,
 };

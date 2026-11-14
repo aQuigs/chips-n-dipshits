@@ -259,6 +259,32 @@ test('polling is what moves time forward: the deal, the clock and the next hand'
   assert.equal(failure(history).code, 'unauthorized');
 });
 
+test('the end of a night reaches the store once each time, whether the last hand ends it as a poll comes in or the host does', () => {
+  const { tableId, store, clock, act, poll } = seatedTable();
+  const memory = store as MemoryStore;
+  viewOf(act(0, { type: 'start' }));
+  viewOf(act(0, { type: 'setLastHands', hands: 1 }));
+
+  // The hand is folded around and its result left up until a poll after the pause finds it over
+  clock.time += TIMING.startDelayMs;
+  let view = viewOf(poll(1));
+  while (view.hand!.stage === 'betting') {
+    view = viewOf(act(view.hand!.toAct!, { type: 'fold' }));
+  }
+  clock.time = view.hand!.deadline!;
+  view = viewOf(poll(2, view.version));
+
+  assert.equal(view.nightEndedAt, clock.time);
+  assert.deepEqual(memory.nightsEnded, [{ at: clock.time, tableId }]);
+
+  // Polls and refusals change nothing, and play started again and ended again is another night
+  viewOf(poll(0));
+  assert.equal(failure(act(0, { type: 'endNight' })).error, 'The night is already over');
+  viewOf(act(0, { type: 'playOn' }));
+  viewOf(act(0, { type: 'endNight' }));
+  assert.equal(memory.nightsEnded.length, 2);
+});
+
 test('history returns the finished hands of the table', () => {
   const { service, tableId, players, clock, act, poll } = seatedTable();
   viewOf(act(0, { type: 'start' }));

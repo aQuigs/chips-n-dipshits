@@ -5,6 +5,7 @@ import { midSentence } from '../../engine/handNames.ts';
 import type { HandRead } from '../../engine/handNames.ts';
 import type { HandView, Holding, SeatView, TableView } from '../../engine/view.ts';
 import { cardEl, h } from '../ui.ts';
+import { nightOver } from './night.ts';
 import { hostOrCohost, roleMark } from './roles.ts';
 
 /** Whether the table is drawn lying down (desktop, landscape) or standing up (a phone held upright). */
@@ -67,6 +68,7 @@ const ACTION_LABELS: Record<string, string> = {
 export interface TableHandlers {
   onSit(seat: number): void;
   onStart(): void;
+  onPlayOn(): void;
   /** While the host picks a new seat for a player: who, and where a pick goes. */
   moving?: { playerId: string; to(seat: number): void };
 }
@@ -277,7 +279,7 @@ function openSeatEl(view: TableView, seat: number, slot: number, shape: Shape, h
     return open('requested', h('div.plate', null, 'Waiting for the host…'));
   }
 
-  if (view.you.seat !== null || myRequest) {
+  if (view.you.seat !== null || myRequest || nightOver(view)) {
     return open('idle', h('div.plate', { 'aria-hidden': 'true' }, 'Open'));
   }
 
@@ -374,6 +376,15 @@ function messageEl(view: TableView, handlers: TableHandlers): HTMLElement | null
 
   if (hand) {
     return null;
+  }
+
+  if (nightOver(view)) {
+    return h(
+      'div.message.night-over',
+      null,
+      h('div', null, 'The night is over'),
+      hostOrCohost(view) ? h('button.btn.primary', { type: 'button', 'data-action': 'play-on', onclick: handlers.onPlayOn }, 'Keep playing') : null,
+    );
   }
 
   const seated = view.seats.filter((seat) => seat !== null).length;

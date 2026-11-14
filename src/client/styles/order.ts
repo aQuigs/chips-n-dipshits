@@ -32,4 +32,5 @@ export const STYLESHEETS = [
   'bomb-pots.css',
   'presets.css',
   'attention.css',
+  'last-hands.css',
 ];

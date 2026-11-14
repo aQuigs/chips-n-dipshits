@@ -252,6 +252,10 @@ export interface TableState {
   bombPotCalled: boolean;
   /** Hands dealt since the last bomb pot, counted only while one comes every so many hands. */
   handsSinceBombPot: number;
+  /** The number of the hand the night ends after, once the host has called the last hands; null while none are called. */
+  lastHand: number | null;
+  /** When the night ended, or null while it goes on. Only `endNight` and `restartNight` (`night.ts`) change it. */
+  nightEndedAt: number | null;
   feed: FeedEntry[];
   feedSeq: number;
 }
@@ -291,8 +295,14 @@ export interface HandRecord {
   events: HandEvent[];
 }
 
+/** A night at a table came to its end. A table can have more than one, since play can start again after a night ends. */
+export interface NightEnd {
+  at: number;
+  tableId: string;
+}
+
 /** Things that happened which belong in the permanent record, outside the table state. */
-export type Effect = { type: 'ledger'; entry: LedgerEntry } | { type: 'hand'; record: HandRecord };
+export type Effect = { type: 'ledger'; entry: LedgerEntry } | { type: 'hand'; record: HandRecord } | { type: 'nightEnded'; night: NightEnd };
 
 /** Everything the rules need from the outside world. */
 export interface Ctx {
@@ -326,6 +336,14 @@ export type Command =
   | { type: 'shuffleSeats' }
   | { type: 'transferChips'; from: string; to: string; amount: number }
   | { type: 'setBombPot'; on: boolean }
+  /**
+   * How many hands are still to be dealt after the `from`th, the hand on the table as the sender saw it
+   * (or the last one dealt, between hands); null calls the last hands off.
+   */
+  | { type: 'setLastHands'; hands: number | null; from?: number }
+  | { type: 'endNight' }
+  /** Starts dealing again after the night ended. */
+  | { type: 'playOn' }
   | { type: 'updateConfig'; config: Partial<TableConfig> }
   | { type: 'transferHost'; playerId: string }
   | { type: 'setCohost'; playerId: string; on: boolean };

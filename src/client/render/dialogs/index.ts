@@ -5,7 +5,8 @@ import type { DialogHandlers, DialogKind } from './dialog.ts';
 import { historyDialog } from './history.ts';
 import { inviteDialog } from './invite.ts';
 import { ledgerDialog } from './ledger.ts';
-import { menuDialog, pauseGame, standUp, startGame, toLobby } from './menu.ts';
+import { lastHandsDialog } from './lastHands.ts';
+import { keepPlaying, menuDialog, pauseGame, standUp, startGame, toLobby } from './menu.ts';
 import { playersDialog } from './players.ts';
 import { preferencesDialog } from './preferences.ts';
 import { rebuyDialog } from './rebuy.ts';
@@ -31,9 +32,11 @@ const REGISTERED = [
   shuffleSeats,
   callBombPot,
   callOffBombPot,
+  lastHandsDialog,
   settingsDialog,
   pauseGame,
   startGame,
+  keepPlaying,
   themeDialog,
   preferencesDialog,
   standUp,

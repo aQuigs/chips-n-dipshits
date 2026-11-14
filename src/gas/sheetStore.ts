@@ -48,15 +48,20 @@ const HEADERS: Record<SheetKey, string[]> = {
 // An amount is written as its table writes it, 1.50 for 150 cents, and as a number so the column can be added up
 const AMOUNT: Record<Unit, string> = { chips: WHOLE_NUMBER, cents: '0.00' };
 
+/** What happened that has a tab to go to. The end of a night has none, so nothing of it is kept. */
+type Recorded = Extract<Effect, { type: 'ledger' | 'hand' }>;
+
 /**
  * Where each kind of record ends up, how the cells of a row are formatted for the table it happened at,
  * and which column holds the record's id. A column added later goes after the id, so that rows written
  * before it keep their id where a retry looks for it.
  */
-const RECORD_SHEETS: { type: Effect['type']; sheet: SheetKey; idColumn: number; formats(table: Denominated): string[] }[] = [
+const RECORD_SHEETS: { type: Recorded['type']; sheet: SheetKey; idColumn: number; formats(table: Denominated): string[] }[] = [
   { type: 'ledger', sheet: 'ledger', idColumn: 7, formats: ({ unit }) => [TIMESTAMP, TEXT, TEXT, TEXT, AMOUNT[unit], TEXT, TEXT, AMOUNT[unit], TEXT, TEXT] },
   { type: 'hand', sheet: 'hands', idColumn: 6, formats: () => [TIMESTAMP, TEXT, WHOLE_NUMBER, TEXT, TEXT, TEXT] },
 ];
+
+const hasTab = (effect: Effect): effect is Recorded => RECORD_SHEETS.some((sheet) => sheet.type === effect.type);
 
 // The engine keeps a hand's log shorter than this. Should a longer one ever arrive, its end is kept
 // rather than the hand being refused: the record must fit a cell, and it holds the summary.
@@ -129,7 +134,7 @@ function fromCells(cells: unknown[]): string {
 /** A ledger entry or finished hand on its way to its tab. The id is how a retry tells that it already arrived. */
 interface Held {
   id: string;
-  record: Effect;
+  record: Recorded;
 }
 
 /** The cells that keep records in a table's row until they are copied out. If they can't all fit, hands give way before money, oldest first. */
@@ -255,7 +260,7 @@ export class SheetStore implements TableStore {
 
       if (save) {
         // A table's version changes with every save, which makes these ids one of a kind
-        const fresh = txn.effects.map((record, index) => ({ id: `${save.id}:${save.version}:${index}`, record }));
+        const fresh = txn.effects.flatMap((record, index) => (hasTab(record) ? [{ id: `${save.id}:${save.version}:${index}`, record }] : []));
 
         this.persist(save, found ? found.row : null, found ? found.held : [], fresh);
       } else if (found && found.held.length > 0) {

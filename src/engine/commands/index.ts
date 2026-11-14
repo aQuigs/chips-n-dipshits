@@ -1,10 +1,11 @@
 import { isHostLevel, requireLevel } from '../hosts.ts';
+import { nightIsOver } from '../night.ts';
 import { memberOf, seatIndexOf } from '../seats.ts';
 import { GameError } from '../types.ts';
 import type { Command, Ctx, TableState } from '../types.ts';
 import { chat } from './anyone.ts';
 import type { Call, CommandType, Handler, SeatedCall } from './handler.ts';
-import { approve, deny, kick, moveSeat, pause, setBombPot, setCohost, setStack, shuffleSeats, start, transferChips, transferHost, updateConfig } from './host.ts';
+import { approve, deny, endTheNight, kick, moveSeat, pause, playOn, setBombPot, setCohost, setLastHands, setStack, shuffleSeats, start, transferChips, transferHost, updateConfig } from './host.ts';
 import { call, check, fold, raise, ritVote, showCards } from './play.ts';
 import { cancelRequest, requestRebuy, requestSeat, setStraddle, sitIn, sitOut, standUp } from './seat.ts';
 
@@ -37,6 +38,9 @@ export const HANDLERS: { [T in CommandType]: Handler<T> } = {
   shuffleSeats,
   transferChips,
   setBombPot,
+  setLastHands,
+  endNight: endTheNight,
+  playOn,
   updateConfig,
   transferHost,
   setCohost,
@@ -56,6 +60,10 @@ export function dispatch(state: TableState, ctx: Ctx, playerId: string, command:
 
   if (isHostLevel(handler.by)) {
     requireLevel(state, playerId, handler.by);
+  }
+
+  if (handler.inPlayOnly && nightIsOver(state)) {
+    throw new GameError('The night is over, so that waits until play starts again');
   }
 
   if (handler.by !== 'seat') {

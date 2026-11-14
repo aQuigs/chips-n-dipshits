@@ -15,7 +15,7 @@ import { BUZZ_PATTERN } from '../src/client/attentionWays.ts';
 import { KEYS_SETTLE_MS } from '../src/client/hotkeys.ts';
 import { RECIPES } from '../src/client/soundRecipes.ts';
 import { THEMES } from '../src/client/themes.ts';
-import { DEFAULT_CONFIG, presetSettings } from '../src/engine/index.ts';
+import { DEFAULT_CONFIG, LIMITS, presetSettings } from '../src/engine/index.ts';
 import type { Command, TableConfig, TableView } from '../src/engine/index.ts';
 import { contrast } from '../tests/colorVision.ts';
 import { boxes, overlap, Rig, SCREENS, setStageHeight, squeezed, textBoxes } from './rig.ts';
@@ -264,6 +264,13 @@ const BOMB_POT_TABLES = [
 ];
 
 const nextIsBombPot = (amount: string) => `Next hand is a bomb pot: ${amount} each`;
+
+/** What the bar says about the hands to come is whole, on the screen and clear of the table and the buttons. */
+async function assertNextHandsFit(page: Page, screen: ScreenName, who: string): Promise<void> {
+  assert.deepEqual(await squeezed(page, '.controls .waiting, .controls .next-hand span'), [], `what the ${who} is told about the hands to come is cut off`);
+  assertOnScreen(await boxes(page, '.controls .next-hand span, .seat .plate'), screen, `the ${who}'s table and what is said under it`);
+  assertApart(await boxes(page, '.controls .next-hand span'), await boxes(page, '.stage, .controls .extras'), 'word of the hands to come and what is around it');
+}
 
 /*
  * Three double-board bomb pots at a table of BOMB_POT_TABLES, every card fixed, played one after the
@@ -3934,6 +3941,228 @@ const CHECKS: Check[] = [
           assert.equal(await picked('two'), true);
 
           await page.context().close();
+        }
+      }
+    },
+  ],
+  [
+    'the last hands the host calls are told under the table to everyone, beside word of a bomb pot, and changing them leaves a bet being typed alone',
+    async (rig) => {
+      for (const kind of BOMB_POT_TABLES) {
+        for (const screen of PHONE_AND_DESKTOP) {
+          const table = rig.table(
+            LONG_NAMES.slice(0, 6).map((name) => ({ name, stack: kind.stack })),
+            kind.config,
+          );
+          table.join('Zed');
+          table.deal({ button: 0, holes: { 0: 'As Ah', 3: 'Ks Kh' }, board: '2c 7d 9h Jc 3s' });
+
+          const host = await table.open('Quigs', screen);
+          const deciding = await table.open('Marge Simpson-Jr', screen);
+          const watcher = await table.open('Zed', screen);
+          const everyone = { host, watcher };
+          const press = pressOn(host, screen);
+          const [roomBefore] = await boxes(host, '.stage');
+
+          const lookInShapes = async (state: string, said: string[]) => {
+            for (const [who, page] of Object.entries(everyone)) {
+              await page.waitForFunction(`JSON.stringify([...document.querySelectorAll('.controls .next-hand span')].map((part) => part.textContent)) === ${JSON.stringify(JSON.stringify(said))}`);
+
+              await inShapesOf(
+                page,
+                screen,
+                async (shape) => {
+                  await assertNextHandsFit(page, screen, who);
+                  await shot(page, `last-hands-${state}-${who}-${kind.name}-${screen}-${shape}`);
+                },
+                { buttonsUp: false },
+              );
+            }
+          };
+
+          // Called during a hand, from the menu, the count is of the hands after it
+          await press('[data-action="menu"]');
+          assert.equal(await text(host, '.menu [data-action="lastHands"]'), 'Last handsCall how many hands are left, or end the night');
+          await press('.menu [data-action="lastHands"]');
+          await host.waitForSelector('.hand-counts');
+          assert.deepEqual(await texts(host, '.this-hand button, .hand-counts button'), ['This hand is the last', ...Array.from({ length: 10 }, (_, index) => String(index + 1))]);
+          assert.equal(await host.locator('.dialog [data-action="end-night"], .dialog [data-action="call-off-last-hands"]').count(), 0, 'the night can be ended outright during a hand, or a count nobody called called off');
+          assertOnScreen(await boxes(host, '.dialog, .dialog button'), screen, 'the last hands dialog');
+          assert.deepEqual(await squeezed(host, '.dialog button, .dialog p'), [], 'part of the last hands dialog is cut off');
+          await assertNoSidewaysScroll(host);
+          await shot(host, `last-hands-dialog-${kind.name}-${screen}`);
+
+          await press('.hand-counts [data-hands="3"]');
+          await host.waitForSelector('.dialog', { state: 'detached' });
+          assert.equal(table.view('Zed').feed.at(-1)!.text, 'The host calls it a night after this hand and 3 more');
+
+          // A seated player's bar keeps its height, so the count costs their table nothing
+          await host.waitForSelector('.controls .next-hand');
+          assert.deepEqual(await boxes(host, '.stage'), [roomBefore], 'the count took room from a seated player\'s table');
+          await lookInShapes('3', ['3 more hands after this one']);
+
+          table.act('Quigs', { type: 'setBombPot', on: true });
+          await lookInShapes('and-bomb-pot', ['3 more hands after this one', nextIsBombPot(kind.amount)]);
+
+          // The player on the clock is typing a bet when the count changes, and the bet is left as it was typed
+          await deciding.fill('#raise-amount', kind.typed);
+          await deciding.evaluate(`document.querySelector('#raise-amount').dataset.typed = 'yes'`);
+          table.act('Quigs', { type: 'setLastHands', hands: 1 });
+          await deciding.waitForSelector('.feed li:has-text("now calls it a night after this hand and 1 more")', { state: 'attached' });
+          assert.equal(await deciding.inputValue('#raise-amount'), kind.typed);
+          assert.equal(await deciding.locator('#raise-amount[data-typed="yes"]').count(), 1, 'the bet being typed was drawn again');
+          assert.equal(await deciding.locator('.next-hand').count(), 0, 'word of the hands to come takes room from a decision');
+          await shot(deciding, `last-hands-deciding-${kind.name}-${screen}`);
+
+          // Once their move is made, they see the count too
+          await pressOn(deciding, screen)('.turn [data-action="call"]');
+          await deciding.waitForFunction(`document.querySelector('.controls .next-hand')?.textContent === ${JSON.stringify(`1 more hand after this one${nextIsBombPot(kind.amount)}`)}`);
+
+          // Made the last hand, nothing is said of a bomb pot that will never be dealt
+          await press('[data-action="menu"]');
+          assert.equal(await text(host, '.menu [data-action="lastHands"] small'), '1 more hand after this one');
+          await press('.menu [data-action="lastHands"]');
+          await host.waitForSelector('.hand-counts');
+          assert.deepEqual(await texts(host, '.dialog [aria-pressed="true"]'), ['1']);
+          assert.equal(await host.locator('.dialog [data-action="call-off-last-hands"]').count(), 1);
+          await shot(host, `last-hands-dialog-called-${kind.name}-${screen}`);
+          await press('.this-hand [data-hands="0"]');
+          await host.waitForSelector('.dialog', { state: 'detached' });
+          assert.equal(table.view('Zed').feed.at(-1)!.text, 'The host now calls it a night after this hand');
+          await lookInShapes('last', ['Last hand of the night']);
+          await press('[data-action="menu"]');
+          await host.waitForSelector('.menu [data-action="lastHands"]');
+          assert.equal(await host.locator('.menu [data-action="bomb-pot"]').count(), 0, 'a bomb pot is offered for a hand that never comes');
+          await press('[data-action="close"]');
+
+          for (const page of [host, deciding, watcher]) {
+            await page.context().close();
+          }
+        }
+      }
+    },
+  ],
+  [
+    'the longest count of hands left and the longest word of a bomb pot on two boards share the bar whole on the smallest phone',
+    async (rig) => {
+      const table = rig.table(
+        LONG_NAMES.slice(0, 6).map((name) => ({ name, stack: 10_000_000 })),
+        { ...CENTS, bombPotAmount: 999_999, bombPotBoards: 'two' },
+      );
+      table.deal({ button: 0, holes: { 0: 'As Ah' } });
+      table.act('Quigs', { type: 'setLastHands', hands: LIMITS.lastHands, from: 1 });
+      table.act('Quigs', { type: 'setBombPot', on: true });
+
+      const page = await table.open('Stu', 'smallPhone');
+      const said = [`${LIMITS.lastHands} more hands after this one`, 'Next hand is a double-board bomb pot: 9,999.99 each'];
+      await page.waitForFunction(`JSON.stringify([...document.querySelectorAll('.controls .next-hand span')].map((part) => part.textContent)) === ${JSON.stringify(JSON.stringify(said))}`);
+      await inShapesOf(
+        page,
+        'smallPhone',
+        async (shape) => {
+          await assertNextHandsFit(page, 'smallPhone', 'player');
+          await shot(page, `last-hands-longest-double-board-smallPhone-${shape}`);
+        },
+        { buttonsUp: false },
+      );
+    },
+  ],
+  [
+    'the host or a co-host can end the night outright between hands or after a last hand, everyone is told it is over, and either can play on while a member cannot',
+    async (rig) => {
+      for (const kind of BOMB_POT_TABLES) {
+        for (const screen of PHONE_AND_DESKTOP) {
+          const table = rig.table(
+            LONG_NAMES.slice(0, 6).map((name) => ({ name, stack: kind.stack })),
+            kind.config,
+          );
+          table.join('Zed');
+          table.act('Quigs', { type: 'setCohost', playerId: table.auth('Stu').id, on: true });
+
+          const pages = { host: await table.open('Quigs', screen), cohost: await table.open('Stu', screen), member: await table.open('Big Al', screen), watcher: await table.open('Zed', screen) };
+          const runs = (who: string) => who === 'host' || who === 'cohost';
+          const host = pages.host;
+          const press = pressOn(host, screen);
+
+          // Between hands, ended outright from the menu once the host has said so twice
+          await press('[data-action="menu"]');
+          await press('.menu [data-action="lastHands"]');
+          await host.waitForSelector('.dialog [data-action="end-night"]');
+          assert.equal(await host.locator('.this-hand, .dialog [data-action="call-off-last-hands"]').count(), 0, 'with no hand on the table it is offered as the last, or a count nobody called is offered to be called off');
+          assert.deepEqual(await squeezed(host, '.dialog button, .dialog p'), [], 'part of the last hands dialog is cut off');
+          await shot(host, `last-hands-dialog-between-hands-${kind.name}-${screen}`);
+          await press('.dialog [data-action="end-night"]');
+          await host.waitForSelector('.dialog [data-action="confirm"]');
+          assert.equal(await text(host, '.dialog h2'), 'End the night?');
+          await press('.dialog [data-action="confirm"]');
+          await host.waitForSelector('.message.night-over');
+          assert.equal(table.view('Zed').feed.at(-1)!.text, 'The host ended the night');
+
+          // A co-host plays on from the felt, and the next hand is the last
+          await pages.cohost.waitForSelector('.message.night-over [data-action="play-on"]');
+          await pressOn(pages.cohost, screen)('.message.night-over [data-action="play-on"]');
+          await pages.cohost.waitForSelector('.message.night-over', { state: 'detached' });
+          table.deal({ button: 0, holes: { 0: 'As Ah', 3: 'Ks Kh' }, board: '2c 7d 9h Jc 3s' });
+          assert.equal(table.view('Zed').feed.find((entry) => entry.text.startsWith('Co-host'))?.text, 'Co-host Stu started play again');
+          table.act('Quigs', { type: 'setLastHands', hands: 0 });
+
+          // The last hand's result is up, and the bar says it was the last
+          const done = table.play(passive, (view) => view.hand?.stage === 'done');
+          await pages.member.waitForSelector('.controls .waiting:has-text("That was the last hand")');
+          assert.equal(await pages.member.locator('.controls .next-hand').count(), 0);
+
+          rig.advance(done.hand!.deadline! - rig.now());
+          assert.notEqual(table.view('Quigs').nightEndedAt, null);
+          assert.equal(table.view('Zed').feed.at(-1)!.text, 'That was the last hand. The night is over');
+
+          for (const [who, page] of Object.entries(pages)) {
+            await page.waitForSelector('.message.night-over');
+            assert.equal(await text(page, '.message.night-over > div'), 'The night is over', who);
+            assert.equal(await page.locator('.message.night-over [data-action="play-on"]').count(), runs(who) ? 1 : 0, `${who} is offered to play on`);
+            assert.equal(await text(page, '.topbar .pill'), 'Night over', who);
+            assert.equal(await text(page, '.controls .waiting'), 'The night is over', who);
+            assert.equal(await page.locator('.controls .extras, [data-sit]').count(), 0, `${who} is offered to sit down, sit out or add chips with no hands to come`);
+
+            await inShapesOf(
+              page,
+              screen,
+              async (shape) => {
+                assert.deepEqual(await squeezed(page, '.message.night-over > *, .controls .waiting, .topbar .pill'), [], `what the ${who} is told is cut off`);
+                assertOnScreen(await boxes(page, '.message.night-over > *, .seat .plate'), screen, `the ${who}'s table`);
+                assertApart(await boxes(page, '.message.night-over > *'), await boxes(page, '.seat .plate, .seat .hole .card, .board .card'), 'the end of the night and the seats');
+                await shot(page, `night-over-${who}-${kind.name}-${screen}-${shape}`);
+              },
+              { buttonsUp: false },
+            );
+          }
+
+          // However long the table waits, nothing is dealt
+          rig.advance(60_000);
+          assert.equal(table.view('Quigs').hand, null);
+
+          for (const [who, page] of Object.entries(pages)) {
+            const pressHere = pressOn(page, screen);
+
+            await pressHere('[data-action="menu"]');
+            await page.waitForSelector('.menu [data-action="ledger"]');
+            assert.equal(await page.locator('.menu [data-action="keep-playing"]').count(), runs(who) ? 1 : 0, `${who} is offered to play on`);
+            assert.equal(await page.locator('.menu :is([data-action="lastHands"], [data-action="bomb-pot"], [data-action="start"])').count(), 0, `${who} is offered something that waits for hands to be dealt`);
+            await pressHere('.menu [data-action="ledger"]');
+            await page.waitForSelector('.ledger');
+            await pressHere('[data-action="close"]');
+          }
+
+          // The host plays on from the menu
+          await press('[data-action="menu"]');
+          await press('.menu [data-action="keep-playing"]');
+          for (const page of Object.values(pages)) {
+            await page.waitForSelector('.message.night-over', { state: 'detached' });
+          }
+          assert.equal(table.view('Zed').feed.at(-1)!.text, 'The host started play again');
+
+          for (const page of Object.values(pages)) {
+            await page.context().close();
+          }
         }
       }
     },

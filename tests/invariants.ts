@@ -4,7 +4,7 @@
  */
 import assert from 'node:assert/strict';
 
-import { BOARD_SIZE, boardsDealt, evaluateHand, FEED_LIMIT, FLOP_SIZE, LIMITS, PLAYING_THE_BOARD, reaches, replayHand, roleOf, viewFor } from '../src/engine/index.ts';
+import { BOARD_SIZE, boardsDealt, evaluateHand, FEED_LIMIT, FLOP_SIZE, LIMITS, nightIsOver, PLAYING_THE_BOARD, reaches, replayHand, roleOf, viewFor } from '../src/engine/index.ts';
 import type { Effect, FeedEntry, HandPlayer, HandRecord, TableState } from '../src/engine/index.ts';
 import { CACHE_VALUE_BYTES, utf8Bytes } from '../src/gas/sheetStore.ts';
 import { restoreState } from '../src/server/store.ts';
@@ -126,6 +126,22 @@ export function assertBoardsHold(state: TableState): void {
   if (hand.stage === 'betting') {
     assert.equal(boards.length, runs, 'a board is still to come while there is betting');
     assert.ok(boards.every((board) => board.length === boards[0]!.length), 'the boards are at different streets while there is betting');
+  }
+}
+
+/**
+ * Once the night is over nothing is dealt or bought until play starts again, and while the last hands
+ * are called there is always a hand still to finish before the night ends.
+ */
+export function assertNightHolds(state: TableState): void {
+  if (nightIsOver(state)) {
+    assert.ok(!state.hand && !state.running && state.nextHandAt === null, 'a hand is dealt, or due, after the night is over');
+    assert.deepEqual(state.requests, [], 'a request for chips waits after the night is over');
+    assert.ok(state.lastHand === null && !state.bombPotCalled, 'the last hands or a bomb pot are still called after the night is over');
+  }
+
+  if (state.lastHand !== null) {
+    assert.ok(state.lastHand >= state.handCount + (state.hand ? 0 : 1), 'the last hand called has already been played');
   }
 }
 
@@ -257,6 +273,7 @@ export function assertInvariants(state: TableState, now: number): void {
   assertSeatingHolds(state);
   assertBombPotsHold(state);
   assertBoardsHold(state);
+  assertNightHolds(state);
   assertSurvivesSaving(state);
   assertViewsKeepSecrets(state, now);
   assertFitsTheStore(state);

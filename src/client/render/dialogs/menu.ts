@@ -1,5 +1,6 @@
 import type { TableView } from '../../../engine/view.ts';
 import { h } from '../../ui.ts';
+import { nightOver } from '../night.ts';
 import { hostOrCohost } from '../roles.ts';
 import { everyone, frame, seated } from './dialog.ts';
 import type { DialogHandlers, DialogKind, MenuEntry } from './dialog.ts';
@@ -24,9 +25,18 @@ export const pauseGame: MenuAction = {
 
 export const startGame: MenuAction = {
   action: 'start',
-  menu: { label: 'Start the game', who: (view) => hostOrCohost(view) && !view.running },
+  menu: { label: 'Start the game', who: (view) => hostOrCohost(view) && !view.running && !nightOver(view) },
   pick(handlers) {
     void handlers.send({ type: 'start' });
+    handlers.close();
+  },
+};
+
+export const keepPlaying: MenuAction = {
+  action: 'keep-playing',
+  menu: { label: 'Keep playing', who: (view) => hostOrCohost(view) && nightOver(view), note: () => 'Start dealing again: the night goes on' },
+  pick(handlers) {
+    void handlers.send({ type: 'playOn' });
     handlers.close();
   },
 };

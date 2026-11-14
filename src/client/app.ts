@@ -8,7 +8,7 @@ import { isRefusal, nextRetry, ServerClock, ServerLine, sleep, TableConnection }
 import type { SendOutcome, Session } from './connection.ts';
 import { TableEffects } from './effects.ts';
 import { HotkeyPresser } from './hotkeyPresser.ts';
-import { tableChange } from './tableChange.ts';
+import { TableNews } from './tableChange.ts';
 import { Modal } from './modal.ts';
 import type { Platform } from './platform.ts';
 import { PREFERENCES, Preferences } from './prefs.ts';
@@ -21,6 +21,7 @@ import { createFeed } from './render/feed.ts';
 import type { Feed } from './render/feed.ts';
 import { joinScreen, lobbyEl, noticeEl, welcomeBackEl } from './render/lobby.ts';
 import type { LobbyScreen } from './render/lobby.ts';
+import { nightOver } from './render/night.ts';
 import { outdatedEl } from './render/outdated.ts';
 import { hostOrCohost } from './render/roles.ts';
 import { tableEl } from './render/table.ts';
@@ -56,6 +57,7 @@ interface TableScreen {
   modal: Modal;
   feed: Feed;
   effects: TableEffects;
+  news: TableNews;
   seatMoves: SeatMoves;
   shape: Shape;
   seenCards: Set<string>;
@@ -398,6 +400,7 @@ export class App {
       modal: new Modal(overlay.element),
       feed,
       effects: new TableEffects(this.prefs, stage.element, this.sounds, this.attention),
+      news: new TableNews(),
       seatMoves: new SeatMoves(stage.element, {
         view: () => this.view,
         send: (command) => void this.send(command),
@@ -504,7 +507,7 @@ export class App {
     }
 
     // Only for a view that was taken up, so nothing happens twice for one that was dropped or is drawn again
-    this.screen?.effects.run(tableChange(before, view, this.clock.now(), wentBack));
+    this.screen?.effects.run(this.screen.news.change(before, view, this.clock.now(), wentBack));
   }
 
   /** Whether a move can be made, or whether the table is being heard from, has changed. */
@@ -564,6 +567,8 @@ export class App {
 
     if (view.hand) {
       state = `Hand #${view.hand.number}`;
+    } else if (nightOver(view)) {
+      state = 'Night over';
     } else if (!view.running) {
       state = view.handCount === 0 ? 'Not started' : 'Paused';
     }
@@ -611,12 +616,13 @@ export class App {
   private drawStage(screen: TableScreen, view: TableView): void {
     const myRequest = view.requests.find((request) => request.playerId === view.you.id);
     const picking = screen.seatMoves.picking;
-    const shows = [screen.shape, view.you, view.hostId, view.cohostIds, view.running, view.nextHandAt, view.config.actionSeconds, view.seats, view.hand, myRequest, picking];
+    const shows = [screen.shape, view.you, view.hostId, view.cohostIds, view.running, view.nextHandAt, view.nightEndedAt, view.config.actionSeconds, view.seats, view.hand, myRequest, picking];
 
     screen.stage.draw(shows, () => {
       const table = tableEl(view, screen.shape, this.clock.offset, {
         onSit: (seat) => this.openDialog({ kind: 'sit', seat }),
         onStart: () => void this.send({ type: 'start' }),
+        onPlayOn: () => void this.send({ type: 'playOn' }),
         moving: screen.seatMoves.tableHandlers(),
       });
 

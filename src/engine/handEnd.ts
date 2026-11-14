@@ -1,8 +1,4 @@
-/*
- * The end of a hand: everything that happens once a finished hand has been taken off the table. It is
- * one list, run in order from one place, so that whatever a hand's end sets off is found here and
- * nothing has to be remembered by whoever settles a hand.
- */
+/* The end of a hand: everything that happens once a finished hand has been taken off the table, as one list run from one place. */
 import { handFacts } from './handFacts.ts';
 import type { HandFacts } from './handFacts.ts';
 import { countHandPlayed } from './night.ts';
@@ -12,7 +8,7 @@ import { countHand } from './tonight.ts';
 import type { Ctx, HandRecord, TableState } from './types.ts';
 
 /** One thing that happens when a hand ends, told what the hand came to. The hand is off the table by then. */
-export type AtHandEnd = (facts: HandFacts, state: TableState, ctx: Ctx) => void;
+type AtHandEnd = (state: TableState, ctx: Ctx, facts: HandFacts) => void;
 
 /** Players who gave up their seat during the hand leave it, and chips that waited for its end reach their stacks. */
 function settleSeats(state: TableState, ctx: Ctx): void {
@@ -36,10 +32,10 @@ function settleSeats(state: TableState, ctx: Ctx): void {
  * comes last, so that whatever a night's end reads is complete.
  */
 const AT_HAND_END: AtHandEnd[] = [
-  (facts, state) => countHand(state.tonight, facts),
-  (_facts, state, ctx) => settleSeats(state, ctx),
-  (_facts, state, ctx) => reseatAfterHand(state, ctx),
-  (_facts, state, ctx) => countHandPlayed(state, ctx),
+  (state, _ctx, facts) => countHand(state.tonight, facts),
+  settleSeats,
+  reseatAfterHand,
+  countHandPlayed,
 ];
 
 /** Call once for every hand, with its record, right after it is taken off the table. */
@@ -47,6 +43,6 @@ export function handEnded(record: HandRecord, state: TableState, ctx: Ctx): void
   const facts = handFacts(record);
 
   for (const happen of AT_HAND_END) {
-    happen(facts, state, ctx);
+    happen(state, ctx, facts);
   }
 }

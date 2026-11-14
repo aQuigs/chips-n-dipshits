@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import { addMember, createTable, DEFAULT_CONFIG, LIMITS, presetSettings } from '../src/engine/index.ts';
 import type { Effect, HandRecord, TableConfig, TableState } from '../src/engine/index.ts';
 import { SheetPresetStore } from '../src/gas/sheetPresetStore.ts';
-import { CACHE_VALUE_BYTES, SheetStore, utf8Bytes } from '../src/gas/sheetStore.ts';
+import { SheetStore } from '../src/gas/sheetStore.ts';
 import { MemoryPresetStore } from '../src/server/memoryPresetStore.ts';
 import type { PresetStore, SavedPreset } from '../src/server/presetStore.ts';
 import { StoreBusyError } from '../src/server/store.ts';
@@ -926,8 +926,6 @@ test('after the longest night the fullest table still fits its row and the cache
   save(store, t.state);
 
   // Kept by the cache too, which is what spares every poll a read of the Sheet under the lock
-  const bytes = utf8Bytes(JSON.stringify(t.state));
-  assert.ok(bytes <= CACHE_VALUE_BYTES, `the table comes to ${bytes} bytes`);
   assert.ok(cache.entries.has(`state:${t.state.id}`), 'the table was too big for the cache');
 
   cache.entries.clear();

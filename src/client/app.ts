@@ -135,7 +135,7 @@ export class App {
     this.attention = new Attention(this.prefs, pageWays({ sounds: this.sounds, touch: pageTouch(), root, ownsTab: platform.ownsTab }));
     this.abilities = { of: (key) => (key === 'motion' ? motionAbility(this.watching) : this.attention.of(key)), ask: (key) => this.attention.ask(key) };
     this.server = new ServerLine(platform.transport, platform.build, () => this.showOutdated());
-    this.hotkeys = new HotkeyPresser(this.prefs, { root, controls: () => this.screen?.controls.element ?? null, dialogOpen: () => this.server.outdated || this.dialog !== null || (this.screen?.seatMoves.active ?? false) });
+    this.hotkeys = new HotkeyPresser(this.prefs, { root, controls: () => this.screen?.controls.element ?? null, dialogOpen: () => this.tableCovered() });
 
     root.classList.add('cnd');
   }
@@ -748,19 +748,23 @@ export class App {
     this.showOffered();
   }
 
+  /** Whether something is in front of the table: a dialog, a seat being picked, or word that the page is out of date. */
+  private tableCovered(): boolean {
+    return this.server.outdated || this.dialog !== null || (this.screen?.seatMoves.active ?? false);
+  }
+
   /**
-   * Opens the dialog that is waiting, unless that would take something from the viewer: the dialog
-   * they have open, the seat they are picking for someone, the keyboard from under what they are
-   * typing, or the screen while the table has yet to answer what they just asked of it, which may be
-   * what makes the dialog moot. Tried a few times a second, so it waits as long as they are busy and
-   * no longer.
+   * Opens the dialog that is waiting, once the viewer is free for it (`DialogOffers`). An answer the
+   * table still owes them counts as busy: it may be what makes the dialog moot. Tried on every tick.
    */
   private showOffered(): void {
     const offered = this.offered;
-    const field = document.activeElement;
-    const typing = field instanceof HTMLInputElement && field.type === 'text' && field.value !== '';
+    if (!offered || !this.view || this.tableCovered() || this.sending > 0) {
+      return;
+    }
 
-    if (!offered || !this.view || this.dialog || typing || this.sending > 0 || this.screen?.seatMoves.active || this.server.outdated) {
+    const field = document.activeElement;
+    if (field instanceof HTMLInputElement && field.type === 'text' && field.value !== '') {
       return;
     }
 

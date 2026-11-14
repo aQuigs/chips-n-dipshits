@@ -6204,9 +6204,7 @@ const CHECKS: Check[] = [
           // The money is the ledger's, line for line
           const night = await tonightNets(host);
           await press('.dialog [data-action="close"]');
-          await press('[data-action="menu"]');
-          await press('.menu [data-action="ledger"]');
-          await host.waitForSelector('.ledger');
+          await openLedger(host, screen);
           assert.deepEqual(night, await ledgerNets(host), 'the night and the ledger disagree about what someone is up or down');
           assert.deepEqual(night, table.view('Quigs').ledger.map((row) => [row.name, signedAmount(row.net, table.view('Quigs').config)]).sort(), 'the page and the table disagree');
           await press('.dialog [data-action="close"]');
@@ -6215,7 +6213,7 @@ const CHECKS: Check[] = [
           table.act('Quigs', { type: 'endNight' });
 
           for (const [who, page] of [['host', host], ['watcher', watcher]] as const) {
-            await page.waitForSelector('.dialog[aria-label="Tonight"] .tonight-crown');
+            await page.waitForSelector(RECAP);
             assert.deepEqual(await texts(page, '.tonight-crown > *'), ['DIPSHIT OF THE NIGHT', 'Zed', `Down ${kind.down}, more than anyone.`], who);
             assert.equal(await text(page, '.tonight-standing'), 'The night is over, after 2 hands.', who);
             assert.equal(await text(page, '.tonight-players li.dipshit:last-child .who'), 'Zed', who);
@@ -6260,7 +6258,7 @@ const CHECKS: Check[] = [
         // A night that ends a second time ends at another time, which is how the page knows it for news
         rig.advance(1000);
         table.act('Quigs', { type: 'endNight' });
-        await page.waitForSelector('.dialog[aria-label="Tonight"] .tonight-crown');
+        await page.waitForSelector(RECAP);
         assert.deepEqual(await texts(page, '.tonight-crown > *'), says);
         assert.deepEqual(await squeezed(page, '.tonight-crown > *'), [], 'the crown is cut off');
         await assertTonightFits(page, screen);

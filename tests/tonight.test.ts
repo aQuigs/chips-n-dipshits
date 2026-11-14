@@ -304,7 +304,7 @@ test('ending the night crowns from the numbers as they stand, playing on takes t
   assert.deepEqual([t.state.tonight.hands, numbers(t, 1).hands, numbers(t, 2).won], [2, 2, 2], 'every hand of both stretches is counted once');
 });
 
-/** A table as the code before the night's numbers saved it: without them, and with no hand in its row that says who played it. */
+/** A table as the code before the night's numbers saved it: without them. */
 function savedBefore(t: TestTable): TableState {
   const saved = JSON.parse(JSON.stringify(t.state)) as Partial<TableState>;
   delete saved.tonight;
@@ -411,7 +411,6 @@ function assertFactsAgreeWithEvents(record: HandRecord): void {
     assert.ok(player.shown.every((hand) => hand.cards.every((card) => player.cards!.includes(card) || record.boards[hand.board]!.includes(card))), `${where}: a hand shown that its cards and its board do not make`);
     assert.ok(player.wins.every((win) => win.between >= 1 && win.amount > 0) && player.wins.reduce((sum, win) => sum + win.amount, 0) === player.tookOut, `${where}: the pots a player was paid from do not come to what they took`);
   }
-  assert.equal(facts.potInBigBlinds, facts.pot / record.bigBlind);
 
   if (record.events.length === 0) {
     return;

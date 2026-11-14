@@ -84,11 +84,10 @@ export interface HandFacts {
   boards: number;
   /** It was on two boards because the players agreed to run it twice, not because it was dealt on two. */
   runTwice: boolean;
+  /** 0 for a hand recorded before records said what the big blind was. */
   bigBlind: number;
   /** Every chip that was played for, all pots together. Uncalled chips that went back are not in it. */
   pot: number;
-  /** The pot in big blinds, which need not be a whole number; 0 when the record does not say what the big blind was. */
-  potInBigBlinds: number;
   /** Everyone dealt in, in seat order. */
   players: PlayerFacts[];
 }
@@ -173,7 +172,6 @@ export function handFacts(record: HandRecord): HandFacts {
     runTwice: record.boards.length > boardsDealt(record.bombPot),
     bigBlind: record.bigBlind,
     pot,
-    potInBigBlinds: record.bigBlind > 0 ? pot / record.bigBlind : 0,
     players,
   };
 }

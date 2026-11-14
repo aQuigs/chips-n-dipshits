@@ -55,8 +55,8 @@ test('a showdown: what each player put in and took out, who won the pot, and the
   const facts = factsOf(t);
 
   assert.deepEqual(
-    { number: facts.number, ended: facts.ended, bombPot: facts.bombPot, boards: facts.boards, runTwice: facts.runTwice, bigBlind: facts.bigBlind, pot: facts.pot, potInBigBlinds: facts.potInBigBlinds },
-    { number: 1, ended: 'showdown', bombPot: null, boards: 1, runTwice: false, bigBlind: 20, pot: 50, potInBigBlinds: 2.5 },
+    { number: facts.number, ended: facts.ended, bombPot: facts.bombPot, boards: facts.boards, runTwice: facts.runTwice, bigBlind: facts.bigBlind, pot: facts.pot },
+    { number: 1, ended: 'showdown', bombPot: null, boards: 1, runTwice: false, bigBlind: 20, pot: 50 },
   );
   assert.deepEqual(facts.players.map((p) => [p.seat, p.playerId, p.name]), [0, 1, 2].map((seat) => [seat, t.ids[seat], `P${seat}`]));
   assert.deepEqual(chips(facts), [[20, 50, 30], [10, 0, -10], [20, 0, -20]]);
@@ -152,8 +152,7 @@ test('side pots: a short stack wins the main pot and the next best hand the side
 
   const facts = factsOf(t);
 
-  assert.equal(facts.pot, 700);
-  assert.equal(facts.potInBigBlinds, 35);
+  assert.deepEqual([facts.pot, facts.bigBlind], [700, 20], 'a pot of 35 big blinds');
   assert.deepEqual(at(facts, 0).wins, [{ pot: 0, board: 0, amount: 300, between: 1 }]);
   assert.deepEqual(at(facts, 1).wins, [{ pot: 1, board: 0, amount: 400, between: 1 }]);
   assert.deepEqual(at(facts, 2).wins, []);

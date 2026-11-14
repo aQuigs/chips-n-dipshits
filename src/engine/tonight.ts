@@ -112,8 +112,10 @@ function byStanding(a: TonightRow, b: TonightRow): number {
 
 function crown(rows: readonly TonightRow[]): Pick<TonightView, 'dipshits' | 'crownedBy'> {
   const down = leaders(rows, (row) => -row.net);
-  const rebought = down.filter((row) => row.rebuys === Math.max(...down.map((other) => other.rebuys)));
-  const dipshits = rebought.filter((row) => row.won === Math.min(...rebought.map((other) => other.won)));
+  const mostRebuys = Math.max(...down.map((row) => row.rebuys));
+  const rebought = down.filter((row) => row.rebuys === mostRebuys);
+  const fewestPots = Math.min(...rebought.map((row) => row.won));
+  const dipshits = rebought.filter((row) => row.won === fewestPots);
 
   let crownedBy: CrownedBy = 'net';
   if (dipshits.length < rebought.length) {
@@ -133,20 +135,27 @@ function crown(rows: readonly TonightRow[]): Pick<TonightView, 'dipshits' | 'cro
 export function tonightView(state: TableState, ledger: readonly LedgerRow[], over: boolean): TonightView {
   const { tonight } = state;
   const finished = state.handCount - (state.hand ? 1 : 0);
+  const seated = new Set(state.seats.map((seat) => seat?.playerId));
+
+  // How good each player's best hand is, above zero so that having shown none is leading in nothing
+  const bestRank = new Map<string, number>();
 
   const players = ledger
     .map((row): TonightRow => {
       const { hands = 0, won = 0, biggest = 0, best = null, rebuys = 0 } = tonight.players[row.playerId] ?? {};
+      const value = best && evaluateHand(best);
+
+      bestRank.set(row.playerId, value ? value.score + 1 : 0);
 
       return {
         playerId: row.playerId,
         name: row.name,
-        seated: state.seats.some((seat) => seat?.playerId === row.playerId),
+        seated: seated.has(row.playerId),
         net: row.net,
         hands,
         won,
         biggest,
-        best: best && { name: madeHandName(evaluateHand(best)), cards: best },
+        best: value && { name: madeHandName(value), cards: best! },
         rebuys,
       };
     })
@@ -159,7 +168,7 @@ export function tonightView(state: TableState, ledger: readonly LedgerRow[], ove
     upMost: ids(leaders(players, (row) => row.net)),
     mostPots: ids(leaders(players, (row) => row.won)),
     biggestPot: ids(leaders(players, (row) => row.biggest)),
-    bestHand: ids(leaders(players, (row) => rankOfBest(row.best?.cards ?? null) + 1)),
+    bestHand: ids(leaders(players, (row) => bestRank.get(row.playerId)!)),
     ...(over ? crown(players) : { dipshits: [], crownedBy: 'net' }),
   };
 }

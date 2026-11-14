@@ -6,7 +6,7 @@ import type { TableView } from '../../../engine/view.ts';
 import { countsOf, crownOf, leadersOf, missedOf, standingOf, tonightText } from '../../tonightText.ts';
 import { cardText, h } from '../../ui.ts';
 import { nightOver } from '../night.ts';
-import { everyone, frame } from './dialog.ts';
+import { copyOnClick, everyone, frame } from './dialog.ts';
 import type { DialogHandlers, DialogKind } from './dialog.ts';
 
 // The players whose line is unfolded. Kept here, not in the dialog, which is drawn again whenever a
@@ -63,27 +63,7 @@ function copyEl(view: TableView, handlers: DialogHandlers): HTMLElement {
   const box = h('textarea', { id: 'tonight-text', readonly: true, hidden: true, rows: 8, 'aria-label': 'The night as text' });
   const button = h('button.btn', { type: 'button', 'data-action': 'copy-tonight' }, 'Copy as text');
 
-  button.addEventListener('click', async () => {
-    const text = tonightText(view);
-    let copied = await handlers.copy(text);
-
-    // A page inside someone else's frame is often refused the clipboard: the text is put where it can
-    // be copied by hand, and copying the selection is tried, which still works in most such frames
-    if (!copied) {
-      box.value = text;
-      box.hidden = false;
-      box.focus();
-      box.select();
-
-      try {
-        copied = document.execCommand('copy');
-      } catch {
-        copied = false;
-      }
-    }
-
-    button.textContent = copied ? 'Copied' : 'Copy it from the box';
-  });
+  copyOnClick(button, box, () => tonightText(view), handlers);
 
   return h('div.tonight-copy', null, button, h('small.note', null, 'To paste in the group chat.'), box);
 }

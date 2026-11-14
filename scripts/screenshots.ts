@@ -271,13 +271,13 @@ try {
   // ---- Hand 2: everyone all in, run twice ----
   await openFromMenu(host.page, 'start');
 
-  let first = true;
+  // Everyone who can raise goes all in: hand 1 can end in a split pot, and two players who only called would bet on after the flop
   for (let player = await onTheClock(players, '[data-action="rit-yes"]'); player; player = await onTheClock(players, '[data-action="rit-yes"]')) {
     const page = player.page;
 
-    if (first) {
-      first = false;
+    if (await has(page, '.turn [data-action="raise"]')) {
       await page.click('.presets button:has-text("All in")');
+      await page.waitForSelector('.turn [data-action="raise"]:has-text("All in")');
       await act(page, 'raise');
     } else {
       await act(page, 'call');

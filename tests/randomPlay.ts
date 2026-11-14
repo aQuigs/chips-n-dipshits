@@ -1,7 +1,7 @@
 /* Random play on a test table: what the simulation runs, and what plays a saved table on after it is read back. */
 import assert from 'node:assert/strict';
 
-import { addMember, CONFIG_KEYS, MAX_LAST_HANDS, nextDeadline, SEAT_COUNT, viewFor } from '../src/engine/index.ts';
+import { addMember, CONFIG_KEYS, LIMITS, nextDeadline, SEAT_COUNT, viewFor } from '../src/engine/index.ts';
 import type { Command, GameError, Rng } from '../src/engine/index.ts';
 import type { TestTable } from './helpers.ts';
 import { randomConfig } from './randomConfig.ts';
@@ -96,7 +96,7 @@ export const FUZZ_COMMANDS: ((fuzz: Fuzz) => void)[] = [
   ({ t, rng, who }) => attempt(t, who, { type: 'ritVote', agree: chance(rng, 70) }),
 
   // The last hands are called, changed and called off, the night is ended outright, and play is started again after it
-  ({ t, rng }) => attempt(t, chance(rng, 85) ? someoneRunningTheGame(t, rng) : rng.int(t.ids.length), { type: 'setLastHands', hands: chance(rng, 50) ? null : rng.int(MAX_LAST_HANDS + 1) }),
+  ({ t, rng }) => attempt(t, chance(rng, 85) ? someoneRunningTheGame(t, rng) : rng.int(t.ids.length), { type: 'setLastHands', hands: chance(rng, 50) ? null : rng.int(LIMITS.lastHands + 1) }),
   ({ t, rng }) => {
     // Rarely: a table between hands is mostly one short of players, whose night would otherwise end at every turn
     if (chance(rng, 10)) {

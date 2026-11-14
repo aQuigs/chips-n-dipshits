@@ -21,6 +21,7 @@ import { createFeed } from './render/feed.ts';
 import type { Feed } from './render/feed.ts';
 import { joinScreen, lobbyEl, noticeEl, welcomeBackEl } from './render/lobby.ts';
 import type { LobbyScreen } from './render/lobby.ts';
+import { nightOver } from './render/night.ts';
 import { outdatedEl } from './render/outdated.ts';
 import { hostOrCohost } from './render/roles.ts';
 import { tableEl } from './render/table.ts';
@@ -564,6 +565,8 @@ export class App {
 
     if (view.hand) {
       state = `Hand #${view.hand.number}`;
+    } else if (nightOver(view)) {
+      state = 'Night over';
     } else if (!view.running) {
       state = view.handCount === 0 ? 'Not started' : 'Paused';
     }
@@ -611,7 +614,7 @@ export class App {
   private drawStage(screen: TableScreen, view: TableView): void {
     const myRequest = view.requests.find((request) => request.playerId === view.you.id);
     const picking = screen.seatMoves.picking;
-    const shows = [screen.shape, view.you, view.hostId, view.cohostIds, view.running, view.nextHandAt, view.config.actionSeconds, view.seats, view.hand, myRequest, picking];
+    const shows = [screen.shape, view.you, view.hostId, view.cohostIds, view.running, view.nextHandAt, view.nightEndedAt, view.config.actionSeconds, view.seats, view.hand, myRequest, picking];
 
     screen.stage.draw(shows, () => {
       const table = tableEl(view, screen.shape, this.clock.offset, {

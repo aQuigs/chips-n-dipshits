@@ -5,6 +5,7 @@ import { midSentence } from '../../engine/handNames.ts';
 import type { HandRead } from '../../engine/handNames.ts';
 import type { HandView, Holding, SeatView, TableView } from '../../engine/view.ts';
 import { cardEl, h } from '../ui.ts';
+import { nightOver } from './night.ts';
 import { hostOrCohost, roleMark } from './roles.ts';
 
 /** Whether the table is drawn lying down (desktop, landscape) or standing up (a phone held upright). */
@@ -277,7 +278,8 @@ function openSeatEl(view: TableView, seat: number, slot: number, shape: Shape, h
     return open('requested', h('div.plate', null, 'Waiting for the host…'));
   }
 
-  if (view.you.seat !== null || myRequest) {
+  // Nobody sits down once the night is over, with no more hands to play
+  if (view.you.seat !== null || myRequest || nightOver(view)) {
     return open('idle', h('div.plate', { 'aria-hidden': 'true' }, 'Open'));
   }
 
@@ -374,6 +376,15 @@ function messageEl(view: TableView, handlers: TableHandlers): HTMLElement | null
 
   if (hand) {
     return null;
+  }
+
+  if (nightOver(view)) {
+    return h(
+      'div.message.night-over',
+      null,
+      h('div', null, 'The night is over'),
+      hostOrCohost(view) ? h('button.btn.primary', { type: 'button', 'data-action': 'start', onclick: handlers.onStart }, 'Keep playing') : null,
+    );
   }
 
   const seated = view.seats.filter((seat) => seat !== null).length;

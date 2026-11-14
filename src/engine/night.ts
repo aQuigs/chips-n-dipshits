@@ -6,14 +6,10 @@
 import { turnAway } from './seating.ts';
 import { addFeed } from './seats.ts';
 import type { Ctx, TableState } from './types.ts';
-import { wholeNumber } from './validate.ts';
+import { LIMITS, wholeNumber } from './validate.ts';
 
-/** The most hands the host can call as the last ones: more than this is a night still going, not ending. */
-export const MAX_LAST_HANDS = 10;
-
-/** Takes a table or a view of one. */
-export function nightIsOver(table: Pick<TableState, 'nightEndedAt'>): boolean {
-  return table.nightEndedAt !== null;
+export function nightIsOver(state: TableState): boolean {
+  return state.nightEndedAt !== null;
 }
 
 /** Hands still to be dealt before the night ends, not counting the one on the table; null while no last hands are called. */
@@ -43,7 +39,7 @@ export function callLastHands(state: TableState, ctx: Ctx, by: string, hands: un
     return;
   }
 
-  const count = wholeNumber(hands, 'The number of hands', state.hand ? 0 : 1, MAX_LAST_HANDS);
+  const count = wholeNumber(hands, 'The number of hands', state.hand ? 0 : 1, LIMITS.lastHands);
   const lastHand = state.handCount + count;
   if (lastHand === state.lastHand) {
     return;

@@ -5,6 +5,7 @@ import type { Command } from '../../engine/types.ts';
 import type { HandView, SeatView, TableView } from '../../engine/view.ts';
 import { HOTKEYS } from '../hotkeys.ts';
 import { h, holdWhile } from '../ui.ts';
+import { lastHandsText, nightOver } from './night.ts';
 
 export interface ControlHandlers {
   /** Resolves once the server has answered, or failed to. */
@@ -148,7 +149,15 @@ function toggle(label: string, on: boolean, action: string, onChange: (next: boo
 }
 
 function waitingText(view: TableView, hand: HandView | null): string {
+  if (nightOver(view)) {
+    return 'The night is over';
+  }
+
   if (!hand || hand.stage === 'done') {
+    if (hand && view.handsLeft === 0) {
+      return 'That was the last hand';
+    }
+
     if (!view.running) {
       return view.handCount === 0 ? 'The game has not started yet' : 'The game is paused';
     }
@@ -172,19 +181,28 @@ function waitingText(view: TableView, hand: HandView | null): string {
 }
 
 /**
- * What the bar says about the hand to come, or null for nothing. Left out while the viewer has a
- * decision to make, so calling a bomb pot never redraws a bet being sized.
+ * What the bar says about the hands to come: how many are left tonight, and whether the next is a
+ * bomb pot, when there is a next one. Left out while the viewer has a decision to make, so calling
+ * a bomb pot or changing the count never redraws a bet being sized.
  */
-function nextHandNote(view: TableView): string | null {
+function nextHandNote(view: TableView): string[] {
   const deciding = view.hand?.options || view.hand?.canVote;
+  if (deciding || nightOver(view)) {
+    return [];
+  }
 
-  return view.nextBombPot && !deciding ? `Next hand is a ${bombPotName(view.nextBombPot)}: ${formatAmount(view.nextBombPot.amount, view.config)} each` : null;
+  // The last hand has no hand after it to be a bomb pot, and once it is over the line above says so
+  const lastHand = view.hand !== null && view.handsLeft === 0;
+  const countdown = lastHand && view.hand!.stage === 'done' ? null : lastHandsText(view);
+  const bombPot = view.nextBombPot && !lastHand ? `Next hand is a ${bombPotName(view.nextBombPot)}: ${formatAmount(view.nextBombPot.amount, view.config)} each` : null;
+
+  return [countdown, bombPot].filter((part) => part !== null);
 }
 
 function waitingEl(text: string, view: TableView): HTMLElement {
   const note = nextHandNote(view);
 
-  return h('div.waiting', null, text, note ? h('div.next-hand', null, note) : null);
+  return h('div.waiting', null, text, note.length > 0 ? h('div.next-hand', null, note.map((part) => h('span', null, part))) : null);
 }
 
 function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandlers): HTMLElement {
@@ -216,6 +234,11 @@ function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandle
   // On the way out, nothing else here would still take effect: the seat is gone when the hand is
   if (seat.leaving) {
     return h('div.controls.seated', null, h('div.waiting', null, 'You leave your seat when this hand ends'), h('div.extras', null, showCards));
+  }
+
+  // Sitting out, straddling and adding chips are all for hands that are not coming
+  if (nightOver(view)) {
+    return h('div.controls.seated', null, main);
   }
 
   const extras: HTMLElement[] = [];
@@ -263,7 +286,7 @@ export function controlsEl(view: TableView, handlers: ControlHandlers): HTMLElem
     );
   }
 
-  return h('div.controls', null, waitingEl('You are watching. Pick an open seat to play.', view));
+  return h('div.controls', null, waitingEl(nightOver(view) ? 'The night is over' : 'You are watching. Pick an open seat to play.', view));
 }
 
 /**
@@ -284,7 +307,7 @@ export function controlsSignature(view: TableView): string {
   return JSON.stringify([
     seat && [seat.stack, seat.pendingAdd, seat.sittingOut, seat.away, seat.straddle, seat.leaving],
     hand && [hand.number, hand.stage, hand.street, hand.toAct, hand.turn, hand.currentBet, hand.pot, hand.options, hand.canVote, hand.canShow],
-    [view.running, view.nextHandAt !== null, view.handCount === 0],
+    [view.running, view.nextHandAt !== null, view.handCount === 0, view.nightEndedAt],
     view.requests.filter((request) => request.playerId === view.you.id),
     [view.config.allowStraddle, view.config.maxBuyIn],
     nextHandNote(view),

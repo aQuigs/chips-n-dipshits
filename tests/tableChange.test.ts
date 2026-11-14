@@ -287,3 +287,32 @@ test('a device whose clock is a minute off still takes a view that arrives at on
     Date.now = realNow;
   }
 });
+
+test('the end of the night is news once, with the view that brought it, and only while it is fresh', () => {
+  const table = new TestTable({ stacks: [1000, 1000] });
+  const page = new Page();
+  page.arrive(table);
+
+  table.cmd(0, { type: 'endNight' });
+  assert.equal(page.arrive(table).nightEnded, true);
+
+  table.cmd(1, { type: 'chat', text: 'gg' });
+  assert.equal(page.arrive(table).nightEnded, false, 'the night ended again');
+
+  // Started and ended again between two views
+  table.cmd(0, { type: 'start' });
+  table.now += 1000;
+  table.cmd(0, { type: 'endNight' });
+  assert.equal(page.arrive(table).nightEnded, true);
+
+  // Reaching the page long after, as to a phone that slept through it
+  table.cmd(0, { type: 'start' });
+  table.now += 1000;
+  table.cmd(0, { type: 'endNight' });
+  table.now += 60_000;
+  assert.equal(page.arrive(table).nightEnded, false);
+
+  // A page opened on a table whose night is over is told nothing happened
+  assert.equal(new Page().arrive(table).nightEnded, false);
+  assert.equal(page.arrive(table, true).nightEnded, false);
+});

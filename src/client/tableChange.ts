@@ -28,6 +28,11 @@ export interface TableChange {
   current: boolean;
   /** The table itself returned to an earlier state, as after the Sheet was restored. */
   wentBack: boolean;
+  /**
+   * The night has ended and this is the view to say so: the first `current` one that shows an end not
+   * already told. What happens for everyone when a night ends hangs off this.
+   */
+  nightEnded: boolean;
 }
 
 /**
@@ -37,11 +42,12 @@ export interface TableChange {
  *
  * `now` is the server's time as the page reckons it, which is well past the view's own when the view
  * was slow to arrive. `wentBack` says the table itself returned to an earlier state, so nothing in
- * the view is news.
+ * the view is news. `nightTold` is the end of the night already told, which `TableNews` remembers
+ * past a view that came late.
  */
-export function tableChange(before: TableView | null, view: TableView, now: number, wentBack = false): TableChange {
+export function tableChange(before: TableView | null, view: TableView, now: number, wentBack = false, nightTold = before?.nightEndedAt ?? null): TableChange {
   if (!before || wentBack) {
-    return { before, view, feed: [], events: [], current: false, wentBack };
+    return { before, view, feed: [], events: [], current: false, wentBack, nightEnded: false };
   }
 
   // A line is known by its number and its time together: a table put back to an earlier state numbers its next lines like ones it had
@@ -53,7 +59,28 @@ export function tableChange(before: TableView | null, view: TableView, now: numb
   // holds things the viewer missed, and its events cannot be told apart from those
   const current = feed.length === lines.length && now - view.now <= FRESH_MS;
 
-  return { before, view, feed, events: current ? newEvents(before, view) : [], current, wentBack };
+  // Compared by time, so a night started again and ended again between two views is still news
+  const nightEnded = current && view.nightEndedAt !== null && view.nightEndedAt !== nightTold;
+
+  return { before, view, feed, events: current ? newEvents(before, view) : [], current, wentBack, nightEnded };
+}
+
+/**
+ * The changes of one table screen, one view after another. The end of the night is told by the first
+ * view on time that shows it, so one that came late passes it on rather than losing it; an end the
+ * page found already there when it opened, or after the table went back, is never told.
+ */
+export class TableNews {
+  private nightTold: number | null = null;
+
+  change(before: TableView | null, view: TableView, now: number, wentBack = false): TableChange {
+    const change = tableChange(before, view, now, wentBack, this.nightTold);
+    if (!before || wentBack || change.nightEnded) {
+      this.nightTold = view.nightEndedAt;
+    }
+
+    return change;
+  }
 }
 
 function newEvents(before: TableView, view: TableView): HandEvent[] {

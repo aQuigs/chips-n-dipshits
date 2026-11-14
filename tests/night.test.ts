@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { addMember, endNight, MAX_LAST_HANDS, nightIsOver, TIMING } from '../src/engine/index.ts';
+import { addMember, endNight, LIMITS, nightIsOver, TIMING } from '../src/engine/index.ts';
 import type { Command, NightEnd } from '../src/engine/index.ts';
 import { restoreState } from '../src/server/store.ts';
 import { ACES, BOARD, handRecords, KINGS, options, TestTable } from './helpers.ts';
@@ -76,15 +76,15 @@ test('the host calls the last hands, changes the number and calls them off, and 
 test('the number of hands is a whole number from 1 to the most, or from 0 while a hand is on the table', () => {
   const t = running();
 
-  for (const hands of [0, MAX_LAST_HANDS + 1, -1, 2.5, '3', undefined, true]) {
-    assert.throws(() => t.cmd(HOST, { type: 'setLastHands', hands } as unknown as Command), { name: 'GameError', message: `The number of hands must be a whole number from 1 to ${MAX_LAST_HANDS}` }, String(hands));
+  for (const hands of [0, LIMITS.lastHands + 1, -1, 2.5, '3', undefined, true]) {
+    assert.throws(() => t.cmd(HOST, { type: 'setLastHands', hands } as unknown as Command), { name: 'GameError', message: `The number of hands must be a whole number from 1 to ${LIMITS.lastHands}` }, String(hands));
   }
 
-  t.cmd(HOST, { type: 'setLastHands', hands: MAX_LAST_HANDS });
-  assert.equal(t.view(PLAYER).handsLeft, MAX_LAST_HANDS);
+  t.cmd(HOST, { type: 'setLastHands', hands: LIMITS.lastHands });
+  assert.equal(t.view(PLAYER).handsLeft, LIMITS.lastHands);
 
   nextHand(t);
-  assert.throws(() => t.cmd(HOST, { type: 'setLastHands', hands: -1 }), { message: `The number of hands must be a whole number from 0 to ${MAX_LAST_HANDS}` });
+  assert.throws(() => t.cmd(HOST, { type: 'setLastHands', hands: -1 }), { message: `The number of hands must be a whole number from 0 to ${LIMITS.lastHands}` });
 });
 
 test('only the host or a co-host calls the last hands or ends the night: a seated player and a watcher are refused', () => {

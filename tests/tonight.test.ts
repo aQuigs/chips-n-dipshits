@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { addMember, evaluateHand, handFacts, ledgerOf, newTonight, nightIsOver, SEAT_COUNT, tonightView } from '../src/engine/index.ts';
-import type { Effect, HandRecord, PlayerTonight, TableState, Tonight, TonightView } from '../src/engine/index.ts';
+import { addMember, evaluateHand, handFacts, isStraddle, ledgerOf, newTonight, nightIsOver, SEAT_COUNT, STRADDLES, STRADDLES_IN_A_ROW, straddlesAllowed, tonightView } from '../src/engine/index.ts';
+import type { Effect, HandRecord, PlayerTonight, Straddle, TableState, Tonight, TonightView } from '../src/engine/index.ts';
 import { restoreState } from '../src/server/store.ts';
 import { ACES, BOARD, cards, checkAround, handRecords, KINGS, QUEENS, seededRng, TestTable } from './helpers.ts';
 import { assertInvariants } from './invariants.ts';
@@ -475,7 +475,9 @@ const TABLES = Number(process.env.SIM_TABLES ?? 40);
 const STEPS_PER_TABLE = 600;
 
 test('over random games the numbers are at every step exactly what the hand records and the ledger make them, and no fact holds a card nobody was shown', () => {
-  const reached = { hands: 0, showdowns: 0, runTwice: 0, bombPots: 0, doubleBoards: 0, antes: 0, straddles: 0, transfers: 0, rebuys: 0, left: 0, nightsEnded: 0, playedOn: 0, crowned: 0, busts: 0, splits: 0, bestHands: 0 };
+  const reached = { hands: 0, showdowns: 0, runTwice: 0, bombPots: 0, doubleBoards: 0, antes: 0, transfers: 0, rebuys: 0, left: 0, nightsEnded: 0, playedOn: 0, crowned: 0, busts: 0, splits: 0, bestHands: 0 };
+  // Hands with each kind of straddle posted
+  const straddled: Record<Straddle, number> = { straddle: 0, 'double straddle': 0, 'button straddle': 0, 'Mississippi straddle': 0 };
 
   for (let seed = 1; seed <= TABLES; seed++) {
     const rng = seededRng(seed * 104_729);
@@ -497,9 +499,14 @@ test('over random games the numbers are at every step exactly what the hand reco
 
       randomStep(t, rng);
 
-      // Random play hardly ever leaves a straddle on until its player is under the gun, so now and then everyone asks for one
+      // Random play hardly ever leaves a straddle on until it is its player's to post, so now and then everyone asks for
+      // every kind the table allows, or only for those from under the gun: a straddle from elsewhere leaves no room for a double
       if (chance(rng, 15)) {
-        t.state.seats.forEach((seat) => seat && t.state.config.allowStraddle && t.cmd(t.ids.indexOf(seat.playerId), { type: 'setStraddle', kind: 'straddle', on: true }));
+        const wanted = chance(rng, 50) ? STRADDLES.slice(0, STRADDLES_IN_A_ROW) : STRADDLES;
+
+        for (const kind of straddlesAllowed(t.state.config)) {
+          t.state.seats.forEach((seat) => seat && t.cmd(t.ids.indexOf(seat.playerId), { type: 'setStraddle', kind: kind.what, on: wanted.includes(kind) }));
+        }
       }
 
       for (const record of recount.follow(t.effects)) {
@@ -516,7 +523,7 @@ test('over random games the numbers are at every step exactly what the hand reco
         reached.bombPots += facts.bombPot ? 1 : 0;
         reached.doubleBoards += facts.bombPot?.boards === 2 ? 1 : 0;
         reached.antes += record.events[0]?.[0] === 'start' && record.events[0][6] ? 1 : 0;
-        reached.straddles += record.events.some((event) => event[0] === 'post' && event[2] === 'straddle') ? 1 : 0;
+        new Set(record.events.flatMap((event) => (event[0] === 'post' && isStraddle(event[2]) ? [event[2]] : []))).forEach((what) => (straddled[what] += 1));
         reached.busts += facts.players.some((p) => p.busted) ? 1 : 0;
         reached.splits += facts.players.some((p) => p.wins.some((win) => win.between > 1)) ? 1 : 0;
       }
@@ -551,10 +558,12 @@ test('over random games the numbers are at every step exactly what the hand reco
   }
 
   // The run only proves something if it reached the parts of the game the numbers have to survive
-  const said = JSON.stringify(reached);
+  const said = JSON.stringify({ ...reached, straddled });
   assert.ok(reached.hands >= TABLES * 30 && reached.showdowns >= TABLES * 10, said);
   assert.ok(reached.runTwice >= TABLES / 2 && reached.bombPots >= TABLES && reached.doubleBoards >= TABLES / 2, said);
-  assert.ok(reached.antes >= TABLES * 5 && reached.straddles >= TABLES / 2, said);
+  assert.ok(reached.antes >= TABLES * 5, said);
+  // A double needs four players, two of them wanting one in a row from under the gun, so it comes up least
+  assert.ok(STRADDLES.every((kind) => straddled[kind.what] >= TABLES / 20), said);
   assert.ok(reached.transfers >= TABLES / 2 && reached.rebuys >= TABLES && reached.left >= TABLES, said);
   assert.ok(reached.nightsEnded >= TABLES / 2 && reached.playedOn >= TABLES / 2 && reached.crowned >= TABLES / 2, said);
   assert.ok(reached.busts >= TABLES && reached.splits >= TABLES / 4 && reached.bestHands >= TABLES * 2, said);

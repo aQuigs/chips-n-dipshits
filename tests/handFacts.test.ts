@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { handFacts, isSevenDeuce, PAIR, STRAIGHT_FLUSH, THREE_OF_A_KIND, wonAPot } from '../src/engine/index.ts';
-import type { HandFacts, PlayerFacts } from '../src/engine/index.ts';
+import type { HandFacts, PlayerFacts, Straddle } from '../src/engine/index.ts';
 import { ACES, BOARD, cards, checkAround, handRecords, KINGS, QUEENS, TestTable } from './helpers.ts';
 
 // On the first board aces beat kings beat queens; on the second a king makes the kings three of a kind
@@ -43,6 +43,38 @@ function doubleBoard(stacks: number[], holes: Record<number, string>, secondBoar
 
   return t;
 }
+
+test('a straddle of any kind is chips its player put in, as a blind is, from whichever seat it was posted', () => {
+  // Six players with the button on seat 0: the blinds are seats 1 and 2, and seat 3 is under the gun
+  const hands: Record<number, Straddle>[] = [{ 3: 'straddle' }, { 3: 'straddle', 4: 'double straddle' }, { 0: 'button straddle' }, { 5: 'Mississippi straddle' }];
+
+  for (const want of hands) {
+    const t = new TestTable({ stacks: [1000, 1000, 1000, 1000, 1000, 1000], config: { allowStraddle: true, allowDoubleStraddle: true, allowButtonStraddle: true, allowMississippiStraddle: true } });
+    Object.entries(want).forEach(([seat, kind]) => t.cmd(Number(seat), { type: 'setStraddle', kind, on: true }));
+    t.deal({ button: 0 });
+
+    const posted = t.state.hand!.straddles;
+    const said = posted.map((post) => post.what).join(' and ');
+    assert.deepEqual(posted.map((post) => [String(post.seat), post.what]), Object.entries(want));
+
+    // Whoever is first to act raises and everyone folds, so each straddle is lost whole and the raise is matched by the biggest
+    const raiser = t.toAct!;
+    t.raise(raiser, 500);
+    t.foldOut();
+
+    const facts = handFacts(handRecords(t.effects).at(-1)!);
+    const biggest = Math.max(...posted.map((post) => post.amount));
+    const blinds = [1, 2].filter((seat) => seat !== raiser).map((seat) => at(facts, seat).putIn);
+
+    for (const post of posted) {
+      assert.deepEqual([at(facts, post.seat).putIn, at(facts, post.seat).net, at(facts, post.seat).folded], [post.amount, -post.amount, true], said);
+    }
+
+    assert.deepEqual(blinds, raiser === 1 ? [20] : [10, 20], said);
+    assert.equal(facts.pot, biggest + posted.reduce((sum, post) => sum + post.amount, 0) + blinds.reduce((sum, blind) => sum + blind, 0), said);
+    assert.deepEqual([at(facts, raiser).putIn, at(facts, raiser).tookOut], [biggest, facts.pot], said);
+  }
+});
 
 test('a showdown: what each player put in and took out, who won the pot, and the hands that were shown, the losing one too', () => {
   const t = new TestTable({ stacks: [1000, 1000, 1000] });

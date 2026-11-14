@@ -74,7 +74,8 @@ export class ReactionMarks implements SeatMarks {
 
       // Laid out by the width each is drawn at, which differs from one device's emoji to another's, and
       // moved in together at the table's edge, so none is cut off
-      const widths = here.map(({ element }) => element.offsetWidth);
+      // The width it is laid out at: whole pixels would let the last one run past the edge, and a box would be scaled by its bounce
+      const widths = here.map(({ element }) => parseFloat(getComputedStyle(element).width));
       const total = widths.reduce((sum, each) => sum + each, 0) + gap * (here.length - 1);
       const middle = (plate.left + plate.width / 2 - frame.left) / zoom;
       let left = Math.max(0, Math.min(middle - total / 2, width - total));

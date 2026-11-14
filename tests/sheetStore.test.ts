@@ -2257,12 +2257,16 @@ for (const [kind, make] of [
     store.add('Big Al', NOW);
     store.add('Bob', NOW);
 
-    for (const [name, holder] of [['big al', 'Big Al'], ['BIG  AL', 'Big Al'], ['BigAl', 'Big Al'], ['Big AI', 'Big Al'], [' bob ', 'Bob'], ['B0b', 'Bob'], ['B o b', 'Bob']]) {
+    for (const [name, holder] of [['big al', 'Big Al'], ['BIG  AL', 'Big Al'], ['BigAl', 'Big Al'], ['Big AI', 'Big Al'], ['BIG AI', 'Big Al'], ['B\u0131gAl', 'Big Al'], [' bob ', 'Bob'], ['B0b', 'Bob'], ['B0B', 'Bob'], ['B o b', 'Bob']]) {
       assert.throws(() => store.add(name!, NOW), { name: 'NameOnList', message: `${holder} is already on the list of players. If that is you, pick ${holder} from the list. If not, add something to your name` }, name);
     }
 
     assert.deepEqual(playerNames(store).sort(), ['Big Al', 'Bob']);
     assert.equal(store.add('Bob K', NOW).name, 'Bob K');
+
+    // An i is not an l, though a capital I passes for either
+    store.add('Kai', NOW);
+    assert.equal(store.add('Kal', NOW).name, 'Kal');
   });
 
   test(`players ${kind}: only what a table takes for a name gets on the list, up to the longest`, () => {
@@ -2333,6 +2337,25 @@ test('a Players tab under other headers is read by where things are, and its hea
   assert.deepEqual(tab().cells[0], ['Who', 'Called', 'Since', 'Lately', 'Notes']);
   assert.deepEqual(tab().cells[1]![4], 'owes me a beer');
   assert.deepEqual(run().list(), [ann, quigs]);
+});
+
+test('a Players tab whose header row was deleted by hand still has the player who moved up into its place, and goes on being written to', () => {
+  const { run, tab, cache } = playerSetup();
+  const quigs = run().add('Quigs', NOW);
+  const ann = run().add('Ann', NOW + 1000);
+
+  tab().cells.shift();
+  cache.entries.clear();
+
+  assert.deepEqual(run().list(), [ann, quigs]);
+
+  const bob = run().add('Bob', NOW + 2000);
+  assert.deepEqual(tab().cells.map((cells) => cells[1]), ['Quigs', 'Ann', 'Bob'], 'no headers were written over the first player');
+  assert.deepEqual(run().list(), [bob, ann, quigs]);
+
+  assert.deepEqual(run().seen(quigs.id, NOW + SEEN_EVERY_MS), quigs);
+  assert.deepEqual(tab().cells[0]![3], new Date(NOW + SEEN_EVERY_MS));
+  assert.deepEqual(run().list(), [quigs, bob, ann]);
 });
 
 test('ids and names that a spreadsheet would take for a number or a date are kept as the text they are', () => {

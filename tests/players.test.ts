@@ -50,7 +50,8 @@ function deployed() {
   const calls = { tables: new Calls(), players: new Calls() };
   const sheet = new FakeSpreadsheet(lock, { Players: 1 + LIMITS.knownPlayers }, calls.players, [], { Players: LIMITS.nameLength });
   const cache = new FakeCache(calls.players);
-  const tables = new SheetStore({ spreadsheet: () => new FakeSpreadsheet(lock, {}, calls.tables), cache: new FakeCache(calls.tables), lock, flush: () => calls.tables.note('flush') });
+  const tableSheet = new FakeSpreadsheet(lock, {}, calls.tables);
+  const tables = new SheetStore({ spreadsheet: () => tableSheet, cache: new FakeCache(calls.tables), lock, flush: () => calls.tables.note('flush') });
   const players = new SheetPlayerStore({ spreadsheet: () => sheet, cache, lock, flush: () => calls.players.note('flush'), rng: seededRng(77) });
 
   return { ...setup(players, tables), lock, calls, sheet, cache, tab: () => sheet.sheets.get('Players')! };
@@ -155,7 +156,7 @@ test('someone new under a name the list has is told whose it is and how to go on
   const host = joined(create('Big Al', NEW));
   const message = 'Big Al is already on the list of players. If that is you, pick Big Al from the list. If not, add something to your name';
 
-  for (const name of ['Big Al', 'big al', 'BIG  AL', 'BigAl', 'Big AI']) {
+  for (const name of ['Big Al', 'big al', 'BIG  AL', 'BigAl', 'Big AI', 'BIG AI']) {
     assert.deepEqual(join(host.view.id, name, NEW), { ok: false, code: 'invalid', error: message }, name);
     assert.deepEqual(create(name, NEW), { ok: false, code: 'invalid', error: message }, name);
   }
@@ -319,6 +320,67 @@ test('whichever call for the list of players fails while someone makes a table o
       assert.deepEqual(viewOf(game.poll(arrived.view.id, arrived.auth)).you, arrived.view.you, step);
     }
   }
+});
+
+test('the table lets someone new in before the list hears of them: whichever of the table\'s calls fails, nobody is on the list for a join that came to nothing, and whoever did get in can be who the list says', () => {
+  const fresh = () => {
+    const game = deployed();
+    const host = joined(game.create('Host'));
+
+    game.listed();
+    game.calls.tables.made = [];
+
+    return { game, tableId: host.view.id };
+  };
+
+  const clean = fresh();
+  joined(clean.game.join(clean.tableId, 'Quigs', NEW));
+  const steps = [...clean.game.calls.tables.made];
+  assert.equal(steps.filter((call) => call === 'Tables.setValues').length, 2, 'the row is written once to let them in and once to say who they are');
+
+  const outcomes = { turnedAway: 0, known: 0, unknown: 0 };
+
+  for (let failing = 1; failing <= steps.length; failing++) {
+    const { game, tableId } = fresh();
+    const step = `call ${failing}, ${steps[failing - 1]}`;
+
+    game.calls.tables.failNth(failing);
+
+    // A failure of the Sheet itself is no answer at all, which the page takes as one to ask again
+    let answer: ApiResponse | null = null;
+    try {
+      answer = game.join(tableId, 'Quigs', NEW);
+    } catch {
+      answer = null;
+    }
+
+    assert.equal(game.lock.held, false, step);
+
+    if (!answer?.ok) {
+      outcomes.turnedAway += 1;
+      assert.deepEqual(game.listed(), [], `${step}: on the list without having got in`);
+
+      // The same request sent again finds no name of its own in its way on the list
+      const again = game.join(tableId, 'Quigs', NEW);
+      assert.ok(again.ok || /already called Quigs/.test(again.error), `${step}: ${JSON.stringify(again)}`);
+      continue;
+    }
+
+    const [listedAs] = game.listed();
+    const you = viewOf(game.poll(tableId, joined(answer).auth)).you;
+    assert.equal(you.name, 'Quigs', step);
+    assert.deepEqual(listedAs?.name, 'Quigs', step);
+
+    if (you.identity === null) {
+      outcomes.unknown += 1;
+      assert.equal(viewOf(game.identify(tableId, joined(answer).auth, known(listedAs!.id))).you.identity, listedAs!.id, step);
+    } else {
+      outcomes.known += 1;
+      assert.equal(you.identity, listedAs!.id, step);
+    }
+  }
+
+  assert.ok(outcomes.turnedAway > 0 && outcomes.unknown > 0, JSON.stringify(outcomes));
 });
 
 test('what the list of players costs a join in calls to the Sheet: none without it or for a player seen tonight, and the same few for someone new whether nobody is known or fifty are', () => {

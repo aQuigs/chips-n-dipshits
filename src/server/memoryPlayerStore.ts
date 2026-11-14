@@ -3,7 +3,7 @@ import type { KnownPlayer, Rng } from '../engine/index.ts';
 import { dueToBeSeen, inListOrder, mayAdd, newPlayerId } from './playerStore.ts';
 import type { KeptPlayer, PlayerStore } from './playerStore.ts';
 
-/** Keeps the known players in memory, for local play and tests. `rng` is where their ids come from, and is drawn from for nothing else. */
+/** Keeps the known players in memory, for local play and tests. `rng` is where their ids come from: one of its own wherever the game's is seeded, so that a new player changes no card dealt after. */
 export class MemoryPlayerStore implements PlayerStore {
   private readonly kept: KeptPlayer[] = [];
   private readonly rng: Rng;

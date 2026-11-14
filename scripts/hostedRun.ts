@@ -1077,7 +1077,6 @@ try {
       const host = await open(browser);
       await host.goto(fresh.url);
       await host.waitForSelector('#host-name');
-      await until('the list of players to be heard from', () => known.list().length === 0);
       assert.equal(await asks(host), 'name');
       assert.deepEqual([await host.isVisible('.who-pick'), await host.isVisible('.who-remembered')], [false, false]);
 

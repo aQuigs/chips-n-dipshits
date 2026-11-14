@@ -1,4 +1,4 @@
-import { addMember, applyCommand, createTable, GameError, joiningName, listedLike, newConfig, playerName, presetName, presetSettings, randomId, requireLevel, setIdentity, sharedPreset, tick, viewFor } from '../engine/index.ts';
+import { addMember, applyCommand, createTable, GameError, listedLike, playerName, presetName, presetSettings, randomId, requireLevel, setIdentity, sharedPreset, tick, viewFor } from '../engine/index.ts';
 import type { Arriving, Command, Ctx, Member, Preset, Rng, TableState } from '../engine/index.ts';
 import type { ApiResponse, Auth, ErrorCode, Who } from './api.ts';
 import { NOWHERE } from './errorLog.ts';
@@ -124,7 +124,11 @@ function whoOf(request: Fields): Who | null {
 /** Someone about to become a member of a table: what they are called there, and who the list of players says they are. */
 interface Arrival extends Arriving {
   name: unknown;
+  /** Someone new, for the list of players to hear of once the table has let them in. */
+  enlist: boolean;
 }
+
+type Joined = Extract<ApiResponse, { kind: 'joined' }>;
 
 /** Anyone with the game's address may list the presets, so they are handed out holding only what presets keep. */
 function presetsAnswer(presets: Preset[]): ApiResponse {
@@ -333,57 +337,64 @@ export class PokerService {
 
   /**
    * Who is arriving at a table, from what their request says of it. Being known is only a label, so
-   * nothing here stops a game: when the list of players can't be asked or written to, or has no such
-   * player, or is full, they arrive all the same, as nobody it knows. Only a name is refused: a new
-   * one that the list already has, since its holder may be the one asking.
-   *
-   * `mayArrive` throws whatever else would turn someone new away under that name. It is asked before
-   * the list is written to, so that nobody is put on it by an arrival that then comes to nothing.
+   * nothing here stops a game: when the list of players can't be asked, or has no such player, they
+   * arrive all the same, as nobody it knows. Only a name is refused: a new one that the list already
+   * has, since its holder may be the one asking.
    */
-  private arrival(request: Fields, mayArrive: (name: string) => void): Arrival {
+  private arrival(request: Fields): Arrival {
     const who = whoOf(request);
-    const now = this.clock.now();
 
     if (!who) {
-      return { name: request.name, identity: null, keepsName: false };
+      return { name: request.name, identity: null, keepsName: false, enlist: false };
     }
 
     if (who.as === 'known') {
       let known = null;
 
       try {
-        known = this.players.seen(who.id, now);
+        known = this.players.seen(who.id, this.clock.now());
       } catch (error) {
         console.error(error);
       }
 
       // The name is the list's whether or not the list could say so, and not the player's to change
-      return { name: known?.name ?? request.name, identity: known?.id ?? null, keepsName: true };
+      return { name: known?.name ?? request.name, identity: known?.id ?? null, keepsName: true, enlist: false };
     }
 
     const name = playerName(request.name);
     this.refuseNameOnList(name);
-    mayArrive(name);
+
+    return { name, identity: null, keepsName: false, enlist: true };
+  }
+
+  /**
+   * Puts a member who came in as someone new on the list of players, and has their table say who they
+   * are. The table lets them in first, so that nobody is on the list for an arrival that came to
+   * nothing, and a request sent again after one finds no name of its own in the way. Whatever goes
+   * wrong here, they are in, as nobody the list knows.
+   */
+  private enlisted(tableId: string, joined: Joined): ApiResponse {
+    const { id } = joined.auth;
 
     try {
-      const added = this.players.add(name, now);
+      const added = this.players.add(joined.view.you.name, this.clock.now());
 
-      return { name: added.name, identity: added.id, keepsName: false };
+      return this.mutate(tableId, (state, ctx) => {
+        setIdentity(state, id, added, ctx);
+
+        return { ...joined, view: viewFor(state, id, ctx.now) };
+      });
     } catch (error) {
-      if (error instanceof NameOnList) {
-        throw error;
-      }
-
       console.error(error);
 
-      return { name, identity: null, keepsName: false };
+      return joined;
     }
   }
 
   /**
-   * Turns away a name for someone new that the list has, as adding them would, but before the table has
-   * its say: where both have the name, "pick yourself from the list" is the answer that gets its holder
-   * in. A list that can't be read turns nobody away.
+   * Turns away a name for someone new that the list has, before the table has its say: where both
+   * have the name, "pick yourself from the list" is the answer that gets its holder in. A list that
+   * can't be read turns nobody away.
    */
   private refuseNameOnList(name: string): void {
     let holder = null;
@@ -400,7 +411,7 @@ export class PokerService {
   }
 
   private create(request: Fields): ApiResponse {
-    const arriving = this.arrival(request, () => void newConfig(request.config));
+    const arriving = this.arrival(request);
 
     for (let attempt = 0; attempt < CREATE_ATTEMPTS; attempt++) {
       const tableId = randomId(this.rng, TABLE_ID_LENGTH);
@@ -423,7 +434,9 @@ export class PokerService {
         // A new table is rare and already a write to the store, so it is when the old ones are seen to
         this.putAwayOldTables();
 
-        return { ok: true, kind: 'joined', ...created };
+        const joined: Joined = { ok: true, kind: 'joined', ...created };
+
+        return arriving.enlist ? this.enlisted(tableId, joined) : joined;
       }
     }
 
@@ -451,13 +464,15 @@ export class PokerService {
   }
 
   private join(tableId: string, request: Fields): ApiResponse {
-    const arriving = this.arrival(request, (name) => void joiningName(this.tableAt(tableId), name));
+    const arriving = this.arrival(request);
 
-    return this.mutate(tableId, (state, ctx) => {
+    const joined = this.mutate(tableId, (state, ctx): Joined => {
       const member = addMember(state, arriving.name, ctx, arriving);
 
       return { ok: true, kind: 'joined', auth: { id: member.id, token: member.token }, view: viewFor(state, member.id, ctx.now) };
     });
+
+    return arriving.enlist ? this.enlisted(tableId, joined) : joined;
   }
 
   private poll(tableId: string, auth: Auth, since: unknown): ApiResponse {

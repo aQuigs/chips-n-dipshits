@@ -41,11 +41,8 @@ export interface Arriving {
 
 const NOBODY_KNOWN: Arriving = { identity: null, keepsName: false };
 
-/**
- * The name someone would go by as a new member of this table, or the reason the table can't take
- * them: a name it already has, or no room. It changes nothing, so it also answers before anyone joins.
- */
-export function joiningName(state: TableState, rawName: unknown, keepsName = false): string {
+/** The name someone goes by as a new member of this table, or the reason the table can't take them: a name it already has, or no room. */
+function joiningName(state: TableState, rawName: unknown, keepsName: boolean): string {
   const name = playerName(rawName);
   const holderOf = (wanted: string) => state.members.find((m) => readAlike(m.name, wanted));
 

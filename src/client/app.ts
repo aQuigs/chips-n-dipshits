@@ -504,7 +504,7 @@ export class App {
     if (view.you.identity !== null) {
       this.me.set(playerFor(view.you.identity, as));
     } else {
-      this.toast('You’re in. The list of players couldn’t take note of you just now: say who you are from the menu when you like.');
+      this.toast('You’re in, though not on the list of players. You can say who you are from the menu.');
     }
   }
 

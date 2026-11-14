@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { addMember, createTable, DEFAULT_CONFIG, joiningName, ledgerOf, setIdentity, STATE_SCHEMA, viewFor } from '../src/engine/index.ts';
+import { addMember, createTable, DEFAULT_CONFIG, ledgerOf, setIdentity, STATE_SCHEMA, viewFor } from '../src/engine/index.ts';
 import type { Ctx } from '../src/engine/index.ts';
 import { restoreState } from '../src/server/store.ts';
 import { ledgerEntries, seededRng, TestTable } from './helpers.ts';
@@ -67,10 +67,22 @@ test('a name that reads like one already at the table is refused', () => {
   assert.throws(() => addMember(state, 'B0b', ctx), /reads too much like Bob/, 'a zero for an o');
   assert.throws(() => addMember(state, '\uFF22ob', ctx), /reads too much like Bob/, 'a full-width B');
 
+  // Capitals in one place and a look-alike in another, which neither test catches on the whole name
+  assert.throws(() => addMember(state, 'BIG AI', ctx), /reads too much like Big Al/);
+  assert.throws(() => addMember(state, 'B0B', ctx), /reads too much like Bob/);
+  assert.throws(() => addMember(state, 'T0m', ctx), /reads too much like TOM/);
+  assert.throws(() => addMember(state, 'B\u0131g Al', ctx), /reads too much like Big Al/, 'a Turkish i without its dot');
+  assert.throws(() => addMember(state, 'B\u0130G AL', ctx), /reads too much like Big Al/, 'a Turkish capital I with a dot');
+
   // Names that only share an alphabet with nobody are as welcome as any
   for (const name of ['\u0410\u043D\u043D\u0430', '\u039D\u03AF\u03BA\u03BF\u03C2', '\u4F60\u597D', 'Zo\u00EB', 'Tim', 'Al']) {
     assert.equal(addMember(state, name, ctx).name, name);
   }
+
+  // And an i is not an l, though a capital I passes for either
+  assert.equal(addMember(state, 'Kai', ctx).name, 'Kai');
+  assert.equal(addMember(state, 'Kal', ctx).name, 'Kal');
+  assert.throws(() => addMember(state, 'KAI', ctx), /already called KAI/);
 });
 
 test('a member carries which known player they said they are, or nobody, and everyone at the table is told which', () => {
@@ -129,21 +141,17 @@ test('a known player whose name the table already has is given room under a numb
   assertViewsKeepSecrets(state, ctx.now);
 });
 
-test('the name someone would go by can be asked before they join, which changes nothing and draws nothing', () => {
+test('a join the table turns away changes nothing and takes nothing from its randomness, so the cards after it are the same', () => {
   const ctx = freshCtx();
   const { state } = createTable('ABC123', 'Quigs', {}, ctx);
   const before = JSON.stringify(state);
   const drawn = seededRng(1);
   const untouched = seededRng(1);
 
-  assert.equal(joiningName(state, '  New   Guy '), 'New Guy');
-  assert.equal(joiningName(state, 'Quigs', true), 'Quigs 2');
-  assert.throws(() => joiningName(state, 'quigs'), /already called quigs/);
-  assert.throws(() => joiningName(state, '=1'), /Names start with/);
-  assert.equal(JSON.stringify(state), before);
+  assert.throws(() => addMember(state, 'quigs', { now: ctx.now, rng: drawn, effects: [] }), /already called quigs/);
+  assert.throws(() => addMember(state, '=1', { now: ctx.now, rng: drawn, effects: [] }), /Names start with/);
 
-  // A join the table turns away takes nothing from its randomness, so the cards after it are the same
-  assert.throws(() => addMember(state, 'quigs', { now: ctx.now, rng: drawn, effects: [] }), /already called/);
+  assert.equal(JSON.stringify(state), before);
   assert.equal(drawn.int(1_000_000), untouched.int(1_000_000));
 });
 

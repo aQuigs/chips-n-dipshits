@@ -198,9 +198,13 @@ export class SheetPlayerStore implements PlayerStore {
     const blank = (cells: unknown[]) => cells.every((cell) => String(cell).trim() === '');
     const rows: Row[] = [];
 
-    values.slice(FIRST_DATA_ROW - 1).forEach((cells, index) => {
+    // The first row is the headers whatever it says, except a player: deleting the header row by hand
+    // moves one up into its place, and they are on the list still
+    const first = values.length > 0 && keptOf(values[0]!, []) ? 1 : FIRST_DATA_ROW;
+
+    values.slice(first - 1).forEach((cells, index) => {
       if (!blank(cells)) {
-        rows.push({ row: FIRST_DATA_ROW + index, player: keptOf(cells, readable(rows)) });
+        rows.push({ row: first + index, player: keptOf(cells, readable(rows)) });
       }
     });
 

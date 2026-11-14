@@ -9785,6 +9785,9 @@ const CHECKS: Check[] = [
       `on a ${screen}, after a hand a player who folded is offered each of their cards, drawn on its button, and both, in one group under the table clear of the switches beside it, standing and lying`,
       async (rig) => {
         const table = foldedToQuigs(rig);
+        // The chat at its busiest beside the offer: a line naming Pam, and a GIF as the newest in the bar
+        table.act('Stu', { type: 'chat', text: '@Pam nice fold' });
+        table.act('Stu', { type: 'chat', text: 'https://giphy.com/gifs/funny-cat-abc123' });
         const pam = await table.open('Pam', screen);
 
         await pam.waitForSelector('.controls .show-cards');

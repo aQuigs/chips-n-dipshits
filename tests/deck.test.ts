@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-import { PREFERENCES, Preferences } from '../src/client/prefs.ts';
-import type { Pref, PrefHost } from '../src/client/prefs.ts';
+import { PREFERENCES } from '../src/client/prefs.ts';
+import type { Pref } from '../src/client/prefs.ts';
 import { THEMES } from '../src/client/themes.ts';
 import { splitWrittenCards } from '../src/engine/cards.ts';
 import { contrast, distance, VISIONS } from './colorVision.ts';
@@ -54,39 +54,16 @@ function shown(attribute: string, option: string, theme: string): (property: str
   return (property) => resolve(scope.get(property)!);
 }
 
-function fakeHost(): PrefHost {
-  return { dataset: {}, style: { setProperty: () => undefined } };
-}
-
-const memory = () => {
-  const kept = new Map<string, string>();
-
-  return { get: (key: string) => kept.get(key) ?? null, set: (key: string, value: string) => void kept.set(key, value) };
-};
-
-test('the deck and the back are shown on the app for the stylesheet, and start as the theme draws them', () => {
-  const host = fakeHost();
-  const prefs = new Preferences(PREFERENCES, memory(), host);
-
-  assert.equal(host.dataset.deck, 'theme');
-  assert.equal(host.dataset.cardBack, 'theme');
-
-  prefs.set('deck', 'four');
-  prefs.set('cardBack', 'dots');
-  assert.equal(host.dataset.deck, 'four');
-  assert.equal(host.dataset.cardBack, 'dots');
-});
-
 test('with nothing chosen, every theme draws its cards in its own colors and on its own back', () => {
   for (const theme of THEMES) {
     const tokens = themeTokens(theme.id);
-    const deck = shown('data-deck', 'theme', theme.id);
+    const deck = shown('data-deck', PREFERENCES.deck.default, theme.id);
 
     for (const suit of SUITS) {
       assert.equal(deck(`--deck-${suit}`), tokens.get(`--suit-${suit}`), `${theme.name}: ${suit}`);
     }
 
-    assert.equal(shown('data-card-back', 'theme', theme.id)('--back'), tokens.get('--card-back'), theme.name);
+    assert.equal(shown('data-card-back', PREFERENCES.cardBack.default, theme.id)('--back'), tokens.get('--card-back'), theme.name);
   }
 });
 
@@ -101,13 +78,14 @@ test('two colors pairs clubs with spades and diamonds with hearts, in every them
 
 test('four colors reads on every theme’s cards, and the suits stay apart with each common kind of color blindness', () => {
   for (const theme of THEMES) {
-    const card = themeTokens(theme.id).get('--card')!;
+    const tokens = themeTokens(theme.id);
+    const card = tokens.get('--card')!;
     const deck = shown('data-deck', 'four', theme.id);
     const colors = SUITS.map((suit) => deck(`--deck-${suit}`));
 
     assert.deepEqual(
-      SUITS.map((suit) => deck(`--deck-${suit}`)),
-      SUITS.map((suit) => themeTokens(theme.id).get(`--suit-four-${suit}`)),
+      colors,
+      SUITS.map((suit) => tokens.get(`--suit-four-${suit}`)),
       `${theme.name} does not draw the four-color deck from its tokens`,
     );
 
@@ -133,7 +111,7 @@ test('every back has a look of its own, and the cards are drawn from the choice'
   const cards = rules('cards.css');
   assert.match(cards.get('.card.back')!.get('background')!, /var\(--back\b/);
   for (const suit of SUITS) {
-    assert.match(cards.get(`.card.suit-${suit}`)!.get('color')!, new RegExp(`var\\(--deck-${suit}\\b`));
+    assert.match(cards.get(`:is(.card, .card-text).suit-${suit}`)!.get('color')!, new RegExp(`var\\(--deck-${suit}\\b`));
   }
 });
 

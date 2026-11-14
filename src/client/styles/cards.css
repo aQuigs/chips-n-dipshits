@@ -25,25 +25,25 @@
   font-size: calc(var(--card-w) * 0.44);
 }
 
-.card.suit-s {
-  color: var(--deck-s, var(--suit-s));
+:is(.card, .card-text).suit-s {
+  color: var(--deck-s);
 }
 
-.card.suit-c {
-  color: var(--deck-c, var(--suit-c));
+:is(.card, .card-text).suit-c {
+  color: var(--deck-c);
 }
 
-.card.suit-h {
-  color: var(--deck-h, var(--suit-h));
+:is(.card, .card-text).suit-h {
+  color: var(--deck-h);
 }
 
-.card.suit-d {
-  color: var(--deck-d, var(--suit-d));
+:is(.card, .card-text).suit-d {
+  color: var(--deck-d);
 }
 
 .card.back {
   border: calc(var(--card-w) * 0.07) solid var(--card);
-  background: var(--back, var(--card-back));
+  background: var(--back);
 }
 
 .card.slot {

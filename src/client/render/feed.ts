@@ -1,5 +1,5 @@
 import type { FeedEntry } from '../../engine/types.ts';
-import { cardText, h } from '../ui.ts';
+import { cardText, h, marksCards } from '../ui.ts';
 
 const CHAT_LENGTH = 200;
 
@@ -65,8 +65,23 @@ export function createFeed(onChat: (text: string) => void, deck: string): Feed {
 
   let lastSeq = 0;
   // What the list shows, so it can be written out again for another deck
-  let shown: FeedEntry[] = [];
-  let newest: FeedEntry | null = null;
+  const shown: FeedEntry[] = [];
+
+  /** Changes the list, and keeps it at the bottom if that is where the reader was. */
+  function keepFollowing(change: () => void): void {
+    const following = list.scrollHeight - list.scrollTop - list.clientHeight < FOLLOW_SLACK_PX;
+
+    change();
+
+    if (following) {
+      list.scrollTop = list.scrollHeight;
+    }
+  }
+
+  const showLatest = () => {
+    const newest = shown.at(-1);
+    latest.replaceChildren(...(newest ? latestText(newest, deck) : []));
+  };
 
   return {
     element,
@@ -76,28 +91,21 @@ export function createFeed(onChat: (text: string) => void, deck: string): Feed {
         return;
       }
 
-      const following = list.scrollHeight - list.scrollTop - list.clientHeight < FOLLOW_SLACK_PX;
-
-      for (const entry of fresh) {
-        list.appendChild(entryEl(entry, deck));
-      }
-
       lastSeq = fresh[fresh.length - 1]!.seq;
-      shown = [...shown, ...fresh].slice(-MAX_ENTRIES);
+      shown.push(...fresh);
+      shown.splice(0, Math.max(0, shown.length - MAX_ENTRIES));
 
-      while (list.childElementCount > MAX_ENTRIES) {
-        list.firstElementChild!.remove();
-      }
+      keepFollowing(() => {
+        list.append(...fresh.map((entry) => entryEl(entry, deck)));
 
-      newest = entries[entries.length - 1]!;
-      latest.replaceChildren(...latestText(newest, deck));
-
-      if (following) {
-        list.scrollTop = list.scrollHeight;
-      }
+        while (list.childElementCount > MAX_ENTRIES) {
+          list.firstElementChild!.remove();
+        }
+      });
+      showLatest();
     },
     showDeck(chosen) {
-      const marksChange = (chosen === 'four') !== (deck === 'four');
+      const marksChange = marksCards(chosen) !== marksCards(deck);
 
       deck = chosen;
       // Rewriting the list has a screen reader read it all again, so only when the cards are written differently
@@ -105,14 +113,8 @@ export function createFeed(onChat: (text: string) => void, deck: string): Feed {
         return;
       }
 
-      const following = list.scrollHeight - list.scrollTop - list.clientHeight < FOLLOW_SLACK_PX;
-
-      list.replaceChildren(...shown.map((entry) => entryEl(entry, deck)));
-      latest.replaceChildren(...(newest ? latestText(newest, deck) : []));
-
-      if (following) {
-        list.scrollTop = list.scrollHeight;
-      }
+      keepFollowing(() => list.replaceChildren(...shown.map((entry) => entryEl(entry, deck))));
+      showLatest();
     },
   };
 }

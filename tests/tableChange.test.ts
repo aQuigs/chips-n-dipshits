@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { ServerClock } from '../src/client/connection.ts';
-import { tableChange } from '../src/client/tableChange.ts';
+import { TableNews, tableChange } from '../src/client/tableChange.ts';
 import type { TableChange } from '../src/client/tableChange.ts';
 import type { HandEvent, TableView } from '../src/engine/index.ts';
 import { TestTable } from './helpers.ts';
@@ -11,11 +11,13 @@ import { TestTable } from './helpers.ts';
 const seenBy = (table: TestTable, seat: number): TableView => structuredClone(table.view(seat));
 
 /** Seat 0's page, which shows each view the moment it is made, as nearly all of them arrive. */
+/** A table screen taking up views, each `late` ms after the table made it. */
 class Page {
+  private readonly news = new TableNews();
   private shown: TableView | null = null;
 
-  arrive(table: TestTable, wentBack = false): TableChange {
-    const change = tableChange(this.shown, seenBy(table, 0), table.now, wentBack);
+  arrive(table: TestTable, wentBack = false, late = 0): TableChange {
+    const change = this.news.change(this.shown, seenBy(table, 0), table.now + late, wentBack);
 
     this.shown = change.view;
 
@@ -288,7 +290,7 @@ test('a device whose clock is a minute off still takes a view that arrives at on
   }
 });
 
-test('the end of the night is news once, with the view that brought it, and only while it is fresh', () => {
+test('the end of the night is told once, by the first view on time that shows it', () => {
   const table = new TestTable({ stacks: [1000, 1000] });
   const page = new Page();
   page.arrive(table);
@@ -304,15 +306,46 @@ test('the end of the night is news once, with the view that brought it, and only
   table.now += 1000;
   table.cmd(0, { type: 'endNight' });
   assert.equal(page.arrive(table).nightEnded, true);
+});
 
-  // Reaching the page long after, as to a phone that slept through it
+test('an end of the night brought by a late view is told by the next view on time, and one gone by then never is', () => {
+  const table = new TestTable({ stacks: [1000, 1000] });
+  const page = new Page();
+  page.arrive(table);
+
+  // Half a minute on its way, the view is not news, but the end it brought waits
+  table.cmd(0, { type: 'endNight' });
+  const late = page.arrive(table, false, 30_000);
+  assert.equal(late.current, false);
+  assert.equal(late.nightEnded, false);
+  assert.equal(page.arrive(table).nightEnded, true);
+  assert.equal(page.arrive(table).nightEnded, false, 'told again');
+
+  // Ended again and played on, all before a view on time came
   table.cmd(0, { type: 'playOn' });
   table.now += 1000;
   table.cmd(0, { type: 'endNight' });
-  table.now += 60_000;
-  assert.equal(page.arrive(table).nightEnded, false);
+  assert.equal(page.arrive(table, false, 30_000).nightEnded, false);
+  table.cmd(0, { type: 'playOn' });
+  assert.equal(page.arrive(table).nightEnded, false, 'an end no longer shown');
+});
 
-  // A page opened on a table whose night is over is told nothing happened
-  assert.equal(new Page().arrive(table).nightEnded, false);
+test('a page opened on a table whose night ended long ago, or shown it again after the table went back, is told nothing', () => {
+  const table = new TestTable({ stacks: [1000, 1000] });
+  table.cmd(0, { type: 'endNight' });
+  table.now += 60 * 60_000;
+
+  const opened = new Page();
+  assert.equal(opened.arrive(table).nightEnded, false);
+  table.cmd(1, { type: 'chat', text: 'still here' });
+  assert.equal(opened.arrive(table).nightEnded, false, 'the next view on time');
+
+  const page = new Page();
+  page.arrive(table);
+  table.cmd(0, { type: 'playOn' });
+  page.arrive(table);
+  table.now += 1000;
+  table.cmd(0, { type: 'endNight' });
   assert.equal(page.arrive(table, true).nightEnded, false);
+  assert.equal(page.arrive(table).nightEnded, false);
 });

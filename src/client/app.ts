@@ -8,7 +8,7 @@ import { isRefusal, nextRetry, ServerClock, ServerLine, sleep, TableConnection }
 import type { SendOutcome, Session } from './connection.ts';
 import { TableEffects } from './effects.ts';
 import { HotkeyPresser } from './hotkeyPresser.ts';
-import { tableChange } from './tableChange.ts';
+import { TableNews } from './tableChange.ts';
 import { Modal } from './modal.ts';
 import type { Platform } from './platform.ts';
 import { PREFERENCES, Preferences } from './prefs.ts';
@@ -57,6 +57,7 @@ interface TableScreen {
   modal: Modal;
   feed: Feed;
   effects: TableEffects;
+  news: TableNews;
   seatMoves: SeatMoves;
   shape: Shape;
   seenCards: Set<string>;
@@ -399,6 +400,7 @@ export class App {
       modal: new Modal(overlay.element),
       feed,
       effects: new TableEffects(this.prefs, stage.element, this.sounds, this.attention),
+      news: new TableNews(),
       seatMoves: new SeatMoves(stage.element, {
         view: () => this.view,
         send: (command) => void this.send(command),
@@ -505,7 +507,7 @@ export class App {
     }
 
     // Only for a view that was taken up, so nothing happens twice for one that was dropped or is drawn again
-    this.screen?.effects.run(tableChange(before, view, this.clock.now(), wentBack));
+    this.screen?.effects.run(this.screen.news.change(before, view, this.clock.now(), wentBack));
   }
 
   /** Whether a move can be made, or whether the table is being heard from, has changed. */

@@ -7916,6 +7916,37 @@ const CHECKS: Check[] = [
       }
     },
   ],
+  [
+    'nine hands that pick three runs show one chance a seat while they pick, and with the third board laid only its own, whole and clear of everything on the smallest phone and the desktop, standing and lying',
+    async (rig) => {
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        const table = rig.table(LONG_NAMES.slice(0, 9).map((name) => ({ name, stack: 1000 })), { maxRuns: 3 });
+        table.deal({ button: 0, holes: NINE_HOLES, board: '2c 5h 3d 6s Jh', secondBoard: '2d 4h 9s Td 3c', thirdBoard: '4s 6h Qd 8d 2h' });
+        const page = await table.open('Quigs', screen);
+
+        // While three runs may come, every run deals from the same cards, so one figure a seat says each one's chance
+        table.play(allIn, (view) => view.hand!.stage === 'ritVote');
+        await page.waitForSelector('.turn [data-action="rit-3"]');
+        const picking = await chancesOn(page, table, 'Quigs');
+        assert.deepEqual(picking, { 0: '~18%', 1: '~12%', 2: '~18%', 3: '~14%', 4: '~12%', 5: '~8%', 6: '~8%', 7: '~8%', 8: '~2%' }, `${screen}: nine hands while they pick`);
+
+        // Run three times: the jacks won the first board, the nines the second, and the third is laid with no card yet
+        table.play(allInPicking(3), (view) => view.hand!.boards.length === 3);
+        const third = await chancesOn(page, table, 'Quigs');
+        assert.ok(Object.values(third).every((figures) => /^~?\d+%\*?$/.test(figures)), `${screen}: one figure a seat, for the board being run: ${JSON.stringify(third)}`);
+        assert.equal(Object.values(third).reduce((sum, figure) => sum + Number(figure.replace(/[~%*]/g, '')), 0), 100, `${screen}: the nine chances on the third board add up`);
+        assert.match((await page.locator('.seat[data-seat="3"] .status.chance').getAttribute('title'))!, /^Chance to win: board 1 100%, board 2 0%, board 3 ~\d+%$/);
+
+        await inShapesOf(page, screen, async (shape) => {
+          await assertChancesFit(page, `${screen}, nine hands on three boards, ${shape}`);
+          await assertMiddleFits(page, screen);
+          await shot(page, `chances-nine-three-boards-${screen}-${shape}`);
+        }, { buttonsUp: false });
+
+        await page.context().close();
+      }
+    },
+  ],
   ...MOTION_LAYOUTS.map((layout): Check => [
     `with animations on, a hand’s chance changes only once the card that changes it has landed, however soon it was worked out, and not at all while the last card lies face down: ${layout.name}`,
     async (rig) => {
@@ -8115,7 +8146,7 @@ const CHECKS: Check[] = [
     },
   ],
   ...[MOTION_LAYOUTS[0]!, MOTION_LAYOUTS[2]!].map((layout): Check => [
-    `a hand run three times holds each board's last card face down as it comes, and nothing names a winner before the third board's is up, for a player and for a watcher: ${layout.name}`,
+    `a hand run three times holds each board's last card face down as it comes, nothing names a winner before the third board's is up, and no chance changes before its card has landed, for a player and for a watcher: ${layout.name}`,
     async (rig) => {
       const where = (what: string) => `${layout.name}, ${what}`;
       const table = rig.table([{ name: 'Quigs', stack: 10_000 }, { name: 'Stu', stack: 10_000 }], { ...layout.config, maxRuns: 3 });
@@ -8125,17 +8156,32 @@ const CHECKS: Check[] = [
         ['Kibitz', await watch(table, 'Kibitz', layout)],
       ] as const;
 
+      for (const [, { moving }] of watched) {
+        await moving.evaluate(CHANCE_LOG);
+      }
+
       table.deal({ button: 0, holes: { 0: 'Ah Ad', 1: 'Kh Kd' }, board: '2c 7d 9h Jc Ks', secondBoard: '5c 6d Th Qc 3s', thirdBoard: '8c 8d 4h 5s 4s' });
       table.play(allInPicking(3), (view) => view.hand!.stage === 'runout');
 
       const handNames = (page: Page) => texts(page, `${HINT} .name`);
+      // Each seat's chance on every board, from the line's title, which has them all however few the line shows
+      const everyChance = (page: Page) =>
+        page.evaluate(`Object.fromEntries([...document.querySelectorAll('.seat[data-seat] .status.chance')].map((line) => [
+          line.closest('.seat').dataset.seat,
+          line.title.replace('Chance to win: ', '').split(', ').map((figure) => figure.replace(/^board \\d+ /, '')),
+        ]))`) as Promise<Record<string, string[]>>;
 
       while (table.view('Quigs').hand!.stage === 'runout') {
         const before = table.view('Quigs').hand!.boards.map((board) => board.length);
         const named: Record<string, string[]> = {};
+        const shownBefore: Record<string, Record<string, string[]>> = {};
         for (const [name, { moving }] of watched) {
+          // Everything landed and every chance worked out, so what the page says now is what it will hold to. Moves
+          // stop in the air on this page, so whatever started since the last landing is let land
+          await moving.waitForFunction(`(window.land(), document.querySelector('.stage:not([data-moving]):not([data-chances-pending])') !== null)`);
           await moving.evaluate(SWEAT);
           named[name] = await handNames(moving);
+          shownBefore[name] = await everyChance(moving);
         }
 
         rig.advance(table.view('Quigs').hand!.deadline! - rig.now());
@@ -8153,15 +8199,20 @@ const CHECKS: Check[] = [
           // The page that moves is not caught up until the card is turned: the view that ends the hand is held back until then
           const what = where(`board ${finished + 1}, as ${name}`);
 
-          // The view that brings a board's last card starts the next board, and the hint names the hand on it at
-          // once: that tells nothing, so only the line of the board whose card is face down must hold
+          // The view that brings a board's last card starts the next board, and the hint and the chances speak of it at
+          // once: that tells nothing, so only what they say of the board whose card is face down must hold
           if (finished < 2) {
             await moving.waitForSelector('.board-card.stand-in');
             assert.equal((await handNames(moving))[finished], named[name]![finished], `${what}: the hint names the hand the face-down card makes`);
             await moving.evaluate(`window.sweat.hint = document.querySelector('.seat.me .hint')?.textContent ?? ''; delete window.sweat.said['the hint']`);
+            await moving.evaluate(`window.sweat.chances = [...document.querySelectorAll('.status.chance')].map((line) => line.textContent).join(); delete window.sweat.said['a hand’s chance to win']`);
           }
 
           await sweating(moving, what, view.hand!.boards[finished]![4]!, finished);
+          const now = await everyChance(moving);
+          for (const [seat, figures] of Object.entries(shownBefore[name]!)) {
+            assert.equal(now[seat]?.[finished], figures[finished], `${what}: seat ${seat}'s chance on the board changed while its last card lies face down`);
+          }
           if (finished === 2 && name === 'Stu') {
             await shot(moving, `three-runs-sweat-${layout.name}`);
           }
@@ -8175,6 +8226,10 @@ const CHECKS: Check[] = [
       for (const [name, { moving }] of watched) {
         await moving.waitForSelector('.message.result');
         assert.equal(await moving.locator('.board .card[data-card]').count(), 15, where(`every board is out, as ${name}`));
+
+        const changes = (await moving.evaluate('window.chanceLog')) as ChanceChange[];
+        assert.ok(changes.some((change) => /\d/.test(change.text)), where(`no chance was shown, as ${name}`));
+        assert.deepEqual(changes.filter((change) => change.inFlight > 0 && /\d/.test(change.text)), [], where(`a chance changed while something on the table was moving, as ${name}`));
         await moving.context().close();
       }
     },

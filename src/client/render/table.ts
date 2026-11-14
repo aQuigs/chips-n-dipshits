@@ -214,19 +214,25 @@ function markPlaying(cards: HTMLElement[], reads: readonly HandRead[]): HTMLElem
   return cards;
 }
 
+// The bare figures a seat's line has room for, side by side, on the narrowest phone
+const FIGURES_IN_A_LINE = 2;
+
 /**
  * A hand's chance to win, a figure for each board in the order the boards lie, in the line of the plate
- * that otherwise says what its player did. One figure carries its sign; several stand bare, with no
- * room for more on a phone's seat, and the line's title says them in full.
+ * that otherwise says what its player did. One figure carries its sign; several stand bare, and the
+ * line's title says them in full. A hand run more times than the line has figures for shows only the
+ * board being run, the last laid: the ones before it are over, and the felt shows how.
  */
-function chanceEl(figures: (ChanceFigure | null)[]): HTMLElement {
+function chanceEl(figures: (ChanceFigure | null)[], runs: number): HTMLElement {
   const several = figures.length > 1;
   const inFull = figures.map((figure, board) => `${several ? `board ${board + 1} ` : ''}${figure ? `${figure.text}%` : 'still to come'}`).join(', ');
+  const shown = runs > FIGURES_IN_A_LINE ? figures.slice(-1) : figures;
+  const bare = shown.length > 1;
 
   return h(
     'div.status.chance',
     { title: `Chance to win: ${inFull}` },
-    figures.map((figure) => h('span', { class: figure ? figure.favorite && 'favorite' : 'pending' }, figure ? `${figure.text}${several ? '' : '%'}` : '…')),
+    shown.map((figure) => h('span', { class: figure ? figure.favorite && 'favorite' : 'pending' }, figure ? `${figure.text}${bare ? '' : '%'}` : '…')),
   );
 }
 
@@ -247,7 +253,7 @@ function seatEl(view: TableView, seat: SeatView, slot: number, shape: Shape, clo
   const hint = holding && !middleNamesHands ? hintEl(holding) : null;
   const place = seatPlace(shape, slot);
   const spot = chances?.seats.indexOf(seat.seat) ?? -1;
-  const chance = spot >= 0 ? chanceEl(chances!.boards.map((figures) => figures?.[spot] ?? null)) : null;
+  const chance = spot >= 0 ? chanceEl(chances!.boards.map((figures) => figures?.[spot] ?? null), view.hand?.runs ?? 1) : null;
 
   const classes = [
     place.class,

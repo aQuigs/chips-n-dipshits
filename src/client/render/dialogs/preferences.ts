@@ -6,8 +6,12 @@ import type { DialogHandlers, DialogKind } from './dialog.ts';
 /** The store as this dialog uses it: whatever is in the registry, by the kind of each entry. */
 type AnyPreferences = Preferences<Record<string, Pref>>;
 
+// Radios with one name are one group across the document, and the showcase page holds two apps
+let groupsDrawn = 0;
+
 /** A choice whose options are drawn as samples: one tile per option, each showing what picking it looks like. */
 function samples(prefs: AnyPreferences, key: string, pref: ChoicePref, preview: NonNullable<ChoicePref['preview']>): HTMLElement {
+  const name = `pref-${key}-${(groupsDrawn += 1)}`;
   const tiles = pref.options.map((option) => {
     const sample = h('span.sample', { 'aria-hidden': 'true' }, preview.map(cardEl));
     sample.dataset[key] = option.value;
@@ -15,7 +19,8 @@ function samples(prefs: AnyPreferences, key: string, pref: ChoicePref, preview: 
     return h(
       'label.tile',
       null,
-      h('input', { type: 'radio', name: `pref-${key}`, value: option.value, checked: prefs.get(key) === option.value, onchange: () => prefs.set(key, option.value) }),
+      // A click, not a change: picking the option already marked still applies it, as after it was chosen in another tab
+      h('input', { type: 'radio', name, value: option.value, checked: prefs.get(key) === option.value, onclick: () => prefs.set(key, option.value) }),
       sample,
       h('span', null, option.label),
     );

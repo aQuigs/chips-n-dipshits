@@ -56,7 +56,7 @@ export function prettyCards(cards: readonly Card[]): string {
 }
 
 const SUIT_OF_SYMBOL = new Map(Object.entries(SUIT_SYMBOLS).map(([suit, symbol]) => [symbol, suit]));
-const WRITTEN_CARD = /(?<![\p{L}\p{N}])(?:10|[2-9JQKA])([♣♦♥♠])/gu;
+const WRITTEN_CARD = /(?<![\p{L}\p{N}])(?:10|[2-9JQKA])([♣♦♥♠])(?![\p{L}\p{N}])/gu;
 
 /** Text split around each card written in it by `prettyCard`, with that card's suit. */
 export function splitWrittenCards(text: string): { text: string; suit: string | null }[] {

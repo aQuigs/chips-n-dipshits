@@ -103,7 +103,14 @@
   gap: 3px;
 }
 
-/* A lone card is a back, whose pattern needs the room to show */
-.sample .card:only-child {
+/* A back's pattern needs the room to show */
+.sample .card.back {
   --card-w: 30px;
+}
+
+/* Forced colors drop the shadow and repaint every border alike, so the chosen tile shows by its width */
+@media (forced-colors: active) {
+  .tile:has(input:checked) {
+    border-width: 3px;
+  }
 }

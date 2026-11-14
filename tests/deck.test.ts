@@ -162,6 +162,6 @@ test('cards the dealer writes are picked out of the text with their suits, and n
     { text: ' (Flush)', suit: null },
   ]);
   assert.deepEqual(splitWrittenCards('Seat 10 wins 2,000'), [{ text: 'Seat 10 wins 2,000', suit: null }]);
-  assert.deepEqual(splitWrittenCards('XA♠ and ♠'), [{ text: 'XA♠ and ♠', suit: null }], 'a suit inside a word or on its own is not a card');
+  assert.deepEqual(splitWrittenCards('XA♠ and K♦ing and ♠'), [{ text: 'XA♠ and K♦ing and ♠', suit: null }], 'a suit inside a word or on its own is not a card');
   assert.deepEqual(splitWrittenCards(''), []);
 });

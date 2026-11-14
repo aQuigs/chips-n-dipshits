@@ -97,9 +97,16 @@ export function createFeed(onChat: (text: string) => void, deck: string): Feed {
       }
     },
     showDeck(chosen) {
-      const following = list.scrollHeight - list.scrollTop - list.clientHeight < FOLLOW_SLACK_PX;
+      const marksChange = (chosen === 'four') !== (deck === 'four');
 
       deck = chosen;
+      // Rewriting the list has a screen reader read it all again, so only when the cards are written differently
+      if (!marksChange) {
+        return;
+      }
+
+      const following = list.scrollHeight - list.scrollTop - list.clientHeight < FOLLOW_SLACK_PX;
+
       list.replaceChildren(...shown.map((entry) => entryEl(entry, deck)));
       latest.replaceChildren(...(newest ? latestText(newest, deck) : []));
 

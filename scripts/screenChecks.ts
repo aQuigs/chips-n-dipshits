@@ -467,10 +467,13 @@ const CHECKS: Check[] = [
 
         const backs = new Set<string>();
         for (const back of ['lattice', 'dots', 'gingham', 'felt', 'theme']) {
+          const sample = `#pref-cardBack [data-card-back="${back}"] .card.back`;
+          assert.notEqual(await style(page, sample, 'backgroundImage'), await style(page, FACE_DOWN, 'backgroundImage'), `the ${back} sample is drawn with the back the table has now`);
+
           await pick('cardBack', back);
           const drawn = await style(page, FACE_DOWN, 'backgroundImage');
 
-          assert.equal(drawn, await style(page, `#pref-cardBack [data-card-back="${back}"] .card.back`, 'backgroundImage'), `the ${back} back on the table is not the one Preferences showed`);
+          assert.equal(drawn, await style(page, sample, 'backgroundImage'), `the ${back} back on the table is not the one Preferences showed`);
           backs.add(drawn);
         }
 

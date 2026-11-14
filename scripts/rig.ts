@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict';
 
 import { chromium } from 'playwright';
-import type { Browser, Page } from 'playwright';
+import type { Browser, BrowserContext, BrowserContextOptions, Page } from 'playwright';
 
 import { startDevServer } from '../src/dev/server.ts';
 import type { DevServer } from '../src/dev/server.ts';
@@ -25,6 +25,10 @@ import { STILL } from './pageSpies.ts';
 // and what fails only there usually fails here in a narrower font ('Times New Roman') or a wider one ('Verdana').
 const FONT_OVERRIDE = process.env.RIG_FONT;
 const STEP_TIMEOUT_MS = 15_000;
+
+// Built once for the whole run, since no check can change the page
+let built: Promise<string> | undefined;
+const builtPage = () => (built ??= clientPage({}));
 
 export const SCREENS = {
   phone: { width: 375, height: 667 },
@@ -192,17 +196,23 @@ export class RigTable {
   }
 }
 
-/** The local server with a game whose cards and clock belong to the check. */
+/**
+ * The local server with a game whose cards and clock belong to the check. Every check gets a rig of its
+ * own, so its tables, its presets, its clock and what its pages threw are nobody else's.
+ */
 export class Rig {
   readonly store: MemoryStore;
-  /** The group's presets, which every check shares: a check that saves some deletes them before it ends. */
+  /** The group's presets, empty when the check starts. */
   readonly presets: MemoryPresetStore;
-  readonly browser: Browser;
+  /** What the pages of this rig threw, each with whose page it was. */
   readonly pageErrors: string[] = [];
+  private readonly browser: Browser;
   private readonly service: PokerService;
   private readonly server: DevServer;
   /** How far the game's clock runs ahead of the real one. */
   private readonly lead: { ms: number };
+  private readonly contexts: BrowserContext[] = [];
+  private closing: Promise<void> | null = null;
 
   private constructor(parts: { store: MemoryStore; presets: MemoryPresetStore; browser: Browser; service: PokerService; server: DevServer; lead: { ms: number } }) {
     this.store = parts.store;
@@ -213,15 +223,16 @@ export class Rig {
     this.lead = parts.lead;
   }
 
-  static async start(): Promise<Rig> {
+  /** A rig with nothing on it yet, whose pages open in `browser`. */
+  static async start(browser: Browser): Promise<Rig> {
     const store = new MemoryStore();
     const presets = new MemoryPresetStore();
     const lead = { ms: 0 };
     const service = new PokerService({ store, presets, clock: { now: () => Date.now() + lead.ms }, rng: seededRng(20261113) });
-    const html = await clientPage({});
+    const html = await builtPage();
     const server = await startDevServer({ port: 0, page: async () => html, service });
 
-    return new Rig({ store, presets, browser: await chromium.launch(), service, server, lead });
+    return new Rig({ store, presets, browser, service, server, lead });
   }
 
   get url(): string {
@@ -249,7 +260,7 @@ export class Rig {
   /** A browser page on a screen of the given size, with nothing in it yet and its table kept still. `who` names it when it throws. */
   async page(screen: ScreenName, who: string, { moving = false }: PageOptions = {}): Promise<Page> {
     const touch = screen !== 'desktop';
-    const context = await this.browser.newContext({ viewport: SCREENS[screen], ...(touch ? { deviceScaleFactor: 2, isMobile: true, hasTouch: true } : {}) });
+    const context = await this.context({ viewport: SCREENS[screen], ...(touch ? { deviceScaleFactor: 2, isMobile: true, hasTouch: true } : {}) });
     const page = await context.newPage();
 
     if (!moving) {
@@ -300,9 +311,54 @@ export class Rig {
     return table;
   }
 
+  /** A browser context that goes when the rig does. */
+  private async context(options: BrowserContextOptions): Promise<BrowserContext> {
+    const context = await this.browser.newContext(options);
+    this.contexts.push(context);
+
+    // A check stopped for running out of time may still be going, and what it opens now nobody would close
+    if (this.closing) {
+      await context.close();
+      throw new Error('This rig is closed');
+    }
+
+    return context;
+  }
+
+  /** The pages this rig has open. */
+  pages(): Page[] {
+    return this.contexts.flatMap((context) => context.pages());
+  }
+
+  /** Closes this rig's pages and its server. The browser stays open, for the rig of the next check. */
+  close(): Promise<void> {
+    this.closing ??= Promise.all(this.contexts.map((context) => context.close()))
+      .finally(() => this.server.close())
+      .then(() => undefined);
+
+    return this.closing;
+  }
+}
+
+/**
+ * The browser of one worker, whose checks use it one after the other, each on a rig of its own. It is
+ * launched when first asked for, and again when it has died, so a crash costs the check it happened
+ * under and no other worker's.
+ */
+export class RigBrowser {
+  private browser: Browser | null = null;
+
+  /** A new rig, which whoever asks closes when done with it. */
+  async rig(): Promise<Rig> {
+    if (!this.browser?.isConnected()) {
+      this.browser = await chromium.launch();
+    }
+
+    return Rig.start(this.browser);
+  }
+
   async close(): Promise<void> {
-    await this.browser.close();
-    await this.server.close();
+    await this.browser?.close();
   }
 }
 

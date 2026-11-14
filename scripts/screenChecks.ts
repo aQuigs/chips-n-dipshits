@@ -25,6 +25,7 @@ import type { Box, RigPlayer, RigTable, ScreenName } from './rig.ts';
 import { complaints, MOTION, NOTICES, SPOTS, TITLES } from './pageSpies.ts';
 import type { Flight, Spots } from './pageSpies.ts';
 import { STAND_IN_HOST } from './standInHost.ts';
+import { runChecks } from './checkRunner.ts';
 
 const OUT = fileURLToPath(new URL('../screenshots/', import.meta.url));
 
@@ -721,7 +722,7 @@ const flightsOf = (seen: Seen, what: Flight['what'], standIn: boolean) => seen.f
 
 type Check = [name: string, run: (rig: Rig) => Promise<void>];
 
-/** The presets are the whole rig's, and the lobby of every check after the one that saved them would offer them. */
+/** For a check that looks at the presets more than once, as in a round for each screen: the lobby of the next round would offer the ones the last saved. */
 const forgetPresets = (rig: Rig) => rig.presets.list().forEach((preset) => rig.presets.delete(preset.name));
 
 const CHECKS: Check[] = [
@@ -5482,27 +5483,10 @@ const CHECKS: Check[] = [
 
 await mkdir(OUT, { recursive: true });
 
-const rig = await Rig.start();
-const only = process.argv[2];
-let failed = 0;
+// Told to stop, Playwright closes the browsers and leaves the script running, and the workers would launch new ones and go on
+process.once('SIGTERM', () => process.exit(143));
 
-try {
-  for (const [name, run] of CHECKS) {
-    if (only && !name.includes(only)) {
-      continue;
-    }
+const passed = await runChecks(CHECKS, { only: process.argv[2], picturesIn: OUT });
 
-    try {
-      await run(rig);
-      console.log(`  ok    ${name}`);
-    } catch (error) {
-      failed += 1;
-      console.log(`  FAIL  ${name}\n${(error as Error).stack}`);
-    }
-  }
-
-  assert.deepEqual(rig.pageErrors, [], 'a page threw an error');
-  assert.equal(failed, 0, `${failed} screen checks failed`);
-} finally {
-  await rig.close();
-}
+// Ended outright once the report is out: a check that was stopped may have left a timer behind that would keep the script going
+process.stdout.write('', () => process.exit(passed ? 0 : 1));

@@ -16,17 +16,16 @@ export type Check = [name: string, run: (rig: Rig) => Promise<void>];
 
 export interface CheckRun {
   /** Runs only the checks with this in their name. */
-  only?: string | undefined;
+  only?: string;
   /** The folder, ending in a slash, for pictures of the pages of a check that was stopped. */
   picturesIn: string;
 }
 
 /*
  * Chosen by timing 65 checks on a ten-core laptop: 193 s on one worker, 101 on two, 71 on three, 54 on
- * four, 46 on five, 41 on six, 37 on eight. Four use two and a half cores between them, which is what
- * leaves room for the suites of two other people on that machine, and for CI, which has four cores:
- * beside two other runs of the checks, eight workers were no faster than four and slowed the six-player
- * game twice as much.
+ * four, 46 on five, 41 on six, 37 on eight. Four use two and a half cores between them, which leaves
+ * room for two other suites on that machine, and for CI, which has four cores: beside two other runs of
+ * the checks, eight workers were no faster than four and slowed the six-player game twice as much.
  */
 const DEFAULT_WORKERS = 4;
 
@@ -49,34 +48,29 @@ function workerCount(): number {
 
 const CONSOLE_METHODS = ['log', 'info', 'warn', 'error'] as const;
 
-/** Where the lines printed on one worker go: to the check that worker is running. */
-interface Printed {
-  lines: string[];
-}
-
 /** One browser's checks, one after the other. */
 interface Worker {
   browser: RigBrowser;
-  printed: Printed;
+  /** Where what is printed on this worker goes: to the check it is running. */
+  lines: string[];
 }
 
 /**
  * Keeps what is printed while a check runs with that check, since several run at once and their lines
  * would come out shuffled. What a page's events print comes in the context its browser was launched in,
- * whichever check that was, so the context is the worker's, the same for all its checks, and only
- * where it points changes from one check to the next.
+ * whichever check that was, so the context is the worker, the same for all its checks.
  */
-function keepPrintsApart(): AsyncLocalStorage<Printed> {
-  const printedOn = new AsyncLocalStorage<Printed>();
+function keepPrintsApart(): AsyncLocalStorage<Worker> {
+  const printedOn = new AsyncLocalStorage<Worker>();
 
   for (const method of CONSOLE_METHODS) {
     const print = console[method];
 
     console[method] = (...said: unknown[]) => {
-      const printed = printedOn.getStore();
+      const worker = printedOn.getStore();
 
-      if (printed) {
-        printed.lines.push(format(...said));
+      if (worker) {
+        worker.lines.push(format(...said));
       } else {
         print(...said);
       }
@@ -117,7 +111,7 @@ const telling = (thrown: unknown) =>
 export async function runChecks(checks: readonly Check[], { only, picturesIn }: CheckRun): Promise<boolean> {
   const chosen = checks.filter(([name]) => !only || name.includes(only));
   const notes = chosen.map((): string[] => []);
-  const workers = Array.from({ length: Math.min(workerCount(), chosen.length) }, (): Worker => ({ browser: new RigBrowser(), printed: { lines: [] } }));
+  const workers = Array.from({ length: Math.min(workerCount(), chosen.length) }, (): Worker => ({ browser: new RigBrowser(), lines: [] }));
   const printedOn = keepPrintsApart();
   const started = performance.now();
 
@@ -125,16 +119,11 @@ export async function runChecks(checks: readonly Check[], { only, picturesIn }: 
   const runCheck = async ([name, run]: Check, browser: RigBrowser, stop: AbortSignal, said: string[]): Promise<void> => {
     const rig = await browser.rig();
 
-    // A check out of time is waiting on something: closing its pages under it makes that wait throw, which
-    // says where it was. Its browser goes too, in case that is what hangs
+    // A check out of time is waiting on something: closing its pages under it makes that wait throw, which says where it was
     stop.addEventListener('abort', () => {
       void picturesOf(rig, `${picturesIn}stuck-${fileName(name)}`)
         .then((pictures) => said.push('Its pages when it was stopped:', ...pictures))
-        .finally(() => {
-          browser.retire();
-
-          return rig.close();
-        })
+        .finally(() => rig.close())
         // A close that fails is told by the close below, which is this same one
         .catch(() => undefined);
     });
@@ -155,7 +144,7 @@ export async function runChecks(checks: readonly Check[], { only, picturesIn }: 
   };
 
   /** A check's line, and under it what it printed and why it failed. */
-  const account = (result: Result<void>, index: number): string => {
+  const account = (result: Result, index: number): string => {
     const told = [...notes[index]!];
 
     if (result.outcome === 'failed') {
@@ -177,10 +166,10 @@ export async function runChecks(checks: readonly Check[], { only, picturesIn }: 
 
   const tasks = chosen.map((check, index) => ({
     name: check[0],
-    run: ({ browser, printed }: Worker, stop: AbortSignal) => {
-      printed.lines = notes[index]!;
+    run: (worker: Worker, stop: AbortSignal) => {
+      worker.lines = notes[index]!;
 
-      return printedOn.run(printed, () => runCheck(check, browser, stop, notes[index]!));
+      return printedOn.run(worker, () => runCheck(check, worker.browser, stop, notes[index]!));
     },
   }));
 

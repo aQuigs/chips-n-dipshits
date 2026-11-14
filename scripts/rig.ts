@@ -28,7 +28,6 @@ const STEP_TIMEOUT_MS = 15_000;
 
 // Built once for the whole run, since no check can change the page
 let built: Promise<string> | undefined;
-const builtPage = () => (built ??= clientPage({}));
 
 export const SCREENS = {
   phone: { width: 375, height: 667 },
@@ -209,30 +208,30 @@ export class Rig {
   private readonly browser: Browser;
   private readonly service: PokerService;
   private readonly server: DevServer;
-  /** How far the game's clock runs ahead of the real one. */
-  private readonly lead: { ms: number };
+  /** The game's time, which stands still until the check moves it: running, it would play a hand on under a check that is looking at it. */
+  private readonly clock: { ms: number };
   private readonly contexts: BrowserContext[] = [];
   private closing: Promise<void> | null = null;
 
-  private constructor(parts: { store: MemoryStore; presets: MemoryPresetStore; browser: Browser; service: PokerService; server: DevServer; lead: { ms: number } }) {
+  private constructor(parts: { store: MemoryStore; presets: MemoryPresetStore; browser: Browser; service: PokerService; server: DevServer; clock: { ms: number } }) {
     this.store = parts.store;
     this.presets = parts.presets;
     this.browser = parts.browser;
     this.service = parts.service;
     this.server = parts.server;
-    this.lead = parts.lead;
+    this.clock = parts.clock;
   }
 
   /** A rig with nothing on it yet, whose pages open in `browser`. */
   static async start(browser: Browser): Promise<Rig> {
     const store = new MemoryStore();
     const presets = new MemoryPresetStore();
-    const lead = { ms: 0 };
-    const service = new PokerService({ store, presets, clock: { now: () => Date.now() + lead.ms }, rng: seededRng(20261113) });
-    const html = await builtPage();
+    const clock = { ms: Date.now() };
+    const service = new PokerService({ store, presets, clock: { now: () => clock.ms }, rng: seededRng(20261113) });
+    const html = await (built ??= clientPage({}));
     const server = await startDevServer({ port: 0, page: async () => html, service });
 
-    return new Rig({ store, presets, browser, service, server, lead });
+    return new Rig({ store, presets, browser, service, server, clock });
   }
 
   get url(): string {
@@ -240,12 +239,12 @@ export class Rig {
   }
 
   now(): number {
-    return Date.now() + this.lead.ms;
+    return this.clock.ms;
   }
 
   /** Moves the game's clock forward. Pages follow, since they take the time from the server's answers. */
   advance(ms: number): void {
-    this.lead.ms += ms;
+    this.clock.ms += ms;
   }
 
   ask(request: unknown): ApiResponse {
@@ -325,7 +324,6 @@ export class Rig {
     return context;
   }
 
-  /** The pages this rig has open. */
   pages(): Page[] {
     return this.contexts.flatMap((context) => context.pages());
   }
@@ -354,13 +352,6 @@ export class RigBrowser {
     }
 
     return Rig.start(this.browser);
-  }
-
-  /** Gives the browser up, so the next rig gets a new one: for when it may be the browser that a check hung on. */
-  retire(): void {
-    // Not waited for, as a browser that hangs may never close; Playwright ends it with the script
-    void this.browser?.close().catch(() => undefined);
-    this.browser = null;
   }
 
   async close(): Promise<void> {

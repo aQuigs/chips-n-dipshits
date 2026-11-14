@@ -16,11 +16,11 @@ function gate(): { opened: Promise<void>; open: () => void } {
   return { opened, open };
 }
 
-const outcomes = (results: Result<unknown>[]) => results.map((result) => result.outcome);
+const outcomes = (results: Result[]) => results.map((result) => result.outcome);
 
 /** What each task that did not pass threw, by its message. */
-const thrown = (results: Result<unknown>[]) => results.map((result) => (result.outcome === 'passed' ? null : (result.error as Error | undefined)?.message));
-const named = (name: string, run: Task<string, unknown>['run']): Task<string, unknown> => ({ name, run });
+const thrown = (results: Result[]) => results.map((result) => (result.outcome === 'passed' ? null : (result.error as Error | undefined)?.message));
+const named = (name: string, run: Task<string>['run']): Task<string> => ({ name, run });
 
 test('as many tasks run at once as there are workers, one on each, and never more', async () => {
   const allBusy = gate();
@@ -59,8 +59,6 @@ test('results come back in the order of the list, whatever order the tasks end i
       await ends[index + 1]?.opened;
       ended.push(index);
       ends[index]!.open();
-
-      return index * 10;
     }),
   );
 
@@ -69,8 +67,8 @@ test('results come back in the order of the list, whatever order the tasks end i
   assert.deepEqual(ended, [2, 1, 0]);
   assert.deepEqual(reported, [['task 0', 0], ['task 1', 1], ['task 2', 2]]);
   assert.deepEqual(
-    results.map((result) => [result.name, result.outcome === 'passed' && result.value]),
-    [['task 0', 0], ['task 1', 10], ['task 2', 20]],
+    results.map((result) => result.name),
+    ['task 0', 'task 1', 'task 2'],
   );
 });
 

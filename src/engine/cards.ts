@@ -21,17 +21,20 @@ export function freshDeck(): Card[] {
   return deck;
 }
 
-export function shuffledDeck(rng: Rng): Card[] {
-  const deck = freshDeck();
-
-  for (let i = deck.length - 1; i > 0; i--) {
+/** Puts a list in random order, in place, every order as likely as any other. */
+export function shuffle<T>(items: T[], rng: Rng): T[] {
+  for (let i = items.length - 1; i > 0; i--) {
     const j = rng.int(i + 1);
-    const swap = deck[i]!;
-    deck[i] = deck[j]!;
-    deck[j] = swap;
+    const swap = items[i]!;
+    items[i] = items[j]!;
+    items[j] = swap;
   }
 
-  return deck;
+  return items;
+}
+
+export function shuffledDeck(rng: Rng): Card[] {
+  return shuffle(freshDeck(), rng);
 }
 
 /** 2 for a deuce up to 14 for an ace. */

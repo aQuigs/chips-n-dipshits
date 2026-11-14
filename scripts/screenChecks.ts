@@ -119,6 +119,18 @@ const PHONE_AND_DESKTOP = ['phone', 'desktop'] as const;
 // The least height at which a phone's table stands up: its width over WIDE_ASPECT in src/client/app.ts
 const JUST_STANDING = Math.ceil(SCREENS.phone.width / 1.15) + 1;
 
+/**
+ * Pins the table's shape for a check about what sits on its seats: a phone's standing up at the least
+ * height it does so, where its seats come closest, and a desktop's lying down.
+ */
+async function standOrLie(page: Page, screen: ScreenName): Promise<void> {
+  if (screen !== 'desktop') {
+    await setStageHeight(page, JUST_STANDING);
+  }
+
+  await page.waitForSelector(screen === 'desktop' ? '.table.wide' : '.table.tall');
+}
+
 const TO_THE_CENT = 'This table plays to the cent, so an amount has at most two decimals';
 
 const texts = (page: Page, selector: string) => page.locator(selector).allInnerTexts();
@@ -845,9 +857,9 @@ const CHECKS: Check[] = [
         await press('.menu [data-action="players"]');
 
         for (const name of ['Marge Simpson-Jr', 'Lurker']) {
-          assert.deepEqual(await page.locator(`${row(name)} button`).allInnerTexts(), name === 'Lurker' ? ['Make co-host', 'Make host', 'Remove'] : ['Set stack', 'Make co-host', 'Make host', 'Remove']);
+          assert.deepEqual(await page.locator(`${row(name)} button`).allInnerTexts(), name === 'Lurker' ? ['Make co-host', 'Make host', 'Remove'] : ['Set stack', 'Move', 'Make co-host', 'Make host', 'Remove']);
         }
-        assert.deepEqual(await page.locator(`${row('Quigs')} button`).allInnerTexts(), ['Set stack', 'Remove'], 'the host is offered a say over their own role');
+        assert.deepEqual(await page.locator(`${row('Quigs')} button`).allInnerTexts(), ['Set stack', 'Move', 'Remove'], 'the host is offered a say over their own role');
         assertOnScreen(await boxes(page, '.dialog .row-actions .btn'), screen, 'a button in the Players dialog');
         assert.deepEqual(await squeezed(page, '.dialog .row-actions .btn'), [], 'a button in the Players dialog is cut off');
         await shot(page, `players-host-${screen}`);
@@ -887,16 +899,17 @@ const CHECKS: Check[] = [
 
         const cohost = await table.open('Stu', screen);
         const press = pressOn(cohost, screen);
+        assert.equal(await cohost.locator('.table.movable').count(), 1, 'a co-host cannot drag players to other seats');
 
         await press('[data-action="menu"]');
         const menu = await cohost.locator('.menu .menu-item').evaluateAll((items) => items.map((item) => item.getAttribute('data-action')));
-        for (const tool of ['players', 'settings', 'start']) {
+        for (const tool of ['players', 'shuffle', 'settings', 'start']) {
           assert.ok(menu.includes(tool), `the co-host's menu has no ${tool}: ${menu.join(', ')}`);
         }
 
         await press('.menu [data-action="players"]');
-        assert.deepEqual(await cohost.locator('.dialog li:has-text("Quigs") button').allInnerTexts(), ['Set stack'], 'a co-host is offered to remove the host');
-        assert.deepEqual(await cohost.locator('.dialog li:has-text("Pam") button').allInnerTexts(), ['Set stack', 'Remove']);
+        assert.deepEqual(await cohost.locator('.dialog li:has-text("Quigs") button').allInnerTexts(), ['Set stack', 'Move'], 'a co-host is offered to remove the host');
+        assert.deepEqual(await cohost.locator('.dialog li:has-text("Pam") button').allInnerTexts(), ['Set stack', 'Move', 'Remove']);
         assert.deepEqual(await cohost.locator('.dialog li:has-text("Lurker") button').allInnerTexts(), ['Remove']);
         assert.equal(await cohost.locator('[data-action="make-host"], [data-action="make-cohost"], [data-action="end-cohost"]').count(), 0, 'a co-host is offered what only the host may do');
         assertOnScreen(await boxes(cohost, '.dialog .row-actions .btn'), screen, 'a button in the co-host\'s Players dialog');
@@ -911,7 +924,8 @@ const CHECKS: Check[] = [
           const member = await table.open('Pam', screen);
           await member.tap('[data-action="menu"]');
           await member.waitForSelector('.menu');
-          assert.equal(await member.locator('.menu [data-action="players"], .menu [data-action="settings"], .menu [data-action="start"]').count(), 0, 'a plain member is offered the host\'s tools');
+          assert.equal(await member.locator('.menu [data-action="players"], .menu [data-action="shuffle"], .menu [data-action="settings"], .menu [data-action="start"]').count(), 0, 'a plain member is offered the host\'s tools');
+          assert.equal(await member.locator('.table.movable').count(), 0, 'a plain member can drag players to other seats');
           assert.equal(await member.locator('.message [data-action="start"]').count(), 0);
           await member.context().close();
         }
@@ -1508,6 +1522,304 @@ const CHECKS: Check[] = [
       assert.equal(await page.isChecked('#table-unit input[value="chips"]'), true);
       assert.equal(await page.isDisabled('#table-unit input[value="cents"]'), true);
       assert.equal(await page.inputValue('#table-small-blind'), '10');
+    },
+  ],
+  [
+    'the host moves a player by picking an open seat, on a phone and a desktop, and everyone sees them there',
+    async (rig) => {
+      for (const screen of PHONE_AND_DESKTOP) {
+        const table = rig.table(['Quigs', 'Stu', 'Pam', 'Big Al', 'Zed', 'WWWWWWWWWWWWWWWW'].map((name) => ({ name, stack: 1000 })));
+
+        const host = await table.open('Quigs', screen);
+        const watcher = await table.open('Pam', 'phone');
+        const press = pressOn(host, screen);
+        await standOrLie(host, screen);
+
+        await press('[data-action="menu"]');
+        await press('.menu [data-action="players"]');
+        await press('.dialog li:has-text("Stu") [data-action="move"]');
+
+        await host.waitForSelector('.dialog', { state: 'detached' });
+        assert.equal(await text(host, '.banner.move-prompt span'), 'Pick an open seat for Stu');
+        assertOnScreen(await boxes(host, '.banner.move-prompt, [data-action="cancel-move"]'), screen, 'the prompt to pick a seat');
+        assertOnScreen(await boxes(host, '[data-move-to]'), screen, 'an open seat to move to');
+        assert.equal(await host.locator('[data-move-to]').count(), 4, 'every open seat is offered');
+        assertApart(await boxes(host, '[data-move-to]'), await boxes(host, '.seat[data-seat] .plate, .seat[data-seat] .card'), 'an open seat to move to and a seated player');
+        assert.equal(await host.locator('[data-sit]').count(), 0);
+        assert.equal(await host.locator('.seat.moving[data-seat="1"]').count(), 1, 'the player being moved is not picked out');
+        assert.deepEqual(await squeezed(host, '[data-move-to]'), []);
+        await shot(host, `move-pick-${screen}`);
+
+        await press('[data-move-to="6"]');
+        await host.waitForSelector('.seat[data-seat="6"] .name:has-text("Stu")');
+        assert.equal(await host.locator('.banner.move-prompt, [data-move-to]').count(), 0, 'picking goes on after the move');
+        assert.equal(table.view('Quigs').seats[6]?.name, 'Stu');
+        assert.equal(table.view('Quigs').seats[1], null);
+
+        await watcher.waitForSelector('.seat[data-seat="6"] .name:has-text("Stu")');
+        assert.equal(await watcher.locator('.seat[data-seat="1"]').count(), 0);
+        assert.match(await text(watcher, '.feed-toggle .latest'), /The host moved Stu to seat 7/);
+        await shot(watcher, `moved-seen-by-another-${screen}`);
+
+        await host.context().close();
+        await watcher.context().close();
+      }
+    },
+  ],
+  [
+    'cancelling a pick leaves the table as it was, from its button or the Escape key',
+    async (rig) => {
+      const table = rig.table([
+        { name: 'Quigs', stack: 1000 },
+        { name: 'Stu', stack: 1000 },
+      ]);
+      table.join('Lurker');
+      const before = JSON.stringify(table.view('Quigs').seats);
+
+      for (const screen of ['phone', 'desktop'] as const) {
+        const page = await table.open('Quigs', screen);
+        const press = pressOn(page, screen);
+        const drawn = await page.innerHTML('.stage');
+        const shape = (await page.getAttribute('.stage .table', 'class'))!.includes('tall') ? 'tall' : 'wide';
+
+        for (const way of ['button', 'Escape'] as const) {
+          if (way === 'Escape' && screen === 'phone') {
+            continue;
+          }
+
+          await press('[data-action="menu"]');
+          await press('.menu [data-action="players"]');
+          await press('.dialog li:has-text("Stu") [data-action="move"]');
+          await page.waitForSelector('[data-move-to]');
+
+          if (way === 'button') {
+            await press('[data-action="cancel-move"]');
+          } else {
+            await page.keyboard.press('Escape');
+          }
+
+          // The prompt took height from the table, which may have lain down for it and stands up again once it goes
+          await page.waitForSelector('.banner.move-prompt', { state: 'detached' });
+          await page.waitForSelector(`.stage .table.${shape}`);
+          assert.equal(await page.innerHTML('.stage'), drawn, `the table is not drawn as it was after cancelling with the ${way}`);
+          assert.equal(JSON.stringify(table.view('Quigs').seats), before);
+        }
+
+        await page.context().close();
+      }
+
+      // Someone watching is still offered the open seats once the host has cancelled
+      const lurker = await table.open('Lurker', 'phone');
+      assert.equal(await lurker.locator('[data-sit]').count(), 8);
+      await lurker.context().close();
+    },
+  ],
+  [
+    'a move that waits for the hand shows on the seat, whole, beside a long name, and happens when the hand ends',
+    async (rig) => {
+      for (const screen of PHONE_AND_DESKTOP) {
+        const table = rig.table([
+          { name: 'Quigs', stack: 1000 },
+          { name: 'Marge Simpson-Jr', stack: 1000 },
+          { name: 'WWWWWWWWWWWWWWWW', stack: 1000 },
+          { name: 'Stu', stack: 1000 },
+          { name: 'Pam', stack: 1000 },
+          { name: 'Big Al', stack: 1000 },
+        ]);
+        table.deal({ button: 0 });
+
+        const host = await table.open('Quigs', screen);
+        const watcher = await table.open('Stu', screen);
+        const press = pressOn(host, screen);
+        await standOrLie(host, screen);
+        await standOrLie(watcher, screen);
+
+        await press('[data-action="menu"]');
+        await press('.menu [data-action="players"]');
+        await press('.dialog li:has-text("WWWWWWWWWWWWWWWW") [data-action="move"]');
+        assert.equal(await text(host, '.banner.move-prompt span'), 'Pick an open seat for WWWWWWWWWWWWWWWW. They move when this hand ends.');
+        await press('[data-move-to="7"]');
+        await host.waitForSelector('.seat[data-seat="2"] .move-note');
+        await shot(host, `move-waiting-${screen}`);
+
+        for (const page of [host, watcher]) {
+          const note = '.seat[data-seat="2"] .move-note';
+          await page.waitForSelector(note);
+          assert.equal(await text(page, note), '→ Seat 8');
+          assert.equal(await page.getAttribute(note, 'aria-label'), 'Moves to seat 8 after this hand');
+          assertOnScreen(await boxes(page, note), screen, 'the note of a move that waits');
+          assert.deepEqual(await squeezed(page, `${note}, .seat[data-seat="2"] .plate .stack`), [], 'the note or the stack beside it is cut off');
+          // Inside its own plate, it takes no room the plate does not already have, down the side of a crowded table as anywhere
+          const [box] = await boxes(page, note);
+          const [plate] = await boxes(page, '.seat[data-seat="2"] .plate');
+          assert.ok(box!.left >= plate!.left && box!.right <= plate!.right && box!.top >= plate!.top && box!.bottom <= plate!.bottom, 'the note of a move sticks out of its seat');
+          assertApart(await boxes(page, '.seat[data-seat="2"] .plate'), await boxes(page, '.seat:not([data-seat="2"]) .plate, .board .card, .bet, .pot'), 'the seat with a move waiting and the table around it');
+        }
+
+        assert.equal(table.view('Quigs').seats[2]?.moveTo, 7);
+
+        await press('[data-action="menu"]');
+        await press('.menu [data-action="players"]');
+        assert.equal(await text(host, '.dialog li:has-text("WWWWWWWWWWWWWWWW") .move-note'), 'Moves to seat 8 after this hand');
+        assert.deepEqual(await host.locator('.dialog li:has-text("WWWWWWWWWWWWWWWW") button').allInnerTexts(), ['Set stack', 'Stay put', 'Make co-host', 'Make host', 'Remove'], 'a move that waits cannot be taken back');
+        await press('[data-action="close"]');
+
+        table.play(() => ({ type: 'fold' }), (view) => view.hand === null || view.hand.number > 1);
+        await watcher.waitForSelector('.seat[data-seat="7"] .name:has-text("WWWWWWWWWWWWWWWW")');
+        assert.equal(await watcher.locator('.seat .move-note').count(), 0);
+        assert.equal(table.view('Quigs').seats[7]?.name, 'WWWWWWWWWWWWWWWW');
+
+        await host.context().close();
+        await watcher.context().close();
+      }
+    },
+  ],
+  [
+    'the host shuffles the seats after saying yes, at once between hands and at the end of a hand during one',
+    async (rig) => {
+      const players = ['Quigs', 'Stu', 'Pam', 'Big Al'];
+      const table = rig.table(players.map((name) => ({ name, stack: 1000 })));
+      const seatsOf = () => table.view('Quigs').seats.map((seat) => seat?.name ?? null);
+      const before = seatsOf();
+
+      const page = await table.open('Quigs', 'phone');
+      await page.tap('[data-action="menu"]');
+      assert.equal(await text(page, '.menu [data-action="shuffle"] small'), 'Everyone gets a random seat');
+      await page.tap('.menu [data-action="shuffle"]');
+      assert.equal(await text(page, '.dialog h2'), 'Shuffle the seats?');
+      assertOnScreen(await boxes(page, '.dialog [data-action="confirm"]'), 'phone', 'the button that shuffles');
+      await shot(page, 'shuffle-confirm-phone');
+      await page.tap('[data-action="confirm"]');
+
+      await page.waitForSelector('.feed-toggle .latest:has-text("The host shuffled the seats")');
+      const after = seatsOf();
+      assert.deepEqual(after.map((name) => name !== null), before.map((name) => name !== null), 'a shuffle opened or filled a seat');
+      assert.deepEqual([...after].sort(), [...before].sort());
+      await page.context().close();
+
+      table.deal({ button: 0 });
+      const desktop = await table.open('Quigs', 'desktop');
+      await desktop.click('[data-action="menu"]');
+      assert.equal(await text(desktop, '.menu [data-action="shuffle"] small'), 'Everyone gets a random seat when this hand ends');
+      await desktop.click('.menu [data-action="shuffle"]');
+      await desktop.click('[data-action="confirm"]');
+      await desktop.waitForSelector('.feed-toggle .latest:has-text("The host shuffles the seats after this hand")', { state: 'attached' });
+      assert.deepEqual(seatsOf(), after, 'the seats were shuffled in the middle of a hand');
+
+      await desktop.click('[data-action="menu"]');
+      assert.equal(await text(desktop, '.menu [data-action="shuffle"] small'), 'Set for when this hand ends');
+      await desktop.click('[data-action="close"]');
+
+      table.play(() => ({ type: 'fold' }), (view) => view.hand === null || view.hand.number > 1);
+      assert.equal(table.view('Quigs').shuffleAfterHand, false);
+      assert.deepEqual([...seatsOf()].sort(), [...before].sort());
+      await desktop.context().close();
+    },
+  ],
+  [
+    'on the desktop the host drags a player onto an open seat, lying down and standing up, even while the table is redrawn under the mouse',
+    async (rig) => {
+      for (const shape of ['wide', 'tall'] as const) {
+        const table = rig.table(['Quigs', 'Stu', 'Pam', 'Big Al', 'Zed', 'Pocket Pam'].map((name) => ({ name, stack: 1000 })));
+
+        const page = await table.open('Quigs', 'desktop');
+        if (shape === 'tall') {
+          // A desktop window taller than it is wide, which stands the table up
+          await setStageHeight(page, 900);
+        }
+        await page.waitForSelector(`.table.${shape}`);
+
+        const center = async (selector: string) => {
+          const [box] = await boxes(page, selector);
+          assert.ok(box, `${selector} is not on the screen`);
+
+          return { x: (box.left + box.right) / 2, y: (box.top + box.bottom) / 2 };
+        };
+
+        // Let go over the felt, and nothing moves
+        const from = await center('.seat[data-seat="1"] .plate');
+        const felt = await center('.felt');
+        await page.mouse.move(from.x, from.y);
+        await page.mouse.down();
+        await page.mouse.move(felt.x, felt.y, { steps: 8 });
+        await page.mouse.up();
+        assert.equal(table.view('Quigs').seats[1]?.name, 'Stu');
+        assert.equal(await page.locator('.seat.dragging, .seat.drop').count(), 0);
+
+        const to = await center('[data-open-seat="7"] .plate');
+        await page.mouse.move(from.x, from.y);
+        await page.mouse.down();
+        await page.mouse.move((from.x + to.x) / 2, (from.y + to.y) / 2, { steps: 8 });
+        assert.equal(await page.locator('.seat.dragging[data-seat="1"]').count(), 1, 'the seat does not follow the mouse');
+
+        // A change at the table draws it again while the seat is in the air
+        table.act('Pam', { type: 'sitOut' });
+        await page.waitForSelector('.seat[data-seat="2"] .status:has-text("Sitting out")');
+        assert.equal(await page.locator('.seat.dragging[data-seat="1"]').count(), 1, 'the drag was lost when the table was drawn again');
+
+        await page.mouse.move(to.x, to.y, { steps: 8 });
+        assert.equal(await page.locator('.seat.drop[data-open-seat="7"]').count(), 1, 'the open seat under the mouse is not picked out');
+        await shot(page, `move-drag-desktop-${shape}`);
+        await page.mouse.up();
+
+        await page.waitForSelector('.seat[data-seat="7"] .name:has-text("Stu")');
+        assert.equal(table.view('Quigs').seats[7]?.name, 'Stu');
+        assert.equal(table.view('Quigs').seats[1], null);
+        assert.equal(await page.locator('.seat.dragging, .seat.drop').count(), 0);
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'the keys of a turn do nothing while the host picks a seat, and Escape backs out of the pick and nothing else',
+    async (rig) => {
+      const table = rig.table([
+        { name: 'Quigs', stack: 1000 },
+        { name: 'Stu', stack: 1000 },
+        { name: 'Pam', stack: 1000 },
+      ]);
+
+      // Three-handed the button acts first, so the deal puts the action on the host's own page
+      table.deal({ button: 0 });
+      const page = await table.open('Quigs', 'desktop');
+      const sent = movesSent(page);
+
+      await page.waitForSelector('.turn [data-action="call"]:enabled');
+      await page.click('[data-action="menu"]');
+      await page.click('.menu [data-action="players"]');
+      await page.click('.dialog li:has-text("Stu") [data-action="move"]');
+      await page.waitForSelector('[data-move-to]');
+      await settle(page);
+
+      const amount = await page.inputValue('#raise-amount');
+      await page.evaluate('document.activeElement.blur()');
+      for (const key of ['f', 'c', 'r', '1', '2', '3', '4']) {
+        await page.keyboard.press(key);
+      }
+
+      // In the bet box Enter is the raise key
+      await page.focus('#raise-amount');
+      await page.keyboard.press('Enter');
+      await page.waitForTimeout(300);
+
+      assert.deepEqual(sent, [], 'a key played a move while the host was picking a seat');
+      assert.equal(table.view('Quigs').hand!.toAct, 0);
+      assert.equal(await page.inputValue('#raise-amount'), amount, 'a key changed the bet size while the host was picking a seat');
+      assert.equal(await page.locator('[data-move-to]').count(), 7, 'a key ended the pick');
+
+      // With the bet box in use, Escape backs out of the pick and leaves the box as it was
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('.banner.move-prompt', { state: 'detached' });
+      assert.equal(await page.evaluate('document.activeElement?.id'), 'raise-amount', 'Escape also left the bet box');
+      assert.equal(table.view('Quigs').seats[1]?.name, 'Stu');
+
+      // Back from the pick, the keys are the turn's again
+      await page.evaluate('document.activeElement.blur()');
+      await settle(page);
+      await page.keyboard.press('f');
+      await page.waitForTimeout(300);
+      assert.deepEqual(sent, ['fold']);
+      await page.context().close();
     },
   ],
 ];

@@ -2,6 +2,7 @@ import type { Rng } from './cards.ts';
 import { dispatch } from './commands/index.ts';
 import { newConfig } from './config.ts';
 import { startHand, stepHand, TIMING } from './hand.ts';
+import { reseatAfterHand } from './reseating.ts';
 import { addFeed, eligibleSeats } from './seats.ts';
 import { GameError, SEAT_COUNT, STATE_SCHEMA } from './types.ts';
 import type { Command, Ctx, Member, TableState } from './types.ts';
@@ -115,6 +116,7 @@ export function createTable(id: string, hostName: unknown, configInput: unknown,
     handCount: 0,
     turn: 0,
     hand: null,
+    shuffleAfterHand: false,
     feed: [],
     feedSeq: 0,
   };
@@ -174,6 +176,10 @@ export function tick(state: TableState, ctx: Ctx): boolean {
 
     if (state.hand) {
       stepHand(state, ctx);
+
+      if (!state.hand) {
+        reseatAfterHand(state, ctx);
+      }
     } else {
       state.nextHandAt = null;
     }

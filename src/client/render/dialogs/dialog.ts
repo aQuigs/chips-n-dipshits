@@ -16,6 +16,8 @@ export interface DialogHandlers {
   memberLink(): string;
   prefs: AppPreferences;
   toLobby(): void;
+  /** Leaves the dialog for the table, where an open seat is picked for the player. */
+  pickSeat(playerId: string): void;
 }
 
 /** A dialog's line in the menu. */

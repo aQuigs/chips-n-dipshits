@@ -10,6 +10,7 @@ import { tableChange } from './tableChange.ts';
 import { Modal } from './modal.ts';
 import type { Platform } from './platform.ts';
 import { PREFERENCES, Preferences } from './prefs.ts';
+import { movePromptEl, SeatMoves } from './seatMoves.ts';
 import type { AppPreferences } from './prefs.ts';
 import { controlsEl, controlsSignature, lockTurn } from './render/controls.ts';
 import { dialogAllowed, dialogEl, dialogShows } from './render/dialogs/index.ts';
@@ -47,6 +48,7 @@ interface TableScreen {
   modal: Modal;
   feed: Feed;
   effects: TableEffects;
+  seatMoves: SeatMoves;
   shape: Shape;
   seenCards: Set<string>;
   resizeObserver: ResizeObserver;
@@ -99,7 +101,7 @@ export class App {
     this.prefs = new Preferences(PREFERENCES, platform.memory, root);
     this.prefs.watch('theme', (id) => this.applyTheme(id));
     this.prefs.watch('deck', (deck) => this.screen?.feed.showDeck(deck));
-    this.hotkeys = new HotkeyPresser(this.prefs, { root, controls: () => this.screen?.controls.element ?? null, dialogOpen: () => this.dialog !== null });
+    this.hotkeys = new HotkeyPresser(this.prefs, { root, controls: () => this.screen?.controls.element ?? null, dialogOpen: () => this.dialog !== null || (this.screen?.seatMoves.active ?? false) });
 
     root.classList.add('cnd');
   }
@@ -137,8 +139,17 @@ export class App {
     setInterval(() => this.tickCountdowns(), COUNTDOWN_TICK_MS);
 
     document.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape' && this.dialog) {
+      if (event.key !== 'Escape') {
+        return;
+      }
+
+      if (this.dialog) {
         this.closeDialog();
+      } else if (this.screen?.seatMoves.active) {
+        this.screen.seatMoves.cancel();
+
+        // Spent on backing out of the move, so the keys of the turn don't also act on it
+        event.stopImmediatePropagation();
       }
     });
     document.addEventListener('keydown', (event) => this.hotkeys.handle(event));
@@ -356,6 +367,11 @@ export class App {
       modal: new Modal(overlay.element),
       feed,
       effects: new TableEffects(this.prefs, stage.element),
+      seatMoves: new SeatMoves(stage.element, {
+        view: () => this.view,
+        send: (command) => void this.send(command),
+        changed: () => this.drawTable(),
+      }),
       shape: 'wide',
       seenCards: new Set(),
       resizeObserver: new ResizeObserver(() => this.reshape()),
@@ -386,6 +402,7 @@ export class App {
     this.table = null;
     this.screen?.resizeObserver.disconnect();
     this.screen?.effects.dispose();
+    this.screen?.seatMoves.dispose();
     this.screen = null;
     this.view = null;
     this.dialog = null;
@@ -427,6 +444,7 @@ export class App {
     const before = this.view;
 
     this.view = view;
+    this.screen?.seatMoves.follow(view);
 
     // A table that can't be drawn must not be what stops it from updating
     try {
@@ -515,11 +533,15 @@ export class App {
     const requests = hostOrCohost(view) ? view.requests : [];
 
     const trouble = this.table?.trouble ?? null;
+    const picking = screen.seatMoves.picking;
 
     const troubleText = { unreachable: 'Lost the connection to the table. Trying again…', struggling: 'The table is slow to answer. Trying again…' };
 
-    screen.banners.draw([trouble, requests], () => [
+    const pickingFor = picking === null ? null : view.seats.find((seat) => seat?.playerId === picking);
+
+    screen.banners.draw([trouble, requests, picking, pickingFor?.name, pickingFor?.inHand], () => [
       trouble ? h('div.banner.warn', null, troubleText[trouble]) : null,
+      picking === null ? null : movePromptEl(view, picking, () => screen.seatMoves.cancel()),
       requests.map((request) => {
         const what = request.kind === 'seat' ? `wants seat ${request.seat + 1} with ${formatAmount(request.amount, view.config)}` : `wants to add ${formatAmount(request.amount, view.config)}`;
         const approve = h('button.btn.small.primary', { type: 'button', 'data-action': 'approve' }, 'Approve');
@@ -535,12 +557,14 @@ export class App {
 
   private drawStage(screen: TableScreen, view: TableView): void {
     const myRequest = view.requests.find((request) => request.playerId === view.you.id);
-    const shows = [screen.shape, view.you, view.hostId, view.cohostIds, view.running, view.nextHandAt, view.config.actionSeconds, view.seats, view.hand, myRequest];
+    const picking = screen.seatMoves.picking;
+    const shows = [screen.shape, view.you, view.hostId, view.cohostIds, view.running, view.nextHandAt, view.config.actionSeconds, view.seats, view.hand, myRequest, picking];
 
     screen.stage.draw(shows, () => {
       const table = tableEl(view, screen.shape, this.clock.offset, {
         onSit: (seat) => this.openDialog({ kind: 'sit', seat }),
         onStart: () => void this.send({ type: 'start' }),
+        moving: screen.seatMoves.tableHandlers(),
       });
 
       // Only cards that were not on the table a moment ago get the dealing animation
@@ -559,6 +583,8 @@ export class App {
 
       return table;
     });
+
+    screen.seatMoves.redrawn();
 
     this.tickCountdowns();
   }
@@ -646,6 +672,10 @@ export class App {
       memberLink: () => this.platform.links.memberLink(session.tableId, session.auth),
       prefs: this.prefs,
       toLobby: () => this.showLobby(true),
+      pickSeat: (playerId) => {
+        this.closeDialog();
+        this.screen?.seatMoves.pick(playerId);
+      },
     };
   }
 

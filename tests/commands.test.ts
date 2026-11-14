@@ -99,6 +99,8 @@ const DECLARED: { [T in CommandType]: { by: 'member' | 'seat' } | { by: HostLeve
   deny: { by: 'host or cohost', sample: (ids) => ({ type: 'deny', playerId: ids[ASKER]! }) },
   kick: { by: 'host or cohost', sample: (ids) => ({ type: 'kick', playerId: ids[TARGET]! }) },
   setStack: { by: 'host or cohost', sample: (ids) => ({ type: 'setStack', playerId: ids[TARGET]!, stack: 5 }) },
+  moveSeat: { by: 'host or cohost', sample: (ids) => ({ type: 'moveSeat', playerId: ids[TARGET]!, seat: 7 }) },
+  shuffleSeats: { by: 'host or cohost', sample: () => ({ type: 'shuffleSeats' }) },
   updateConfig: { by: 'host or cohost', sample: () => ({ type: 'updateConfig', config: { bigBlind: 40 } }) },
   transferHost: { by: 'host alone', sample: (ids) => ({ type: 'transferHost', playerId: ids[TARGET]! }) },
   setCohost: { by: 'host alone', sample: (ids) => ({ type: 'setCohost', playerId: ids[TARGET]!, on: true }) },

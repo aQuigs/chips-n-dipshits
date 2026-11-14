@@ -23,6 +23,7 @@ function grantSeat(state: TableState, ctx: Ctx, request: SeatRequest): void {
     leaving: false,
     straddle: false,
     pendingAdd: 0,
+    moveTo: null,
   };
 
   recordLedger(state, ctx, member, 'buy-in', request.amount);
@@ -67,13 +68,18 @@ export function grant(state: TableState, ctx: Ctx, request: SeatRequest): void {
   state.requests = state.requests.filter((r) => r.playerId !== request.playerId);
 
   if (request.kind === 'seat') {
-    turnAway(
-      state,
-      ctx,
-      (r) => r.kind === 'seat' && r.seat === request.seat,
-      (name) => `Seat ${request.seat + 1} is taken, so ${name} needs to pick another`,
-    );
+    turnAwayFrom(state, ctx, request.seat);
   }
+}
+
+/** Someone has just been put in a seat, so whoever else asked for it has to pick another. */
+export function turnAwayFrom(state: TableState, ctx: Ctx, seat: number): void {
+  turnAway(
+    state,
+    ctx,
+    (r) => r.kind === 'seat' && r.seat === seat,
+    (name) => `Seat ${seat + 1} is taken, so ${name} needs to pick another`,
+  );
 }
 
 /** Drops the requests that can no longer be granted and says why, so none is left that the host could only fail to approve. */
@@ -109,6 +115,7 @@ export function leaveSeat(state: TableState, ctx: Ctx, seatIndex: number): void 
   }
 
   seat.leaving = true;
+  seat.moveTo = null;
   state.requests = state.requests.filter((r) => r.playerId !== seat.playerId);
   stopWaitingFor(state, ctx, seatIndex);
 }

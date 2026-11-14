@@ -6427,6 +6427,83 @@ const CHECKS: Check[] = [
     },
   ],
   [
+    'while an all-in hand’s last card lies face down the Tonight dialog says nothing the cards have not, for a player and for a watcher, and has the result once the card is up; when that hand is the night’s last, the recap comes only once the hand is off the table, to a page that saw the card turned and to one still waiting on it',
+    async (rig) => {
+      const { screen } = MOTION_LAYOUTS[0]!;
+      const table = rig.table([{ name: 'Quigs', stack: 10_000 }, { name: 'Stu', stack: 10_000 }, { name: 'Pam', stack: 10_000 }], { allowRunItTwice: false });
+
+      table.join('Kibitz');
+
+      // A first hand, so that the night has a leader for the next one to unseat: Pam is given the small blind
+      table.deal({ button: 0, holes: { 0: '9c 4d', 1: '7h 2d', 2: '8c 3d' }, board: '2c 7d 9h Jc 6s' });
+      playOut(table);
+
+      // The night's last: Quigs and Stu put everything in, and Stu catches a king on the river
+      table.dealNext({ holes: { 0: 'Ah Ad', 1: 'Kh Kd', 2: '8c 3d' }, board: '2c 7d 9h Jc Ks' });
+      table.act('Quigs', { type: 'setLastHands', hands: 0 });
+      table.play((view, name) => (name === 'Pam' ? { type: 'fold' } : allIn(view)), (view) => view.hand!.stage !== 'betting');
+      table.play(() => null, (view) => view.hand!.boards[0]!.length === 4);
+
+      // Every move is held where it starts until the check lets it go, so the river lies face down for as long as the check looks
+      const open = async (name: string) => {
+        const page = await table.open(name, screen, MOTION, { moving: true });
+        await page.evaluate('window.holdAt = 0');
+
+        return page;
+      };
+      const turnUp = (page: Page) => page.evaluate('window.holdAt = null; window.land()');
+      const [stu, kibitz, pam, quigs] = [await open('Stu'), await open('Kibitz'), await open('Pam'), await open('Quigs')];
+      const reading = [['a player', stu], ['a watcher', kibitz]] as const;
+      const read = async (page: Page) => ({ text: await text(page, '.dialog-body'), nets: await tonightNets(page), leaders: await texts(page, '.tonight-leaders div') });
+      const before = new Map<Page, Awaited<ReturnType<typeof read>>>();
+
+      for (const [who, page] of reading) {
+        await openTonight(page, screen);
+        before.set(page, await read(page));
+        assert.match(before.get(page)!.leaders[0]!, /^Up the most\s+Pam\b/, `${who}: the night’s leader before the river`);
+      }
+
+      rig.advance(table.view('Quigs').hand!.deadline! - rig.now());
+
+      const settled = table.view('Quigs');
+      const nets = settled.tonight.players.map((row) => [row.name, signedAmount(row.net, settled.config)]).sort();
+      assert.deepEqual([settled.hand!.stage, settled.nightEndedAt], ['done', null]);
+
+      for (const page of [stu, kibitz, pam, quigs]) {
+        await page.waitForSelector('.board-card.stand-in', { state: 'attached' });
+      }
+
+      for (const [who, page] of reading) {
+        assert.deepEqual(await read(page), before.get(page), `${who}: the Tonight dialog gives the result away while the river is face down`);
+      }
+
+      for (const [who, page] of reading) {
+        await turnUp(page);
+        await page.waitForFunction(`/^Up the most\\s+Stu\\b/.test(document.querySelector('.tonight-leaders div').innerText)`);
+        assert.deepEqual(await tonightNets(page), nets, `${who}: the Tonight dialog does not have the result once the river is up`);
+        await pressOn(page, screen)('.dialog [data-action="close"]');
+      }
+
+      // The result is not the end of the night: that comes when the hand is taken off the table
+      assert.equal(await pam.locator('.dialog').count(), 0, 'a recap came while the river was face down');
+      await turnUp(pam);
+      await pam.waitForSelector('.message.result');
+      await assertNoDialogComes(pam, 'the recap came with the result of the night’s last hand, before the hand was off the table');
+      assert.equal(await quigs.locator('.dialog, .message.result').count(), 0, 'a page whose river is still face down shows the result or a recap');
+
+      rig.advance(settled.hand!.deadline! - rig.now());
+      assert.notEqual(table.view('Quigs').nightEndedAt, null);
+
+      // To Quigs the night ends with the river still face down: the wait ends there, and the recap is of the night as it ended
+      for (const [who, page] of [...reading, ['a player with nothing open', pam], ['a page still waiting on the river', quigs]] as const) {
+        await page.waitForSelector(RECAP);
+        assert.deepEqual([await text(page, '.tonight-crown strong'), await tonightNets(page)], ['Quigs', nets], `${who}: the recap of a night that ended on an all-in hand`);
+        assert.equal(await page.locator('.board-card.stand-in').count(), 0, `${who}: a card lies face down on the table under the recap`);
+        await page.context().close();
+      }
+    },
+  ],
+  [
     'a table that was going before the numbers were kept says how many hands they leave out, and with nobody bought in the dialog says so',
     async (rig) => {
       const screen = 'smallPhone';

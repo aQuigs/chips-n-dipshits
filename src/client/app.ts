@@ -759,7 +759,8 @@ export class App {
    */
   private showOffered(): void {
     const offered = this.offered;
-    if (!offered || !this.view || this.tableCovered() || this.sending > 0) {
+    const view = this.shownView();
+    if (!offered || !view || this.tableCovered() || this.sending > 0) {
       return;
     }
 
@@ -770,7 +771,7 @@ export class App {
 
     this.offered = null;
 
-    if (offered.still(this.view)) {
+    if (offered.still(view)) {
       this.openDialog(offered.dialog);
     }
   }

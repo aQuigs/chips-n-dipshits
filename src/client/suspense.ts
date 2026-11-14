@@ -1,9 +1,18 @@
 import type { Card } from '../engine/cards.ts';
 import { readHand } from '../engine/handNames.ts';
-import type { HandView, Holding, LedgerRow, TableView } from '../engine/view.ts';
+import type { HandView, Holding, TableView } from '../engine/view.ts';
 import { sweatOf } from './celebrations.ts';
 import type { BoardCard, TableMotion } from './motion.ts';
 import type { TableChange } from './tableChange.ts';
+
+/**
+ * What a view says of how everyone is doing, all of which a hand's result changes. A part of the view
+ * that a result changes and that is not the hand, a stack or the feed goes here, or it gives the result
+ * away while it is held.
+ */
+type Standing = Pick<TableView, 'ledger' | 'tonight'>;
+
+const standingOf = ({ ledger, tonight }: TableView): Standing => ({ ledger, tonight });
 
 /** What the page holds back while the last cards of a runout are turned over. */
 interface Held {
@@ -12,7 +21,7 @@ interface Held {
   /** What the viewer's hand makes without those cards, for the hint under their own. */
   holding: Holding | null;
   /** Where everyone stood before the hand was settled, as the view before showed it. */
-  ledger: LedgerRow[];
+  standing: Standing;
   /** The first line of the play-by-play and chat held back, by its number, and every line after it; null when none is. */
   line: number | null;
 }
@@ -81,7 +90,7 @@ export class Suspense {
     this.hold = {
       hand: hand.number,
       events: hand.events.length,
-      held: { cards, holding: withoutCards(view, hand, cards), ledger: before?.ledger ?? view.ledger, line },
+      held: { cards, holding: withoutCards(view, hand, cards), standing: standingOf(before ?? view), line },
       later: { events: events.slice(sweat.upTo), feed: feed.filter((entry) => !told(entry)) },
       waiting: false,
     };
@@ -150,9 +159,9 @@ function withoutCards(view: TableView, hand: HandView, cards: readonly BoardCard
 
 /**
  * The view as it stood before its hand was settled, which is how the page is drawn while the last cards
- * of a runout are turned over: no result, the pot in the middle, every stack and the ledger as they were,
- * nobody offered to show their cards, the hint without the cards being turned, and nothing in the feed
- * from the first line that tells of them.
+ * of a runout are turned over: no result, the pot in the middle, every stack, the ledger and the night's
+ * numbers as they were, nobody offered to show their cards, the hint without the cards being turned, and
+ * nothing in the feed from the first line that tells of them.
  */
 function unsettled(view: TableView, hand: HandView, held: Held): TableView {
   const gained = new Map<number, number>();
@@ -172,7 +181,7 @@ function unsettled(view: TableView, hand: HandView, held: Held): TableView {
     ...view,
     hand: { ...hand, stage: 'runout', result: null, canShow: false, holding: held.holding },
     seats: view.seats.map((seat) => seat && { ...seat, stack: seat.stack - (gained.get(seat.seat) ?? 0) }),
-    ledger: held.ledger,
+    ...held.standing,
     feed: held.line === null ? view.feed : view.feed.filter((entry) => entry.seq < held.line!),
   };
 }

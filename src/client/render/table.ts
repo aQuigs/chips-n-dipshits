@@ -58,6 +58,7 @@ const BET_SPOTS: Record<Shape, Spot[]> = {
 const ACTION_LABELS: Record<string, string> = {
   'small blind': 'SB',
   'big blind': 'BB',
+  'missed big blind': 'Missed BB',
   straddle: 'Straddle',
   fold: 'Fold',
   check: 'Check',
@@ -130,8 +131,19 @@ function statusOf(seat: SeatView, hand: HandView | null): string | null {
     return 'Sitting out';
   }
 
+  // Back at the table with blinds to settle: why they have no cards, for everyone to see
+  if (!seat.inHand && seat.comesIn === 'big blind') {
+    return 'Waiting for BB';
+  }
+
+  if (!seat.inHand && (seat.comesIn === 'button' || seat.comesIn === 'posting')) {
+    return 'Waiting to post';
+  }
+
   return null;
 }
+
+const dealerButtonEl = (title: string) => h('div.dealer-button', { title }, 'D');
 
 /** The line under a seat for the hand it showed down. */
 function shownLabel(seat: SeatView, hand: HandView): string | null {
@@ -251,7 +263,7 @@ function seatEl(view: TableView, seat: SeatView, slot: number, shape: Shape, clo
     { class: classes.join(' '), style: place.style, 'data-seat': seat.seat },
     hole,
     plate,
-    hand?.button === seat.seat ? h('div.dealer-button', { title: 'Dealer button' }, 'D') : null,
+    hand?.button === seat.seat ? dealerButtonEl('Dealer button') : null,
     vote,
     hint,
     label ? h('div.tag', null, label) : null,
@@ -276,7 +288,9 @@ function chipsEl(amount: number | undefined, table: Denominated, style: Record<s
 function openSeatEl(view: TableView, seat: number, slot: number, shape: Shape, handlers: TableHandlers): HTMLElement {
   const myRequest = view.requests.find((request) => request.playerId === view.you.id && request.kind === 'seat');
   const place = seatPlace(shape, slot);
-  const open = (kind: string, plate: HTMLElement) => h('div', { class: `${place.class} open ${kind}`, style: place.style, 'data-open-seat': seat }, plate);
+  // The button takes its turn on a seat nobody is in
+  const deadButton = view.hand?.button === seat ? dealerButtonEl('Dealer button, on an empty seat this hand') : null;
+  const open = (kind: string, plate: HTMLElement) => h('div', { class: `${place.class} open ${kind}`, style: place.style, 'data-open-seat': seat }, plate, deadButton);
   const moving = handlers.moving;
 
   // A seat that a move waiting for the hand will fill is not offered to another
@@ -356,6 +370,11 @@ function resultLines(view: TableView, hand: HandView): string[] {
 
       lines.push(`${board}${nameAt(seat)} wins ${amountOf(amount)}${made ? ` with ${midSentence(made)}` : ''}`);
     }
+  }
+
+  // Folded to a big blind that was the only chips in the hand, which went back to its player
+  if (result.uncontested && lines.length === 0) {
+    lines.push(`Everyone folded to ${nameAt(result.winnings[0]!.seat)}`);
   }
 
   const bountyLine = result.bounty ? [`Seven-deuce! ${nameAt(result.bounty.seat)} collects a ${amountOf(sum(result.bounty.payments.map((payment) => payment.amount)))} bounty`] : [];

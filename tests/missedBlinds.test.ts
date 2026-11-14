@@ -342,7 +342,13 @@ test('a dead button and a hand with no small blind are said in the play-by-play,
   assert.deepEqual(t.state.hand!.log.slice(0, 3), ['Hand #2 · blinds 10/20 · P1 has the button', 'No small blind this hand', 'P3 posts big blind 20']);
   assert.deepEqual(posts(t), ['3 big blind 20']);
   assert.equal(t.toAct, 0);
-  foldOut(t);
+
+  // Folded to, the big blind goes back to its player, and with no other chip in the hand nothing is won
+  t.fold(0);
+  t.fold(1);
+  assert.deepEqual(t.state.hand!.log.slice(-2), ['Uncalled bet of 20 returned to P3', 'Everyone folded to P3']);
+  assert.deepEqual([t.state.hand!.result!.pots, t.state.hand!.result!.winnings], [[], [{ seat: 3, amount: 0 }]]);
+  t.finishHand();
 
   t.deal({ holes: { 0: 'As Ah', 1: 'Ks Kh', 3: 'Qs Qh' }, board: '2c 7d 9h Jc 3s' });
   const hand = t.state.hand!;
@@ -510,4 +516,40 @@ test('after a shuffle nobody owes, and the next hand is dealt to everyone there 
   t.deal();
   assert.equal(t.state.hand!.players.length, 4);
   assertInvariants(t.state, t.now);
+});
+
+test('everyone sees who owes, who is waiting for the big blind or to post, and what a returning player posted', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 1000, 1000, 1000, 1000] });
+  const seenBy = (viewer: number) => {
+    const { owesBigBlind, owesSmallBlind, comesIn, lastAction } = t.view(viewer).seats[3]!;
+
+    return [owesBigBlind, owesSmallBlind, comesIn, lastAction];
+  };
+  const seen = (expected: unknown[]) => {
+    assert.deepEqual([seenBy(0), seenBy(3)], [expected, expected]);
+    assertInvariants(t.state, t.now);
+  };
+
+  t.deal({ button: 0 });
+  foldOut(t);
+  t.cmd(3, { type: 'sitOut' });
+  seen([false, false, null, null]);
+
+  // Out of the game, they owe and have not said how they will settle it
+  t.deal();
+  seen([true, true, null, null]);
+  foldOut(t);
+
+  t.cmd(3, { type: 'sitIn' });
+  seen([true, true, 'big blind', null]);
+
+  t.cmd(3, { type: 'comeIn', post: true });
+  seen([true, true, 'button', null]);
+
+  t.deal();
+  foldOut(t);
+  seen([true, true, 'posting', null]);
+
+  t.deal();
+  seen([false, false, null, 'missed big blind']);
 });

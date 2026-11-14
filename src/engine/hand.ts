@@ -768,7 +768,9 @@ function finishUncontested(state: TableState, ctx: Ctx, winner: HandPlayer): voi
 
   state.seats[winner.seat]!.stack += total;
   pots.forEach((pot, potIndex) => record(hand, ['win', winner.seat, pot.amount, potIndex, 0]));
-  narrate(state, ctx, `${winner.name} wins ${formatAmount(total, state.config)}`);
+
+  // A big blind posted with no small blind and no ante, and folded to, went back as an uncalled bet: nothing is left to win
+  narrate(state, ctx, total > 0 ? `${winner.name} wins ${formatAmount(total, state.config)}` : `Everyone folded to ${winner.name}`);
 
   finishHand(state, ctx, {
     uncontested: true,

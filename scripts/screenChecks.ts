@@ -302,6 +302,50 @@ const DOUBLE_BOARD_RESULTS: Record<string, Record<keyof typeof DOUBLE_BOARD_HAND
   },
 };
 
+/**
+ * A table of whole chips and one of dollars and cents for the checks of missed blinds, with the blinds
+ * as each writes them: the big blind, the small blind, the two together, the smallest raise over the
+ * big blind, and the pot of a hand where one player posted both blinds they missed beside the hand's own.
+ */
+const MISSED_BLIND_TABLES = [
+  { name: 'chips', config: {} as Partial<TableConfig>, stack: 1000, blinds: '10/20', big: '20', small: '10', both: '30', raiseTo: '40', pot: '60' },
+  { name: 'cents', config: { ...CENTS } as Partial<TableConfig>, stack: 10_000, blinds: '0.25/0.50', big: '0.50', small: '0.25', both: '0.75', raiseTo: '1.00', pot: '1.50' },
+];
+
+const MARGE = 'Marge Simpson-Jr';
+
+/** Folds, or checks where that is free, so a hand nobody raises goes to the big blind or to a showdown. */
+const folding = (view: TableView): Command => ({ type: view.hand!.options!.canCheck ? 'check' : 'fold' });
+
+/** Ends the hand on the table without a bet, with the game paused so that the next hand is the check's to deal. */
+function playOut(table: RigTable): void {
+  table.act('Quigs', { type: 'pause' });
+  table.play(folding, (view) => view.hand === null);
+}
+
+/**
+ * Six players, of whom Marge, in seat 3, sat out as the big blind came to her and so owes both blinds.
+ * Handed back between hands with the game paused. The button is due on seat 2 next and the big blind on
+ * seat 5, with Marge between them, where nobody comes in by posting. The hand after next is hand 123.
+ */
+function blindsOwed(rig: Rig, kind: (typeof MISSED_BLIND_TABLES)[number]): RigTable {
+  const table = rig.table(
+    LONG_NAMES.slice(0, 6).map((name) => ({ name, stack: kind.stack })),
+    kind.config,
+  );
+
+  table.alter((state) => {
+    state.handCount = 119;
+  });
+  table.deal({ button: 0 });
+  playOut(table);
+  table.act(MARGE, { type: 'sitOut' });
+  table.dealNext();
+  playOut(table);
+
+  return table;
+}
+
 const stacksBySeat = (page: Page, seats: number) => Promise.all(Array.from({ length: seats }, (_, seat) => text(page, `.seat[data-seat="${seat}"] .stack`)));
 
 async function openLedger(page: Page, screen: ScreenName): Promise<void> {
@@ -4854,6 +4898,390 @@ const CHECKS: Check[] = [
 
       assert.deepEqual(streets, [[0, 0], [0, 0], [0, 0], [1, 0], [1, 0], [1, 0]], 'each street of a hand run twice, on its own board');
       await page.context().close();
+    },
+  ],
+  [
+    'a player who owes blinds is offered to post them or to wait for the big blind, the bar says what happens next, and every seat shows who is waiting',
+    async (rig) => {
+      for (const kind of MISSED_BLIND_TABLES) {
+        for (const screen of ['smallPhone', 'desktop'] as const) {
+          const table = blindsOwed(rig, kind);
+          const page = await table.open(MARGE, screen);
+          const other = await table.open('Stu', screen);
+          const press = pressOn(page, screen);
+          const statuses = async () => [await text(page, '.seat[data-seat="3"] .status'), await text(other, '.seat[data-seat="3"] .status')];
+          const said = (words: string) => page.waitForSelector(`.controls .owed-note:has-text("${words}")`);
+
+          const lookInShapes = (name: string) =>
+            inShapesOf(
+              page,
+              screen,
+              async (shape) => {
+                assert.deepEqual(await squeezed(page, '.controls .waiting, .controls .owed-note, .controls .extras button, .seat .plate .status'), [], 'what the bar or a seat says is cut off');
+                assertOnScreen(await boxes(page, '.controls .owed-note, .controls .extras button, .controls .extras .toggle, .seat .plate'), screen, 'the table and the bar under it');
+                assertApart(await boxes(page, '.controls .waiting'), await boxes(page, '.stage, .controls .extras'), 'what the bar says and what is around it');
+
+                const buttons = await boxes(page, '.controls .extras button');
+                buttons.forEach((button, index) => assertApart([button], buttons.slice(index + 1), 'two buttons under the table'));
+                await assertNoSidewaysScroll(page);
+                await shot(page, `missed-blinds-${name}-${kind.name}-${screen}-${shape}`);
+              },
+              { buttonsUp: false },
+            );
+
+          // Sitting out and owing: the one button that brings a player back is two, one for each way to settle
+          assert.equal(await text(page, '.controls .waiting'), `The game is pausedYou owe ${kind.both} for the blinds you missed`);
+          assert.deepEqual(await texts(page, '.controls .extras [data-action="wait-for-blind"], .controls .extras [data-action="post-blinds"]'), ['Wait for big blind', `Post ${kind.both} and play`]);
+          assert.equal(await page.locator('.controls [data-action="sit-in"], .controls [data-action="sit-out"]').count(), 0);
+          assert.deepEqual(await statuses(), ['Sitting out', 'Sitting out']);
+          await lookInShapes('choice');
+
+          // Between the button and the big blind of the next hand, so posting waits for the button to pass
+          await press('.controls [data-action="post-blinds"]');
+          await said('once the button has passed you');
+          assert.equal(await text(page, '.controls .owed-note'), `You post ${kind.both} and are dealt in once the button has passed you`);
+          assert.deepEqual(await texts(page, '.controls .extras [data-action="wait-for-blind"]'), ['Wait for big blind']);
+          assert.equal(await page.locator('.controls [data-action="post-blinds"], .controls [data-action="sit-in"]').count(), 0);
+          assert.equal(await page.locator('.controls [data-action="sit-out"]').count(), 1, 'a player back in the game is not offered to sit out again');
+          await other.waitForSelector('.seat[data-seat="3"] .status:has-text("Waiting to post")');
+          assert.deepEqual(await statuses(), ['Waiting to post', 'Waiting to post']);
+          await lookInShapes('after-the-button');
+
+          // That hand is dealt without her, and the one after is hers to post in
+          table.dealNext();
+          await said('next hand');
+          assert.equal(await text(page, '.controls .waiting'), `Waiting for Quigs\nYou post ${kind.both} and are dealt in next hand`.replace('\n', ''));
+          assert.equal(await page.locator('.seat.me .hole .card').count(), 0);
+          await lookInShapes('posting-next');
+
+          // Waiting instead, which is what coming back does unless she says otherwise
+          await press('.controls [data-action="wait-for-blind"]');
+          await said('reaches you');
+          assert.equal(await text(page, '.controls .owed-note'), 'You are dealt in when the big blind reaches you');
+          assert.deepEqual(await texts(page, '.controls .extras [data-action="post-blinds"]'), [`Post ${kind.both} instead`]);
+          await other.waitForSelector('.seat[data-seat="3"] .status:has-text("Waiting for BB")');
+          assert.deepEqual(await statuses(), ['Waiting for BB', 'Waiting for BB']);
+          assert.equal(table.view('Quigs').seats[3]!.comesIn, 'big blind');
+          await lookInShapes('waiting');
+
+          assert.deepEqual(await squeezed(other, '.seat .plate .status'), [], 'what a seat says is cut off for another player');
+          await shot(other, `missed-blinds-waiting-seen-${kind.name}-${screen}`);
+
+          await page.context().close();
+          await other.context().close();
+        }
+      }
+    },
+  ],
+  [
+    'a hand with a missed big blind and a dead small blind shows both on the felt, in the play-by-play and in the hand history, and gives their player the option',
+    async (rig) => {
+      for (const kind of MISSED_BLIND_TABLES) {
+        for (const screen of ['smallPhone', 'desktop'] as const) {
+          const table = blindsOwed(rig, kind);
+          const [bigBlind, firstToAct, second] = LONG_NAMES;
+
+          // The button passes Marge in the first of these, and she posts in the second: the button on seat 4, the blinds on seats 5 and 0
+          table.act(MARGE, { type: 'comeIn', post: true });
+          table.dealNext();
+          playOut(table);
+          table.dealNext({ holes: { 0: 'Ks Kh', 3: 'As Ah' }, board: '2c 7d 9h Jc 3s' });
+
+          const lines = [
+            `Hand #123 · blinds ${kind.blinds} · Stu has the button`,
+            `${MARGE} posts missed big blind ${kind.big}`,
+            `${MARGE} posts dead small blind ${kind.small}`,
+            `Big Al posts small blind ${kind.small}`,
+            `${bigBlind} posts big blind ${kind.big}`,
+          ];
+
+          const page = await table.open(firstToAct!, screen);
+          const press = pressOn(page, screen);
+
+          // Her big blind is in front of her like the real one, her small blind is in the pot with no bet to show for it, and the action starts left of the real big blind
+          assert.deepEqual(await texts(page, '.bet'), [kind.big, kind.big, kind.small]);
+          assert.equal(await text(page, '.pot'), `Pot${kind.pot}`);
+          assert.equal(await text(page, '.seat[data-seat="3"] .status'), 'Missed BB');
+          assert.equal(await page.locator('.seat[data-seat="4"] .dealer-button').count(), 1);
+          assert.equal(await page.locator('.seat.acting').getAttribute('data-seat'), '1');
+          assert.equal(await text(page, '.turn [data-action="call"]'), `Call ${kind.big}`);
+
+          await inShapesOf(page, screen, async (shape) => {
+            assert.deepEqual(await squeezed(page, '.pot, .bet, .plate .stack, .plate .status'), [], 'an amount or a status on the table is cut off');
+            assertOnScreen(await boxes(page, '.seat .plate, .bet, .pot'), screen, 'a seat, a bet or the pot');
+            await assertBetsApart(page);
+            await shot(page, `missed-blinds-hand-${kind.name}-${screen}-${shape}`);
+          });
+
+          const feedToggle = async () => {
+            if (screen !== 'desktop') {
+              await page.tap('.feed-toggle');
+            }
+          };
+
+          await feedToggle();
+          const said = await texts(page, '.entries li');
+          const from = said.indexOf(lines[0]!);
+          assert.deepEqual(said.slice(from, from + lines.length), lines);
+          assert.deepEqual(await squeezed(page, '.entries li'), [], 'a line of the play-by-play is cut off');
+          await assertNoSidewaysScroll(page);
+          await shot(page, `missed-blinds-play-by-play-${kind.name}-${screen}`);
+          await feedToggle();
+
+          // With nothing to call she may still raise: the big blind in front of her is a bet she has not acted on
+          table.act(firstToAct!, { type: 'fold' });
+          table.act(second!, { type: 'fold' });
+          const hers = await table.open(MARGE, screen);
+          assert.equal(await text(hers, '.turn [data-action="check"]'), 'Check');
+          assert.equal(await text(hers, '.turn [data-action="raise"]'), `Raise to ${kind.raiseTo}`);
+          assert.equal(await text(hers, '.pot'), `Pot${kind.pot}`);
+          await shot(hers, `missed-blinds-option-${kind.name}-${screen}`);
+          await hers.context().close();
+
+          playOut(table);
+          await press('[data-action="menu"]');
+          await press('.menu [data-action="history"]');
+          await page.waitForSelector('.history summary');
+          assert.match(await text(page, '.history summary'), new RegExp(`^Hand #123${MARGE} \\+`));
+          await press('.history summary');
+          assert.deepEqual((await text(page, '.history pre')).split('\n').slice(0, lines.length), lines);
+          assert.deepEqual(await squeezed(page, '.history summary'), [], 'the hand\'s line in the history is cut off');
+          await shot(page, `missed-blinds-history-${kind.name}-${screen}`);
+
+          await page.context().close();
+        }
+      }
+    },
+  ],
+  [
+    'a player who sits down while a game is going waits for the big blind or posts one, and their seat says which',
+    async (rig) => {
+      for (const kind of MISSED_BLIND_TABLES) {
+        for (const screen of PHONE_AND_DESKTOP) {
+          const table = rig.table(
+            ['Quigs', 'Stu', 'Pocket Pam', 'Big Al'].map((name) => ({ name, stack: kind.stack })),
+            kind.config,
+          );
+          table.deal({ button: 0 });
+          table.join(MARGE);
+
+          const page = await table.open(MARGE, screen);
+          const other = await table.open('Stu', 'phone');
+          const press = pressOn(page, screen);
+          table.seat(MARGE, 6, kind.stack);
+
+          const look = async (name: string) => {
+            assert.deepEqual(await squeezed(page, '.controls .waiting, .controls .owed-note, .controls .extras button, .seat .plate .status'), [], 'what the bar or a seat says is cut off');
+            assertOnScreen(await boxes(page, '.controls .owed-note, .controls .extras button, .seat .plate'), screen, 'the table and the bar under it');
+            assertApart(await boxes(page, '.controls .waiting'), await boxes(page, '.stage, .controls .extras'), 'what the bar says and what is around it');
+            await shot(page, `missed-blinds-newcomer-${name}-${kind.name}-${screen}`);
+          };
+
+          // Sat down between hands of a game, she owes a big blind and waits for it unless she says otherwise
+          await page.waitForSelector('.controls .owed-note');
+          assert.equal(await text(page, '.controls .owed-note'), 'You are dealt in when the big blind reaches you');
+          assert.deepEqual(await texts(page, '.controls .extras [data-action="post-blinds"]'), [`Post ${kind.big} instead`]);
+          assert.equal(await text(page, '.seat.me .status'), 'Waiting for BB');
+          await other.waitForSelector('.seat[data-seat="6"] .status:has-text("Waiting for BB")');
+          await look('waiting');
+
+          await press('.controls [data-action="post-blinds"]');
+          await page.waitForSelector('.controls .owed-note:has-text("next hand")');
+          assert.equal(await text(page, '.controls .owed-note'), `You post ${kind.big} and are dealt in next hand`);
+          await other.waitForSelector('.seat[data-seat="6"] .status:has-text("Waiting to post")');
+          await look('posting');
+
+          // In for a big blind that plays, and no small blind: she never had the big blind before it
+          playOut(table);
+          table.dealNext();
+          await page.waitForSelector('.seat.me .hole .card');
+          assert.deepEqual(await texts(page, '.bet'), [kind.small, kind.big, kind.big]);
+          assert.equal(await page.locator('.controls .owed-note').count(), 0);
+          assert.ok(table.view('Quigs').feed.some((entry) => entry.text === `${MARGE} posts missed big blind ${kind.big}`));
+          assert.ok(!table.view('Quigs').feed.some((entry) => entry.text.includes('dead small blind')));
+          await assertBetsApart(page);
+          await look('dealt-in');
+
+          await page.context().close();
+          await other.context().close();
+        }
+      }
+    },
+  ],
+  [
+    'the host forgives a player the blinds they missed from the Players dialog, and the player is simply back',
+    async (rig) => {
+      for (const kind of MISSED_BLIND_TABLES) {
+        for (const screen of PHONE_AND_DESKTOP) {
+          const table = blindsOwed(rig, kind);
+          const page = await table.open('Quigs', screen);
+          const hers = await table.open(MARGE, 'phone');
+          const press = pressOn(page, screen);
+          // Hers is the one line that says anything is owed
+          const row = '.rows li:has(.owes-note)';
+
+          await press('[data-action="menu"]');
+          await press('.menu [data-action="players"]');
+          await page.waitForSelector(row);
+
+          // Only the player who owes has anything to forgive
+          assert.match(await text(page, `${row} > span`), new RegExp(`^${MARGE} · seat 4 · `));
+          assert.equal(await text(page, `${row} .owes-note`), 'Owes the big blind and the small blind');
+          assert.deepEqual(await texts(page, '.dialog [data-action="forgive-blinds"]'), ['Forgive blinds']);
+          assert.equal(await page.locator(`${row} [data-action="forgive-blinds"]`).count(), 1);
+          await page.locator(row).scrollIntoViewIfNeeded();
+          assert.deepEqual(await squeezed(page, `${row} > span, ${row} .owes-note, ${row} button`), [], 'part of her line in the list is cut off');
+          assertOnScreen(await boxes(page, `.dialog, ${row}, ${row} button`), screen, 'her line in the list of players');
+          await assertNoSidewaysScroll(page);
+          await shot(page, `missed-blinds-forgive-${kind.name}-${screen}`);
+
+          await press(`${row} [data-action="forgive-blinds"]`);
+          await page.waitForSelector('.dialog [data-action="forgive-blinds"]', { state: 'detached' });
+          assert.equal(await page.locator('.dialog .owes-note').count(), 0);
+          assert.equal(table.view('Stu').feed.at(-1)!.text, `The host forgave ${MARGE} the blinds they missed`);
+
+          // Owing nothing, she is offered the one way back that anyone sitting out is
+          await hers.waitForSelector('.controls [data-action="sit-in"]');
+          assert.equal(await hers.locator('.controls .owed-note, .controls [data-action="post-blinds"], .controls [data-action="wait-for-blind"]').count(), 0);
+
+          await page.context().close();
+          await hers.context().close();
+        }
+      }
+    },
+  ],
+  [
+    'the table settings and the form for a new table take whether missed blinds are owed or forgiven, and forgiving them clears what is owed',
+    async (rig) => {
+      for (const kind of MISSED_BLIND_TABLES) {
+        for (const screen of ['smallPhone', 'desktop'] as const) {
+          const table = blindsOwed(rig, kind);
+          const page = await table.open('Quigs', screen);
+          const press = pressOn(page, screen);
+          const picked = (value: string) => page.isChecked(`#table-missed-blinds input[value="${value}"]`);
+          const openSettings = async () => {
+            await press('[data-action="menu"]');
+            await press('.menu [data-action="settings"]');
+            await page.waitForSelector('#table-missed-blinds');
+          };
+
+          await openSettings();
+          assert.equal(await picked('owed'), true, 'missed blinds are owed unless the host says otherwise');
+          assert.equal(await text(page, '#table-missed-blinds > span'), 'Missed blinds');
+          assert.deepEqual(await texts(page, '#table-missed-blinds .check'), ['Owed', 'Forgiven']);
+          assert.equal(await text(page, '#table-missed-blinds small'), 'Owed: a player the blinds pass while sitting out posts them to come back, or waits for the big blind');
+
+          await page.locator('#table-missed-blinds').scrollIntoViewIfNeeded();
+          assert.deepEqual(await squeezed(page, '#table-missed-blinds .check span, #table-missed-blinds > span, #table-missed-blinds small'), [], 'part of the settings is cut off');
+          assertOnScreen(await boxes(page, '.dialog, #table-missed-blinds, #table-missed-blinds .check'), screen, 'missed blinds in the settings');
+          const [owed, forgiven] = await boxes(page, '#table-missed-blinds .check');
+          assert.ok(owed && forgiven && !overlap(owed, forgiven), 'the two choices are drawn over each other');
+          await assertNoSidewaysScroll(page);
+
+          await press('#table-missed-blinds label:has-text("Forgiven")');
+          await shot(page, `missed-blinds-settings-${kind.name}-${screen}`);
+          await press('[data-action="save-settings"]');
+          await page.waitForSelector('.dialog', { state: 'detached' });
+
+          const seen = table.view('Stu');
+          assert.equal(seen.feed.at(-1)!.text, 'Missed blinds are forgiven: nobody owes any');
+          assert.deepEqual([seen.config.missedBlinds, seen.seats[3]!.owesBigBlind, seen.seats[3]!.owesSmallBlind], ['forgiven', false, false]);
+
+          await openSettings();
+          assert.equal(await picked('forgiven'), true);
+          await page.context().close();
+        }
+      }
+
+      for (const screen of PHONE_AND_DESKTOP) {
+        const page = await rig.lobby(screen);
+        const press = pressOn(page, screen);
+
+        assert.equal(await page.isChecked('#new-table-missed-blinds input[value="owed"]'), true);
+        await page.fill('#host-name', 'Quigs');
+        await press('#new-table-missed-blinds label:has-text("Forgiven")');
+
+        await page.locator('#new-table-missed-blinds').scrollIntoViewIfNeeded();
+        assert.deepEqual(await squeezed(page, '#new-table-missed-blinds .check span, #new-table-missed-blinds > span, #new-table-missed-blinds small'), [], 'part of the form is cut off');
+        assertOnScreen(await boxes(page, '#new-table-missed-blinds, #new-table-missed-blinds .check'), screen, 'missed blinds in the form for a new table');
+        await assertNoSidewaysScroll(page);
+        await shot(page, `missed-blinds-new-table-${screen}`);
+
+        await press('[data-action="create-table"]');
+        await page.waitForSelector('#table-link');
+        assert.equal(rig.store.read(new URL(await page.inputValue('#table-link')).searchParams.get('table')!)!.config.missedBlinds, 'forgiven');
+
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'a dead button sits on the seat it is due on though nobody is in it, and a hand with no small blind says so in the play-by-play',
+    async (rig) => {
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        const table = rig.table(['Quigs', 'Stu', 'Pocket Pam', 'Big Al'].map((name) => ({ name, stack: 1000 })));
+        table.alter((state) => {
+          state.handCount = 121;
+        });
+        table.deal({ button: 0 });
+        playOut(table);
+
+        // Pam had the big blind and leaves: the small blind is due on her seat next, and the button the hand after
+        table.act('Pocket Pam', { type: 'standUp' });
+        table.dealNext();
+
+        const page = await table.open('Quigs', screen);
+        const feedToggle = async () => {
+          if (screen !== 'desktop') {
+            await page.tap('.feed-toggle');
+          }
+        };
+        const saidFrom = async (first: string, count: number) => {
+          await feedToggle();
+          const said = await texts(page, '.entries li');
+          await feedToggle();
+
+          return said.slice(said.indexOf(first), said.indexOf(first) + count);
+        };
+
+        const noSmallBlind = ['Hand #123 · blinds 10/20 · Stu has the button', 'No small blind this hand', 'Big Al posts big blind 20'];
+        assert.deepEqual(await saidFrom(noSmallBlind[0]!, 3), noSmallBlind);
+        assert.deepEqual(await texts(page, '.bet'), ['20']);
+        assert.equal(await page.locator('.seat[data-seat="1"] .dealer-button').count(), 1);
+        await shot(page, `missed-blinds-no-small-blind-${screen}`);
+
+        // Folded to, the big blind was the only chips in the hand, so the felt says how it ended and not what was won
+        table.act('Quigs', { type: 'pause' });
+        table.play(folding, (view) => view.hand!.stage === 'done');
+        await page.waitForSelector('.message.result > div');
+        assert.deepEqual(await texts(page, '.message.result > div'), ['Everyone folded to Big Al']);
+        assert.deepEqual((await saidFrom('Uncalled bet of 20 returned to Big Al', 2)), ['Uncalled bet of 20 returned to Big Al', 'Everyone folded to Big Al']);
+        await shot(page, `missed-blinds-folded-to-the-big-blind-${screen}`);
+
+        table.play(folding, (view) => view.hand === null);
+        table.dealNext();
+        await page.waitForSelector('[data-open-seat="2"] .dealer-button');
+
+        const deadButton = ['Hand #124 · blinds 10/20 · dead button on seat 3', 'Big Al posts small blind 10', 'Quigs posts big blind 20'];
+        assert.deepEqual(await saidFrom(deadButton[0]!, 3), deadButton);
+        assert.equal(await page.locator('.dealer-button').count(), 1);
+
+        await inShapesOf(
+          page,
+          screen,
+          async (shape) => {
+            const button = await boxes(page, '.dealer-button');
+
+            assertOnScreen(button, screen, 'the dead button');
+            assertApart(button, await boxes(page, '.bet, .board .card, .pot, .seat[data-seat] .plate'), 'the dead button and what is on the table');
+            await assertBetsApart(page);
+            await shot(page, `missed-blinds-dead-button-${screen}-${shape}`);
+          },
+          { buttonsUp: false },
+        );
+
+        await page.context().close();
+      }
     },
   ],
 ];

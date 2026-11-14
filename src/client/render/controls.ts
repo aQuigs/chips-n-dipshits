@@ -198,10 +198,61 @@ function nextHandNote(view: TableView): string[] {
   return [countdown, bombPot].filter((part) => part !== null);
 }
 
-function waitingEl(text: string, view: TableView): HTMLElement {
-  const note = nextHandNote(view);
+/** What a player owes for the blinds they missed; 0 for nothing. */
+function owedBlinds(view: TableView, seat: SeatView): number {
+  return (seat.owesBigBlind ? view.config.bigBlind : 0) + (seat.owesSmallBlind ? view.config.smallBlind : 0);
+}
 
-  return h('div.waiting', null, text, note.length > 0 ? h('div.next-hand', null, note.map((part) => h('span', null, part))) : null);
+/** What the bar tells a player who owes blinds about getting back into the game, or null for nothing. */
+function owedNote(view: TableView, seat: SeatView): string | null {
+  const owed = formatAmount(owedBlinds(view, seat), view.config);
+
+  if (seat.sittingOut || seat.away) {
+    return owedBlinds(view, seat) > 0 ? `You owe ${owed} for the blinds you missed` : null;
+  }
+
+  switch (seat.comesIn) {
+    case 'big blind':
+      return 'You are dealt in when the big blind reaches you';
+
+    case 'button':
+      return `You post ${owed} and are dealt in once the button has passed you`;
+
+    case 'posting':
+      return `You post ${owed} and are dealt in next hand`;
+
+    default:
+      return null;
+  }
+}
+
+/** The buttons a player who owes blinds picks how to settle them with, which bring them back if they are sitting out. */
+function owedButtons(view: TableView, seat: SeatView, handlers: ControlHandlers): HTMLElement[] {
+  // Short, since they share a row of a phone with the switch for sitting out: the line above them says the rest
+  const post = (label: string) => commandButton('button.chip-btn', 'post-blinds', label, () => handlers.send({ type: 'comeIn', post: true }));
+  const wait = (spec: `button.${string}`) => commandButton(spec, 'wait-for-blind', 'Wait for big blind', () => handlers.send({ type: 'comeIn', post: false }));
+  const owed = formatAmount(owedBlinds(view, seat), view.config);
+
+  if (owedBlinds(view, seat) === 0) {
+    return [];
+  }
+
+  if (seat.sittingOut || seat.away) {
+    return [wait('button.chip-btn.strong'), post(`Post ${owed} and play`)];
+  }
+
+  if (seat.comesIn === 'big blind') {
+    return [post(`Post ${owed} instead`)];
+  }
+
+  return seat.comesIn === 'button' || seat.comesIn === 'posting' ? [wait('button.chip-btn')] : [];
+}
+
+function waitingEl(text: string, view: TableView, seat?: SeatView): HTMLElement {
+  const note = nextHandNote(view);
+  const owed = seat ? owedNote(view, seat) : null;
+
+  return h('div.waiting', null, text, note.length > 0 ? h('div.next-hand', null, note.map((part) => h('span', null, part))) : null, owed ? h('div.owed-note', null, owed) : null);
 }
 
 function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandlers): HTMLElement {
@@ -225,7 +276,7 @@ function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandle
       ),
     );
   } else {
-    main = waitingEl(waitingText(view, hand), view);
+    main = waitingEl(waitingText(view, hand), view, seat);
   }
 
   const showCards = hand?.canShow ? commandButton('button.chip-btn', 'show', 'Show my cards', () => handlers.send({ type: 'showCards' })) : null;
@@ -242,11 +293,16 @@ function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandle
 
   const extras: HTMLElement[] = [];
 
-  if (seat.sittingOut || seat.away) {
-    extras.push(commandButton('button.chip-btn.strong', 'sit-in', "I'm back", () => handlers.send({ type: 'sitIn' })));
-  } else {
+  const settling = owedButtons(view, seat, handlers);
+
+  // Coming back owing blinds is a choice between two ways of settling them, which takes the place of the one button
+  if (!seat.sittingOut && !seat.away) {
     extras.push(toggle('Sit out next hand', false, 'sit-out', () => handlers.send({ type: 'sitOut' })));
+  } else if (settling.length === 0) {
+    extras.push(commandButton('button.chip-btn.strong', 'sit-in', "I'm back", () => handlers.send({ type: 'sitIn' })));
   }
+
+  extras.push(...settling);
 
   if (view.config.allowStraddle) {
     extras.push(toggle('Straddle', seat.straddle, 'straddle', (on) => handlers.send({ type: 'setStraddle', on })));
@@ -304,11 +360,11 @@ export function controlsSignature(view: TableView): string {
   const hand = view.hand;
 
   return JSON.stringify([
-    seat && [seat.stack, seat.pendingAdd, seat.sittingOut, seat.away, seat.straddle, seat.leaving],
+    seat && [seat.stack, seat.pendingAdd, seat.sittingOut, seat.away, seat.straddle, seat.leaving, seat.owesBigBlind, seat.owesSmallBlind, seat.comesIn],
     hand && [hand.number, hand.stage, hand.street, hand.toAct, hand.turn, hand.currentBet, hand.pot, hand.options, hand.canVote, hand.canShow],
     [view.running, view.nextHandAt !== null, view.handCount === 0, nightOver(view), hand?.stage === 'done' && onLastHand(view)],
     view.requests.filter((request) => request.playerId === view.you.id),
-    [view.config.allowStraddle, view.config.maxBuyIn],
+    [view.config.allowStraddle, view.config.maxBuyIn, view.config.smallBlind, view.config.bigBlind],
     nextHandNote(view),
   ]);
 }

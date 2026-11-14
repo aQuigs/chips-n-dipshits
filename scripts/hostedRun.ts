@@ -1023,7 +1023,7 @@ try {
     assert.deepEqual(fromLobby.filter((op) => op === 'report'), [], 'a page that is at no table reported');
 
     const page = await open(browser, meant);
-    const id = await createTable(page, server.url, 'Homer');
+    const id = await createTable(page, server.url, 'Ned');
     const member = inAddress(page, 'me')!;
     const sent = opsSent(page);
 

@@ -60,7 +60,7 @@ function onOff(prefs: AnyPreferences, abilities: Abilities, key: string, id: str
 
     button.setAttribute('aria-checked', String(ability === 'yes' && prefs.get(key)));
     button.setAttribute('aria-disabled', String(ability === 'blocked'));
-    note.textContent = ability === 'blocked' ? BLOCKED : pref.compact ? '' : (pref.hint ?? '');
+    note.textContent = ability === 'blocked' ? (pref.blocked ?? BLOCKED) : pref.compact ? '' : (pref.hint ?? '');
   };
 
   button.addEventListener('click', async () => {

@@ -17,6 +17,7 @@ import { MemoryStore } from '../src/server/memoryStore.ts';
 import { PokerService } from '../src/server/service.ts';
 import { seededRng } from '../tests/helpers.ts';
 import { clientPage } from './bundle.ts';
+import { STILL } from './pageSpies.ts';
 
 const OUT = fileURLToPath(new URL('../screenshots/', import.meta.url));
 const DESKTOP = { width: 1280, height: 800 };
@@ -33,6 +34,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function open(browser: Browser, phone: boolean): Promise<Page> {
   const context = await browser.newContext(phone ? { viewport: PHONE, deviceScaleFactor: 2, isMobile: true, hasTouch: true } : { viewport: DESKTOP });
+  await context.addInitScript(STILL);
   const page = await context.newPage();
 
   page.setDefaultTimeout(STEP_TIMEOUT_MS);

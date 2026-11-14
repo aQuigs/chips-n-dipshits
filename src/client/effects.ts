@@ -1,6 +1,8 @@
 import type { Attention } from './attention.ts';
+import { handMoves } from './effects/handMoves.ts';
 import { handSounds } from './effects/handSounds.ts';
 import { yourTurn } from './effects/yourTurn.ts';
+import type { TableMotion } from './motion.ts';
 import type { AppPreferences } from './prefs.ts';
 import type { Sounds } from './sound.ts';
 import type { TableChange } from './tableChange.ts';
@@ -15,6 +17,8 @@ export interface EffectContext {
   sounds: Sounds;
   /** The way to get the viewer's attention, for a reason: a chime, a buzz, a flash, a notification. */
   attention: Attention;
+  /** The way to move something across the table, held to the viewer's switch and to a device that asks for less motion. */
+  motion: TableMotion;
 }
 
 /** Something that happens on the page when the table changes: a sound, an animation, an alert. */
@@ -34,6 +38,7 @@ export interface TableEffect {
  */
 const TABLE_EFFECTS: (() => TableEffect)[] = [
   handSounds,
+  handMoves,
   yourTurn,
 ];
 
@@ -43,18 +48,20 @@ export class TableEffects {
   private readonly stage: HTMLElement;
   private readonly sounds: Sounds;
   private readonly attention: Attention;
+  private readonly motion: TableMotion;
   private readonly effects = TABLE_EFFECTS.map((make) => make());
 
-  constructor(prefs: AppPreferences, stage: HTMLElement, sounds: Sounds, attention: Attention) {
+  constructor(prefs: AppPreferences, stage: HTMLElement, sounds: Sounds, attention: Attention, motion: TableMotion) {
     this.prefs = prefs;
     this.stage = stage;
     this.sounds = sounds;
     this.attention = attention;
+    this.motion = motion;
   }
 
   /** Call once for every view put on screen, with what it brought. */
   run(change: TableChange): void {
-    const context: EffectContext = { prefs: this.prefs, seat: change.view.you.seat, stage: this.stage, sounds: this.sounds, attention: this.attention };
+    const context: EffectContext = { prefs: this.prefs, seat: change.view.you.seat, stage: this.stage, sounds: this.sounds, attention: this.attention, motion: this.motion };
 
     for (const effect of this.effects) {
       // An effect that fails must not be what stops the table from updating, or the other effects from happening

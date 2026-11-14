@@ -19,6 +19,7 @@ import { seededRng, TestTable } from '../tests/helpers.ts';
 import type { DealOptions } from '../tests/helpers.ts';
 import { assertInvariants } from '../tests/invariants.ts';
 import { clientPage } from './bundle.ts';
+import { STILL } from './pageSpies.ts';
 
 // Names a font to draw every screen in. CI's browser has other fonts than the machine a check was written on,
 // and what fails only there usually fails here in a narrower font ('Times New Roman') or a wider one ('Verdana').
@@ -43,6 +44,11 @@ export interface RigPlayer {
 }
 
 export type RigDeal = DealOptions & { button: number };
+
+export interface PageOptions {
+  /** Leaves animations on, as a new player has them. Only for a check that is about motion: it waits for `.stage:not([data-moving])` before it measures anything. */
+  moving?: boolean;
+}
 
 /** One table on the rig. The first player given is the host. */
 export class RigTable {
@@ -160,9 +166,9 @@ export class RigTable {
   }
 
   /** The table in a browser, as one of its members, on a screen of the given size. `init` runs in the page before anything of its own. */
-  async open(name: string, screen: ScreenName, init?: string): Promise<Page> {
+  async open(name: string, screen: ScreenName, init?: string, options?: PageOptions): Promise<Page> {
     const { id, token } = this.auth(name);
-    const page = await this.rig.page(screen, name);
+    const page = await this.rig.page(screen, name, options);
 
     if (init) {
       await page.addInitScript(init);
@@ -231,11 +237,15 @@ export class Rig {
     this.server.deploy(build);
   }
 
-  /** A browser page on a screen of the given size, with nothing in it yet. `who` names it when it throws. */
-  async page(screen: ScreenName, who: string): Promise<Page> {
+  /** A browser page on a screen of the given size, with nothing in it yet and its table kept still. `who` names it when it throws. */
+  async page(screen: ScreenName, who: string, { moving = false }: PageOptions = {}): Promise<Page> {
     const touch = screen !== 'desktop';
     const context = await this.browser.newContext({ viewport: SCREENS[screen], ...(touch ? { deviceScaleFactor: 2, isMobile: true, hasTouch: true } : {}) });
     const page = await context.newPage();
+
+    if (!moving) {
+      await context.addInitScript(STILL);
+    }
 
     if (FONT_OVERRIDE) {
       await context.addInitScript(`document.addEventListener('DOMContentLoaded', () => {

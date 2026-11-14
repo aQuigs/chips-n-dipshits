@@ -12,15 +12,18 @@ import { fileURLToPath } from 'node:url';
 import type { Page } from 'playwright';
 
 import { BUZZ_PATTERN } from '../src/client/attentionWays.ts';
+import { MOST_MOVE_MS, MOST_VIEW_MS, STEP_GAP_MS } from '../src/client/handMoves.ts';
 import { KEYS_SETTLE_MS } from '../src/client/hotkeys.ts';
 import { RECIPES } from '../src/client/soundRecipes.ts';
 import { THEMES } from '../src/client/themes.ts';
+import { shortAmount } from '../src/engine/amounts.ts';
 import { DEFAULT_CONFIG, LIMITS, presetSettings } from '../src/engine/index.ts';
 import type { Command, TableConfig, TableView } from '../src/engine/index.ts';
 import { contrast } from '../tests/colorVision.ts';
 import { boxes, overlap, Rig, SCREENS, setStageHeight, squeezed, textBoxes } from './rig.ts';
-import type { Box, RigPlayer, ScreenName } from './rig.ts';
-import { complaints, NOTICES, TITLES } from './pageSpies.ts';
+import type { Box, RigPlayer, RigTable, ScreenName } from './rig.ts';
+import { complaints, MOTION, NOTICES, SPOTS, TITLES } from './pageSpies.ts';
+import type { Flight, Spots } from './pageSpies.ts';
 import { STAND_IN_HOST } from './standInHost.ts';
 
 const OUT = fileURLToPath(new URL('../screenshots/', import.meta.url));
@@ -98,7 +101,7 @@ const LISTEN = `(() => {
   const connect = AudioNode.prototype.connect;
   AudioNode.prototype.connect = function (target, ...rest) {
     if (target instanceof AudioDestinationNode) {
-      window.played.push({ gain: this.gain.value, voices: [], starts: [] });
+      window.played.push({ gain: this.gain.value, voices: [], starts: [], frame: window.frame });
     }
 
     return connect.call(this, target, ...rest);
@@ -341,8 +344,8 @@ function movesSent(page: Page): string[] {
 
 const HINT = '.seat.me .hint';
 
-/** Waits for the cards just dealt to land where they will sit. */
-const dealt = (page: Page) => page.waitForFunction(`document.getAnimations().every((animation) => animation.animationName !== 'deal')`);
+/** Waits for whatever is moving on the table to land where it will sit. On a still table, as the rig keeps its pages, nothing is. */
+const dealt = (page: Page) => page.waitForSelector('.stage:not([data-moving])');
 
 /** The cards on the table the hand hint picks out as making the viewer's hand, and the ones it says do not. */
 const marking = (page: Page) =>
@@ -471,6 +474,192 @@ const BUZZ = `(() => {
     configurable: true,
   });
 })()`;
+
+const middle = (box: Box) => ({ x: (box.left + box.right) / 2, y: (box.top + box.bottom) / 2 });
+
+/** Whether one thing lies with its middle on the middle of another. */
+const over = (a: Box, b: Box) => Math.hypot(middle(a).x - middle(b).x, middle(a).y - middle(b).y) <= 1.5;
+
+function assertOver(found: Box, wanted: Box | undefined, what: string): void {
+  assert.ok(wanted && over(found, wanted), `${what}: its middle is at ${JSON.stringify(middle(found))}, not ${JSON.stringify(wanted && middle(wanted))}`);
+}
+
+/** Whether two measures are the same to the browser: what one layout gives twice. */
+const same = (a: number, b: number) => Math.abs(a - b) < 0.05;
+
+/** What the page has set moving since it was last asked, once all of it has landed. Moves held in the air are let go first. */
+async function flown(page: Page): Promise<Flight[]> {
+  await page.evaluate('window.land()');
+  await dealt(page);
+
+  const flights = (await page.evaluate('window.flights.splice(0)')) as Flight[];
+
+  for (const flight of flights) {
+    assert.deepEqual(flight.properties.filter((property) => property !== 'transform' && property !== 'opacity'), [], `a ${flight.what} is moved by more than transform and opacity`);
+    assert.ok(flight.duration <= MOST_MOVE_MS, `a ${flight.what} takes ${flight.duration} ms to move`);
+    assert.ok(flight.delay + flight.duration <= MOST_VIEW_MS, `a ${flight.what} is still moving ${flight.delay + flight.duration} ms after the view`);
+  }
+
+  return flights;
+}
+
+/** The table's part of a page as it is drawn: its markup, and the box of every element of it in the order they are drawn. */
+interface Drawn {
+  markup: string;
+  boxes: Box[];
+}
+
+// Run in the page
+const DRAWN = `(() => {
+  const stage = document.querySelector('.stage');
+
+  return {
+    markup: stage.outerHTML,
+    boxes: [...stage.querySelectorAll('*')].map((element) => {
+      const { left, top, right, bottom } = element.getBoundingClientRect();
+
+      return { left, top, right, bottom };
+    }),
+  };
+})()`;
+
+const sameBox = (a: Box, b: Box | undefined) => b !== undefined && (['left', 'top', 'right', 'bottom'] as const).every((edge) => same(a[edge], b[edge]));
+
+/**
+ * That a page whose motion has landed is, to the last attribute and the last box, what a page that
+ * never moved shows of the same table. Answers with what the still page shows.
+ */
+async function assertAsStill(moving: Page, still: Page, when: string): Promise<Drawn> {
+  await dealt(moving);
+
+  const moved = (await moving.evaluate(DRAWN)) as Drawn;
+  const stood = (await still.evaluate(DRAWN)) as Drawn;
+
+  assert.equal(moved.markup, stood.markup, `${when}: the table that moved is not the table that stood still`);
+  moved.boxes.forEach((box, index) => assert.ok(sameBox(box, stood.boxes[index]), `${when}: something lies at ${JSON.stringify(box)} that the still table has at ${JSON.stringify(stood.boxes[index])}`));
+
+  return stood;
+}
+
+/** Waits for a page to show the table as the server has it for a viewer: whose turn it is, the cards out, the bets, the folds and the result. */
+async function caughtUp(page: Page, view: TableView): Promise<void> {
+  const hand = view.hand;
+  const seats = view.seats.filter((seat) => seat !== null);
+  const wanted = [
+    hand?.stage === 'betting' ? hand.toAct : null,
+    hand?.boards.flat().length ?? 0,
+    seats.filter((seat) => seat.bet > 0).length,
+    seats.filter((seat) => seat.folded).length,
+    hand?.stage === 'done',
+  ];
+
+  await page.waitForFunction(`JSON.stringify([
+    document.querySelector('.seat.acting') ? Number(document.querySelector('.seat.acting').dataset.seat) : null,
+    document.querySelectorAll('.board .card[data-card]').length,
+    document.querySelectorAll('.bet[data-bet]').length,
+    document.querySelectorAll('.seat.folded').length,
+    document.querySelector('.message.result') !== null,
+  ]) === ${JSON.stringify(JSON.stringify(wanted))}`);
+}
+
+interface MotionLayout {
+  name: string;
+  screen: ScreenName;
+  /** The height a phone's table is held at, which makes it stand or lie. */
+  height?: number;
+  /** Moves play out in their own time on a processor this many times slower. On the others they are held where they start and let go, so no check waits on them. */
+  slower?: number;
+  config?: Partial<TableConfig>;
+}
+
+const MOTION_LAYOUTS: MotionLayout[] = [
+  { name: 'phone-standing', screen: 'phone', height: JUST_STANDING },
+  { name: 'phone-lying', screen: 'phone', height: Math.floor(SCREENS.phone.width / WIDE_ASPECT) - 1 },
+  { name: 'desktop', screen: 'desktop', config: CENTS },
+  { name: 'phone-slow', screen: 'phone', height: JUST_STANDING, slower: 4 },
+];
+
+const MOTION_PLAYERS: RigPlayer[] = ['Quigs', 'Stu', 'Pam', 'Al'].map((name) => ({ name, stack: 10_000 }));
+
+/** What a step of a hand set moving, and where things lay on the still table before it and after. */
+interface Seen {
+  flights: Flight[];
+  before: Spots;
+  after: Spots;
+}
+
+/** A table watched twice by one of its players, on the same screen: on a page that moves, which writes its moves down, and on one that stands still to measure the first against. */
+interface Watched {
+  moving: Page;
+  still: Page;
+  /** Does something to the table, waits for both pages to show it and for the moving one to land, and checks that it landed as the still one stands. */
+  step(what: string, act: () => unknown): Promise<Seen>;
+}
+
+async function watch(table: RigTable, name: string, layout: MotionLayout, holdAt: number | null = 0): Promise<Watched> {
+  const moving = await table.open(name, layout.screen, MOTION, { moving: true });
+  const still = await table.open(name, layout.screen);
+
+  // A phone's table is held at one height for the whole hand, whatever the buttons under it come to: its shape is the check's to choose
+  if (layout.height) {
+    for (const page of [moving, still]) {
+      await page.setViewportSize({ width: SCREENS[layout.screen].width, height: layout.height + 600 });
+      // And at a width that is no whole number of pixels, as a zoomed browser gives it, which is where a rounded measure shows
+      await page.addStyleTag({ content: `.stage { align-self: start; width: calc(100% - 0.4px); height: ${layout.height}px; }` });
+      await page.waitForSelector(layout.height >= JUST_STANDING ? '.table.tall' : '.table.wide');
+    }
+  }
+
+  if (layout.slower) {
+    const session = await moving.context().newCDPSession(moving);
+    await session.send('Emulation.setCPUThrottlingRate', { rate: layout.slower });
+  } else {
+    await moving.evaluate(`window.holdAt = ${holdAt}`);
+  }
+
+  return {
+    moving,
+    still,
+    step: async (what, act) => {
+      const before = (await still.evaluate(SPOTS)) as Spots;
+
+      act();
+
+      const view = table.view(name);
+      await Promise.all([caughtUp(moving, view), caughtUp(still, view)]);
+
+      const flights = await flown(moving);
+      const stood = await assertAsStill(moving, still, `${layout.name}, ${what}`);
+
+      // What the table draws ends its move exactly where the still table has it
+      for (const flight of flights.filter((flight) => !flight.standIn)) {
+        assert.ok(sameBox(flight.to, stood.boxes[flight.index]), `${layout.name}, ${what}: a ${flight.what} lands at ${JSON.stringify(flight.to)}, and rests at ${JSON.stringify(stood.boxes[flight.index])}`);
+      }
+
+      return { flights, before, after: (await still.evaluate(SPOTS)) as Spots };
+    },
+  };
+}
+
+/**
+ * That folded cards leave from the place their seat keeps for cards, drawn as they were. A seat that
+ * says it folded has grown a line, so that place is not quite where the cards lay a moment ago.
+ */
+function assertLeavesSeat(flight: Flight, { before, after }: Seen, seat: number, what: string): void {
+  const [cards, hole] = [before.cards[seat]!, after.holes[seat]!];
+  const fits = same(flight.from.top, hole.top) && same(flight.from.bottom, hole.bottom) && same(middle(flight.from).x, middle(hole).x);
+
+  assert.ok(fits && same(flight.from.right - flight.from.left, cards.right - cards.left), `${what}: the folded cards start at ${JSON.stringify(flight.from)}, their place is ${JSON.stringify(hole)} and they lay at ${JSON.stringify(cards)}`);
+  assertOver(flight.to, after.felt, `${what}: the folded cards go to the middle of the table`);
+}
+
+/** That a card of a board comes down onto its own place from just above it. */
+function assertDrops(card: Flight, what: string): void {
+  assert.ok(same(middle(card.from).x, middle(card.to).x) && card.from.top < card.to.top && card.from.bottom > card.to.top, `${what} drops onto its place from just above it`);
+}
+
+/** The flights of one kind, in the order the page set them off. */
+const flightsOf = (seen: Seen, what: Flight['what'], standIn: boolean) => seen.flights.filter((flight) => flight.what === what && flight.standIn === standIn);
 
 type Check = [name: string, run: (rig: Rig) => Promise<void>];
 
@@ -4165,6 +4354,506 @@ const CHECKS: Check[] = [
           }
         }
       }
+    },
+  ],
+  [
+    'with animations on, each move starts where it should and the table lands exactly as a still one stands, on one board and on two and at the end of the night, standing, lying, on the desktop and on a slow phone',
+    async (rig) => {
+      for (const layout of MOTION_LAYOUTS) {
+        const table = rig.table(MOTION_PLAYERS, layout.config);
+        const { config } = table.view('Quigs');
+        const big = config.bigBlind;
+        const says = (amount: number) => shortAmount(amount, config);
+        const { moving, still, step } = await watch(table, 'Quigs', layout);
+        const where = (what: string) => `${layout.name}, ${what}`;
+
+        // A hand's last move, with the game paused first: a table that is running deals the next hand itself, with cards nobody chose
+        const last = (move: () => unknown) => {
+          table.act('Quigs', { type: 'pause' });
+          move();
+        };
+
+        // The button is on Al, so Quigs and Stu post the blinds and the cards go around from Quigs
+        let seen = await step('the deal', () => table.deal({ button: 3, holes: { 0: 'Ah Kd', 1: 'Qc Qd', 2: '7h 7s', 3: '9c 4d' }, board: 'Kh 7c 2c 9d 3s' }));
+        let bets = flightsOf(seen, 'chips', false);
+        let cards = flightsOf(seen, 'card', false);
+
+        assert.equal(seen.flights.length, 10, where('two blinds and eight cards move'));
+        assert.deepEqual(bets.map((bet) => [bet.seat, bet.text, bet.delay]), [[0, says(big / 2), 0], [1, says(big), 0]], where('the blinds'));
+        bets.forEach((bet) => assertOver(bet.from, seen.after.plates[bet.seat!], where(`the blind of seat ${bet.seat} leaves its seat`)));
+        assert.deepEqual(cards.map((card) => card.seat), [0, 0, 1, 1, 2, 2, 3, 3], where('the cards go around from the left of the button'));
+        cards.forEach((card) => assertOver(card.from, seen.after.felt, where(`a card of seat ${card.seat} leaves the middle of the table`)));
+        assert.equal(cards[0]!.delay, 0, where('the first cards wait'));
+        cards.slice(2).forEach((card, nth) => assert.ok(card.delay >= cards[nth]!.delay && card.delay > 0, where('a seat is dealt before the one to its right')));
+
+        seen = await step('a raise', () => table.act('Pam', { type: 'raise', to: 3 * big }));
+        assert.deepEqual(seen.flights.map((flight) => [flight.what, flight.standIn, flight.seat, flight.text, flight.delay]), [['chips', false, 2, says(3 * big), 0]], where('a raise'));
+        assertOver(seen.flights[0]!.from, seen.after.plates[2], where('the raise leaves its seat'));
+
+        seen = await step('a fold', () => table.act('Al', { type: 'fold' }));
+        assert.deepEqual(seen.flights.map((flight) => [flight.what, flight.standIn, flight.delay]), [['cards', true, 0]], where('a fold'));
+        assertLeavesSeat(seen.flights[0]!, seen, 3, where('a fold'));
+
+        seen = await step('the viewer’s own call', () => table.act('Quigs', { type: 'call' }));
+        assert.deepEqual(seen.flights.map((flight) => [flight.what, flight.standIn, flight.seat, flight.text]), [['chips', false, 0, says(3 * big)]], where('the viewer’s own call'));
+        assertOver(seen.flights[0]!.from, seen.after.plates[0], where('the viewer’s call leaves their seat'));
+
+        // The last call ends the street: it is seen going to the pot with the other bets, and the flop comes a beat later
+        seen = await step('the end of a street', () => table.act('Stu', { type: 'call' }));
+        bets = flightsOf(seen, 'chips', true);
+        cards = flightsOf(seen, 'card', false);
+
+        assert.equal(seen.flights.length, 6, where('three bets and three cards move'));
+        assert.deepEqual(bets.map((bet) => [bet.text, bet.delay]), [0, 1, 2].map(() => [says(3 * big), 0]), where('the bets going to the pot'));
+        bets.forEach((bet, seat) => {
+          assertOver(bet.from, seen.before.bets[seat], where(`the bet of seat ${seat} leaves where it lay`));
+          assertOver(bet.to, seen.after.pot, where(`the bet of seat ${seat} goes to the pot`));
+        });
+        assert.deepEqual(cards.map((card) => [card.board, card.delay]), [0, 1, 2].map((nth) => [0, STEP_GAP_MS + nth * 60]), where('the flop'));
+        cards.forEach((card) => assertDrops(card, where('a card of the flop')));
+
+        seen = await step('a check', () => table.act('Quigs', { type: 'check' }));
+        assert.deepEqual(seen.flights, [], where('a check moves nothing'));
+
+        seen = await step('a bet', () => table.act('Stu', { type: 'raise', to: 5 * big }));
+        assert.deepEqual(seen.flights.map((flight) => [flight.what, flight.standIn, flight.seat, flight.text]), [['chips', false, 1, says(5 * big)]], where('a bet'));
+        assertOver(seen.flights[0]!.from, seen.after.plates[1], where('the bet leaves its seat'));
+
+        seen = await step('another fold', () => table.act('Pam', { type: 'fold' }));
+        assert.equal(seen.flights.length, 1, where('another fold'));
+        assertLeavesSeat(seen.flights[0]!, seen, 2, where('another fold'));
+
+        // The viewer's own fold leaves their cards where they are and is silent to them, so the pot won is heard at once:
+        // the bet nobody called goes back and the pot leaves with it
+        seen = await step('a win', () => last(() => table.act('Quigs', { type: 'fold' })));
+        bets = flightsOf(seen, 'chips', true);
+
+        assert.equal(seen.flights.length, 2, where('the bet going back and the pot move'));
+        assert.deepEqual(bets.map((bet) => [bet.text, bet.delay]), [[says(5 * big), 0], [says(9 * big), 0]], where('the bet going back and the pot'));
+        assertOver(bets[0]!.from, seen.before.bets[1], where('the bet going back leaves where it lay'));
+        assertOver(bets[1]!.from, seen.after.pot, where('the pot leaves the middle'));
+        bets.forEach((bet) => assertOver(bet.to, seen.after.plates[1], where('the winner’s chips go to their seat')));
+
+        // The board plays for everyone, so the pot is split four ways: the other hands turn up, then each winner gets a pile
+        await step('the next deal', () => {
+          table.play(() => null, (view) => !view.hand);
+          table.deal({ button: 3, board: 'As Ks Qs Js Ts' });
+        });
+        await step('to the river', () => table.play(passive, (view) => view.hand!.street === 'river' && view.hand!.toAct === 3));
+
+        seen = await step('a split pot', () => last(() => table.act('Al', { type: 'check' })));
+        bets = flightsOf(seen, 'chips', true);
+        cards = flightsOf(seen, 'card', false);
+
+        assert.equal(seen.flights.length, 10, where('six cards turn up and four piles move'));
+        assert.deepEqual(cards.map((card) => [card.seat, card.delay]), [1, 1, 2, 2, 3, 3].map((seat) => [seat, 0]), where('the other three hands turn up'));
+        cards.forEach((card) => assertOver(card.from, card.to, where('a card turns up where it lies')));
+        assert.deepEqual(bets.map((bet) => [bet.text, bet.delay]), [0, 1, 2, 3].map(() => [says(big), STEP_GAP_MS]), where('a pile for each winner'));
+        assert.deepEqual(bets.map((bet) => Object.keys(seen.after.plates).find((seat) => over(bet.to, seen.after.plates[Number(seat)]!))).sort(), ['0', '1', '2', '3'], where('each pile goes to a winner of its own'));
+        bets.forEach((bet) => assertOver(bet.from, seen.after.pot, where('a winner’s pile leaves the middle')));
+
+        // A bomb pot: a bare chip from every seat as the cards go out, then the flop
+        seen = await step('a bomb pot', () => {
+          table.play(() => null, (view) => !view.hand);
+          table.act('Quigs', { type: 'setBombPot', on: true });
+          table.deal({ button: 3, board: '2c 7d 9h Jc 3s' });
+        });
+        bets = flightsOf(seen, 'chips', true);
+        cards = flightsOf(seen, 'card', false);
+
+        assert.equal(seen.flights.length, 15, where('four chips, eight cards and the flop move'));
+        assert.deepEqual(bets.map((bet) => [bet.text, bet.delay]), [0, 1, 2, 3].map(() => ['', 0]), where('a bare chip from every seat'));
+        bets.forEach((bet, seat) => {
+          assertOver(bet.from, seen.after.plates[seat], where(`the chip of seat ${seat} leaves its seat`));
+          assertOver(bet.to, seen.after.pot, where(`the chip of seat ${seat} goes to the pot`));
+        });
+        assert.deepEqual(cards.map((card) => card.seat ?? `board ${card.board}`), [0, 0, 1, 1, 2, 2, 3, 3, 'board 0', 'board 0', 'board 0'], where('the cards, then the flop'));
+        assert.deepEqual(cards.slice(8).map((card) => card.delay), [0, 1, 2].map((nth) => STEP_GAP_MS + nth * 60), where('the flop comes a beat after the deal'));
+
+        // The same on two boards: both flops land together, each card on its own place
+        seen = await step('a double-board bomb pot', () => {
+          last(() => table.play(passive, (view) => view.hand?.stage === 'done'));
+          table.play(() => null, (view) => !view.hand);
+          table.act('Quigs', { type: 'updateConfig', config: { bombPotBoards: 'two' } });
+          table.act('Quigs', { type: 'setBombPot', on: true });
+          table.deal({ button: 3, board: '2c 7d 9h Jc 3s', secondBoard: 'Kd 5c 8h Ts 2h' });
+        });
+        bets = flightsOf(seen, 'chips', true);
+        cards = flightsOf(seen, 'card', false);
+
+        assert.equal(seen.flights.length, 18, where('four chips, eight cards and two flops move'));
+        bets.forEach((bet, seat) => {
+          assertOver(bet.from, seen.after.plates[seat], where(`the chip of seat ${seat} leaves its seat for two boards`));
+          assertOver(bet.to, seen.after.pot, where(`the chip of seat ${seat} goes to the pot under two boards`));
+        });
+        assert.deepEqual(cards.slice(8).map((card) => [card.board, card.delay]), [0, 1].flatMap((board) => [0, 1, 2].map((nth) => [board, STEP_GAP_MS + nth * 60])), where('both flops come together, a beat after the deal'));
+        cards.slice(8).forEach((card) => assertDrops(card, where(`a card of the flop of board ${card.board}`)));
+        await shot(moving, `motion-landed-two-flops-${layout.name}`);
+
+        // Bets lie clear of both boards, a row further out on a standing phone, and that is where each slides to and leaves from
+        for (const name of ['Quigs', 'Stu', 'Pam']) {
+          seen = await step(`${name}’s bet beside two boards`, () => table.act(name, name === 'Quigs' ? { type: 'raise', to: 2 * big } : { type: 'call' }));
+          assert.deepEqual(seen.flights.map((flight) => [flight.what, flight.standIn, flight.text]), [['chips', false, says(2 * big)]], where(`${name}’s bet beside two boards`));
+          assertOver(seen.flights[0]!.from, seen.after.plates[seen.flights[0]!.seat!], where(`${name}’s bet beside two boards leaves its seat`));
+        }
+
+        // The button's call ends the street: the bets go to the pot as it is heard, and the turn of both boards a beat later, as the one sound of the two
+        seen = await step('the turn of two boards', () => table.act('Al', { type: 'call' }));
+        bets = flightsOf(seen, 'chips', true);
+        cards = flightsOf(seen, 'card', false);
+
+        assert.equal(seen.flights.length, 6, where('four bets and the turn of two boards move'));
+        assert.deepEqual(bets.map((bet) => [bet.text, bet.delay]), [0, 1, 2, 3].map(() => [says(2 * big), 0]), where('the bets going to the pot under two boards'));
+        bets.forEach((bet, seat) => {
+          if (seen.before.bets[seat]) {
+            assertOver(bet.from, seen.before.bets[seat], where(`beside two boards, the bet of seat ${seat} leaves where it lay`));
+          }
+          assertOver(bet.to, seen.after.pot, where(`the bet of seat ${seat} goes to the pot under two boards`));
+        });
+        assert.deepEqual(Object.keys(seen.before.bets), ['0', '1', '2'], where('the bets that lay beside two boards'));
+        assert.deepEqual(cards.map((card) => [card.board, card.delay]), [0, 1].map((board) => [board, STEP_GAP_MS]), where('the turn of both boards comes together'));
+        cards.forEach((card) => assertDrops(card, where(`the turn of board ${card.board}`)));
+        await shot(moving, `motion-landed-two-turns-${layout.name}`);
+
+        // The last hand of the night, played out in one view: each winner gets one pile, all at once
+        table.act('Quigs', { type: 'setLastHands', hands: 0 });
+        seen = await step('the last hand of the night', () => table.play(passive, (view) => view.hand?.stage === 'done'));
+        bets = flightsOf(seen, 'chips', true);
+
+        assert.ok(bets.length > 0 && bets.every((bet) => bet.delay === bets[0]!.delay), where('the last pot goes to its winners at once'));
+        bets.forEach((bet) => assertOver(bet.from, seen.after.pot, where('a pile of the last pot leaves the middle')));
+        assert.equal(new Set(bets.map((bet) => Object.keys(seen.after.plates).find((seat) => over(bet.to, seen.after.plates[Number(seat)]!)))).size, bets.length, where('each pile of the last pot goes to a winner of its own'));
+
+        // And when the felt comes to say the night is over, nothing moves and nothing is left on it
+        seen = await step('the end of the night', () => rig.advance(table.view('Quigs').hand!.deadline! - rig.now()));
+        assert.notEqual(table.view('Quigs').nightEndedAt, null);
+        assert.deepEqual(seen.flights, [], where('the end of the night moves nothing'));
+        assert.equal(await text(moving, '.message.night-over > div'), 'The night is over', where('the felt'));
+        assert.equal(await moving.locator('.stand-in').count(), 0, where('something is left on the felt when the night is over'));
+        await shot(moving, `motion-night-over-${layout.name}`);
+
+        await shot(moving, `motion-landed-${layout.name}`);
+        await moving.context().close();
+        await still.context().close();
+      }
+    },
+  ],
+  [
+    'with animations on, a tap, a key and a half-typed bet work while cards are in the air, and a new view, a squeezed table, a turned phone or the end of the night leaves nothing behind',
+    async (rig) => {
+      // Every animation the page's script has running, what each changes, and every stand-in on the table.
+      // The flash of a turn is the stylesheet's own, on the table's background
+      const inTheAir = (page: Page) =>
+        page.evaluate(`(() => {
+          const animations = document.getAnimations().filter((animation) => !(animation instanceof CSSAnimation));
+
+          // What a tap would land on where each thing in flight is right now: never the thing itself
+          const inTheWay = animations.filter(({ effect: { target } }) => {
+            const box = target.getBoundingClientRect();
+
+            return target.contains(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2));
+          });
+
+          return {
+            moving: document.querySelector('.stage').hasAttribute('data-moving'),
+            animations: animations.length,
+            animated: [...new Set(animations.flatMap((animation) => animation.effect.getKeyframes().flatMap(Object.keys)))].filter((key) => !['offset', 'computedOffset', 'easing', 'composite'].includes(key)).sort(),
+            standIns: document.querySelectorAll('.stand-in').length,
+            inTheWay: inTheWay.length,
+          };
+        })()`) as Promise<{ moving: boolean; animations: number; animated: string[]; standIns: number; inTheWay: number }>;
+      const still = { moving: false, animations: 0, animated: [], standIns: 0, inTheWay: 0 };
+      const air = (animations: number, standIns: number) => ({ moving: true, animations, animated: ['opacity', 'transform'], standIns, inTheWay: 0 });
+
+      for (const layout of MOTION_LAYOUTS.filter((layout) => ['phone-standing', 'desktop'].includes(layout.name))) {
+        const table = rig.table(MOTION_PLAYERS);
+        const { moving, still: unmoved } = await watch(table, 'Quigs', layout, 0.5);
+        const press = pressOn(moving, layout.screen);
+        const where = (what: string) => `${layout.name}, ${what}`;
+        const shown = () => Promise.all([moving, unmoved].map((page) => caughtUp(page, table.view('Quigs'))));
+
+        // The button is on Stu, so the deal puts the action on Quigs with every card still in the air
+        table.deal({ button: 1 });
+        await shown();
+        assert.deepEqual(await inTheAir(moving), air(10, 0), where('the deal'));
+        await shot(moving, `motion-held-deal-${layout.name}`);
+
+        // A bet half typed stays through a view that brings no news of the hand, which leaves the cards in the air too
+        await moving.fill('#raise-amount', '55');
+        table.act('Stu', { type: 'chat', text: 'any day now' });
+        await moving.getByText('any day now').first().waitFor({ state: 'attached' });
+        assert.equal(await moving.inputValue('#raise-amount'), '55', where('the half-typed bet was lost to a line of chat'));
+        assert.deepEqual(await inTheAir(moving), air(10, 0), where('a line of chat'));
+
+        // A tap on a phone and a key on the desktop play the move with the cards still in the air
+        if (layout.screen === 'desktop') {
+          await moving.locator('#raise-amount').blur();
+          await settle(moving);
+          await moving.keyboard.press('c');
+        } else {
+          await press('.turn [data-action="raise"]');
+        }
+        await moving.waitForSelector('.seat.acting[data-seat="1"]');
+        assert.equal(table.view('Quigs').seats[0]!.bet, layout.screen === 'desktop' ? 20 : 55, where('the move did not reach the table'));
+        await shown();
+        assert.deepEqual(await inTheAir(moving), air(1, 0), where('the viewer’s bet slides alone, and nothing of the deal is left'));
+
+        // Each fold takes the place of the one in the air before it
+        for (const name of ['Stu', 'Pam']) {
+          table.act(name, { type: 'fold' });
+          await shown();
+          assert.deepEqual(await inTheAir(moving), air(1, 1), where(`${name}’s fold`));
+        }
+
+        // A stand-in is drawn from the theme as what it stands in for is: here two cards face down, on their way to the middle
+        if (layout.screen === 'desktop') {
+          for (const theme of THEMES) {
+            await moving.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme.id)}`);
+            await shot(moving, `motion-held-fold-theme-${theme.id}`);
+          }
+          await moving.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(THEMES[0]!.id)}`);
+        }
+
+        // The bets on their way to the pot as the flop comes: Pam's blind with them, though she folded
+        table.act('Al', passive(table.view('Al')));
+        await shown();
+        assert.deepEqual(await inTheAir(moving), air(6, 3), where('the end of the street'));
+        await shot(moving, `motion-held-flop-${layout.name}`);
+
+        if (!layout.height) {
+          // A page put out of sight, as by another tab, would hold what is in the air until it came back
+          await moving.evaluate(SIGHT);
+          await moving.evaluate('window.outOfSight(true)');
+          assert.deepEqual(await inTheAir(moving), still, where('the page out of sight'));
+          await moving.evaluate('window.outOfSight(false)');
+          await assertAsStill(moving, unmoved, where('the page out of sight'));
+        } else {
+          // A keyboard opening squeezes the table and a turned phone lays it down: either way what was in the air is gone at once
+          for (const page of [moving, unmoved]) {
+            await page.addStyleTag({ content: `.stage { height: ${layout.height - 40}px !important; }` });
+          }
+          await dealt(moving);
+          assert.deepEqual(await inTheAir(moving), still, where('the table squeezed'));
+          await assertAsStill(moving, unmoved, where('the table squeezed'));
+
+          // And the next thing to happen moves as ever
+          table.act('Al', { type: 'raise', to: 40 });
+          await shown();
+          assert.deepEqual(await inTheAir(moving), air(1, 0), where('a bet after the squeeze'));
+
+          for (const page of [moving, unmoved]) {
+            await page.setViewportSize({ width: SCREENS.phoneSideways.width, height: layout.height + 600 });
+            await page.waitForSelector('.table.wide');
+          }
+          await dealt(moving);
+          assert.deepEqual(await inTheAir(moving), still, where('the phone turned'));
+          await assertAsStill(moving, unmoved, where('the phone turned'));
+        }
+
+        await flown(moving);
+        await assertAsStill(moving, unmoved, where('landed'));
+
+        // The last hand of the night is won, and the felt comes to say the night is over with the pot still on its way
+        table.act('Quigs', { type: 'setLastHands', hands: 0 });
+        const done = table.play(passive, (view) => view.hand?.stage === 'done');
+        await shown();
+        assert.ok((await inTheAir(moving)).standIns > 0, where('the last pot is not in the air'));
+
+        rig.advance(done.hand!.deadline! - rig.now());
+        for (const page of [moving, unmoved]) {
+          await page.waitForSelector('.message.night-over');
+        }
+        assert.deepEqual(await inTheAir(moving), still, where('the night over'));
+        await assertAsStill(moving, unmoved, where('the night over'));
+        await shot(moving, `motion-held-night-over-${layout.name}`);
+
+        await moving.context().close();
+        await unmoved.context().close();
+      }
+    },
+  ],
+  [
+    'animations are on for a new player, off for one who switched them off and for a device that asks for less motion, and the switch says which',
+    async (rig) => {
+      const table = rig.table(MOTION_PLAYERS);
+      const page = await table.open('Quigs', 'phone', MOTION, { moving: true });
+      const kept = await table.open('Stu', 'phone', MOTION);
+      const press = pressOn(page, 'phone');
+      const shown = (on: Page = page) => caughtUp(on, table.view('Quigs'));
+      const moved = async (on: Page = page) => (await flown(on)).length;
+
+      const preferences = async () => {
+        await press('[data-action="menu"]');
+        await press('.menu [data-action="preferences"]');
+        await page.waitForSelector('#pref-motion');
+        await page.locator('#pref-motion').scrollIntoViewIfNeeded();
+      };
+
+      table.deal({ button: 3 });
+      await shown();
+      await shown(kept);
+      assert.equal(await moved(), 10, 'a new player sees the blinds slide in and the cards dealt');
+      assert.equal(await moved(kept), 0, 'a page the rig keeps still moved');
+      assert.equal(await kept.evaluate(`localStorage.getItem('cnd.motion')`), 'off');
+      await kept.context().close();
+
+      await preferences();
+      assert.equal(await page.getAttribute('#pref-motion', 'aria-checked'), 'true');
+      assert.match(await text(page, '#pref-motion'), /^Animations\s*Cards are dealt around the table and chips slide to the pot$/);
+      assertOnScreen(await boxes(page, '#pref-motion'), 'phone', 'the switch for animations');
+      assert.deepEqual(await squeezed(page, '#pref-motion, #pref-motion span'), [], 'the switch for animations is cut off');
+      await shot(page, 'preferences-motion-phone');
+
+      await press('#pref-motion');
+      await page.waitForSelector('#pref-motion[aria-checked="false"]');
+      assert.equal(await page.evaluate(`localStorage.getItem('cnd.motion')`), 'off');
+      await press('[data-action="close"]');
+
+      table.act('Pam', { type: 'raise', to: 60 });
+      await shown();
+      assert.equal(await moved(), 0, 'a bet moved with animations switched off');
+
+      await preferences();
+      await press('#pref-motion');
+      await page.waitForSelector('#pref-motion[aria-checked="true"]');
+      await press('[data-action="close"]');
+
+      table.act('Al', { type: 'fold' });
+      await shown();
+      assert.equal(await moved(), 1, 'a fold did not move with animations switched back on');
+
+      // The device's own setting wins, and leaves the player's choice as it was for when the device stops asking
+      await page.emulateMedia({ reducedMotion: 'reduce' });
+      table.act('Quigs', { type: 'call' });
+      await shown();
+      assert.equal(await moved(), 0, 'a call moved on a device that asks for less motion');
+
+      await preferences();
+      await page.waitForSelector('#pref-motion[aria-disabled="true"][aria-checked="false"]');
+      assert.match(await text(page, '#pref-motion'), /Off while this device asks for less motion/);
+      await page.tap('#pref-motion', { force: true });
+      assert.equal(await page.getAttribute('#pref-motion', 'aria-checked'), 'false', 'the switch turned on against the device');
+      assert.equal(await page.evaluate(`localStorage.getItem('cnd.motion')`), 'on', 'the player’s own choice was lost');
+      assert.deepEqual(await squeezed(page, '#pref-motion, #pref-motion span'), [], 'the switch that cannot be turned on is cut off');
+      await shot(page, 'preferences-motion-reduced-phone');
+      await press('[data-action="close"]');
+
+      await page.emulateMedia({ reducedMotion: 'no-preference' });
+      table.act('Stu', { type: 'call' });
+      await shown();
+      assert.equal(await moved(), 6, 'the bets did not go to the pot, or the flop did not come, once the device stopped asking');
+      await page.context().close();
+    },
+  ],
+  [
+    'animations start in the frame their sound does: the deal at once, a street a beat after what is heard before it, and a street on two boards with the one sound of the two',
+    async (rig) => {
+      /**
+       * What a view set moving on Stu's page and what it played, since the last look. Whatever is heard
+       * and seen was set off in one frame, and the first card of each board starts when its sound does.
+       */
+      const watcher = async (table: RigTable) => {
+        const page = await table.open('Stu', 'desktop', [LISTEN, MOTION].join(';'), { moving: true });
+        let listened = 0;
+
+        return {
+          page,
+          look: async (what: string) => {
+            await caughtUp(page, table.view('Stu'));
+
+            const flights = await flown(page);
+            const names = await playedNames(page, listened);
+            const starts = (await playedAt(page)).slice(listened);
+            const frames = ((await page.evaluate('window.played')) as { frame: number }[]).slice(listened).map((sound) => sound.frame);
+            const heard = names.map((sound, nth) => ({ sound, frame: frames[nth]!, after: Math.round((starts[nth]! - starts[0]!) * 1000) }));
+            const boards = [...new Set(flights.flatMap((flight) => (flight.board === null ? [] : [flight.board])))].sort();
+            const firstOf = (these: Flight[]) => these.reduce((first, flight) => (flight.delay < first.delay ? flight : first));
+            const streets = boards.map((board) => firstOf(flights.filter((flight) => flight.board === board)));
+            const street = heard.find(({ sound }) => sound === 'street');
+
+            listened += names.length;
+
+            for (const card of streets) {
+              assert.equal(card.frame, street?.frame, `${what}: board ${card.board} was not set off in the frame its sound was`);
+              // Sounds keep their gap by the clock and moves by the frame they start in, so the two agree to within a frame
+              assert.ok(Math.abs(card.delay - street!.after) < 17, `${what}: board ${card.board} is seen ${card.delay} ms after the view and heard ${street!.after} ms after it`);
+            }
+
+            return { flights, heard: heard.map(({ sound, after }) => [sound, Math.round(after / STEP_GAP_MS)]), streets: streets.map((card) => [card.board, card.delay]), firstOf };
+          },
+        };
+      };
+
+      // A bomb pot on one board: the deal at once, and the flop a beat later
+      let table = rig.table(MOTION_PLAYERS);
+      let { page, look } = await watcher(table);
+
+      table.act('Quigs', { type: 'setBombPot', on: true });
+      table.deal({ button: 3, board: '2c 7d 9h Jc 3s' });
+
+      let seen = await look('a bomb pot');
+      const deal = seen.firstOf(seen.flights.filter((flight) => flight.what === 'card' && flight.seat !== null));
+
+      assert.deepEqual(seen.heard, [['deal', 0], ['street', 1]]);
+      assert.equal(deal.delay, 0, 'the deal waits');
+      assert.equal(deal.frame, seen.flights.find((flight) => flight.board !== null)!.frame, 'the deal and the flop were not set off together');
+      assert.deepEqual(seen.streets, [[0, STEP_GAP_MS]]);
+      await page.context().close();
+
+      // On two boards the flops are one sound and land together
+      table = rig.table(MOTION_PLAYERS, { bombPotBoards: 'two' });
+      ({ page, look } = await watcher(table));
+
+      table.act('Quigs', { type: 'setBombPot', on: true });
+      table.deal({ button: 3, board: '2c 7d 9h Jc 3s', secondBoard: 'Kd 5c 8h Ts 2h' });
+      seen = await look('a double-board bomb pot');
+      assert.deepEqual(seen.heard, [['deal', 0], ['street', 1]]);
+      assert.deepEqual(seen.streets, [[0, STEP_GAP_MS], [1, STEP_GAP_MS]]);
+
+      // Checked around to the button, whose check Stu hears as a knock: the turn of both boards comes with the street's sound, a beat after it
+      for (const name of ['Quigs', 'Stu', 'Pam']) {
+        table.act(name, { type: 'check' });
+      }
+      await look('checks');
+      table.act('Al', { type: 'check' });
+      seen = await look('the turn of two boards');
+      assert.deepEqual(seen.heard.slice(0, 2), [['knock', 0], ['street', 1]]);
+      assert.deepEqual(seen.streets, [[0, STEP_GAP_MS], [1, STEP_GAP_MS]]);
+
+      // Stu's own call is silent to him, so when it ends the street the river of both comes at once, with the bets going to the pot
+      table.act('Quigs', { type: 'check' });
+      table.act('Stu', { type: 'check' });
+      table.act('Pam', { type: 'raise', to: 40 });
+      table.act('Al', { type: 'fold' });
+      table.act('Quigs', { type: 'fold' });
+      await look('a bet and two folds');
+      table.act('Stu', { type: 'call' });
+      seen = await look('the river of two boards');
+      assert.deepEqual(seen.heard[0], ['street', 0]);
+      assert.deepEqual(seen.streets, [[0, 0], [1, 0]]);
+      assert.equal(seen.flights.filter((flight) => flight.what === 'chips' && flight.delay === 0).length, 2, 'the two bets go to the pot as the river comes');
+      await page.context().close();
+
+      // A hand run twice is dealt a street at a time, a board after the other: each card lands as its own street is heard
+      table = rig.table(MOTION_PLAYERS.slice(0, 2), { allowRunItTwice: true });
+      ({ page, look } = await watcher(table));
+
+      table.deal({ button: 0, holes: { 0: 'As Ah', 1: 'Kd Kc' }, board: '3c 8d Jh Qs 4d', secondBoard: '2c 5h 9s Td 6c' });
+      table.play(allIn, (view) => view.hand?.stage === 'runout');
+      // With every chip in before the flop, the table has no more on it than before the deal but the cards
+      await page.waitForSelector('.seat[data-seat="0"] .hole .card[data-card]');
+      await look('all in');
+
+      const streets: unknown[] = [];
+      for (let street = 0; street < 7 && table.view('Stu').hand!.stage === 'runout'; street++) {
+        rig.advance(table.view('Stu').hand!.deadline! - rig.now());
+        seen = await look(`street ${street} of a hand run twice`);
+        assert.equal(seen.heard[0]![0], 'street');
+        streets.push(...seen.streets);
+      }
+
+      assert.deepEqual(streets, [[0, 0], [0, 0], [0, 0], [1, 0], [1, 0], [1, 0]], 'each street of a hand run twice, on its own board');
+      await page.context().close();
     },
   ],
 ];

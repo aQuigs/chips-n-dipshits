@@ -51,14 +51,3 @@
   background: none;
   box-shadow: none;
 }
-
-.card.fresh {
-  animation: deal 0.28s ease-out;
-}
-
-@keyframes deal {
-  from {
-    opacity: 0;
-    transform: translateY(-35%) scale(0.92);
-  }
-}

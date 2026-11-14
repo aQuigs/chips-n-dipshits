@@ -1,6 +1,20 @@
-@media (prefers-reduced-motion: reduce) {
-  .card.fresh,
-  .plate .status.won {
-    animation: none;
-  }
+/* ---- Things in motion on the table: stand-ins for chips and cards the table no longer draws ---- */
+
+/* Over everything on the table and under no finger, held by its middle at the place the table gives it, as a bet is */
+.stand-in {
+  position: absolute;
+  z-index: 6;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+/* While anything is in flight, a card or a bet crossing the table is no more in a finger's way than a stand-in:
+   a tap goes to the seat or the felt under it */
+.stage[data-moving] :is(.card, .bet) {
+  pointer-events: none;
+}
+
+/* A chip with no figure beside it */
+.bet.bare {
+  padding: 0.25em;
 }

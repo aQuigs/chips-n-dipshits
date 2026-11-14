@@ -14,7 +14,7 @@ import { KEYS_SETTLE_MS } from '../src/client/hotkeys.ts';
 import { startDevServer } from '../src/dev/server.ts';
 import { UNSTAMPED_BUILD } from '../src/server/build.ts';
 import { clientPage } from './bundle.ts';
-import { complaints, NOTICES, TITLES } from './pageSpies.ts';
+import { complaints, NOTICES, STILL, TITLES } from './pageSpies.ts';
 import { STAND_IN_HOST } from './standInHost.ts';
 
 const STEP_TIMEOUT_MS = 20_000;
@@ -52,6 +52,7 @@ async function until(what: string, reached: () => boolean): Promise<void> {
 async function open(browser: Browser): Promise<Page> {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   await context.addInitScript(STAND_IN_HOST);
+  await context.addInitScript(STILL);
 
   const page = await context.newPage();
   page.setDefaultTimeout(STEP_TIMEOUT_MS);

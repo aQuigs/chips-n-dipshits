@@ -57,17 +57,33 @@ function soundOf(event: HandEvent, viewer: number | null, dealtOn: number): Soun
 }
 
 // The most sounds one view of the table plays: a slow answer that catches up on a whole street plays only how it ended
-const MOST_PER_VIEW = 3;
+export const MOST_PER_VIEW = 3;
+
+/** A sound a view plays, and which of its events it is heard for, counted from the first. */
+export interface Heard {
+  sound: SoundName;
+  event: number;
+}
 
 /**
- * What the hand's new events sound like to the viewer at `seat`, in order. Each sound plays once,
- * where it last came, and only the last few, so a burst of moves reads as how it ended, not as noise.
- * The viewer's own pot needs no second, smaller one for someone else's beside it. `dealtOn` is how
- * many boards the hand was dealt on from its first card.
+ * What the hand's new events sound like to the viewer at `seat`, in order, each with the event it is
+ * heard for. Each sound plays once, where it last came, and only the last few, so a burst of moves
+ * reads as how it ended, not as noise. The viewer's own pot needs no second, smaller one for someone
+ * else's beside it. `dealtOn` is how many boards the hand was dealt on from its first card.
  */
-export function soundsHeard(events: readonly HandEvent[], seat: number | null, dealtOn = 1): SoundName[] {
-  const heard = events.map((event) => soundOf(event, seat, dealtOn)).filter((sound) => sound !== null);
-  const once = heard.filter((sound, index) => heard.lastIndexOf(sound) === index && !(sound === 'win' && heard.includes('myWin')));
+export function soundsPlaced(events: readonly HandEvent[], seat: number | null, dealtOn = 1): Heard[] {
+  const heard = events.flatMap((event, nth) => {
+    const sound = soundOf(event, seat, dealtOn);
+
+    return sound === null ? [] : [{ sound, event: nth }];
+  });
+  const sounds = heard.map(({ sound }) => sound);
+  const once = heard.filter(({ sound }, index) => sounds.lastIndexOf(sound) === index && !(sound === 'win' && sounds.includes('myWin')));
 
   return once.slice(-MOST_PER_VIEW);
+}
+
+/** The sounds of `soundsPlaced` alone, as whatever plays them needs them. */
+export function soundsHeard(events: readonly HandEvent[], seat: number | null, dealtOn = 1): SoundName[] {
+  return soundsPlaced(events, seat, dealtOn).map(({ sound }) => sound);
 }

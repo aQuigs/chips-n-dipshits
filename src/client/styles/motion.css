@@ -1,6 +1,18 @@
-@media (prefers-reduced-motion: reduce) {
-  .card.fresh,
-  .plate .status.won {
-    animation: none;
-  }
+/* ---- Things in motion on the table: stand-ins for chips and cards the table no longer draws ---- */
+
+/* Over everything on the table and under no finger. Where it lies comes from the table, as a bet's place does */
+.stand-in {
+  z-index: 6;
+  pointer-events: none;
+}
+
+/* A seat's two cards, held by the middle of the place a seat keeps for them */
+.hole.stand-in {
+  position: absolute;
+  transform: translate(-50%, -50%);
+}
+
+/* A chip with no figure beside it */
+.bet.bare {
+  padding: 0.25em;
 }

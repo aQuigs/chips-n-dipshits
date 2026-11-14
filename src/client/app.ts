@@ -10,10 +10,12 @@ import { TableEffects } from './effects.ts';
 import { HotkeyPresser } from './hotkeyPresser.ts';
 import { TableNews } from './tableChange.ts';
 import { Modal } from './modal.ts';
+import { Motion, motionAbility } from './motion.ts';
+import { pageMotion, pageWatching } from './pageMotion.ts';
 import type { Platform } from './platform.ts';
 import { PREFERENCES, Preferences } from './prefs.ts';
 import { movePromptEl, SeatMoves } from './seatMoves.ts';
-import type { AppPreferences } from './prefs.ts';
+import type { Abilities, AppPreferences } from './prefs.ts';
 import { controlsEl, controlsSignature, lockTurn } from './render/controls.ts';
 import { dialogAllowed, dialogEl, dialogShows } from './render/dialogs/index.ts';
 import type { Dialog, DialogHandlers } from './render/dialogs/index.ts';
@@ -56,11 +58,11 @@ interface TableScreen {
   overlay: Slot;
   modal: Modal;
   feed: Feed;
+  motion: Motion;
   effects: TableEffects;
   news: TableNews;
   seatMoves: SeatMoves;
   shape: Shape;
-  seenCards: Set<string>;
   resizeObserver: ResizeObserver;
 }
 
@@ -76,6 +78,9 @@ export class App {
   readonly prefs: AppPreferences;
   private readonly sounds: Sounds;
   private readonly attention: Attention;
+  private readonly watching = pageWatching();
+  /** What this device can do of what Preferences switches on, each switch asked of the part of the page that knows. */
+  private readonly abilities: Abilities;
 
   private readonly root: HTMLElement;
   private readonly platform: Platform;
@@ -116,6 +121,7 @@ export class App {
     this.prefs.watch('deck', (deck) => this.screen?.feed.showDeck(deck));
     this.sounds = new Sounds(pageSounds(), this.prefs, { now: () => performance.now(), inView: () => !document.hidden });
     this.attention = new Attention(this.prefs, pageWays({ sounds: this.sounds, touch: pageTouch(), root, ownsTab: platform.ownsTab }));
+    this.abilities = { of: (key) => (key === 'motion' ? motionAbility(this.watching) : this.attention.of(key)), ask: (key) => this.attention.ask(key) };
     this.server = new ServerLine(platform.transport, platform.build, () => this.showOutdated());
     this.hotkeys = new HotkeyPresser(this.prefs, { root, controls: () => this.screen?.controls.element ?? null, dialogOpen: () => this.server.outdated || this.dialog !== null || (this.screen?.seatMoves.active ?? false) });
 
@@ -391,6 +397,7 @@ export class App {
     const feed = createFeed((text) => void this.send({ type: 'chat', text }), this.prefs.get('deck'));
     const stage = new Slot(h('div.stage'));
     const overlay = new Slot(h('div.overlay', { hidden: true }));
+    const motion = new Motion(pageMotion(stage.element), this.prefs, this.watching);
     const screen: TableScreen = {
       topbar: new Slot(h('header.topbar')),
       banners: new Slot(h('div.banners')),
@@ -399,7 +406,8 @@ export class App {
       overlay,
       modal: new Modal(overlay.element),
       feed,
-      effects: new TableEffects(this.prefs, stage.element, this.sounds, this.attention),
+      motion,
+      effects: new TableEffects(this.prefs, stage.element, this.sounds, this.attention, motion),
       news: new TableNews(),
       seatMoves: new SeatMoves(stage.element, {
         view: () => this.view,
@@ -407,7 +415,6 @@ export class App {
         changed: () => this.drawTable(),
       }),
       shape: 'wide',
-      seenCards: new Set(),
       resizeObserver: new ResizeObserver(() => this.reshape()),
     };
 
@@ -436,6 +443,7 @@ export class App {
     this.table = null;
     this.screen?.resizeObserver.disconnect();
     this.screen?.effects.dispose();
+    this.screen?.motion.dispose();
     this.screen?.seatMoves.dispose();
     this.screen = null;
     this.view = null;
@@ -619,28 +627,12 @@ export class App {
     const shows = [screen.shape, view.you, view.hostId, view.cohostIds, view.running, view.nextHandAt, view.nightEndedAt, view.config.actionSeconds, view.seats, view.hand, myRequest, picking];
 
     screen.stage.draw(shows, () => {
-      const table = tableEl(view, screen.shape, this.clock.offset, {
+      return tableEl(view, screen.shape, this.clock.offset, {
         onSit: (seat) => this.openDialog({ kind: 'sit', seat }),
         onStart: () => void this.send({ type: 'start' }),
         onPlayOn: () => void this.send({ type: 'playOn' }),
         moving: screen.seatMoves.tableHandlers(),
       });
-
-      // Only cards that were not on the table a moment ago get the dealing animation
-      const visible = new Set<string>();
-      for (const card of table.querySelectorAll<HTMLElement>('.card[data-card]')) {
-        const owner = card.closest<HTMLElement>('[data-seat]')?.dataset.seat ?? `board${card.closest<HTMLElement>('[data-run]')?.dataset.run ?? ''}`;
-        const key = `${view.hand?.number}:${owner}:${card.dataset.card}`;
-
-        visible.add(key);
-        if (!screen.seenCards.has(key)) {
-          card.classList.add('fresh');
-        }
-      }
-
-      screen.seenCards = visible;
-
-      return table;
     });
 
     screen.seatMoves.redrawn();
@@ -739,7 +731,7 @@ export class App {
       tableLink: () => this.platform.links.tableLink(session.tableId),
       memberLink: () => this.platform.links.memberLink(session.tableId, session.auth),
       prefs: this.prefs,
-      abilities: this.attention,
+      abilities: this.abilities,
       toLobby: () => this.showLobby(true),
       pickSeat: (playerId) => {
         this.closeDialog();

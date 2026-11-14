@@ -28,7 +28,9 @@
   transform: translate(-50%, -100%);
 }
 
-.seat .hole {
+/* A stand-in for a seat's cards (motion.css) is laid out as they are, so it starts exactly over the place the seat keeps for them */
+.seat .hole,
+.hole.stand-in {
   display: flex;
   gap: 2px;
   height: calc(var(--card-w) * 1.4 * 0.72);
@@ -129,7 +131,6 @@
   font-size: 1em;
   font-weight: 800;
   letter-spacing: 0;
-  animation: pop 0.35s ease-out;
 }
 
 .seat.acting .plate {
@@ -211,13 +212,6 @@
 
 .tag.vote.yes {
   color: var(--good);
-}
-
-@keyframes pop {
-  from {
-    opacity: 0;
-    transform: translateY(40%) scale(0.8);
-  }
 }
 
 .seat.open .plate {

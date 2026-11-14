@@ -23,6 +23,8 @@ interface PrefBase<Kind extends string, Value> {
 export interface OnOffPref extends PrefBase<'onOff', boolean> {
   /** Drawn as a small switch beside the others of its group, its label alone saying what it does and its hint kept for a pointer resting on it. */
   compact?: boolean;
+  /** Said in place of the hint while the device will not have it switched on. Left out, it is the browser's settings that say no. */
+  blocked?: string;
 }
 
 export interface ChoicePref extends PrefBase<'choice', string> {
@@ -91,6 +93,15 @@ export const PREFERENCES = {
     default: true,
     css: 'attribute',
   },
+  // On for a new player. A device that asks for less motion has none, whatever is chosen
+  motion: {
+    kind: 'onOff',
+    label: 'Animations',
+    hint: 'Cards are dealt around the table and chips slide to the pot',
+    blocked: 'Off while this device asks for less motion',
+    group: 'Cards',
+    default: true,
+  },
   // The ways of getting a player's attention (attentionWays.ts) beside the chime, each left out where the device can't do it.
   // After the cards, so they stay in sight when Preferences opens on a small phone
   buzz: { kind: 'onOff', label: 'Buzz', hint: 'Two short buzzes on a phone', group: 'When it’s your turn', compact: true, default: true },
@@ -112,7 +123,7 @@ export const PREFERENCES = {
 /**
  * Whether this device can do what an on/off preference switches on. 'no' leaves the preference out of
  * the dialog; 'ask' shows it off until the player's tap gets the browser's leave; 'blocked' shows it off
- * and says the browser was told no.
+ * and says what on the device will not have it.
  */
 export type Ability = 'yes' | 'no' | 'ask' | 'blocked';
 

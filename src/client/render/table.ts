@@ -4,6 +4,7 @@ import { BOARD_SIZE } from '../../engine/boards.ts';
 import { midSentence } from '../../engine/handNames.ts';
 import type { HandRead } from '../../engine/handNames.ts';
 import type { HandView, Holding, SeatView, TableView } from '../../engine/view.ts';
+import type { Place } from '../motion.ts';
 import { cardEl, h } from '../ui.ts';
 import { nightOver } from './night.ts';
 import { hostOrCohost, roleMark } from './roles.ts';
@@ -258,10 +259,18 @@ function seatEl(view: TableView, seat: SeatView, slot: number, shape: Shape, clo
 
   const nodes = [seatNode];
   if (seat.bet > 0) {
-    nodes.push(h('div.bet', { style: betPlace(shape, slot) }, h('i.chip'), shortAmount(seat.bet, view.config)));
+    const bet = chipsEl(seat.bet, view.config, betPlace(shape, slot));
+
+    bet.dataset.bet = String(seat.seat);
+    nodes.push(bet);
   }
 
   return nodes;
+}
+
+/** A pile of chips as a bet is drawn: a chip and what it is worth, or the chip alone. `style` says where it lies. */
+function chipsEl(amount: number | undefined, table: Denominated, style: Record<string, string>): HTMLDivElement {
+  return h('div.bet', { class: amount === undefined ? 'bare' : '', style }, h('i.chip'), amount === undefined ? null : shortAmount(amount, table));
 }
 
 function openSeatEl(view: TableView, seat: number, slot: number, shape: Shape, handlers: TableHandlers): HTMLElement {
@@ -442,7 +451,7 @@ export function tableEl(view: TableView, shape: Shape, clockOffset: number, hand
   // Those who may move players can drag a seat to an open one
   const movable = hostOrCohost(view) && view.seats.includes(null) && !view.shuffleAfterHand;
 
-  return h(
+  const table = h(
     'div',
     // How many boards the hand is played on, from its first card: the size of their cards and how far the bets stand off follow it
     { class: `table ${shape}${movable ? ' movable' : ''}`, 'data-boards': hand?.runs ?? 1 },
@@ -450,4 +459,150 @@ export function tableEl(view: TableView, shape: Shape, clockOffset: number, hand
     h('div.center', null, hand ? boardEl(hand) : null, hand ? potEl(view.config, hand) : null, messageEl(view, handlers)),
     nodes,
   );
+
+  DRAWINGS.set(table, { shape, hero, seats: seatCount, config: view.config });
+
+  return table;
+}
+
+/** What a table was drawn from that says where things on it go. */
+interface Drawing {
+  shape: Shape;
+  hero: number;
+  seats: number;
+  config: Denominated;
+}
+
+const DRAWINGS = new WeakMap<HTMLElement, Drawing>();
+
+/** A point on a drawn table, in its own pixels from its top left corner. */
+export interface Point {
+  x: number;
+  y: number;
+}
+
+/**
+ * A table as `tableEl` drew it, for whatever moves things across it. Every answer is measured on the
+ * page or built the way the table builds its own, so another shape of table, or another board, is
+ * followed without a word here.
+ */
+export interface DrawnTable {
+  /** The table itself. A table drawn again is another element. */
+  element: HTMLElement;
+  /** What the table has standing at a place: a seat's cards, its bet, one card of a board. Nothing where it draws nothing. */
+  standing(place: Place): HTMLElement[];
+  /** The middle of a place, whether or not anything stands there. Null for a seat nobody sits in. */
+  middle(place: Place): Point | null;
+  /** The middle of something on the table, wherever it is drawn at this moment. */
+  middleOf(element: Element): Point;
+  /**
+   * Makes a stand-in for what the table no longer draws, to be put on `element`: a pile of chips, saying
+   * `amount` or bare, or a seat's two cards face down, laid out at `place` as the table would draw it
+   * there. It lies over everything and under no finger, and taking it off again leaves the table as it
+   * was drawn. Null where there is no such place.
+   */
+  standIn(what: 'chips' | 'cards', place: Place, amount?: number): HTMLElement | null;
+}
+
+/** The table drawn in `stage` right now, or null while there is none. */
+export function drawnTable(stage: Element): DrawnTable | null {
+  const element = stage.querySelector<HTMLElement>(':scope > .table');
+  const drawing = element && DRAWINGS.get(element);
+  if (!element || !drawing) {
+    return null;
+  }
+
+  const seatEl = (seat: number) => element.querySelector<HTMLElement>(`.seat[data-seat="${seat}"]`);
+
+  // What marks the middle of a place. A bet's place has nothing when no bet is drawn there
+  const marker = (place: Place): Element | null => {
+    switch (place.at) {
+      case 'deck':
+        return element.querySelector('.felt');
+      case 'pot':
+        // Once the hand is over the result stands where the pot stood
+        return element.querySelector('.pot') ?? element.querySelector('.center > .message') ?? element.querySelector('.center');
+      case 'seat':
+        return seatEl(place.seat)?.querySelector('.plate') ?? null;
+      case 'cards':
+        return seatEl(place.seat)?.querySelector('.hole') ?? null;
+      case 'bet':
+        return element.querySelector(`.bet[data-bet="${place.seat}"]`);
+      case 'board':
+        return element.querySelector(`.board[data-run="${place.board}"]`)?.children[place.card] ?? null;
+    }
+  };
+
+  const middleOf = (target: Element): Point => {
+    const box = target.getBoundingClientRect();
+    const frame = element.getBoundingClientRect();
+    // The page may be drawn smaller than life, as the frames of the theme showcase are
+    const zoom = frame.width / element.offsetWidth || 1;
+
+    return { x: (box.left + box.width / 2 - frame.left) / zoom, y: (box.top + box.height / 2 - frame.top) / zoom };
+  };
+
+  const betSpot = (seat: number) => betPlace(drawing.shape, (seat - drawing.hero + drawing.seats) % drawing.seats);
+
+  // Where a stand-in lies: a bet's own place for one, and for anything else the middle of what marks the place
+  const lies = (at: Place): Record<string, string> | null => {
+    if (at.at === 'bet') {
+      return betSpot(at.seat);
+    }
+
+    const spot = marker(at);
+    const middle = spot && middleOf(spot);
+
+    return middle && { left: `${middle.x}px`, top: `${middle.y}px` };
+  };
+
+  const standIn = (what: 'chips' | 'cards', at: Place, amount?: number): HTMLElement | null => {
+    const style = lies(at);
+    if (!style) {
+      return null;
+    }
+
+    const made = what === 'chips' ? chipsEl(amount, drawing.config, style) : h('div.hole', { style }, cardEl(null), cardEl(null));
+
+    made.classList.add('stand-in');
+    made.setAttribute('aria-hidden', 'true');
+
+    return made;
+  };
+
+  return {
+    element,
+    standing: (at) => {
+      const spot = marker(at);
+
+      if (at.at === 'cards') {
+        return [...(spot?.querySelectorAll<HTMLElement>('.card') ?? [])];
+      }
+
+      const stands = at.at === 'bet' || (at.at === 'board' && spot?.matches('[data-card]'));
+
+      return stands && spot instanceof HTMLElement ? [spot] : [];
+    },
+    middle: (at) => {
+      const spot = marker(at);
+      if (spot) {
+        return middleOf(spot);
+      }
+
+      if (at.at !== 'bet') {
+        return null;
+      }
+
+      // Where a bet would sit is the stylesheet's to work out, so one is laid there for a moment and measured
+      const probe = standIn('chips', at)!;
+
+      element.append(probe);
+      const middle = middleOf(probe);
+      probe.remove();
+
+      return middle;
+    },
+    middleOf,
+    standIn,
+  };
 }

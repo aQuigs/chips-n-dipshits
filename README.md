@@ -145,11 +145,42 @@ With several Google accounts signed in to one browser, Google tends to send thes
 
 `npm run deploy` is also how an update goes live; the address stays the same. A page that was open through the update says "The game was updated" the next time it hears from the server, with a Reload button, and until it is reloaded nothing it sends changes a table. The reload comes back to the same table and seat.
 
-The Sheet is the database, a tab for each kind of thing: Tables (every table, including the cards in play), Ledger, Hands, Presets (the group's saved settings, made the first time one is saved), and Archive (tables that were put away, made when the first one is). Only people you trust not to peek should have access to it. Players never need access to the Sheet itself.
+The Sheet is the database, a tab for each kind of thing: Tables (every table, including the cards in play), Ledger, Hands, Presets (the group's saved settings, made the first time one is saved), Archive (tables that were put away, made when the first one is), and Errors (what went wrong, made the first time something does). Only people you trust not to peek should have access to it. Players never need access to the Sheet itself.
 
 A table nobody has played at for two weeks is put away, so the Tables tab stays short. It happens when someone creates a table: up to three old ones, the longest untouched first, move from Tables to Archive. What counts is a table's Updated cell, which every change to the table writes; looking at a table changes nothing, so a page left open does not keep it. In the Archive a table keeps its row, in the same twelve columns, and after them come its name, when it was created, who bought chips at it and when it was put away. Its row in Tables is left empty and the next new table takes it. Its lines in Ledger and Hands stay where they are. Anyone who opens its link is told it was put away and offered a new table.
 
 To bring one back, copy cells A to L of its row in Archive (the lowest, if it is there more than once), paste them into the row below the last one in Tables with an ordinary paste, which keeps the cells as text, and empty that row's Updated cell (B). Do it when nobody is creating a table, which writes to that tab too. Within half a minute its link and its players' personal links work again. With Updated empty it stays until two weeks after it is next played; left filled in, the next new table puts it away again.
+
+## When something breaks
+
+When something goes wrong, on the server or in a player's browser, a row is added to the Errors tab of the Sheet. The tab is made by the first one, so until something fails there is none. The newest rows are at the bottom.
+
+| Column | What it says |
+| --- | --- |
+| When | When it happened. |
+| Where | `server` and what was asked (`server act` is any move, chat line or command; `server poll`, `server join` and so on), `store` and what the Sheet was being made to do, or `page` for a player's browser. |
+| Times | 1 the first time. Repeats of the same failure in the ten minutes after it are counted rather than written, and come as one more row with how many there were, written with the next failure after those ten minutes. |
+| Message | What went wrong, cut short. |
+| Table | The table's code, when it happened at one. |
+| Build | Which build of the game. A page left open across an update shows its own and the server's. |
+| Browser | For a page: the browser, its version, and whether it is a phone, a tablet or a desktop. |
+| Trace | Where in the code, a few steps deep. On a row of repeats, when the first one was. |
+
+The rows you are most likely to see:
+
+- `server act`, "The lock was not free in time": the Sheet was busy for 20 seconds and the player was asked to try again. A few on a busy night are normal; many mean the Sheet is slow.
+- `store copy to Ledger` or `store copy to Hands`: a ledger line or a hand could not be copied to its tab. It waits in the table's row and is tried again, so nothing is lost.
+- `store cache after save`: the table was saved but the script's cache could not be updated. Harmless; the next request reads the Sheet.
+- `store put away`: an old table could not be moved to the Archive this time. The next new table tries again.
+- `page` with something like "TypeError": a bug in the page. Build says which version had it.
+
+A row never holds a card, a player's personal link or anything else that lets someone take their seat, a chat line, or anything a player typed apart from a table's code: an address loses everything after `?` or `#`, and anything shaped like a card or a seat's key is cut out.
+
+Limits, so that nobody can fill the tab and a broken Sheet can't either: only someone at a table can send a page's failure, a page sends three at most each time it is loaded, and the server takes three a minute from one player, ten from one table and thirty from all of them. At most twenty rows are written a minute. The tab keeps the newest 500 rows; past that the oldest fifty go at once. The counts behind these live in the script's cache for a few hours, so repeats that are still being counted when nothing else fails for that long are not written. Two failures at the same moment may be counted a little off.
+
+Apps Script's own log (Executions, in the script's editor) has every failure too, in full, including any the Errors tab could not take because the Sheet or the cache was what broke.
+
+To see that it works on the live game, sit at a table, open the browser's developer console on the game's page, pick the frame called `userCodeAppPanel` in the console's list of frames, and run `setTimeout(() => { throw new Error('Testing the Errors tab') })`. A `page` row with that message appears within a few seconds, and the game carries on as before.
 
 ## Work on it
 
@@ -188,6 +219,7 @@ Things worth knowing before changing it:
 - Every amount is a whole number of the table's smallest unit, a chip or a cent, so 1.50 is kept as 150 and the rules never see a fraction. `src/engine/amounts.ts` is the one place an amount is written out (`formatAmount`) and the one place a typed amount is read (`parseAmount`); both take the table it belongs to. The Ledger tab gets the amount as a number in dollars for a table that plays cents.
 - The ledger has two kinds of line. Buy-ins, cash-outs and the host's stack adjustments are chips paid for, which is what a player's net counts against. Chips moved between players outside a hand are two lines made together, chips off one stack and onto the other, each naming the other player: of kind `transfer` for a transfer, and `high hand` for each payer's part of the high-hand bonus to each collector. They move no money with the bank, so anything that adds up buy-ins, rebuys or what a player paid leaves those lines out: the chips moved are already in the stacks and so in what is cashed out. Only a transfer counts in a member's `transferred`; the bonus is winnings, like a pot. The Ledger tab writes such chips in its own Transferred column, beside the other player, with Type saying which, and leaves Amount empty, so a player's amounts there still add up to what they paid less what they took away.
 - A preset is a name and the settings it was saved with, kept for the whole group rather than a table. Settings are added and dropped over time, so a preset is always read through `fromPreset` (`src/engine/presets.ts`): a setting added since takes the value a new table starts with, one removed is ignored, and a value no longer allowed goes back to the usual with a note saying so. Saving and deleting one are requests of their own (`savePreset`, `deletePreset`), not table commands, since they change no table; the service lets only a host or co-host of the table they are sent from make them.
+- What goes wrong and is carried on through is reported through `ErrorLog` (`src/server/errorLog.ts`): the service's `failed`, the Sheet store's own and the page's `report` request all end there. Its Sheet version writes the Errors tab, its memory version keeps rows for the local server and the tests. A row is made from its fixed columns only, with the message and trace passed through `scrub`, and repeats and limits are counted in one value in the cache. The page catches what it throws and leaves uncaught in `src/client/pageErrors.ts`.
 - Each tab of the Sheet is kept by a store of its own behind an interface named for what it keeps (`TableStore`, `PresetStore`), with the Sheet's implementation in `src/gas` and one in memory for the local server and the tests. `src/gas/sheets.ts` has what they share: the stand-in interfaces for Apps Script, `openTab`, which makes a tab with its headers the first time something is written to it, and `underLock`.
 - Old tables are put away by `TableStore.putAwayOld`, asked for only by the service's `putAwayOldTables` after a table is created. It rides on someone else's request, so it never throws, gives up after a second when the lock is taken, and leaves what it could not do for the next new table. Which tables are due, and which of them a sweep looks at, is `src/server/putAway.ts`. A table that was put away is known from the Archive's ids, remembered in the cache for half a minute as a missing table is.
 - `LastWords` (`src/server/putAway.ts`) is asked of a table as it is put away: handed its final state, it answers with effects, which the store keeps as it keeps a transaction's, through `RECORD_SHEETS`, and writes once even when a failed sweep asks again. The service passes one that says nothing (`LAST_WORDS`).

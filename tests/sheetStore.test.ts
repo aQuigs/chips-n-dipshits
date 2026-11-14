@@ -3,12 +3,16 @@ import { test } from 'node:test';
 
 import { addMember, BADGES, createTable, DEFAULT_CONFIG, LIMITS, prettyCards, presetSettings, REACTIONS, REACTIONS_LIVE } from '../src/engine/index.ts';
 import type { Effect, HandRecord, TableConfig, TableState } from '../src/engine/index.ts';
+import { ERRORS_TAB, REPORTS_PER_RUN, SheetErrorLog } from '../src/gas/sheetErrorLog.ts';
 import { SheetPresetStore } from '../src/gas/sheetPresetStore.ts';
+import { TEXT, TIMESTAMP, WHOLE_NUMBER } from '../src/gas/sheets.ts';
 import { SheetStore } from '../src/gas/sheetStore.ts';
+import { ERROR_LIMITS, NOWHERE } from '../src/server/errorLog.ts';
 import { MemoryPresetStore } from '../src/server/memoryPresetStore.ts';
 import { MemoryStore } from '../src/server/memoryStore.ts';
 import type { PresetStore, SavedPreset } from '../src/server/presetStore.ts';
 import type { LastWords } from '../src/server/putAway.ts';
+import { PokerService } from '../src/server/service.ts';
 import { StoreBusyError } from '../src/server/store.ts';
 import type { TableStore } from '../src/server/store.ts';
 import { Calls, FakeCache, FakeLock, FakeSpreadsheet } from './fakes.ts';
@@ -1855,4 +1859,232 @@ test('the Sheet store and the memory store agree after every step of random crea
   assert.ok(seen.sweepsWithOthersLeft > 30, `only ${seen.sweepsWithOthersLeft} sweeps moved tables from among others that stayed`);
   assert.ok(seen.askedAfter > 100, `a table that had been put away was saved to only ${seen.askedAfter} times`);
   assert.ok(seen.rowsTakenAgain > 30, `a new table found an empty row only ${seen.rowsTakenAgain} times`);
+});
+
+// ---- The Errors tab ----
+
+const ERRORS_ROW_LIMIT = 1 + ERROR_LIMITS.rowsKept + ERROR_LIMITS.rowsPerReport;
+
+/** An Errors tab in a Sheet whose other tabs need the lock, with the calls made to it and the cache counted apart, and a clock the test moves. */
+function errorsSetup() {
+  const lock = new FakeLock();
+  const calls = new Calls();
+  const spreadsheet = new FakeSpreadsheet(lock, { [ERRORS_TAB]: ERRORS_ROW_LIMIT }, calls, [ERRORS_TAB]);
+  const cache = new FakeCache(calls);
+  const clock = { time: NOW, now: () => clock.time };
+
+  /** A log as one script run has it: each request is a run of its own. */
+  const run = () => new SheetErrorLog({ spreadsheet: () => spreadsheet, cache, clock, build: 'thisbuild123' });
+  const tab = () => spreadsheet.getSheetByName(ERRORS_TAB);
+
+  return { lock, calls, spreadsheet, cache, clock, run, tab };
+}
+
+test('the first failure makes the Errors tab, with its headers and every row formatted, without the lock and whoever holds it', () => {
+  const { lock, spreadsheet, run, tab } = errorsSetup();
+
+  assert.equal(tab(), null, 'nothing is made before there is something to write');
+  lock.busy = true;
+  run().report({ where: 'server act', error: new Error('Sheet broke'), tableId: 'ABC234' });
+
+  const sheet = tab()!;
+  assert.deepEqual(sheet.cells[0], ['When', 'Where', 'Times', 'Message', 'Table', 'Build', 'Browser', 'Trace']);
+  assert.deepEqual(sheet.cells[1]!.slice(1, 7), ['server act', 1, 'Sheet broke', 'ABC234', 'thisbuild123', '']);
+  assert.ok(sheet.cells[1]![0] instanceof Date);
+  assert.equal(sheet.formats.length, 1000);
+  assert.deepEqual(sheet.formats[999], [TIMESTAMP, TEXT, WHOLE_NUMBER, TEXT, TEXT, TEXT, TEXT, TEXT]);
+  assert.deepEqual(lock.waits, [], 'the lock was asked for');
+  assert.equal(spreadsheet.getSheetByName('Tables'), null);
+});
+
+test('a tab someone made with other headers is added to below its last row, its headers left as they are', () => {
+  const { lock, spreadsheet, run, tab } = errorsSetup();
+
+  lock.waitLock(0);
+  const made = spreadsheet.insertSheet(ERRORS_TAB);
+  made.getRange(1, 1, 3, 2).setValues([
+    ['Date', 'What went wrong'],
+    ['yesterday', 'a note'],
+    ['', ''],
+  ]);
+  lock.releaseLock();
+
+  run().report({ where: 'page', error: 'Boom' });
+
+  assert.deepEqual(tab()!.cells.slice(0, 2), [
+    ['Date', 'What went wrong'],
+    ['yesterday', 'a note'],
+  ]);
+  assert.equal(tab()!.shown(3, 4), 'Boom');
+});
+
+test('text that a Sheet would take for a formula is written as text, in the tab the game made and in one made by hand without formats', () => {
+  const texts = ['=SUM(A1:A9)', '+1+2', '-5 chips', '@someone'];
+
+  for (const byHand of [false, true]) {
+    const { lock, spreadsheet, clock, run, tab } = errorsSetup();
+
+    if (byHand) {
+      lock.waitLock(0);
+      spreadsheet.insertSheet(ERRORS_TAB).getRange(1, 1, 1, 1).setValues([['Errors']]);
+      lock.releaseLock();
+    }
+
+    for (const text of texts) {
+      clock.time += 60_000;
+      run().report({ where: text, error: text });
+    }
+
+    const sheet = tab()!;
+    const rows = Array.from({ length: texts.length }, (_row, index) => index + 2);
+
+    for (const [index, row] of rows.entries()) {
+      for (const column of [2, 4]) {
+        const shown = sheet.shown(row, column);
+
+        assert.ok(shown === texts[index] || shown === `'${texts[index]}`, `${byHand ? 'by hand' : 'made by the game'}: ${shown}`);
+        assert.equal(typeof sheet.cells[row - 1]![column - 1], 'string');
+      }
+    }
+  }
+});
+
+test('past its cap the oldest rows go in one call, so the newest are always there and the tab never grows past it', () => {
+  const { calls, clock, run, tab } = errorsSetup();
+  let deletes = 0;
+
+  for (let n = 0; n < 2 * ERROR_LIMITS.rowsKept; n++) {
+    clock.time += 60_000;
+    run().report({ where: 'server act', error: `failure ${n.toString(36)}x` });
+
+    const kept = tab()!.getLastRow() - 1;
+    assert.ok(kept <= ERROR_LIMITS.rowsKept, `${kept} rows after failure ${n}`);
+    deletes = calls.count('.deleteRows');
+  }
+
+  assert.ok(deletes >= 2 && deletes <= 2 * ERROR_LIMITS.rowsKept / 50, `${deletes} trims`);
+  assert.equal(tab()!.cells[0]![0], 'When', 'the headers stay');
+  assert.equal(tab()!.shown(tab()!.getLastRow(), 4), `failure ${(2 * ERROR_LIMITS.rowsKept - 1).toString(36)}x`);
+});
+
+test('a report costs a known number of calls, a repeat only the cache, and a run reports three failures at most', () => {
+  const { calls, run } = errorsSetup();
+
+  run().report({ where: 'server act', error: 'first' });
+  calls.made = [];
+
+  const log = run();
+  log.report({ where: 'server act', error: 'second' });
+  assert.deepEqual(calls.made, ['cache.get', 'cache.put', 'spreadsheet.getSheetByName', 'Errors.appendRow', 'Errors.getLastRow']);
+
+  calls.made = [];
+  log.report({ where: 'server act', error: 'second' });
+  assert.deepEqual(calls.made, ['cache.get', 'cache.put']);
+
+  calls.made = [];
+  const busy = errorsSetup();
+  const many = busy.run();
+  for (let n = 0; n < 10; n++) {
+    many.report({ where: 'server act', error: `kind ${'abcdefghij'[n]}` });
+  }
+
+  assert.equal(busy.tab()!.getLastRow(), 1 + REPORTS_PER_RUN);
+  assert.ok(busy.calls.made.length <= 2 + 5 + REPORTS_PER_RUN * 4, busy.calls.made.join(' '));
+});
+
+test('every call of a report failed in turn: nothing is thrown, the lock is never asked for, and the next run writes as usual', () => {
+  const clean = errorsSetup();
+  clean.run().report({ where: 'server act', error: 'first' });
+  const steps = [...clean.calls.made];
+
+  for (const kind of ['cache.get', 'cache.put', 'spreadsheet.insertSheet', 'Errors.setNumberFormats', 'Errors.setValues', 'Errors.appendRow', 'Errors.getLastRow']) {
+    assert.ok(steps.includes(kind), `no call to ${kind}`);
+  }
+
+  for (let failing = 1; failing <= steps.length; failing++) {
+    const context = errorsSetup();
+    const step = `call ${failing}, ${steps[failing - 1]}`;
+
+    context.calls.failNth(failing);
+    assert.doesNotThrow(() => context.run().report({ where: 'server act', error: 'first' }), step);
+    assert.deepEqual(context.lock.waits, [], step);
+
+    context.clock.time += ERROR_LIMITS.repeatWindowMs;
+    context.run().report({ where: 'server act', error: 'second' });
+    assert.equal(context.tab()?.shown(context.tab()!.getLastRow(), 4), 'second', step);
+  }
+});
+
+test('the counts kept in the cache stay well inside its limits at their fullest', () => {
+  const { cache, clock, run } = errorsSetup();
+  const words = (n: number) => `${n.toString(36)} ${'long words '.repeat(30)}`;
+
+  for (let minute = 0; minute < 5; minute++) {
+    clock.time += 60_000;
+
+    for (let n = 0; n < 40; n++) {
+      run().report({ where: `server ${'x'.repeat(30)}`, error: words(minute * 40 + n), tableId: 'ABC234', page: { memberId: `M${String(n).padStart(7, '0')}`, build: 'b'.repeat(40), browser: null } });
+    }
+  }
+
+  const kept = cache.entries.get('errors:tally')!;
+  assert.ok(Buffer.byteLength(kept, 'utf8') < 20_000, `${kept.length} characters`);
+  assert.deepEqual(
+    [...cache.seconds.entries()].filter(([key]) => key.startsWith('errors')),
+    [['errors:tally', ERROR_LIMITS.tallySeconds]],
+  );
+});
+
+/** A game on the Sheet with its log (or none), the Errors tab and its cache counted apart from the store's calls, so either can be failed alone. */
+function sheetGame(logged: boolean) {
+  const store = setup();
+  const logCalls = new Calls();
+  const book = new FakeSpreadsheet(store.lock, { [ERRORS_TAB]: ERRORS_ROW_LIMIT }, logCalls, [ERRORS_TAB]);
+  const clock = { now: () => NOW };
+  const errors = logged ? new SheetErrorLog({ spreadsheet: () => book, cache: new FakeCache(logCalls), clock, build: 'thisbuild123' }) : NOWHERE;
+  const sheetStore = new SheetStore({ spreadsheet: () => store.spreadsheet, cache: store.cache, lock: store.lock, flush: () => store.calls.note('flush'), errors });
+  const game = new PokerService({ store: sheetStore, presets: new MemoryPresetStore(), clock, rng: seededRng(9), errors });
+  const host = game.handle({ op: 'create', name: 'Host', config: { minBuyIn: 100 } });
+  assert.ok(host.ok && host.kind === 'joined');
+
+  const sitDown = () => {
+    try {
+      return game.handle({ op: 'act', tableId: host.view.id, auth: host.auth, command: { type: 'requestSeat', seat: 0, buyIn: 1000 } });
+    } catch (error) {
+      return { threw: String(error) };
+    }
+  };
+
+  return { ...store, logCalls, book, sitDown };
+}
+
+test("failing each of a request's own Sheet, cache and flush calls in turn gets the same answer with the log as without, and failing the log's own calls changes nothing", () => {
+  const learned = sheetGame(true);
+  learned.calls.made = [];
+  learned.sitDown();
+  const steps = learned.calls.made.length;
+  let reported = 0;
+
+  for (let failing = 1; failing <= steps; failing++) {
+    const plain = sheetGame(false);
+    plain.calls.failNth(failing);
+    const answer = plain.sitDown();
+
+    const logged = sheetGame(true);
+    logged.calls.failNth(failing);
+    logged.logCalls.made = [];
+    assert.deepEqual(logged.sitDown(), answer, `store call ${failing}`);
+
+    const logSteps = logged.logCalls.made.length;
+    reported += logSteps > 0 ? 1 : 0;
+
+    for (let logFailing = 1; logFailing <= logSteps; logFailing++) {
+      const both = sheetGame(true);
+      both.calls.failNth(failing);
+      both.logCalls.failNth(logFailing);
+      assert.deepEqual(both.sitDown(), answer, `store call ${failing}, log call ${logFailing}`);
+    }
+  }
+
+  assert.ok(reported >= 5, `only ${reported} of the failed calls were reported`);
 });

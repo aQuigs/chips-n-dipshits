@@ -1,7 +1,8 @@
 import { BuildGate } from '../server/build.ts';
 import { ByteRng } from '../server/byteRng.ts';
-import { PokerService } from '../server/service.ts';
+import { failureOf, PokerService } from '../server/service.ts';
 import type { ApiError, Built } from '../server/api.ts';
+import { SheetErrorLog } from './sheetErrorLog.ts';
 import { SheetPresetStore } from './sheetPresetStore.ts';
 import { SheetStore } from './sheetStore.ts';
 
@@ -38,6 +39,18 @@ function uuidBytes(): number[] {
 }
 
 let serviceForThisRun: BuildGate | null = null;
+let errorsForThisRun: SheetErrorLog | null = null;
+
+function errors(): SheetErrorLog {
+  errorsForThisRun ??= new SheetErrorLog({
+    spreadsheet: () => SpreadsheetApp.getActiveSpreadsheet(),
+    cache: CacheService.getScriptCache(),
+    clock: { now: () => Date.now() },
+    build: BUILD_ID,
+  });
+
+  return errorsForThisRun;
+}
 
 function service(): BuildGate {
   if (serviceForThisRun) {
@@ -50,10 +63,11 @@ function service(): BuildGate {
 
   serviceForThisRun = new BuildGate(
     new PokerService({
-      store: new SheetStore({ spreadsheet, cache: CacheService.getScriptCache(), lock, flush }),
+      store: new SheetStore({ spreadsheet, cache: CacheService.getScriptCache(), lock, flush, errors: errors() }),
       presets: new SheetPresetStore({ spreadsheet, lock, flush }),
       clock: { now: () => Date.now() },
       rng: new ByteRng(uuidBytes),
+      errors: errors(),
     }),
     BUILD_ID,
   );
@@ -115,14 +129,25 @@ function holdUntilNews(request: unknown): void {
 
 /** Every call the game page makes, as JSON in and JSON out. */
 export function api(body: string): string {
-  try {
-    const request: unknown = JSON.parse(body);
+  let request: unknown;
 
+  try {
+    request = JSON.parse(body);
+  } catch {
+    // Not something the page sends: whoever did is told so, and the log is no place for it
+    const refused: ApiError & Built = { ok: false, code: 'invalid', error: 'Malformed request', build: BUILD_ID };
+
+    return JSON.stringify(refused);
+  }
+
+  try {
     holdUntilNews(request);
 
     return JSON.stringify(service().handle(request));
   } catch (error) {
+    // What the service caught and reported already is left out by the log
     console.error(error);
+    errors().report(failureOf(request, error));
 
     const failure: ApiError & Built = { ok: false, code: 'internal', error: 'Something went wrong on the server, try again', build: BUILD_ID };
 

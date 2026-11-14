@@ -1,8 +1,10 @@
 import { asNumber, upgradeRecord } from '../engine/index.ts';
 import type { Denominated, Effect, HandRecord, TableState, Unit } from '../engine/index.ts';
+import { NOWHERE } from '../server/errorLog.ts';
+import type { ErrorLog } from '../server/errorLog.ts';
 import { dueToLookAt, lastWordsOf, PUT_AWAY_AT_ONCE } from '../server/putAway.ts';
 import type { LastWords } from '../server/putAway.ts';
-import { peekOf, restoreState } from '../server/store.ts';
+import { peekOf, restoreState, StoreBusyError } from '../server/store.ts';
 import type { TablePeek, TableStore, Txn } from '../server/store.ts';
 import { dataRows, FIRST_DATA_ROW, openTab, TEXT, TIMESTAMP, underLock, WHOLE_NUMBER } from './sheets.ts';
 import type { CacheLike, LockLike, SheetLike, SpreadsheetLike } from './sheets.ts';
@@ -14,7 +16,12 @@ export interface SheetStoreDeps {
   lock: LockLike;
   /** Pushes pending writes to the spreadsheet, so they are there before the lock is let go. */
   flush: () => void;
+  /** Where what goes wrong and is carried on through is reported. */
+  errors?: ErrorLog;
 }
+
+/** Tells of something that went wrong but stops nothing: where, and what. */
+type Noted = (where: string, error: unknown) => void;
 
 type SheetKey = 'tables' | 'ledger' | 'hands';
 
@@ -174,8 +181,11 @@ function heldOf(effects: Effect[], made: string): Held[] {
   return effects.flatMap((record, index) => (hasTab(record) ? [{ id: `${made}:${index}`, record }] : []));
 }
 
-/** The cells that keep records in a table's row until they are copied out. If they can't all fit, hands give way before money, oldest first. */
-function heldCells(held: Held[]): string[] {
+/**
+ * The cells that keep records in a table's row until they are copied out. If they can't all fit, hands
+ * give way before money, oldest first, and each dropped is `noted`.
+ */
+function heldCells(held: Held[], noted: Noted = () => undefined): string[] {
   for (let kept = held; ; ) {
     const cells = toCells(kept.length > 0 ? JSON.stringify(kept) : '', HELD_CHUNKS);
     if (cells) {
@@ -185,9 +195,16 @@ function heldCells(held: Held[]): string[] {
     const oldestHand = kept.findIndex((item) => item.record.type === 'hand');
     const dropped = Math.max(oldestHand, 0);
 
-    console.error('No room left to hold a record until it can be copied out', kept[dropped]);
+    noted('store hold records', `No room left in the row to hold a ${kept[dropped]!.record.type} record until it is copied out, so it was dropped`);
     kept = kept.filter((_item, index) => index !== dropped);
   }
+}
+
+/** The table records held together belong to. */
+function tableOfHeld(held: Held[]): string | null {
+  const first = held[0]?.record;
+
+  return first ? (first.type === 'ledger' ? first.entry.tableId : first.record.tableId) : null;
 }
 
 function isHeld(value: unknown): value is Held {
@@ -201,8 +218,8 @@ function isHeld(value: unknown): value is Held {
     : record.type === 'hand' && typeof record.record?.summary === 'string';
 }
 
-/** Reads the held cells of a row. Whatever in them isn't a record is left out: the table matters more than what someone did to these cells. */
-function heldFrom(text: string): Held[] {
+/** Reads the held cells of a row. Whatever in them isn't a record is left out, and `noted`: the table matters more than what someone did to these cells. */
+function heldFrom(text: string, noted: Noted): Held[] {
   if (!text) {
     return [];
   }
@@ -217,7 +234,7 @@ function heldFrom(text: string): Held[] {
   const held = Array.isArray(parsed) ? parsed.filter(isHeld) : [];
 
   if (!Array.isArray(parsed) || held.length < parsed.length) {
-    console.error('Set aside waiting records that could not be read', text);
+    noted('store read records', 'Set aside waiting records in the row that could not be read');
   }
 
   return held;
@@ -234,10 +251,10 @@ function stateText(values: unknown[]): string {
   return fromCells(values.slice(STATE_COLUMN - 1, STATE_COLUMN - 1 + STATE_CHUNKS));
 }
 
-function parseRow(values: unknown[]): TableRow {
+function parseRow(values: unknown[], noted: Noted): TableRow {
   return {
     state: restoreState(stateText(values)),
-    held: heldFrom(fromCells(values.slice(HELD_COLUMN - 1, HELD_COLUMN - 1 + HELD_CHUNKS))),
+    held: heldFrom(fromCells(values.slice(HELD_COLUMN - 1, HELD_COLUMN - 1 + HELD_CHUNKS)), noted),
   };
 }
 
@@ -296,7 +313,7 @@ const saveOf = (id: unknown, version: unknown) => `${String(id)}:${String(versio
  */
 const savedAs = ([id, updated, version]: unknown[]) => `${saveOf(id, version)}:${String(savedAt(updated))}`;
 
-function recordRow({ id, record }: Held, table: Denominated): unknown[] {
+function recordRow({ id, record }: Held, table: Denominated, noted: Noted): unknown[] {
   if (record.type === 'ledger') {
     const entry = record.entry;
     const amount = asNumber(entry.amount, table);
@@ -316,7 +333,7 @@ function recordRow({ id, record }: Held, table: Denominated): unknown[] {
   // The engine keeps a hand's events far shorter than this as well. A record too long for its cell would be
   // refused every time it is tried, so it goes without its events rather than never arriving
   if (json.length > CELL_LENGTH) {
-    console.error('A hand record too long for its cell was saved without its events', hand.tableId, hand.number);
+    noted('store copy to Hands', `Hand ${hand.number}'s record was too long for its cell, so it was saved without its events`);
     json = JSON.stringify({ ...fitted, events: [] });
   }
 
@@ -344,10 +361,12 @@ function headBlankColumns(sheet: SheetLike, headers: string[]): void {
  */
 export class SheetStore implements TableStore {
   private readonly deps: SheetStoreDeps;
+  private readonly errors: ErrorLog;
   private readonly sheets = new Map<SheetKey, SheetLike>();
 
   constructor(deps: SheetStoreDeps) {
     this.deps = deps;
+    this.errors = deps.errors ?? NOWHERE;
   }
 
   transact<T>(tableId: string, fn: (state: TableState | null) => Txn<T>): T {
@@ -419,8 +438,13 @@ export class SheetStore implements TableStore {
     try {
       underLock(this.deps.lock, BUSY, () => this.sweep(now, lastWords), PUT_AWAY_LOCK_WAIT_MS);
     } catch (error) {
-      // Whatever was not put away is still in the Tables tab, where the next new table finds it
-      console.error(error);
+      // Whatever was not put away is still in the Tables tab, where the next new table finds it. Giving up on a lock
+      // that was taken is what a sweep is meant to do, and no failure
+      if (error instanceof StoreBusyError) {
+        console.error(error);
+      } else {
+        this.failed('store put away', error);
+      }
     }
   }
 
@@ -432,6 +456,17 @@ export class SheetStore implements TableStore {
 
     // Looked for once more, under the lock: a table that has come to be there since must never be noted as gone
     return this.locked(() => !this.locate(tableId) && this.rememberGone(tableId));
+  }
+
+  /** Tells Apps Script's log and the error log of something that went wrong here and was carried on through. */
+  private failed(where: string, error: unknown, tableId: string | null = null): void {
+    console.error(where, error);
+    this.errors.report({ where, error, tableId });
+  }
+
+  /** What notes a failure at one table. */
+  private noter(tableId: string | null): Noted {
+    return (where, error) => this.failed(where, error, tableId);
   }
 
   private locked<T>(work: () => T): T {
@@ -485,7 +520,7 @@ export class SheetStore implements TableStore {
       const values = rowAt(hint);
 
       if (String(values[0]) === tableId) {
-        return { row: hint, ...parseRow(values) };
+        return { row: hint, ...parseRow(values, this.noter(tableId)) };
       }
     }
 
@@ -496,7 +531,7 @@ export class SheetStore implements TableStore {
 
     const row = index + FIRST_DATA_ROW;
 
-    return { row, ...parseRow(rowAt(row)) };
+    return { row, ...parseRow(rowAt(row), this.noter(tableId)) };
   }
 
   private persist(state: TableState, at: number, knownRow: number | null, leftOver: Held[], fresh: Held[]): void {
@@ -515,10 +550,11 @@ export class SheetStore implements TableStore {
 
     const settled = held.length === 0 || this.copyOut(row, held, leftOver.length > 0 ? RETRY_SCAN_ROWS : NEVER_TRIED, state.config);
 
-    // The save itself succeeded, so a cache that can't be refreshed is only emptied, not treated as a failure
+    // The save itself succeeded, so a cache that can't be refreshed is only emptied, not treated as a failure of the request
     try {
       this.remember(state, row, settled);
-    } catch {
+    } catch (error) {
+      this.failed('store cache after save', error, state.id);
       this.forget(state.id);
     }
   }
@@ -539,7 +575,7 @@ export class SheetStore implements TableStore {
       range.setNumberFormats([TABLE_FORMATS]);
     }
 
-    range.setValues([[state.id, new Date(at).toISOString(), String(state.version), ...stateCells, ...heldCells(held)]]);
+    range.setValues([[state.id, new Date(at).toISOString(), String(state.version), ...stateCells, ...heldCells(held, this.noter(state.id))]]);
 
     return row;
   }
@@ -571,6 +607,7 @@ export class SheetStore implements TableStore {
    */
   private copyOut(row: number, held: Held[], triedWithin: number, table: Denominated): boolean {
     const waiting: Held[] = [];
+    const noted = this.noter(tableOfHeld(held));
 
     for (const { type, sheet, idColumn, formats } of RECORD_SHEETS) {
       const mine = held.filter((item) => item.record.type === type);
@@ -590,10 +627,11 @@ export class SheetStore implements TableStore {
           headBlankColumns(this.sheet(sheet), HEADERS[sheet]);
         }
 
-        this.appendRows(this.sheet(sheet), fresh.map((item) => recordRow(item, table)), rowFormats);
+        this.appendRows(this.sheet(sheet), fresh.map((item) => recordRow(item, table, noted)), rowFormats);
         this.deps.flush();
       } catch (error) {
-        console.error(error);
+        // Waits in the table's row for the next try
+        noted(`store copy to ${SHEET_NAMES[sheet]}`, error);
         waiting.push(...mine);
       }
     }
@@ -603,11 +641,11 @@ export class SheetStore implements TableStore {
     }
 
     try {
-      this.sheet('tables').getRange(row, HELD_COLUMN, 1, HELD_CHUNKS).setValues([heldCells(waiting)]);
+      this.sheet('tables').getRange(row, HELD_COLUMN, 1, HELD_CHUNKS).setValues([heldCells(waiting, noted)]);
       this.deps.flush();
     } catch (error) {
       // The row still lists what was copied; the retry will find those in their tabs and only clear the list
-      console.error(error);
+      noted('store clear copied records', error);
 
       return false;
     }
@@ -696,7 +734,7 @@ export class SheetStore implements TableStore {
           leaving.push(ready);
         }
       } catch (error) {
-        console.error(error);
+        this.failed('store put away', error, candidate.id);
       }
     }
 
@@ -715,7 +753,7 @@ export class SheetStore implements TableStore {
         tables.getRange(table.row, 1, 1, TABLE_COLUMNS).setValues([EMPTY_ROW]);
       } catch (error) {
         // Still in both tabs, and finished by a later sweep
-        console.error(error);
+        this.failed('store put away', error, table.id);
       }
     }
 
@@ -761,11 +799,11 @@ export class SheetStore implements TableStore {
     const json = stateText(values);
     const saved = String(values[0]) === id ? savedTable(json, id) : null;
     const heldAs = values.slice(HELD_COLUMN - 1, HELD_COLUMN - 1 + HELD_CHUNKS);
-    const held = heldFrom(fromCells(heldAs));
+    const held = heldFrom(fromCells(heldAs), this.noter(id));
 
     // Whatever is in the cells for waiting records and is not such records would be gone once they are settled
     if (!saved || heldCells(held).some((cell, index) => cell !== heldAs[index])) {
-      console.error('Left a row of the Tables tab where it is, since it does not read as the table it names', id, row);
+      this.failed('store put away', `Left row ${row} of the Tables tab where it is, since it does not read as the table it names`, id);
 
       return null;
     }
@@ -799,7 +837,7 @@ export class SheetStore implements TableStore {
     const all = [...held, ...fresh];
 
     if (fresh.length > 0) {
-      this.sheet('tables').getRange(row, HELD_COLUMN, 1, HELD_CHUNKS).setValues([heldCells(all)]);
+      this.sheet('tables').getRange(row, HELD_COLUMN, 1, HELD_CHUNKS).setValues([heldCells(all, this.noter(tableOfHeld(all)))]);
       this.deps.flush();
     }
 

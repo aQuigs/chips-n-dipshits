@@ -12,8 +12,12 @@ export interface RangeLike {
 
 export interface SheetLike {
   getLastRow(): number;
+  getMaxRows(): number;
   getRange(row: number, column: number, numRows: number, numColumns: number): RangeLike;
   deleteRow(rowPosition: number): unknown;
+  deleteRows(rowPosition: number, howMany: number): unknown;
+  /** Adds a row below the last one with content. Google makes it safe against other appends at the same moment, without the lock. */
+  appendRow(rowContents: unknown[]): unknown;
 }
 
 export interface SpreadsheetLike {
@@ -69,15 +73,22 @@ export function dataRows(sheet: SheetLike, columns: number): unknown[][] {
 /**
  * A tab by its name. One that isn't there is made, with its headers, only when `create` says so,
  * which must be under the lock; otherwise it is null. A Sheet made before a tab was thought of gets it
- * the first time something is written to it.
+ * the first time something is written to it. With `formats`, one for each header, every row the new
+ * tab has is formatted by them, for rows that are appended rather than formatted as they are written.
  */
-export function openTab(spreadsheet: SpreadsheetLike, name: string, headers: string[], create: boolean): SheetLike | null {
+export function openTab(spreadsheet: SpreadsheetLike, name: string, headers: string[], create: boolean, formats?: string[]): SheetLike | null {
   const found = spreadsheet.getSheetByName(name);
   if (found || !create) {
     return found;
   }
 
   const made = spreadsheet.insertSheet(name);
+
+  if (formats) {
+    const rows = made.getMaxRows();
+    made.getRange(1, 1, rows, formats.length).setNumberFormats(Array.from({ length: rows }, () => formats));
+  }
+
   made.getRange(1, 1, 1, headers.length).setValues([headers]);
 
   return made;

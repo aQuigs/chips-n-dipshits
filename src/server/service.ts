@@ -1,6 +1,8 @@
 import { addMember, applyCommand, createTable, GameError, presetName, presetSettings, randomId, requireLevel, sharedPreset, tick, viewFor } from '../engine/index.ts';
 import type { Command, Ctx, Member, Preset, Rng, TableState } from '../engine/index.ts';
-import type { ApiResponse, Auth, ErrorCode } from './api.ts';
+import type { ApiResponse, Auth, ErrorCode, PageBrowser } from './api.ts';
+import type { ErrorLog, Failure } from './errorLog.ts';
+import { MemoryErrorLog } from './memoryErrorLog.ts';
 import type { PresetStore } from './presetStore.ts';
 import { PUT_AWAY_MESSAGE } from './putAway.ts';
 import type { LastWords } from './putAway.ts';
@@ -16,6 +18,8 @@ export interface ServiceDeps {
   presets: PresetStore;
   clock: Clock;
   rng: Rng;
+  /** Where failures the game carries on through are written down. Left out, they are kept in memory. */
+  errors?: ErrorLog;
 }
 
 const TABLE_ID_LENGTH = 6;
@@ -24,6 +28,10 @@ const TABLE_ID_LENGTH = 6;
 const TABLE_ID_PATTERN = new RegExp(`^[A-Z0-9]{${TABLE_ID_LENGTH}}$`);
 const CREATE_ATTEMPTS = 5;
 const HISTORY_LIMIT = 30;
+
+// What a page may send of a failure; the log keeps far less of it
+const REPORTED_MESSAGE_LENGTH = 500;
+const REPORTED_TRACE_LENGTH = 3000;
 
 /** A poll that may be kept open: until the table moves on from `since`, or for `ms` at most. */
 export interface PollWait {
@@ -112,6 +120,29 @@ class NoSuchTable extends ApiFailure {
   }
 }
 
+/**
+ * A failure in answering a request, for the log: where is the operation, when it is one this code
+ * could have known, and the table is the one the request names, when it is a table's id.
+ */
+export function failureOf(request: unknown, error: unknown): Failure {
+  const { op, tableId } = (typeof request === 'object' && request !== null ? request : {}) as Fields;
+
+  return {
+    where: typeof op === 'string' && /^[A-Za-z]{1,20}$/.test(op) ? `server ${op}` : 'server',
+    error,
+    tableId: typeof tableId === 'string' ? wellFormedTableId(tableId) : null,
+  };
+}
+
+const textOf = (value: unknown, length: number) => (typeof value === 'string' ? value.slice(0, length) : '');
+
+/** A page's word for its browser, with every field checked to be of its kind; the log keeps only the ones it knows. */
+function browserOf(value: unknown): PageBrowser | null {
+  const { name, major, device } = (typeof value === 'object' && value !== null ? value : {}) as Partial<Record<keyof PageBrowser, unknown>>;
+
+  return typeof name === 'string' && typeof major === 'number' && (device === 'phone' || device === 'tablet' || device === 'desktop') ? { name: name.slice(0, 20), major, device } : null;
+}
+
 /** Nothing yet: whatever comes to want a table's last state answers here. */
 const LAST_WORDS: LastWords = () => [];
 
@@ -125,12 +156,14 @@ export class PokerService {
   private readonly presets: PresetStore;
   private readonly clock: Clock;
   private readonly rng: Rng;
+  private readonly errors: ErrorLog;
 
   constructor(deps: ServiceDeps) {
     this.store = deps.store;
     this.presets = deps.presets;
     this.clock = deps.clock;
     this.rng = deps.rng;
+    this.errors = deps.errors ?? new MemoryErrorLog(deps.clock);
   }
 
   /** Answers one request. Rule violations and bad requests come back as error responses; only bugs and outages throw. */
@@ -146,12 +179,26 @@ export class PokerService {
         return { ok: false, code: error.code, error: error.message, ...(error.putAway ? { putAway: true } : {}) };
       }
 
+      // The commonest failure of the live game, and the player is asked to try again: the answer stands, and the log hears of it
       if (error instanceof StoreBusyError) {
+        this.failed(failureOf(request, `The lock was not free in time: ${error.message}`));
+
         return { ok: false, code: 'busy', error: error.message };
       }
 
+      this.failed(failureOf(request, error));
       throw error;
     }
+  }
+
+  /**
+   * Tells Apps Script's own log and the error log of something that went wrong. The one way the server
+   * reports a failure, so that a host which catches the same error again (`api` in `gas/main.ts`) can
+   * hand it here as well: the log writes one error object once.
+   */
+  failed(failure: Failure): void {
+    console.error(failure.where, failure.error);
+    this.errors.report(failure);
   }
 
   /**
@@ -229,6 +276,8 @@ export class PokerService {
         return this.savePreset(tableIdOf(request), authOf(request), request);
       case 'deletePreset':
         return this.deletePreset(tableIdOf(request), authOf(request), request.name);
+      case 'report':
+        return this.reportFromPage(tableIdOf(request), authOf(request), request);
       default:
         throw new ApiFailure('invalid', 'Unknown request');
     }
@@ -262,7 +311,7 @@ export class PokerService {
     try {
       this.store.putAwayOld(this.clock.now(), LAST_WORDS);
     } catch (error) {
-      console.error(error);
+      this.failed({ where: 'server put away', error });
     }
   }
 
@@ -392,6 +441,20 @@ export class PokerService {
     this.hostOrCohost(tableId, auth);
 
     return presetsAnswer(this.presets.delete(presetName(name)));
+  }
+
+  /**
+   * A failure a member's page saw. Only a member may write to the log, which anyone with the game's
+   * address could otherwise fill; the log holds each to its limits. The answer is the same whatever the
+   * log does with it.
+   */
+  private reportFromPage(tableId: string, auth: Auth, request: Fields): ApiResponse {
+    const { member } = this.memberOf(tableId, auth);
+    const error = { message: textOf(request.message, REPORTED_MESSAGE_LENGTH), stack: textOf(request.trace, REPORTED_TRACE_LENGTH) };
+
+    this.errors.report({ where: 'page', error, tableId, page: { memberId: member.id, build: textOf(request.build, 100), browser: browserOf(request.browser) } });
+
+    return { ok: true, kind: 'reported' };
   }
 
   private memberOf(tableId: string, auth: Auth): { state: TableState; member: Member } {

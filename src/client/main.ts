@@ -1,4 +1,5 @@
 import { App } from './app.ts';
+import { watchForErrors } from './pageErrors.ts';
 import { detectPlatform } from './platform.ts';
 import type { Boot } from './platform.ts';
 
@@ -13,4 +14,7 @@ declare global {
 
 const boot = typeof window.CND_BOOT === 'object' && window.CND_BOOT !== null ? window.CND_BOOT : {};
 
-new App(document.getElementById('app')!, detectPlatform(boot, window.CND_BUILD ?? '')).start();
+const app = new App(document.getElementById('app')!, detectPlatform(boot, window.CND_BUILD ?? ''));
+
+watchForErrors(window, (failure) => app.reportFailure(failure));
+app.start();

@@ -14,6 +14,13 @@ export interface Auth {
   token: string;
 }
 
+/** What a page says of its browser when it reports a failure: its name, major version and kind of device, nothing else. */
+export interface PageBrowser {
+  name: string;
+  major: number;
+  device: 'phone' | 'tablet' | 'desktop';
+}
+
 export type ApiRequest =
   | { op: 'create'; name: string; config?: Partial<TableConfig> }
   | { op: 'info'; tableId: string }
@@ -32,7 +39,9 @@ export type ApiRequest =
   | { op: 'presets' }
   /** Presets belong to the group, but only a host or co-host of a table may save one, from that table. */
   | { op: 'savePreset'; tableId: string; auth: Auth; name: string; settings: Partial<TableConfig>; replace: boolean }
-  | { op: 'deletePreset'; tableId: string; auth: Auth; name: string };
+  | { op: 'deletePreset'; tableId: string; auth: Auth; name: string }
+  /** A failure a member's page saw, for the error log. Its answer says nothing a page acts on. */
+  | { op: 'report'; tableId: string; auth: Auth; message: string; trace: string; browser: PageBrowser };
 
 /**
  * invalid: the request broke a rule; the message is for the player.
@@ -66,4 +75,5 @@ export type ApiResponse =
   | { ok: true; kind: 'view'; view: TableView }
   | { ok: true; kind: 'unchanged'; now: number }
   | { ok: true; kind: 'history'; hands: HandRecord[] }
-  | { ok: true; kind: 'presets'; presets: Preset[] };
+  | { ok: true; kind: 'presets'; presets: Preset[] }
+  | { ok: true; kind: 'reported' };

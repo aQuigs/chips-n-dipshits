@@ -7,6 +7,9 @@ const HALF_AN_EMOJI = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\
 const CACHE_VALUE_LIMIT_BYTES = 100_000;
 const CACHE_KEY_LIMIT_CHARACTERS = 250;
 
+// The rows a tab Google makes starts with
+const NEW_TAB_ROWS = 1000;
+
 /**
  * Every call a store makes to the stand-ins that share one of these, in order, by name, such as
  * `Tables.setValues` or `cache.remove`. It can make one of them fail, to act out the service giving up
@@ -41,24 +44,30 @@ export class Calls {
  * if it looks like one. A cell takes 50,000 characters and no more, and half an emoji does not survive
  * being stored. A number shows only as many decimals as its cell's format has. Given a lock, it refuses
  * a write made without holding it, since the store keeps the cache in step with the sheet only that way.
- * Given a row limit, it refuses a write below it.
+ * Given a row limit, it refuses a write below it. A leading apostrophe makes the rest of a string
+ * text in a cell that isn't formatted as text, and stays in one that is. A tab that is written without
+ * the lock by design (`lockFree`) takes any write without it.
  */
 export class FakeSheet implements SheetLike {
   cells: unknown[][] = [];
   formats: string[][] = [];
   reads = 0;
+  /** The rows the tab has, written to or not, which deleting rows takes away from and appending past adds to. */
+  maxRows = NEW_TAB_ROWS;
   private writesAllowed = Infinity;
   private readonly lock: FakeLock | null;
   private readonly rowLimit: number;
   private readonly calls: Calls | null;
   private readonly name: string;
+  private readonly lockFree: boolean;
 
   /** `rowLimit` is the most rows, headers included, the store may ever write to. `calls` is told of every call, under the tab's `name`. */
-  constructor(lock: FakeLock | null = null, rowLimit = Infinity, calls: Calls | null = null, name = 'Sheet') {
+  constructor(lock: FakeLock | null = null, rowLimit = Infinity, calls: Calls | null = null, name = 'Sheet', lockFree = false) {
     this.lock = lock;
     this.rowLimit = rowLimit;
     this.calls = calls;
     this.name = name;
+    this.lockFree = lockFree;
   }
 
   private note(call: string): void {
@@ -84,6 +93,12 @@ export class FakeSheet implements SheetLike {
     }
 
     return 0;
+  }
+
+  getMaxRows(): number {
+    this.note('getMaxRows');
+
+    return this.maxRows;
   }
 
   getRange(row: number, column: number, numRows: number, numColumns: number): RangeLike {
@@ -115,25 +130,12 @@ export class FakeSheet implements SheetLike {
 
       setValues: (values: unknown[][]): void => {
         this.note('setValues');
-        this.mustHoldLock();
-
-        if (row - 1 + numRows > this.rowLimit) {
-          throw new Error(`A write to row ${row - 1 + numRows} of a tab that may have ${this.rowLimit} rows`);
-        }
-
-        if (this.writesAllowed <= 0) {
-          throw new Error('Service Spreadsheets failed while accessing the document');
-        }
-
-        this.writesAllowed -= 1;
-
-        if (values.flat().some((value) => typeof value === 'string' && value.length > CELL_LIMIT_CHARACTERS)) {
-          throw new Error('Your input contains more than the maximum of 50000 characters in a single cell.');
-        }
+        this.mustBeWritable(row - 1 + numRows, values.flat());
 
         each(values, (r, c, i, j) => {
           (this.cells[r] ??= [])[c] = this.interpret(values[i]![j], this.formats[r]?.[c]);
         });
+        this.maxRows = Math.max(this.maxRows, row - 1 + numRows);
       },
 
       setNumberFormats: (formats: string[][]): void => {
@@ -162,10 +164,63 @@ export class FakeSheet implements SheetLike {
     this.mustHoldLock();
     this.cells.splice(row - 1, 1);
     this.formats.splice(row - 1, 1);
+    this.maxRows -= 1;
+  }
+
+  deleteRows(row: number, howMany: number): void {
+    this.note('deleteRows');
+    this.mustHoldLock();
+
+    if (row < 1 || howMany < 1 || row - 1 + howMany > this.maxRows) {
+      throw new Error(`Bad rows to delete: ${howMany} from ${row}`);
+    }
+
+    this.cells.splice(row - 1, howMany);
+    this.formats.splice(row - 1, howMany);
+    this.maxRows -= howMany;
+  }
+
+  /** As Google does: below the last row with content, in a row of its own however many come at once, adding a row to the tab when it is full. */
+  appendRow(values: unknown[]): void {
+    this.note('appendRow');
+
+    const row = this.getLastRowQuietly();
+    this.mustBeWritable(row + 1, values);
+
+    this.cells[row] = values.map((value, column) => this.interpret(value, this.formats[row]?.[column]));
+    this.maxRows = Math.max(this.maxRows, row + 1);
+  }
+
+  private getLastRowQuietly(): number {
+    for (let row = this.cells.length - 1; row >= 0; row--) {
+      if ((this.cells[row] ?? []).some((cell) => cell !== '' && cell !== undefined)) {
+        return row + 1;
+      }
+    }
+
+    return 0;
+  }
+
+  private mustBeWritable(lastRow: number, values: unknown[]): void {
+    this.mustHoldLock();
+
+    if (lastRow > this.rowLimit) {
+      throw new Error(`A write to row ${lastRow} of a tab that may have ${this.rowLimit} rows`);
+    }
+
+    if (this.writesAllowed <= 0) {
+      throw new Error('Service Spreadsheets failed while accessing the document');
+    }
+
+    this.writesAllowed -= 1;
+
+    if (values.some((value) => typeof value === 'string' && value.length > CELL_LIMIT_CHARACTERS)) {
+      throw new Error('Your input contains more than the maximum of 50000 characters in a single cell.');
+    }
   }
 
   private mustHoldLock(): void {
-    if (this.lock && !this.lock.held) {
+    if (this.lock && !this.lock.held && !this.lockFree) {
       throw new Error('A write to the sheet without holding the script lock');
     }
   }
@@ -177,6 +232,10 @@ export class FakeSheet implements SheetLike {
 
     if (format === TEXT_FORMAT) {
       return value.replace(HALF_AN_EMOJI, '\uFFFD');
+    }
+
+    if (value.startsWith("'")) {
+      return value.slice(1).replace(HALF_AN_EMOJI, '\uFFFD');
     }
 
     if (/^[=+]/.test(value)) {
@@ -192,12 +251,18 @@ export class FakeSpreadsheet implements SpreadsheetLike {
   private readonly lock: FakeLock | null;
   private readonly rowLimits: Record<string, number>;
   private readonly calls: Calls | null;
+  private readonly lockFree: Set<string>;
 
-  /** With a lock, every sheet in it refuses writes made without holding it. `rowLimits` caps the rows of the tabs it names. `calls` is told of every call to it and to its tabs. */
-  constructor(lock: FakeLock | null = null, rowLimits: Record<string, number> = {}, calls: Calls | null = null) {
+  /**
+   * With a lock, every sheet in it refuses writes made without holding it, but for the tabs named in
+   * `lockFree`, which are made and written without it by design. `rowLimits` caps the rows of the tabs
+   * it names. `calls` is told of every call to it and to its tabs.
+   */
+  constructor(lock: FakeLock | null = null, rowLimits: Record<string, number> = {}, calls: Calls | null = null, lockFree: string[] = []) {
     this.lock = lock;
     this.rowLimits = rowLimits;
     this.calls = calls;
+    this.lockFree = new Set(lockFree);
   }
 
   getSheetByName(name: string): FakeSheet | null {
@@ -209,11 +274,15 @@ export class FakeSpreadsheet implements SpreadsheetLike {
   insertSheet(name: string): FakeSheet {
     this.calls?.note('spreadsheet.insertSheet');
 
-    if (this.lock && !this.lock.held) {
+    if (this.lock && !this.lock.held && !this.lockFree.has(name)) {
       throw new Error('A tab made without holding the script lock');
     }
 
-    const sheet = new FakeSheet(this.lock, this.rowLimits[name], this.calls, name);
+    if (this.sheets.has(name)) {
+      throw new Error(`A sheet with the name "${name}" already exists. Please enter another name.`);
+    }
+
+    const sheet = new FakeSheet(this.lock, this.rowLimits[name], this.calls, name, this.lockFree.has(name));
     this.sheets.set(name, sheet);
 
     return sheet;

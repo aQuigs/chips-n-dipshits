@@ -10048,6 +10048,46 @@ const CHECKS: Check[] = [
       await page.evaluate('window.land()');
     },
   ],
+  [
+    'a failure in the page is told to the server once, as the member, and changes nothing the player sees, on a 360 phone',
+    async (rig) => {
+      const table = rig.table(['Quigs', 'Pam', 'Sam'].map((name) => ({ name, stack: 1000 })));
+      table.deal({ button: 0 });
+
+      const page = await table.open('Quigs', 'smallPhone');
+      await dealt(page);
+
+      // The whole page as drawn, less the clocks, which count down by themselves
+      const drawn = () =>
+        page.evaluate(`(() => {
+          const app = document.querySelector('.cnd').cloneNode(true);
+          app.querySelectorAll('.timer, .status.clock').forEach((clock) => clock.remove());
+
+          return app.outerHTML;
+        })()`) as Promise<string>;
+      const before = await drawn();
+
+      await rig.throwIn(page, 'A failure on purpose');
+      await rig.throwIn(page, 'A failure on purpose');
+
+      for (const deadline = Date.now() + 10_000; rig.errors.rows.length === 0; ) {
+        assert.ok(Date.now() < deadline, 'the failure never reached the error log');
+        await page.waitForTimeout(50);
+      }
+
+      // Long enough for a second report, which must not come
+      await page.waitForTimeout(500);
+      const [row, ...more] = rig.errors.rows;
+      assert.deepEqual(more, [], 'the same failure was reported twice');
+      assert.deepEqual([row!.where, row!.tableId, row!.message, row!.times], ['page', table.id, 'A failure on purpose', 1]);
+      // The rig's phones are a desktop Chrome at a phone's size, and say so
+      assert.match(row!.browser, /^Chrome \d+ on a desktop$/);
+
+      assert.equal(await drawn(), before, 'the page changed what it shows');
+      assert.equal(await page.locator('.toast:not([hidden])').count(), 0, 'the player was told something');
+      await shot(page, 'page-failure-smallPhone');
+    },
+  ],
 ];
 
 await mkdir(OUT, { recursive: true });

@@ -15,6 +15,7 @@ import type { DevServer } from '../src/dev/server.ts';
 import { onTheClock } from '../src/engine/index.ts';
 import type { Command, TableConfig, TableState, TableView } from '../src/engine/index.ts';
 import type { ApiRequest, ApiResponse, Auth } from '../src/server/api.ts';
+import { MemoryErrorLog } from '../src/server/memoryErrorLog.ts';
 import { MemoryPresetStore } from '../src/server/memoryPresetStore.ts';
 import { MemoryStore } from '../src/server/memoryStore.ts';
 import { PokerService } from '../src/server/service.ts';
@@ -266,6 +267,8 @@ export class Rig {
   readonly store: MemoryStore;
   /** The group's presets, empty when the check starts. */
   readonly presets: MemoryPresetStore;
+  /** What the server's error log was told. */
+  readonly errors: MemoryErrorLog;
   /** What the pages of this rig threw, each with whose page it was. */
   readonly pageErrors: string[] = [];
   /** Every picture the pages of this rig asked a GIF host for, in order. */
@@ -278,9 +281,13 @@ export class Rig {
   private readonly contexts: BrowserContext[] = [];
   private closing: Promise<void> | null = null;
 
-  private constructor(parts: { store: MemoryStore; presets: MemoryPresetStore; browser: Browser; service: PokerService; server: DevServer; clock: { ms: number } }) {
+  /** What a check throws in a page on purpose, which is then no failure of the check. */
+  private readonly meant: string[] = [];
+
+  private constructor(parts: { store: MemoryStore; presets: MemoryPresetStore; errors: MemoryErrorLog; browser: Browser; service: PokerService; server: DevServer; clock: { ms: number } }) {
     this.store = parts.store;
     this.presets = parts.presets;
+    this.errors = parts.errors;
     this.browser = parts.browser;
     this.service = parts.service;
     this.server = parts.server;
@@ -292,11 +299,12 @@ export class Rig {
     const store = new MemoryStore();
     const presets = new MemoryPresetStore();
     const clock = { ms: Date.now() };
-    const service = new PokerService({ store, presets, clock: { now: () => clock.ms }, rng: seededRng(20261113) });
+    const errors = new MemoryErrorLog({ now: () => clock.ms });
+    const service = new PokerService({ store, presets, clock: { now: () => clock.ms }, rng: seededRng(20261113), errors });
     const html = await (built ??= clientPage({}));
     const server = await startDevServer({ port: 0, page: async () => html, service });
 
-    return new Rig({ store, presets, browser, service, server, clock });
+    return new Rig({ store, presets, errors, browser, service, server, clock });
   }
 
   get url(): string {
@@ -340,9 +348,21 @@ export class Rig {
     }
 
     page.setDefaultTimeout(STEP_TIMEOUT_MS);
-    page.on('pageerror', (error) => this.pageErrors.push(`${who}: ${error.message}`));
+    page.on('pageerror', (error) => {
+      if (!this.meant.some((text) => error.message.includes(text))) {
+        this.pageErrors.push(`${who}: ${error.message}`);
+      }
+    });
 
     return page;
+  }
+
+  /** Has a page throw `message` on its own, outside anything the page called, as a bug would; for this check that is no failure. */
+  async throwIn(page: Page, message: string): Promise<void> {
+    this.meant.push(message);
+    await page.evaluate((text) => setTimeout(() => {
+      throw new Error(text);
+    }), message);
   }
 
   /** The front page, as someone who has not joined any table. */

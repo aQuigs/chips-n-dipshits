@@ -88,7 +88,7 @@ const BY_SOMEONE_ELSE: [HandEvent, SoundName | null][] = [
   [['chopOffer', 1], null],
   [['chopAnswer', 1, true], null],
   [['chop', [[1, 10], [2, 20]]], 'chips'],
-  [['hunt', [['9h', '4c']]], 'street'],
+  [['hunt', [['9h', '4c']]], 'hunt'],
 ];
 
 test('each kind of hand event makes its sound, or none', () => {
@@ -304,6 +304,14 @@ test('a throw’s whoosh plays the moment it is thrown, outside the queue: every
 
   assert.deepEqual(thrown.filter((played) => !played.startsWith('whoosh')), quiet);
   assert.deepEqual(thrown.filter((played) => played.startsWith('whoosh')), ['whoosh 0', 'whoosh 0', 'whoosh 0', 'whoosh 0']);
+});
+
+test('the cards of a rabbit hunt sound the moment they land, outside the queue: a deal that follows straight after is not put back', () => {
+  const ears = new Ears();
+  ears.sounds.play('hunt');
+  ears.sounds.play('deal');
+
+  assert.deepEqual(ears.played.map(({ sound, delay }) => `${sound} ${delay}`), ['hunt 0', 'deal 0']);
 });
 
 test('the chime for the viewer’s turn waits behind other sounds, however many, and is never dropped', () => {

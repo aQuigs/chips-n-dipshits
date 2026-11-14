@@ -425,3 +425,12 @@ test('a table saved before reactions loads with none, and its players can react'
 
   assert.equal(t.view(0).reactions.length, 1);
 });
+
+test('every saved table loads with rabbit hunting off and nothing hunted', () => {
+  for (const file of FILES) {
+    const state = load(file);
+
+    assert.equal(state.config.rabbitHunting, false, file);
+    assert.equal(state.hand?.hunted ?? null, null, file);
+  }
+});

@@ -9259,6 +9259,78 @@ const CHECKS: Check[] = [
     },
   ],
   [
+    'a rabbit hunt asked for at the last moment holds up nothing of the game: with its cards stopped mid-flight the table reads as still, and the next hand is dealt just as after a hand nobody hunted',
+    async (rig) => {
+      const table = rabbitTable(rig);
+      const page = await table.open('Stu', 'smallPhone', MOTION, { moving: true });
+
+      const nextDeal = async (hunting: boolean) => {
+        foldedTo(table, 3);
+        await page.waitForSelector('.message.result [data-action="hunt"]');
+        await dealt(page);
+
+        if (hunting) {
+          rig.advance(table.view('Stu').hand!.deadline! - rig.now() - 1);
+          await page.evaluate('window.holdAt = 0.5');
+          table.act('Stu', { type: 'huntRabbit', hand: table.view('Stu').hand!.number });
+          await page.waitForFunction(`window.flights.filter((flight) => flight.name === 'hunt').length === 2`);
+          await page.evaluate(`window.holdAt = null; window.hunting = document.getAnimations().filter((animation) => animation.id === 'hunt')`);
+          await dealt(page);
+        }
+
+        await page.evaluate('window.flights.splice(0)');
+        table.act('Quigs', { type: 'pause' });
+        table.play(() => null, (view) => view.hand === null);
+        table.deal({ button: 0, holes: RABBIT_HOLES, board: RABBIT_BOARD });
+
+        await page.waitForFunction(`window.flights.filter((flight) => flight.name === 'deal').length === ${2 * RABBIT_PLAYERS.length}`);
+        await dealt(page);
+        const flights = await flown(page);
+        playOut(table);
+
+        return flights.filter((flight) => flight.name === 'deal').map(({ seat, delay, duration }) => [seat, delay, duration]);
+      };
+
+      const quiet = await nextDeal(false);
+      const hunted = await nextDeal(true);
+      assert.deepEqual(hunted, quiet, 'the deal after a hunt went out otherwise');
+      // Taken off with the board they flew over when the next hand was drawn: never landed, which would end the check's hold
+      assert.deepEqual(await page.evaluate('window.hunting.map((animation) => animation.playState)').then((states) => (states as string[]).filter((state) => state === 'finished')), []);
+      await page.evaluate('window.land()');
+    },
+  ],
+  [
+    'on a 360 phone the offer and the hunted cards stand clear of a reaction popped up over a seat and a throw landed on one',
+    async (rig) => {
+      const table = rabbitTable(rig);
+      foldedTo(table, 3);
+
+      const stu = await table.open('Stu', 'smallPhone');
+      table.act('Pam', { type: 'react', kind: 'laugh' });
+      table.act('Quigs', { type: 'react', kind: 'tomato', to: table.auth('Stu').id });
+      await stu.waitForSelector('.seat-reaction[data-reaction="laugh"]');
+      await stu.waitForSelector('.seat-reaction[data-reaction="tomato"]');
+
+      for (const state of ['offer', 'hunted'] as const) {
+        if (state === 'hunted') {
+          await pressOn(stu, 'smallPhone')('[data-action="hunt"]');
+          await stu.waitForSelector('.rabbit-note');
+        }
+
+        await inShapesOf(
+          stu,
+          'smallPhone',
+          async (shape) => {
+            await assertRabbitFits(stu, 'smallPhone', `${state} beside reactions, ${shape}`);
+            assertApart(await boxes(stu, '.seat-reaction'), await boxes(stu, '.message.result > *, .board .card'), `${state} beside reactions, ${shape}: a reaction and the middle of the table`);
+            await shot(stu, `rabbit-${state}-reactions-smallPhone-${shape}`);
+          },
+          { buttonsUp: false },
+        );
+      }
+    },
+  ],
+  [
     'the table settings switch rabbit hunting on, off as a table starts, and the table is told',
     async (rig) => {
       for (const screen of ['smallPhone', 'desktop'] as const) {

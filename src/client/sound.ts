@@ -1,7 +1,7 @@
 import type { AppPreferences } from './prefs.ts';
 
 /** Every sound the page can make. Each is one short recipe in `soundRecipes.ts`. */
-export type SoundName = 'deal' | 'chips' | 'knock' | 'fold' | 'allIn' | 'street' | 'win' | 'myWin' | 'turn' | 'whoosh';
+export type SoundName = 'deal' | 'chips' | 'knock' | 'fold' | 'allIn' | 'street' | 'win' | 'myWin' | 'turn' | 'whoosh' | 'hunt';
 
 /**
  * What makes the sounds: the Web Audio synthesizer in a browser, or silence where there is none. Sounds
@@ -33,11 +33,11 @@ export const MOST_WAIT_MS = 400;
 const CALLS_BACK: ReadonlySet<SoundName> = new Set(['turn']);
 
 /**
- * Sounds that are decoration beside the game, such as a throw's whoosh, as `ASIDE_MOVES` are beside its
+ * Sounds that are decoration beside the game, such as a throw's whoosh or a rabbit hunt's cards, as `ASIDE_MOVES` are beside its
  * motion: each plays the moment it is asked for, outside the queue, so it never pushes a deal's or a
  * street's sound a gap later, nor is dropped for waiting behind them.
  */
-export const ASIDE_SOUNDS: ReadonlySet<SoundName> = new Set<SoundName>(['whoosh']);
+export const ASIDE_SOUNDS: ReadonlySet<SoundName> = new Set<SoundName>(['whoosh', 'hunt']);
 
 // Once the volume slider rests this long, a sample plays at the new volume
 const SAMPLE_AFTER_MS = 200;

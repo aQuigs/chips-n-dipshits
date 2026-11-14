@@ -56,11 +56,11 @@ export interface Move {
 }
 
 /**
- * Moves that are decoration beside the game, such as a throw: they play in a lane of their own, which
+ * Moves that are decoration beside the game, such as a throw or the cards a rabbit hunt lays out: they play in a lane of their own, which
  * `idle()` and the stage's `data-moving` leave out, so a held card, a hand's chances or a deal never
  * wait for one, however many are flying.
  */
-export const ASIDE_MOVES: ReadonlySet<MoveName> = new Set<MoveName>(['throw']);
+export const ASIDE_MOVES: ReadonlySet<MoveName> = new Set<MoveName>(['throw', 'hunt']);
 
 /** How long each move takes, from leaving to landing. */
 export const MOVE_MS: Record<MoveName, number> = { deal: 260, board: 240, hunt: 280, show: 200, bet: 200, chips: 280, muck: 220, facedown: 150, reveal: 210, confetti: 1100, throw: 550 };

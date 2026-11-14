@@ -56,6 +56,11 @@ export const RECIPES: Record<SoundName, Voice[]> = {
     { noise: 2600, slideTo: 700, width: 1.2, at: 0, length: 0.3, level: 0.3 },
     { tone: 140, slideTo: 90, at: 0.5, length: 0.12, level: 0.25 },
   ],
+  // Cards that would have come, laid down softly: lower and quieter than a street, since they count for nothing
+  hunt: [
+    { noise: 1800, width: 1, at: 0, length: 0.05, level: 0.35 },
+    { tone: 240, wave: 'triangle', slideTo: 170, at: 0, length: 0.06, level: 0.25 },
+  ],
   // Two short rising notes when the action reaches the viewer
   turn: [
     { tone: 660, at: 0, length: 0.12, level: 0.32 },

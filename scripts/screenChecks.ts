@@ -556,11 +556,12 @@ const BUZZ = `(() => {
 const middle = (box: Box) => ({ x: (box.left + box.right) / 2, y: (box.top + box.bottom) / 2 });
 
 /**
- * Run in a page: every emoji of the reactions drawn half as wide again as their own size, as no font here
- * draws them but some phones' fonts come near. A check run with it shows no layout of theirs depends on
- * how wide this machine's emoji are.
+ * Run in a page: every emoji of the reactions and the rabbit hunt drawn half as wide again as their own
+ * size, as no font here draws them but some phones' fonts come near. A check run with it shows no layout
+ * of theirs depends on how wide this machine's emoji are. The rabbit's sits in a line of words, where only
+ * a box of its own takes an indent.
  */
-const WIDE_EMOJI = '.seat-reaction, .thrown, .react-choice, .react-toggle { letter-spacing: 0.25em; text-indent: 0.25em; }';
+const WIDE_EMOJI = '.seat-reaction, .thrown, .react-choice, .react-toggle, .rabbit-mark { letter-spacing: 0.25em; text-indent: 0.25em; } .rabbit-mark { display: inline-block; }';
 
 /** That every box in `found` is inside `frame`. */
 function within(found: Box[], [frame]: Box[], what: string): void {
@@ -9300,33 +9301,44 @@ const CHECKS: Check[] = [
     },
   ],
   [
-    'on a 360 phone the offer and the hunted cards stand clear of a reaction popped up over a seat and a throw landed on one',
+    'on a 360 phone the offer and the hunted cards stand clear of a reaction popped up over a seat and a throw landed on one, with emoji as this machine draws them and far wider',
     async (rig) => {
-      const table = rabbitTable(rig);
-      foldedTo(table, 3);
+      for (const glyph of ['own-emoji', 'wide-emoji']) {
+        const table = rabbitTable(rig);
+        foldedTo(table, 3);
 
-      const stu = await table.open('Stu', 'smallPhone');
-      table.act('Pam', { type: 'react', kind: 'laugh' });
-      table.act('Quigs', { type: 'react', kind: 'tomato', to: table.auth('Stu').id });
-      await stu.waitForSelector('.seat-reaction[data-reaction="laugh"]');
-      await stu.waitForSelector('.seat-reaction[data-reaction="tomato"]');
-
-      for (const state of ['offer', 'hunted'] as const) {
-        if (state === 'hunted') {
-          await pressOn(stu, 'smallPhone')('[data-action="hunt"]');
-          await stu.waitForSelector('.rabbit-note');
+        const stu = await table.open('Stu', 'smallPhone');
+        if (glyph === 'wide-emoji') {
+          await stu.addStyleTag({ content: WIDE_EMOJI });
         }
 
-        await inShapesOf(
-          stu,
-          'smallPhone',
-          async (shape) => {
-            await assertRabbitFits(stu, 'smallPhone', `${state} beside reactions, ${shape}`);
-            assertApart(await boxes(stu, '.seat-reaction'), await boxes(stu, '.message.result > *, .board .card'), `${state} beside reactions, ${shape}: a reaction and the middle of the table`);
-            await shot(stu, `rabbit-${state}-reactions-smallPhone-${shape}`);
-          },
-          { buttonsUp: false },
-        );
+        table.act('Pam', { type: 'react', kind: 'laugh' });
+        table.act('Quigs', { type: 'react', kind: 'tomato', to: table.auth('Stu').id });
+        await stu.waitForSelector('.seat-reaction[data-reaction="laugh"]');
+        await stu.waitForSelector('.seat-reaction[data-reaction="tomato"]');
+
+        for (const state of ['offer', 'hunted'] as const) {
+          if (state === 'hunted') {
+            await pressOn(stu, 'smallPhone')('[data-action="hunt"]');
+            await stu.waitForSelector('.rabbit-note');
+          }
+
+          await inShapesOf(
+            stu,
+            'smallPhone',
+            async (shape) => {
+              const where = `${state} beside reactions, ${glyph}, ${shape}`;
+
+              await assertRabbitFits(stu, 'smallPhone', where);
+              assert.deepEqual(await squeezed(stu, '.message.result .rabbit-note'), [], `${where}: the note is cut off`);
+              assertApart(await boxes(stu, '.seat-reaction'), await boxes(stu, '.message.result > *, .board .card'), `${where}: a reaction and the middle of the table`);
+              await shot(stu, `rabbit-${state}-reactions-${glyph}-smallPhone-${shape}`);
+            },
+            { buttonsUp: false },
+          );
+        }
+
+        await stu.context().close();
       }
     },
   ],

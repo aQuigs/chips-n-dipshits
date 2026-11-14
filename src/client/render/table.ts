@@ -386,18 +386,18 @@ function huntedCardEl(card: string): HTMLElement {
 /** Under the result of a hand that ended early: the cards that would have come once hunted, or for a player dealt in, the button to hunt them. */
 function rabbitEl(hand: HandView, handlers: TableHandlers): HTMLElement | null {
   if (hand.hunted) {
-    return h('div.rabbit-note', null, RABBIT, ' Rabbit hunt: didn’t count');
+    return h('div.rabbit-note', null, rabbitMark(), ' Rabbit hunt: didn’t count');
   }
 
   if (!hand.canHunt) {
     return null;
   }
 
-  return h('button.btn.rabbit', { type: 'button', 'data-action': 'hunt', title: 'See the cards that would have come', onclick: () => handlers.onHunt(hand.number) }, RABBIT, ' Rabbit hunt');
+  return h('button.btn.rabbit', { type: 'button', 'data-action': 'hunt', title: 'See the cards that would have come', onclick: () => handlers.onHunt(hand.number) }, rabbitMark(), ' Rabbit hunt');
 }
 
 /** In Unicode 6.0, so every phone draws it. */
-const RABBIT = '🐇';
+const rabbitMark = () => h('span.rabbit-mark', null, '🐇');
 
 /** How many boards a hand's result speaks of: one for a hand everyone else folded, which was won whole however many were out. */
 function boardsWonOn(hand: HandView): number {

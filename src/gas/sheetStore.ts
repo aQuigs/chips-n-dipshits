@@ -1,12 +1,11 @@
 import { asNumber, upgradeRecord } from '../engine/index.ts';
 import type { Denominated, Effect, HandRecord, TableState, Unit } from '../engine/index.ts';
-import { NOWHERE } from '../server/errorLog.ts';
-import type { ErrorLog, Failure } from '../server/errorLog.ts';
+import type { ErrorLog } from '../server/errorLog.ts';
 import { dueToLookAt, lastWordsOf, PUT_AWAY_AT_ONCE } from '../server/putAway.ts';
 import type { LastWords } from '../server/putAway.ts';
 import { peekOf, restoreState, StoreBusyError } from '../server/store.ts';
 import type { TablePeek, TableStore, Txn } from '../server/store.ts';
-import { dataRows, FIRST_DATA_ROW, openTab, TEXT, TIMESTAMP, underLock, WHOLE_NUMBER } from './sheets.ts';
+import { dataRows, FIRST_DATA_ROW, HeldReports, openTab, TEXT, TIMESTAMP, underLock, WHOLE_NUMBER } from './sheets.ts';
 import type { CacheLike, LockLike, SheetLike, SpreadsheetLike } from './sheets.ts';
 
 export interface SheetStoreDeps {
@@ -357,14 +356,12 @@ function headBlankColumns(sheet: SheetLike, headers: string[]): void {
  */
 export class SheetStore implements TableStore {
   private readonly deps: SheetStoreDeps;
-  private readonly errors: ErrorLog;
-  /** Failures noted while holding the lock, reported once it is let go so that reporting never keeps anyone waiting for it. */
-  private noted: Failure[] = [];
+  private readonly reports: HeldReports;
   private readonly sheets = new Map<SheetKey, SheetLike>();
 
   constructor(deps: SheetStoreDeps) {
     this.deps = deps;
-    this.errors = deps.errors ?? NOWHERE;
+    this.reports = new HeldReports(deps.errors);
   }
 
   transact<T>(tableId: string, fn: (state: TableState | null) => Txn<T>): T {
@@ -433,7 +430,7 @@ export class SheetStore implements TableStore {
   }
 
   putAwayOld(now: number, lastWords: LastWords): void {
-    this.reportingAfter(() => {
+    this.reports.after(() => {
       try {
         underLock(this.deps.lock, BUSY, () => this.sweep(now, lastWords), PUT_AWAY_LOCK_WAIT_MS);
       } catch (error) {
@@ -442,7 +439,7 @@ export class SheetStore implements TableStore {
         if (error instanceof StoreBusyError) {
           console.error(error);
         } else {
-          this.failed('store put away', error);
+          this.reports.failed('store put away', error);
         }
       }
     });
@@ -458,33 +455,13 @@ export class SheetStore implements TableStore {
     return this.locked(() => !this.locate(tableId) && this.rememberGone(tableId));
   }
 
-  /** Tells Apps Script's log of something that went wrong here and was carried on through, and the error log once the lock is let go. */
-  private failed(where: string, error: unknown, tableId: string | null = null): void {
-    console.error(where, error);
-    this.noted.push({ where, error, tableId });
-  }
-
-  /** Does `work`, which may take the lock, and then reports what it noted, whether it finished or not. */
-  private reportingAfter<T>(work: () => T): T {
-    try {
-      return work();
-    } finally {
-      const noted = this.noted;
-      this.noted = [];
-
-      for (const failure of noted) {
-        this.errors.report(failure);
-      }
-    }
-  }
-
   /** What notes a failure at one table. */
   private noter(tableId: string | null): Noted {
-    return (where, error) => this.failed(where, error, tableId);
+    return (where, error) => this.reports.failed(where, error, tableId);
   }
 
   private locked<T>(work: () => T): T {
-    return this.reportingAfter(() => underLock(this.deps.lock, BUSY, work));
+    return this.reports.after(() => underLock(this.deps.lock, BUSY, work));
   }
 
   /** Reads a table from the sheet into the cache. Under the lock, so a write can't slip in between the two. */
@@ -568,7 +545,7 @@ export class SheetStore implements TableStore {
     try {
       this.remember(state, row, settled);
     } catch (error) {
-      this.failed('store cache after save', error, state.id);
+      this.reports.failed('store cache after save', error, state.id);
       this.forget(state.id);
     }
   }
@@ -749,7 +726,7 @@ export class SheetStore implements TableStore {
           leaving.push(ready);
         }
       } catch (error) {
-        this.failed('store put away', error, candidate.id);
+        this.reports.failed('store put away', error, candidate.id);
       }
     }
 
@@ -768,7 +745,7 @@ export class SheetStore implements TableStore {
         tables.getRange(table.row, 1, 1, TABLE_COLUMNS).setValues([EMPTY_ROW]);
       } catch (error) {
         // Still in both tabs, and finished by a later sweep
-        this.failed('store put away', error, table.id);
+        this.reports.failed('store put away', error, table.id);
       }
     }
 
@@ -818,7 +795,7 @@ export class SheetStore implements TableStore {
 
     // Whatever is in the cells for waiting records and is not such records would be gone once they are settled
     if (!saved || heldCells(held).some((cell, index) => cell !== heldAs[index])) {
-      this.failed('store put away', `Left row ${row} of the Tables tab where it is, since it does not read as the table it names`, id);
+      this.reports.failed('store put away', `Left row ${row} of the Tables tab where it is, since it does not read as the table it names`, id);
 
       return null;
     }

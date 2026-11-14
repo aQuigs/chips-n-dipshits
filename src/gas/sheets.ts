@@ -1,7 +1,10 @@
 /*
  * What every store kept in the spreadsheet shares: the parts of the Apps Script services it uses, so
- * it can be run against the stand-ins in tests/fakes.ts, and how it opens a tab and takes the lock.
+ * it can be run against the stand-ins in tests/fakes.ts, how it opens a tab and takes the lock, and how
+ * it reports what it carries on through.
  */
+import { NOWHERE } from '../server/errorLog.ts';
+import type { ErrorLog, Failure } from '../server/errorLog.ts';
 import { StoreBusyError } from '../server/store.ts';
 
 export interface RangeLike {
@@ -60,6 +63,38 @@ export function underLock<T>(lock: LockLike, busy: string, work: () => T, waitMs
     return work();
   } finally {
     lock.releaseLock();
+  }
+}
+
+/**
+ * What a store reports of the failures it carries on through. Apps Script's log is told at once, and
+ * the error log once the lock is let go, so that reporting never keeps anyone waiting for it.
+ */
+export class HeldReports {
+  private readonly errors: ErrorLog;
+  private held: Failure[] = [];
+
+  constructor(errors: ErrorLog = NOWHERE) {
+    this.errors = errors;
+  }
+
+  failed(where: string, error: unknown, tableId: string | null = null): void {
+    console.error(where, error);
+    this.held.push({ where, error, tableId });
+  }
+
+  /** Does `work`, which may take the lock, and then reports what was held, whether it finished or not. */
+  after<T>(work: () => T): T {
+    try {
+      return work();
+    } finally {
+      const held = this.held;
+      this.held = [];
+
+      for (const failure of held) {
+        this.errors.report(failure);
+      }
+    }
   }
 }
 

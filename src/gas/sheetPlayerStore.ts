@@ -1,8 +1,9 @@
 import { listedLike, playerName } from '../engine/index.ts';
 import type { KnownPlayer, Rng } from '../engine/index.ts';
+import type { ErrorLog } from '../server/errorLog.ts';
 import { dueToBeSeen, inListOrder, isPlayerId, listed, newcomer } from '../server/playerStore.ts';
 import type { KeptPlayer, PlayerStore } from '../server/playerStore.ts';
-import { FIRST_DATA_ROW, freeRow, openTab, TEXT, TIMESTAMP, underLock } from './sheets.ts';
+import { FIRST_DATA_ROW, freeRow, HeldReports, openTab, TEXT, TIMESTAMP, underLock } from './sheets.ts';
 import type { CacheLike, LockLike, SheetLike, SpreadsheetLike } from './sheets.ts';
 
 export interface SheetPlayerStoreDeps {
@@ -11,6 +12,8 @@ export interface SheetPlayerStoreDeps {
   lock: LockLike;
   flush: () => void;
   rng: Rng;
+  /** Where what goes wrong and is carried on through is reported. */
+  errors?: ErrorLog;
 }
 
 const TAB = 'Players';
@@ -62,57 +65,64 @@ function keptOf(cells: unknown[], above: KeptPlayer[]): KeptPlayer | null {
  * in front, since every join asks for it. The tab is the truth. Every write to it, and every refill of
  * the cache, happens under the script lock, and a write that fails takes the cache entry with it, so
  * the cache never holds a list older than the game's own last write. A change made by hand is another
- * matter: the game hears of it when the cache entry runs out.
+ * matter: the game hears of it when the cache entry runs out. What goes wrong and is carried on through
+ * is reported as each of the three methods ends, by when the lock has been let go.
  */
 export class SheetPlayerStore implements PlayerStore {
   private readonly deps: SheetPlayerStoreDeps;
+  private readonly reports: HeldReports;
 
   constructor(deps: SheetPlayerStoreDeps) {
     this.deps = deps;
+    this.reports = new HeldReports(deps.errors);
   }
 
   list(): KnownPlayer[] {
-    return inListOrder(this.known());
+    return this.reports.after(() => inListOrder(this.known()));
   }
 
   seen(id: string, at: number): KnownPlayer | null {
-    const found = this.known().find((player) => player.id === id);
-    if (!found) {
-      return null;
-    }
+    return this.reports.after(() => {
+      const found = this.known().find((player) => player.id === id);
+      if (!found) {
+        return null;
+      }
 
-    if (dueToBeSeen(found, at)) {
-      this.noteSeen(id, at);
-    }
+      if (dueToBeSeen(found, at)) {
+        this.noteSeen(id, at);
+      }
 
-    return listed(found);
+      return listed(found);
+    });
   }
 
   add(name: string, at: number): KnownPlayer {
     const clean = playerName(name);
 
-    return this.locked(() => {
-      const sheet = this.tab(true)!;
-      const { headed, rows, players } = this.read(sheet);
-      const added = newcomer(players, rows.length, clean, at, this.deps.rng);
+    return this.reports.after(() =>
+      this.locked(() => {
+        const sheet = this.tab(true)!;
+        const { headed, rows, players } = this.read(sheet);
+        const added = newcomer(players, rows.length, clean, at, this.deps.rng);
 
-      this.write(() => {
-        // A tab that lost its headers, as when making it failed halfway, gets them back
-        if (!headed) {
-          sheet.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]);
-        }
+        this.write(() => {
+          // A tab that lost its headers, as when making it failed halfway, gets them back
+          if (!headed) {
+            sheet.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]);
+          }
 
-        const range = sheet.getRange(freeRow(rows), 1, 1, HEADERS.length);
+          const range = sheet.getRange(freeRow(rows), 1, 1, HEADERS.length);
 
-        // Plain text before anything is written: an id like 2E56789234 is not turned into a number, and
-        // nothing a player typed is ever taken for a formula, whatever the rule for names comes to allow
-        range.setNumberFormats([FORMATS]);
-        range.setValues([[added.id, added.name, new Date(at), new Date(at)]]);
-      });
-      this.remember([...players, added]);
+          // Plain text before anything is written: an id like 2E56789234 is not turned into a number, and
+          // nothing a player typed is ever taken for a formula, whatever the rule for names comes to allow
+          range.setNumberFormats([FORMATS]);
+          range.setValues([[added.id, added.name, new Date(at), new Date(at)]]);
+        });
+        this.remember([...players, added]);
 
-      return listed(added);
-    });
+        return listed(added);
+      }),
+    );
   }
 
   private locked<T>(work: () => T): T {
@@ -152,7 +162,9 @@ export class SheetPlayerStore implements PlayerStore {
       const kept: unknown = JSON.parse(this.deps.cache.get(CACHE_KEY) ?? 'null');
 
       return Array.isArray(kept) ? (kept as KeptPlayer[]) : null;
-    } catch {
+    } catch (error) {
+      this.reports.failed('store read cached players', error);
+
       return null;
     }
   }
@@ -161,7 +173,8 @@ export class SheetPlayerStore implements PlayerStore {
   private remember(players: KeptPlayer[]): void {
     try {
       this.deps.cache.put(CACHE_KEY, JSON.stringify(players), CACHE_SECONDS);
-    } catch {
+    } catch (error) {
+      this.reports.failed('store cache players', error);
       this.forget();
     }
   }
@@ -169,8 +182,9 @@ export class SheetPlayerStore implements PlayerStore {
   private forget(): void {
     try {
       this.deps.cache.remove(CACHE_KEY);
-    } catch {
+    } catch (error) {
       // Nothing more can be done; the entry runs out by itself
+      this.reports.failed('store forget cached players', error);
     }
   }
 
@@ -242,7 +256,7 @@ export class SheetPlayerStore implements PlayerStore {
         this.remember(players);
       });
     } catch (error) {
-      console.error(error);
+      this.reports.failed('store player last seen', error);
     }
   }
 }

@@ -10,6 +10,7 @@ import { TEXT, TIMESTAMP, WHOLE_NUMBER } from '../src/gas/sheets.ts';
 import type { SpreadsheetLike } from '../src/gas/sheets.ts';
 import { SheetStore } from '../src/gas/sheetStore.ts';
 import { ERROR_LIMITS, NOWHERE } from '../src/server/errorLog.ts';
+import type { ErrorLog } from '../src/server/errorLog.ts';
 import { MemoryErrorLog } from '../src/server/memoryErrorLog.ts';
 import { MemoryPlayerStore } from '../src/server/memoryPlayerStore.ts';
 import { MemoryPresetStore } from '../src/server/memoryPresetStore.ts';
@@ -2191,8 +2192,12 @@ function playerSetup(rng: Rng = seededRng(77)) {
   const spreadsheet = new FakeSpreadsheet(lock, { Players: PLAYER_ROWS }, calls, [], { Players: LIMITS.nameLength });
   const cache = new FakeCache(calls);
 
+  /** What the error log was told, and whether the lock was still held when it was. */
+  const reports: { where: string; held: boolean }[] = [];
+  const errors: ErrorLog = { report: (failure) => void reports.push({ where: failure.where, held: lock.held }) };
+
   /** A script run of its own, as every request of the deployed game is: nothing is carried over but the Sheet and the cache. */
-  const run = () => new SheetPlayerStore({ spreadsheet: () => spreadsheet, cache, lock, flush: () => calls.note('flush'), rng });
+  const run = () => new SheetPlayerStore({ spreadsheet: () => spreadsheet, cache, lock, flush: () => calls.note('flush'), rng, errors });
 
   // Looked at without a call of its own, which the counts and the failures below would take for the store's
   const tab = () => spreadsheet.sheets.get('Players')!;
@@ -2207,7 +2212,7 @@ function playerSetup(rng: Rng = seededRng(77)) {
     return said;
   };
 
-  return { run, spreadsheet, cache, lock, calls, tab, assertCacheNotBehind };
+  return { run, spreadsheet, cache, lock, calls, reports, tab, assertCacheNotBehind };
 }
 
 /** The calls made to the Sheet itself, by kind, which are the slow ones. */
@@ -2505,6 +2510,70 @@ test('the Players tab is written only under the script lock, which this store wa
   assert.throws(() => tab().getRange(2, 1, 1, 1).setValues([['x']]), /without holding the script lock/);
 });
 
+test('what the list of players carries on through is told to the error log by the step that failed, once the lock is let go, and the answer is what it would have been', () => {
+  const { run, cache, lock, calls, reports, tab } = playerSetup();
+  const ann = run().add('Ann', NOW);
+
+  const told = () => {
+    assert.ok(reports.every((report) => !report.held), 'the error log was told while the lock was held');
+
+    return reports.splice(0).map((report) => report.where);
+  };
+  assert.deepEqual(told(), []);
+
+  // A cache that can't be asked: the list is the tab's
+  calls.failNth(1);
+  assert.deepEqual(run().list(), [ann]);
+  assert.deepEqual(told(), ['store read cached players']);
+
+  // A list read from the tab that can't be put in the cache
+  cache.entries.clear();
+  calls.made = [];
+  cache.failNextWrite = true;
+  assert.deepEqual(run().list(), [ann]);
+  assert.deepEqual(told(), ['store cache players']);
+
+  // Nor can whatever the cache has be taken out of it
+  const untilRemoved = calls.made.indexOf('cache.remove') + 1;
+  cache.failNextWrite = true;
+  calls.failNth(untilRemoved);
+  assert.deepEqual(run().list(), [ann]);
+  assert.deepEqual(told(), ['store cache players', 'store forget cached players']);
+
+  // A note that a player was seen that can't be written, for want of the lock or by the Sheet failing
+  assert.deepEqual(run().list(), [ann]);
+  lock.busy = true;
+  assert.deepEqual(run().seen(ann.id, NOW + DAY_MS), ann);
+  assert.deepEqual(told(), ['store player last seen']);
+
+  lock.busy = false;
+  tab().refuseWritesAfter(0);
+  assert.deepEqual(run().seen(ann.id, NOW + DAY_MS), ann);
+  assert.deepEqual(told(), ['store player last seen']);
+  assert.deepEqual(tab().cells[1]![3], new Date(NOW));
+
+  // What the store answers is told to nobody: a player it does not have, a name it has
+  tab().acceptWrites();
+  assert.equal(run().seen('ABCDEFG', NOW), null);
+  assert.throws(() => run().add('ann', NOW), { name: 'NameOnList' });
+  assert.deepEqual(told(), []);
+});
+
+test('two people who are the first ever to join, at the same moment, end with one Players tab under one header row', () => {
+  const { run, spreadsheet, tab } = playerSetup();
+  const [first, second] = [run(), run()];
+
+  // Both asked for the list while there was no tab, and neither made one
+  assert.deepEqual([first.list(), second.list()], [[], []]);
+  assert.deepEqual([...spreadsheet.sheets.keys()], []);
+
+  // The tab is looked for and made under the lock, so the second finds the one the first made
+  first.add('Ann', NOW);
+  second.add('Bob', NOW);
+  assert.deepEqual([...spreadsheet.sheets.keys()], ['Players']);
+  assert.deepEqual(tab().cells.map((row) => row[1]), ['Name', 'Ann', 'Bob']);
+});
+
 test('two people new under one name at the same moment: the second sees the first under the lock, and is told the name is taken', () => {
   const { run, tab } = playerSetup();
   const [first, second] = [run(), run()];
@@ -2556,6 +2625,8 @@ test('whichever call fails while someone new is added, a player is noted as seen
       }
 
       assert.equal(context.lock.held, false, step);
+      assert.ok(threw || context.reports.length > 0, `${step}: a failure the store carried on through was told to nobody`);
+      assert.ok(context.reports.every((report) => !report.held), `${step}: the error log was told while the lock was held`);
       if (what === 'a player seen on a new night') {
         assert.equal(threw && steps[failing - 1] !== 'cache.get', false, `${step}: a note that a player was seen failed the request it rode on`);
       }

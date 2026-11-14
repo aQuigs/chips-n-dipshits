@@ -7,10 +7,12 @@ import { SheetPlayerStore } from '../src/gas/sheetPlayerStore.ts';
 import { SheetStore } from '../src/gas/sheetStore.ts';
 import type { ApiResponse, Auth, Who } from '../src/server/api.ts';
 import { BuildGate } from '../src/server/build.ts';
+import type { ErrorLog } from '../src/server/errorLog.ts';
+import { MemoryErrorLog } from '../src/server/memoryErrorLog.ts';
 import { MemoryPlayerStore } from '../src/server/memoryPlayerStore.ts';
 import { MemoryPresetStore } from '../src/server/memoryPresetStore.ts';
 import { MemoryStore } from '../src/server/memoryStore.ts';
-import { ListFull, SEEN_EVERY_MS } from '../src/server/playerStore.ts';
+import { ListFull, NameOnList, SEEN_EVERY_MS } from '../src/server/playerStore.ts';
 import type { PlayerStore } from '../src/server/playerStore.ts';
 import { PokerService } from '../src/server/service.ts';
 import { StoreBusyError } from '../src/server/store.ts';
@@ -20,9 +22,12 @@ import { DAY_MS, failure, joined, seededRng, viewOf } from './helpers.ts';
 
 const NOW = 1_700_000_000_000;
 
-function setup(players: PlayerStore = new MemoryPlayerStore(seededRng(12)), store: TableStore = new MemoryStore()) {
+/** The game, with stores of its own or those `stores` makes, which are handed the error log the service has. */
+function setup(stores: (errors: ErrorLog) => { players?: PlayerStore; store?: TableStore } = () => ({})) {
   const clock = { time: NOW, now: () => clock.time };
-  const service = new PokerService({ store, presets: new MemoryPresetStore(), players, clock, rng: seededRng(11) });
+  const errors = new MemoryErrorLog(clock);
+  const { players = new MemoryPlayerStore(seededRng(12)), store = new MemoryStore() } = stores(errors);
+  const service = new PokerService({ store, presets: new MemoryPresetStore(), players, clock, rng: seededRng(11), errors });
 
   const listed = (): KnownPlayer[] => {
     const response = service.handle({ op: 'players' });
@@ -37,7 +42,7 @@ function setup(players: PlayerStore = new MemoryPlayerStore(seededRng(12)), stor
   const act = (tableId: string, auth: Auth, command: Command) => service.handle({ op: 'act', tableId, auth, command });
   const identify = (tableId: string, auth: Auth, who: Who, name?: string) => service.handle({ op: 'identify', tableId, auth, who, name });
 
-  return { service, store, players, clock, listed, create, join, poll, act, identify };
+  return { service, store, players, clock, errors, listed, create, join, poll, act, identify };
 }
 
 /**
@@ -51,10 +56,13 @@ function deployed() {
   const sheet = new FakeSpreadsheet(lock, { Players: 1 + LIMITS.knownPlayers }, calls.players, [], { Players: LIMITS.nameLength });
   const cache = new FakeCache(calls.players);
   const tableSheet = new FakeSpreadsheet(lock, {}, calls.tables);
-  const tables = new SheetStore({ spreadsheet: () => tableSheet, cache: new FakeCache(calls.tables), lock, flush: () => calls.tables.note('flush') });
-  const players = new SheetPlayerStore({ spreadsheet: () => sheet, cache, lock, flush: () => calls.players.note('flush'), rng: seededRng(77) });
 
-  return { ...setup(players, tables), lock, calls, sheet, cache, tab: () => sheet.sheets.get('Players')! };
+  const game = setup((errors) => ({
+    store: new SheetStore({ spreadsheet: () => tableSheet, cache: new FakeCache(calls.tables), lock, flush: () => calls.tables.note('flush'), errors }),
+    players: new SheetPlayerStore({ spreadsheet: () => sheet, cache, lock, flush: () => calls.players.note('flush'), rng: seededRng(77), errors }),
+  }));
+
+  return { ...game, lock, calls, sheet, cache, tab: () => sheet.sheets.get('Players')! };
 }
 
 const NEW: Who = { as: 'new' };
@@ -94,7 +102,7 @@ test('a request that does not say who its sender is makes a member nobody knows,
       throw new Error('asked to add');
     },
   };
-  const { create, join, poll } = setup(untouched);
+  const { create, join, poll } = setup(() => ({ players: untouched }));
 
   const host = joined(create('Host'));
   const guest = joined(join(host.view.id, 'Guest'));
@@ -239,7 +247,7 @@ test('when the list of players cannot be asked or written to, everyone still get
   ];
 
   for (const [what, fail] of failures) {
-    const { create, join, poll } = setup({ list: fail, seen: fail, add: fail });
+    const { create, join, poll } = setup(() => ({ players: { list: fail, seen: fail, add: fail } }));
 
     const host = joined(create('Host', NEW));
     const ann = joined(join(host.view.id, 'Ann', NEW));
@@ -249,6 +257,92 @@ test('when the list of players cannot be asked or written to, everyone still get
     assert.deepEqual([host, ann, bob, second].map((member) => member.view.you.identity), [null, null, null, null], what);
     assert.deepEqual(viewOf(poll(host.view.id, host.auth)).members.map((member) => member.name), ['Host', 'Ann', 'Bob', 'Bob 2'], what);
   }
+});
+
+test('a step of arriving that fails is told to the error log once, by its name and at its table, and the arrival is answered all the same; what the list answers is told to nobody', () => {
+  const outage = (): never => {
+    throw new Error('Service Spreadsheets failed');
+  };
+
+  /** A table store that fails every write once it is told to. */
+  class Tables extends MemoryStore {
+    failing = false;
+
+    override transact: MemoryStore['transact'] = (tableId, fn) => (this.failing ? outage() : super.transact(tableId, fn));
+  }
+
+  /** A game with Ann on its list, which does as `over` says where it says and is the list in memory otherwise. */
+  const gameWith = (over: (list: MemoryPlayerStore, tables: Tables) => Partial<PlayerStore>) => {
+    const list = new MemoryPlayerStore(seededRng(12));
+    const tables = new Tables();
+    const ann = list.add('Ann', NOW);
+    const players: PlayerStore = { list: () => list.list(), seen: (id, at) => list.seen(id, at), add: (name, at) => list.add(name, at), ...over(list, tables) };
+    const game = setup(() => ({ players, store: tables }));
+    const tableId = joined(game.create('Host')).view.id;
+
+    return { ...game, list, tables, ann, tableId, told: () => game.errors.rows.map((row) => [row.where, row.tableId, row.message]) };
+  };
+
+  // A player picked from a list that can't be asked gets in under the name the page had, as nobody known
+  const unfound = gameWith(() => ({ seen: outage }));
+  const ann = joined(unfound.join(unfound.tableId, 'Ann', known(unfound.ann.id)));
+  assert.deepEqual([ann.view.you.name, ann.view.you.identity], ['Ann', null]);
+  assert.deepEqual(unfound.told(), [['server find player', unfound.tableId, 'Service Spreadsheets failed']]);
+
+  // Someone new whose name can't be held to the list gets in, and onto the list, which then takes the write
+  const unchecked = gameWith(() => ({ list: outage }));
+  const cy = joined(unchecked.join(unchecked.tableId, 'Cy', NEW));
+  assert.deepEqual(unchecked.list.list().find((player) => player.name === 'Cy')?.id, cy.view.you.identity);
+  assert.deepEqual(unchecked.told(), [['server check name', unchecked.tableId, 'Service Spreadsheets failed']]);
+
+  // Someone new the list can't be written for gets in, at a table they join or one they make, as nobody known
+  const unlisted = gameWith(() => ({ add: outage }));
+  const dee = joined(unlisted.join(unlisted.tableId, 'Dee', NEW));
+  unlisted.clock.time += 11 * 60_000;
+  const made = joined(unlisted.create('Eve', NEW));
+  assert.deepEqual([dee.view.you.identity, made.view.you.identity], [null, null]);
+  assert.deepEqual(unlisted.told(), [
+    ['server add player', unlisted.tableId, 'Service Spreadsheets failed'],
+    ['server add player', made.view.id, 'Service Spreadsheets failed'],
+  ]);
+
+  // Someone new whose table can't then be told is in, and on the list, and can say who they are once it can
+  const untold = gameWith((list, tables) => ({
+    add: (name, at) => {
+      tables.failing = true;
+
+      return list.add(name, at);
+    },
+  }));
+  const flo = joined(untold.join(untold.tableId, 'Flo', NEW));
+  const floListed = untold.list.list().find((player) => player.name === 'Flo')!;
+  assert.equal(flo.view.you.identity, null);
+  assert.deepEqual(untold.told(), [['server tell table who', untold.tableId, 'Service Spreadsheets failed']]);
+  untold.tables.failing = false;
+  assert.equal(viewOf(untold.identify(untold.tableId, flo.auth, known(floListed.id))).you.identity, floListed.id);
+
+  // A lock the list could not have in time is a failure like any other
+  const busy = gameWith(() => ({ add: () => { throw new StoreBusyError('The list of players is busy, try again'); } }));
+  assert.equal(joined(busy.join(busy.tableId, 'Gus', NEW)).view.you.identity, null);
+  assert.deepEqual(busy.told(), [['server add player', busy.tableId, 'StoreBusyError: The list of players is busy, try again']]);
+
+  // What the list answers is no failure: a name it has, a player it does not, a list that is full, and a name taken while the table was letting them in
+  const answered = gameWith((list) => ({
+    add: (name, at) => {
+      if (name === 'Hal') {
+        throw new ListFull();
+      }
+      if (name === 'Ida') {
+        throw new NameOnList('Ida');
+      }
+
+      return list.add(name, at);
+    },
+  }));
+  assert.equal(failure(answered.join(answered.tableId, 'ann', NEW)).code, 'invalid');
+  assert.deepEqual([joined(answered.join(answered.tableId, 'Zed', known('ABCDEFG'))).view.you.identity, joined(answered.join(answered.tableId, 'Hal', NEW)).view.you.identity], [null, null]);
+  assert.equal(joined(answered.create('Ida', NEW)).view.you.identity, null);
+  assert.deepEqual(answered.told(), []);
 });
 
 test('whichever call for the list of players fails while someone makes a table or joins one, they get in, and the list is left whole', () => {
@@ -288,6 +382,8 @@ test('whichever call for the list of players fails while someone makes a table o
       const arrived = joined(arrive(game, tableId, ann));
 
       assert.equal(game.lock.held, false, step);
+      assert.ok(game.errors.rows.length > 0, `${step}: the error log heard nothing of it`);
+      assert.ok(game.errors.rows.every((row) => /^(server|store) /.test(row.where) && row.message.startsWith('Service failed at')), `${step}: ${JSON.stringify(game.errors.rows)}`);
       assert.equal(arrived.view.you.name, what.startsWith('someone new') ? 'Quigs' : 'Ann', step);
 
       // Known or not, they are whoever the list says, never someone else and never someone it does not have
@@ -549,7 +645,7 @@ test('saying who you are is refused when it cannot be done, and never without th
   };
 
   for (const players of [undefined, busy]) {
-    const { service, store, create, join, identify, listed } = setup(players);
+    const { service, store, create, join, identify, listed } = setup(() => (players ? { players } : {}));
     const host = joined(create('Host'));
     const ann = joined(join(host.view.id, 'Ann'));
     const before = JSON.stringify(store.read(host.view.id));

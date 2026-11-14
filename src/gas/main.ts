@@ -68,7 +68,7 @@ function service(): BuildGate {
     new PokerService({
       store: new SheetStore({ spreadsheet, cache, lock, flush, errors: errors() }),
       presets: new SheetPresetStore({ spreadsheet, lock, flush }),
-      players: new SheetPlayerStore({ spreadsheet, cache, lock, flush, rng }),
+      players: new SheetPlayerStore({ spreadsheet, cache, lock, flush, rng, errors: errors() }),
       clock: { now: () => Date.now() },
       rng,
       errors: errors(),

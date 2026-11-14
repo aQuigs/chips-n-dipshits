@@ -340,7 +340,7 @@ export class PokerService {
    * arrive all the same, as nobody it knows. Only a name is refused: a new one that the list already
    * has, since its holder may be the one asking.
    */
-  private arrival(request: Fields): Arrival {
+  private arrival(request: Fields, tableId: string | null): Arrival {
     const who = whoOf(request);
 
     if (!who) {
@@ -348,22 +348,32 @@ export class PokerService {
     }
 
     if (who.as === 'known') {
-      let known = null;
-
-      try {
-        known = this.players.seen(who.id, this.clock.now());
-      } catch (error) {
-        console.error(error);
-      }
+      const known = this.without('server find player', tableId, () => this.players.seen(who.id, this.clock.now()));
 
       // The name is the list's whether or not the list could say so, and not the player's to change
       return { name: known?.name ?? request.name, identity: known?.id ?? null, keepsName: true, enlist: false };
     }
 
     const name = playerName(request.name);
-    this.refuseNameOnList(name);
+    this.refuseNameOnList(name, tableId);
 
     return { name, identity: null, keepsName: false, enlist: true };
+  }
+
+  /**
+   * A step an arrival goes ahead without: what it gives, or null when it could not be done. The error
+   * log hears of a failure, and never of an answer, such as a list that is full.
+   */
+  private without<T>(where: string, tableId: string | null, step: () => T): T | null {
+    try {
+      return step();
+    } catch (error) {
+      if (!(error instanceof GameError || error instanceof ApiFailure)) {
+        this.failed({ where, error, tableId });
+      }
+
+      return null;
+    }
   }
 
   /**
@@ -375,19 +385,20 @@ export class PokerService {
   private enlisted(tableId: string, joined: Joined): ApiResponse {
     const { id } = joined.auth;
 
-    try {
-      const added = this.players.add(joined.view.you.name, this.clock.now());
+    const added = this.without('server add player', tableId, () => this.players.add(joined.view.you.name, this.clock.now()));
+    if (!added) {
+      return joined;
+    }
 
-      return this.mutate(tableId, (state, ctx) => {
+    const told = this.without('server tell table who', tableId, () =>
+      this.mutate(tableId, (state, ctx) => {
         setIdentity(state, id, added, ctx);
 
         return { ...joined, view: viewFor(state, id, ctx.now) };
-      });
-    } catch (error) {
-      console.error(error);
+      }),
+    );
 
-      return joined;
-    }
+    return told ?? joined;
   }
 
   /**
@@ -395,14 +406,8 @@ export class PokerService {
    * have the name, "pick yourself from the list" is the answer that gets its holder in. A list that
    * can't be read turns nobody away.
    */
-  private refuseNameOnList(name: string): void {
-    let holder = null;
-
-    try {
-      holder = listedLike(this.players.list(), name);
-    } catch (error) {
-      console.error(error);
-    }
+  private refuseNameOnList(name: string, tableId: string | null): void {
+    const holder = this.without('server check name', tableId, () => listedLike(this.players.list(), name));
 
     if (holder) {
       throw new NameOnList(holder.name);
@@ -410,7 +415,7 @@ export class PokerService {
   }
 
   private create(request: Fields): ApiResponse {
-    const arriving = this.arrival(request);
+    const arriving = this.arrival(request, null);
 
     for (let attempt = 0; attempt < CREATE_ATTEMPTS; attempt++) {
       const tableId = randomId(this.rng, TABLE_ID_LENGTH);
@@ -463,7 +468,7 @@ export class PokerService {
   }
 
   private join(tableId: string, request: Fields): ApiResponse {
-    const arriving = this.arrival(request);
+    const arriving = this.arrival(request, tableId);
 
     const joined = this.mutate(tableId, (state, ctx): Joined => {
       const member = addMember(state, arriving.name, ctx, arriving);

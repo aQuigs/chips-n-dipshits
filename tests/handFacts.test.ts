@@ -3,7 +3,7 @@ import { test } from 'node:test';
 
 import { fullyShown, handFacts, isSevenDeuce, PAIR, STRAIGHT_FLUSH, THREE_OF_A_KIND, wonAPot } from '../src/engine/index.ts';
 import type { HandFacts, PlayerFacts, Straddle } from '../src/engine/index.ts';
-import { ACES, BOARD, cards, checkAround, handRecords, KINGS, QUEENS, TestTable } from './helpers.ts';
+import { ACES, BOARD, cards, checkAround, faceDownCards, handRecords, KINGS, QUEENS, TestTable } from './helpers.ts';
 
 // On the first board aces beat kings beat queens; on the second a king makes the kings three of a kind
 const SECOND = 'Kd 4c 5h 8s Td';
@@ -16,7 +16,7 @@ function factsOf(t: TestTable): HandFacts {
   t.runToResult();
 
   const hand = t.state.hand!;
-  const faceDown = [...hand.deck, ...hand.players.flatMap((p) => p.cards.filter((_card, nth) => !p.shown[nth]))];
+  const faceDown = [...hand.deck, ...hand.players.flatMap(faceDownCards)];
 
   t.finishHand();
 

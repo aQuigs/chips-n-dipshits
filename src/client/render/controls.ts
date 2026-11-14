@@ -8,7 +8,7 @@ import { straddlesAllowed } from '../../engine/straddles.ts';
 import type { Command, PassedOver } from '../../engine/types.ts';
 import type { HandView, SeatView, TableView } from '../../engine/view.ts';
 import { HOTKEYS } from '../hotkeys.ts';
-import { showCommand, showOffer } from '../showing.ts';
+import { showOffer } from '../showing.ts';
 import type { Waiting } from '../shownTable.ts';
 import { cardEl, h, holdWhile } from '../ui.ts';
 import { lastHandsText, nightOver, onLastHand } from './night.ts';
@@ -16,8 +16,8 @@ import { lastHandsText, nightOver, onLastHand } from './night.ts';
 export interface ControlHandlers {
   /** Resolves once the server has answered, or failed to. */
   send(command: Command): Promise<unknown>;
-  /** Sends a show of the player's cards (`showCommand`), and again when it got no answer, while it is still offered. Resolves as `send` does. */
-  showCards(command: Command): Promise<unknown>;
+  /** Shows the table the player's cards at `places` of that hand, 0 on their left. Resolves as `send` does. */
+  showCards(hand: number, places: number[]): Promise<unknown>;
   openRebuy(): void;
   /** Opens the player's own choice of straddles, at a table that allows more than one kind. */
   openStraddles(): void;
@@ -469,7 +469,7 @@ function showCardsEl(view: TableView, seat: SeatView, handlers: ControlHandlers)
     return null;
   }
 
-  const show = (places: number[]) => () => handlers.showCards(showCommand(offer, places));
+  const show = (places: number[]) => () => handlers.showCards(offer.hand, places);
   const buttons = offer.places.map((place) => {
     const card = seat.cards![place]!;
     const button = commandButton('button.chip-btn.show-card', 'show-card', '', show([place]));

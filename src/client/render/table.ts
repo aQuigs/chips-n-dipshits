@@ -291,7 +291,7 @@ function seatEl(view: TableView, seat: SeatView, slot: number, shape: Shape, clo
 
   // Folded hands leave the table, except the viewer's own, which stays to look at, and one turned up after the hand
   const showCards = seat.cards !== null && (!seat.folded || isMe || seat.shown.some(Boolean));
-  const hole = showCards ? h('div.hole', { 'aria-label': isMe ? null : halfShownLabel(seat) }, markPlaying(holeCards(seat, isMe && hand?.stage === 'done'), holding?.reads ?? [])) : h('div.hole.none');
+  const hole = showCards ? h('div.hole', { 'aria-label': halfShownLabel(seat) }, markPlaying(holeCards(seat, isMe && hand?.stage === 'done'), holding?.reads ?? [])) : h('div.hole.none');
 
   let timer: HTMLElement | null = null;
   if (acting && hand.deadline !== null && view.config.actionSeconds > 0) {

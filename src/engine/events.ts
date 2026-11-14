@@ -41,11 +41,7 @@ export type HandEvent =
   | [kind: 'vote', seat: number, runs: number]
   /** Betting is over with cards to come, and the rest is dealt out on this many boards: more than one when it is run more than once, or the hand was dealt on several. */
   | [kind: 'runs', count: number]
-  /**
-   * A player's cards turned face up, at their places among the player's cards (the first on their left),
-   * null at a place left as it was: one face down still, or face up already. Shown at a showdown or
-   * all in, it is the whole hand; shown by choice once the hand is over, either card or both.
-   */
+  /** A player's cards turned face up by this event, null for one left as it was: see `shown.ts`. */
   | [kind: 'show', seat: number, cards: (Card | null)[]]
   | [kind: 'muck', seat: number]
   /** One player's share of one pot; `pot` 0 is the main pot, and `board` is which board won it. */

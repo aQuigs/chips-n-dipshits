@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import { addMember, evaluateHand, handFacts, HIGH_CARD, isSevenDeuce, isStraddle, ledgerOf, newTonight, nextHighHand, nightIsOver, SEAT_COUNT, STRADDLES, STRADDLES_IN_A_ROW, STRAIGHT_FLUSH, straddlesAllowed, tonightView } from '../src/engine/index.ts';
 import type { Card, Effect, HandRecord, PlayerTonight, Straddle, TableState, Tonight, TonightView } from '../src/engine/index.ts';
 import { restoreState } from '../src/server/store.ts';
-import { ACES, BOARD, cards, checkAround, handRecords, KINGS, ledgerEntries, QUEENS, seededRng, TestTable } from './helpers.ts';
+import { ACES, BOARD, cards, checkAround, faceDownCards, handRecords, KINGS, ledgerEntries, QUEENS, seededRng, TestTable } from './helpers.ts';
 import { assertInvariants } from './invariants.ts';
 import { fixedSettings, randomConfig } from './randomConfig.ts';
 import { chance, randomStep } from './randomPlay.ts';
@@ -654,7 +654,7 @@ test('over random games the numbers are at every step exactly what the hand reco
     for (let step = 0; step < STEPS_PER_TABLE; step++) {
       // What is face down on a hand that is over, which the step may take off the table
       const done = t.state.hand?.stage === 'done' ? t.state.hand : null;
-      const faceDown = done ? [...done.deck, ...done.players.flatMap((p) => p.cards.filter((_card, nth) => !p.shown[nth]))] : [];
+      const faceDown = done ? [...done.deck, ...done.players.flatMap(faceDownCards)] : [];
       const over = nightIsOver(t.state);
       const effectsBefore = t.effects.length;
       const holdersBefore = nextHighHand(t.state.tonight.highHand)?.playerIds ?? [];

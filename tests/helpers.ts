@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 
 import type { PrefMemory } from '../src/client/prefs.ts';
 import { applyCommand, createTable, addMember, freshDeck, seededRng, startHand, startOver, tick, viewFor, SEAT_COUNT } from '../src/engine/index.ts';
-import type { Card, Command, Ctx, Effect, Hand, HandRecord, LedgerEntry, Rng, TableConfig, TableState, TableView } from '../src/engine/index.ts';
+import type { Card, Command, Ctx, Effect, Hand, HandPlayer, HandRecord, LedgerEntry, Rng, TableConfig, TableState, TableView } from '../src/engine/index.ts';
+
+/** A player's cards the table has not seen. */
+export const faceDownCards = (player: HandPlayer): Card[] => player.cards.filter((_card, nth) => !player.shown[nth]);
 
 /** A small repeatable generator; the same seed always deals the same cards. */
 export const DAY_MS = 24 * 60 * 60 * 1000;

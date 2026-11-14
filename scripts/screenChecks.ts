@@ -23,7 +23,8 @@ import { spotsOf } from '../src/client/tableChances.ts';
 import { THEMES } from '../src/client/themes.ts';
 import { shortAmount, signedAmount } from '../src/engine/amounts.ts';
 import { BADGES, badgeOf, DEFAULT_CONFIG, LIMITS, onTheClock, presetSettings, REACTION_GAP_MS, REACTION_LIFE_MS } from '../src/engine/index.ts';
-import type { Command, Straddle, TableConfig, TableView } from '../src/engine/index.ts';
+import { cardWords } from '../src/engine/handNames.ts';
+import type { Card, Command, Straddle, TableConfig, TableView } from '../src/engine/index.ts';
 import { PUT_AWAY_AFTER_MS, PUT_AWAY_MESSAGE } from '../src/server/putAway.ts';
 import { contrast } from '../tests/colorVision.ts';
 import { boxes, Gate, overlap, Rig, RigTable, SCREENS, setStageHeight, squeezed, textBoxes } from './rig.ts';
@@ -1713,10 +1714,21 @@ function foldedToQuigs(rig: Rig): RigTable {
   const table = rig.table(SHOW_PLAYERS);
 
   table.join('Kibitz');
-  table.deal({ button: 0, holes: { 0: 'Qc Jc', 2: PAM_HOLE } });
-  table.play((_view, name) => (name === 'Quigs' ? { type: 'raise', to: 60 } : { type: 'fold' }), (view) => view.hand!.stage === 'done');
+  dealFoldedToQuigs(table, PAM_HOLE);
 
   return table;
+}
+
+/** Deals with the button on Quigs, Pam in the big blind holding `hole`, and everyone folds to Quigs's raise. */
+function dealFoldedToQuigs(table: RigTable, hole: string): void {
+  table.deal({ button: 0, holes: { 0: 'Qc Jc', 2: hole } });
+  table.play((_view, name) => (name === 'Quigs' ? { type: 'raise', to: 60 } : { type: 'fold' }), (view) => view.hand!.stage === 'done');
+}
+
+/** Pauses the game and ends the hand on the table, which nobody is still playing. */
+function clearTable(table: RigTable): void {
+  table.act('Quigs', { type: 'pause' });
+  table.play(() => null, (view) => view.hand === null);
 }
 
 /** What the bar under the table offers to show: each button's spoken name, and the card drawn on it. */
@@ -1724,7 +1736,6 @@ const showButtons = (page: Page) =>
   page.evaluate(`[...document.querySelectorAll('.controls .show-cards button')].map((button) => [button.getAttribute('aria-label'), button.querySelector('.card')?.dataset.card ?? null])`) as Promise<[string, string | null][]>;
 
 /** A seat's cards as drawn on a page, left to right: each face-up card, or null for a back. */
-const holeOf = (page: Page, seat: number) => page.evaluate(`[...document.querySelectorAll('.seat[data-seat="${seat}"] .hole .card')].map((card) => card.dataset.card ?? null)`) as Promise<(string | null)[]>;
 
 /** That the offer to show is whole and on the screen, its buttons in one row, apart from each other and from the rest of the bar. */
 async function assertShowOfferFits(page: Page, screen: ScreenName, where: string): Promise<void> {
@@ -1739,18 +1750,15 @@ async function assertShowOfferFits(page: Page, screen: ScreenName, where: string
   await assertNoSidewaysScroll(page);
 }
 
-/** Ends the hand on the table, which nobody is still playing, and deals the next with the game paused: Pam, the big blind again, holds `hole`, and everyone folds to Quigs. */
 function nextFoldedToQuigs(table: RigTable, hole: string): void {
-  table.act('Quigs', { type: 'pause' });
-  table.play(() => null, (view) => view.hand === null);
-  table.deal({ button: 0, holes: { 0: 'Qc Jc', 2: hole } });
-  table.play((_view, name) => (name === 'Quigs' ? { type: 'raise', to: 60 } : { type: 'fold' }), (view) => view.hand!.stage === 'done');
+  clearTable(table);
+  dealFoldedToQuigs(table, hole);
 }
 
 /** That Pam's seat is drawn on another page with `cards` up and the rest down, in her order, said so to a screen reader, and clear of what the seats around it say. */
-async function assertPamShows(page: Page, screen: ScreenName, cards: (string | null)[], where: string): Promise<void> {
+async function assertPamShows(page: Page, screen: ScreenName, cards: (Card | null)[], where: string): Promise<void> {
   const pam = '.seat[data-seat="2"]';
-  const said = `Pam shows ${cards.filter((card) => card !== null).map((card) => (card === 'As' ? 'the ace of spades' : card === 'Kd' ? 'the king of diamonds' : card === '7c' ? 'the seven of clubs' : card)).join(' and ')}; the other card is face down`;
+  const said = `Pam shows ${cards.filter((card) => card !== null).map(cardWords).join(' and ')}; the other card is face down`;
 
   await page.waitForFunction(`JSON.stringify([...document.querySelectorAll('${pam} .hole .card')].map((card) => card.dataset.card ?? null)) === ${JSON.stringify(JSON.stringify(cards))}`);
   assert.equal(await page.getAttribute(`${pam} .hole`, 'aria-label'), cards.includes(null) ? said : null, `${where}: what a screen reader says of Pam's cards`);
@@ -10003,8 +10011,7 @@ const CHECKS: Check[] = [
         }
 
         await page.evaluate('window.flights.splice(0)');
-        table.act('Quigs', { type: 'pause' });
-        table.play(() => null, (view) => view.hand === null);
+        clearTable(table);
         table.deal({ button: 0, holes: { 0: 'Qc Jc', 2: PAM_HOLE } });
 
         await page.waitForFunction(`window.flights.filter((flight) => flight.name === 'deal').length === ${2 * SHOW_PLAYERS.length}`);

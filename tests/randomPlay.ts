@@ -60,6 +60,9 @@ const SHOWN_TOGETHER = [[0], [1], [0, 1], [1, 0]];
  * The commands random play sends besides betting, each of which the table may refuse. A new command
  * joins the simulation by adding an entry that sends it.
  */
+/** The hand on the table, or now and then the one before it, which a command for it is refused. */
+const handOrOneBefore = (t: TestTable, rng: Rng) => (t.state.hand?.number ?? t.state.handCount) - (chance(rng, 90) ? 0 : 1);
+
 export const FUZZ_COMMANDS: ((fuzz: Fuzz) => void)[] = [
   ({ t, who }) => attempt(t, who, { type: 'sitOut' }),
   ({ t, who }) => attempt(t, who, { type: 'sitIn' }),
@@ -106,10 +109,8 @@ export const FUZZ_COMMANDS: ((fuzz: Fuzz) => void)[] = [
 
     attempt(t, who, chance(rng, 50) ? { type: 'offerChop' } : { type: 'answerChop', agree: chance(rng, 50) });
   },
-  // For the hand on the table, or now and then one before it, which is refused
-  ({ t, rng, who }) => attempt(t, who, { type: 'showCards', hand: (t.state.hand?.number ?? t.state.handCount) - (chance(rng, 90) ? 0 : 1), cards: pick(rng, SHOWN_TOGETHER)! }),
-  // For the hand on the table, or now and then one before it, which is refused
-  ({ t, rng, who }) => attempt(t, who, { type: 'huntRabbit', hand: (t.state.hand?.number ?? t.state.handCount) - (chance(rng, 90) ? 0 : 1) }),
+  ({ t, rng, who }) => attempt(t, who, { type: 'showCards', hand: handOrOneBefore(t, rng), cards: pick(rng, SHOWN_TOGETHER)! }),
+  ({ t, rng, who }) => attempt(t, who, { type: 'huntRabbit', hand: handOrOneBefore(t, rng) }),
   ({ t, rng, playerId }) => attempt(t, someoneRunningTheGame(t, rng), { type: 'setStack', playerId, stack: rng.int(2000) }),
   ({ t, rng, playerId }) => attempt(t, someoneRunningTheGame(t, rng), { type: 'kick', playerId }),
   ({ t, rng, playerId }) => {

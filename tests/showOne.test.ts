@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { halfShownLabel, showCommand, showOffer, showStillOffered } from '../src/client/showing.ts';
+import { halfShownLabel, showOffer, showStillOffered } from '../src/client/showing.ts';
 import { spotsOf } from '../src/client/tableChances.ts';
 import { addMember, fullyShown, handFacts, prettyCard, replayHand, seededRng } from '../src/engine/index.ts';
 import type { Command, Rng, TableView } from '../src/engine/index.ts';
@@ -9,11 +9,11 @@ import { ACES, BOARD, handRecords, KINGS, QUEENS, TestTable } from './helpers.ts
 import { assertInvariants } from './invariants.ts';
 import { chance, pick, randomStep } from './randomPlay.ts';
 
-/** Three players, the button on seat 0: seats 0 and 1 fold, seat 1 with `hole`, and the big blind on seat 2 wins the blinds. */
-function foldedToTheBigBlind(hole = 'As Kd', config = {}): TestTable {
-  const t = new TestTable({ stacks: [1000, 1000, 1000], config });
+/** Three players, the button on seat 0: seats 0 and 1 fold, seat 1 with A♠ K♦, and the big blind on seat 2 wins the blinds. */
+function foldedToTheBigBlind(): TestTable {
+  const t = new TestTable({ stacks: [1000, 1000, 1000] });
 
-  t.deal({ button: 0, holes: { 1: hole, 2: '9c 8c' } });
+  t.deal({ button: 0, holes: { 1: 'As Kd', 2: '9c 8c' } });
   t.fold(0);
   t.fold(1);
 
@@ -325,7 +325,7 @@ test('a live hand with one card face up makes no spot to work out a chance from'
   assert.equal(spotsOf(halfShown), null);
 });
 
-test('the page offers the cards still face down of the hand that is over, says so in the request, and sends one again only while it still offers it', () => {
+test('the page offers the cards still face down of the hand that is over, and sends a show again only while it still offers it', () => {
   const t = foldedToTheBigBlind();
   const watcher = t.ids.push(addMember(t.state, 'Kibitz', t.ctx()).id) - 1;
 
@@ -333,20 +333,16 @@ test('the page offers the cards still face down of the hand that is over, says s
   assert.deepEqual(showOffer(t.view(2)), { hand: 1, places: [0, 1] }, 'the winner, nobody having called');
   assert.equal(showOffer(t.view(watcher)), null);
 
-  const left = showCommand(showOffer(t.view(1))!, [0]);
-  assert.deepEqual(left, { type: 'showCards', hand: 1, cards: [0] });
-  assert.equal(showStillOffered(t.view(1), left), true, 'not yet shown: worth sending again');
+  assert.equal(showStillOffered(t.view(1), 1, [0]), true, 'not yet shown: worth sending again');
 
-  t.cmd(1, left);
-  assert.equal(showStillOffered(t.view(1), left), false, 'shown: the answer came by another way');
+  t.show(1, [0]);
+  assert.equal(showStillOffered(t.view(1), 1, [0]), false, 'shown: the answer came by another way');
   assert.deepEqual(showOffer(t.view(1)), { hand: 1, places: [1] });
-
-  const both = showCommand({ hand: 1, places: [0, 1] }, [0, 1]);
-  assert.equal(showStillOffered(t.view(1), both), true, 'one of them is still face down');
+  assert.equal(showStillOffered(t.view(1), 1, [0, 1]), true, 'one of them is still face down');
 
   t.finishHand();
-  assert.equal(showStillOffered(t.view(1), both), false, 'the hand is gone');
-  assert.equal(showStillOffered(null, both), false);
+  assert.equal(showStillOffered(t.view(1), 1, [0, 1]), false, 'the hand is gone');
+  assert.equal(showStillOffered(null, 1, [0, 1]), false);
 
   t.deal();
   while (t.state.hand!.stage === 'betting') {
@@ -355,7 +351,7 @@ test('the page offers the cards still face down of the hand that is over, says s
 
   const dealtIn = t.state.hand!.players.map((player) => t.ids.indexOf(player.playerId));
   for (const player of dealtIn) {
-    assert.equal(showStillOffered(t.view(player), both), false, 'the next hand is over too, and it is not the hand the request was for');
+    assert.equal(showStillOffered(t.view(player), 1, [0, 1]), false, 'the next hand is over too, and it is not the hand the request was for');
   }
 });
 

@@ -150,7 +150,6 @@ function stepsOf(event: HandEvent, before: ReplayPosition, after: ReplayPosition
         return [];
       }
 
-      // A hand turned up whole turns over as one; a card shown alone turns by itself, the other staying as it lies
       return [{ moves: turned.every((card) => card !== null) ? [{ name, to: cardsOf(seat), after: 0 }] : turned.flatMap((card, nth): Move[] => (card === null ? [] : [{ name, to: { at: 'cards', seat, card: nth }, after: 0 }])) }];
     }
 

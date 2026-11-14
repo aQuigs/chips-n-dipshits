@@ -589,25 +589,22 @@ export class App {
   }
 
   /**
-   * Asks to see the cards a hand would have dealt. Unlike a move, a hunt that got no answer is sent once
-   * more, since asking twice shows nothing twice and the hand is off the table within seconds; but only
-   * while the page still offers it, as a hunt that went through shows with the next poll.
+   * Sends a request that does the same however often it arrives, such as a rabbit hunt or a show of
+   * cards. Unlike a move, one that got no answer is sent once more, since the hand is off the table within
+   * seconds; but only while the page still offers it, as one that went through shows with the next poll.
    */
-  private async hunt(hand: number): Promise<void> {
-    if ((await this.send({ type: 'huntRabbit', hand })) === 'unanswered' && this.offersHunt(hand)) {
-      await this.send({ type: 'huntRabbit', hand });
+  private async sendAgainWhileOffered(command: Command, offered: () => boolean): Promise<void> {
+    if ((await this.send(command)) === 'unanswered' && offered()) {
+      await this.send(command);
     }
   }
 
-  /**
-   * Shows the player's cards, as `showCommand` names them. Like a hunt, a show that got no answer is sent
-   * once more, since showing a card twice turns up nothing new and the pause after a hand is short; but
-   * only while the page still offers those cards of that hand, as one that went through shows with the next poll.
-   */
-  private async showCards(command: Command): Promise<void> {
-    if ((await this.send(command)) === 'unanswered' && showStillOffered(this.shownView(), command)) {
-      await this.send(command);
-    }
+  private hunt(hand: number): Promise<void> {
+    return this.sendAgainWhileOffered({ type: 'huntRabbit', hand }, () => this.offersHunt(hand));
+  }
+
+  private showCards(hand: number, places: number[]): Promise<void> {
+    return this.sendAgainWhileOffered({ type: 'showCards', hand, cards: places }, () => showStillOffered(this.shownView(), hand, places));
   }
 
   private offersHunt(hand: number): boolean {
@@ -707,7 +704,7 @@ export class App {
         view,
         {
           send: (command) => this.send(command),
-          showCards: (command) => this.showCards(command),
+          showCards: (hand, places) => this.showCards(hand, places),
           openRebuy: () => this.openDialog({ kind: 'rebuy' }),
           openStraddles: () => this.openDialog({ kind: 'straddles' }),
           sizing: screen.sizing,

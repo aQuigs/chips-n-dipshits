@@ -1,12 +1,6 @@
-/*
- * Showing your cards once a hand is over, as the page offers it: either card, or both, and the other
- * one later. A request to show is no move: it can be sent again when it got no answer, since a card
- * shown twice turns up nothing new, but only while the page still offers it, as the answer that never
- * came can outlast the hand.
- */
+/* Showing your cards once a hand is over, as the page offers it: either card, or both, and the other one later. */
 import type { Card } from '../engine/cards.ts';
 import { cardWords } from '../engine/handNames.ts';
-import type { Command } from '../engine/types.ts';
 import type { SeatView, TableView } from '../engine/view.ts';
 
 /** What the page offers the viewer to show: the hand, and the places of their cards still face down to the table, 0 on their left. */
@@ -26,15 +20,11 @@ export function showOffer(view: TableView): ShowOffer | null {
   return { hand: hand.number, places: seat.shown.flatMap((shown, place) => (shown ? [] : [place])) };
 }
 
-export function showCommand(offer: ShowOffer, places: readonly number[]): Command {
-  return { type: 'showCards', hand: offer.hand, cards: [...places] };
-}
-
 /** Whether a show sent with no answer back is worth sending again: the view still offers that hand, and one of those cards. */
-export function showStillOffered(view: TableView | null, sent: Command): boolean {
+export function showStillOffered(view: TableView | null, hand: number, places: readonly number[]): boolean {
   const offer = view && showOffer(view);
 
-  return sent.type === 'showCards' && offer?.hand === sent.hand && sent.cards.some((place) => offer.places.includes(place));
+  return offer?.hand === hand && places.some((place) => offer.places.includes(place));
 }
 
 /**

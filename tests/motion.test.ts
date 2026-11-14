@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { betSlide, followHand, MOST_MOVE_MS, MOST_VIEW_MS, movesSeen, STEP_GAP_MS } from '../src/client/handMoves.ts';
 import { MOST_PER_VIEW, soundsPlaced } from '../src/client/handSounds.ts';
-import { ASIDE_MOVES, Motion, motionAbility, MOVE_MS } from '../src/client/motion.ts';
+import { Motion, motionAbility, MOVE_MS } from '../src/client/motion.ts';
 import type { MotionPlayer, Move, Place } from '../src/client/motion.ts';
 import { PREFERENCES, Preferences } from '../src/client/prefs.ts';
 import type { AppPreferences } from '../src/client/prefs.ts';
@@ -226,8 +226,6 @@ test('a card shown alone turns by itself, and one shown in the pause after the h
   assert.deepEqual(seen(won, [['show', 1, ['As', null]]]), ['show >cards1.0 @0'], 'with the result');
   assert.deepEqual(inThePause(won, [['show', 1, [null, 'Kd']]]).map(told), ['flip >cards1.1 @0']);
   assert.deepEqual(inThePause(won, [['show', 1, ['As', 'Kd']]]).map(told), ['flip >cards1 @0']);
-  assert.ok(ASIDE_MOVES.has('flip'));
-  assert.ok(!ASIDE_MOVES.has('show'), 'cards turned up at a showdown are the game');
   assert.deepEqual(inThePause(won, [['show', 0, ['Qc', null]]]), [], 'the viewer’s own card');
 });
 

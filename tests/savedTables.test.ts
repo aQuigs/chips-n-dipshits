@@ -435,9 +435,13 @@ test('every saved table loads with rabbit hunting off and nothing hunted', () =>
   }
 });
 
-test('every saved table loads in one go with what was shown as a flag for each card: a hand shown is both, one not shown is neither', () => {
+test('every table saved before schema 6 loads in one go with what was shown as a flag for each card: a hand shown is both, one not shown is neither', () => {
   for (const file of FILES) {
     const saved = JSON.parse(readFileSync(new URL(file, FOLDER), 'utf8')) as { state?: TableState } & TableState;
+    if ((saved.state ?? saved).schema >= 6) {
+      continue;
+    }
+
     const raw = (saved.state ?? saved).hand?.players.map((player) => player.shown as unknown as boolean) ?? [];
     const state = load(file);
 

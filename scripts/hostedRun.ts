@@ -709,24 +709,18 @@ try {
     await folder.click('.turn [data-action="fold"]');
     const watcher = folder === dealer ? other : dealer;
 
-    let shows = 0;
-    await folder.route('**/api', async (route) => {
-      const body = JSON.parse(route.request().postData() ?? '{}') as { op?: string; command?: { type?: string } };
-
-      // The first is played by the table, and its answer never reaches the page
-      if (body.op === 'act' && body.command?.type === 'showCards' && ++shows === 1) {
-        await route.fetch();
-        return route.abort('failed');
-      }
-
-      return route.fallback();
-    });
-
+    // The first is played by the table, and its answer never reaches the page; the one sent again is let through
+    const shows = await Gate.on(folder, 'shows');
+    await shows.close('answers');
     await folder.click('.controls [data-action="show-card"][data-place="0"]');
+    await shows.holding();
+    await shows.lose();
+    await shows.holding();
+    await shows.open();
+
     await folder.waitForSelector('.seat.me .hole .card.seen');
     await watcher.waitForSelector('.seat:not(.me) .hole .card[data-card] + .card.back');
 
-    assert.equal(shows, 2, 'the show with no answer was sent once more');
     assert.equal(await folder.locator('.feed li:has-text("shows one card")').count(), 1, 'and the card came out once');
     assert.equal(await folder.locator('.feed li:has-text("shows the other card")').count(), 0);
 

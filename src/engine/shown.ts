@@ -7,9 +7,9 @@
 import type { Card } from './cards.ts';
 
 /**
- * Whether the table has seen every one of a player's cards, from what it has seen of each: its flag,
- * or the card itself with null for one face down. The one question anything asks of a hand that may
- * be half shown, such as whether it is seven-deuce or has a chance to win.
+ * Whether the table has seen every one of a player's cards: the one question anything asks of a hand
+ * that may be half shown, such as whether it is seven-deuce or has a chance to win. A seat with no
+ * hand has no flags, and has shown nothing.
  */
 export function fullyShown(each: readonly (Card | null)[]): each is Card[];
 export function fullyShown(each: readonly boolean[]): boolean;

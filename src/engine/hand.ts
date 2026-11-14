@@ -42,7 +42,6 @@ export const TIMING = {
   rabbitShowMs: 3000,
 };
 
-
 // A hand's log is saved with the table on every action, so a raising war can't be allowed to grow it without end
 const LOG_LIMIT = 240;
 const LOG_HEAD = 40;
@@ -94,25 +93,18 @@ function livePlayers(hand: Hand): HandPlayer[] {
  * Turns face up for the table those of a player's cards at `places` (0 for the one on their left) that
  * are not up already: all of them, unless told which. `made` names the hand they make, where that is known.
  */
-function show(state: TableState, ctx: Ctx, player: HandPlayer, made = '', places: readonly number[] = player.cards.map((_card, nth) => nth)): void {
-  const turned = player.cards.map((card, nth) => (places.includes(nth) && !player.shown[nth] ? card : null));
-  if (turned.every((card) => card === null)) {
+function show(state: TableState, ctx: Ctx, player: HandPlayer, made = '', places?: readonly number[]): void {
+  const turned = player.cards.map((card, nth) => ((!places || places.includes(nth)) && !player.shown[nth] ? card : null));
+  const cards = turned.filter((card) => card !== null);
+  if (cards.length === 0) {
     return;
   }
 
-  const firstShown = !player.shown.some(Boolean);
   player.shown = player.shown.map((shown, nth) => shown || turned[nth] !== null);
   record(state.hand!, ['show', player.seat, turned]);
-  narrate(state, ctx, `${player.name} ${showText(turned.filter((card) => card !== null), firstShown, fullyShown(player.shown))}${made}`);
-}
 
-/** What the play-by-play says a player turned up: their hand at once, one card of it, or the other one later. */
-function showText(cards: readonly Card[], firstShown: boolean, fully: boolean): string {
-  if (!fully) {
-    return `shows one card, ${prettyCards(cards)}`;
-  }
-
-  return firstShown ? `shows ${prettyCards(cards)}` : `shows the other card, ${prettyCards(cards)}`;
+  const said = cards.length === turned.length ? 'shows' : fullyShown(player.shown) ? 'shows the other card,' : 'shows one card,';
+  narrate(state, ctx, `${player.name} ${said} ${prettyCards(cards)}${made}`);
 }
 
 /** Takes chips from a player's stack into the hand. `as` says how they count there; a call or a raise is a live bet, like a blind. */

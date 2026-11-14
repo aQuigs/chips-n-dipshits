@@ -8,7 +8,7 @@ import { badgeOf, blindsOnly, BOARD_SIZE, boardsDealt, evaluateHand, FEED_LIMIT,
 import type { Card, Effect, FeedEntry, HandPlayer, Mention, HandRecord, TableState } from '../src/engine/index.ts';
 import { CACHE_VALUE_BYTES, utf8Bytes } from '../src/gas/sheetStore.ts';
 import { restoreState } from '../src/server/store.ts';
-import { handRecords, ledgerEntries } from './helpers.ts';
+import { faceDownCards, handRecords, ledgerEntries } from './helpers.ts';
 
 /**
  * Everywhere a chip that has been bought can be. A feature that gives chips somewhere new to sit adds
@@ -388,7 +388,7 @@ export function assertViewsKeepSecrets(state: TableState, now: number): void {
     // The night's numbers hold cards of hands that are over, the best hand each player has shown, and such a card
     // can be face down again in the hand on the table without being a secret. So they are looked at apart: they are
     // the same whoever asks, and tests/tonight.test.ts holds them at every step to what the hand records say
-    const faceDown = new Set([...(hand?.deck ?? []), ...(hand?.players ?? []).filter((p) => p.playerId !== viewer.id).flatMap((p) => p.cards.filter((_card, nth) => !p.shown[nth]))]);
+    const faceDown = new Set([...(hand?.deck ?? []), ...(hand?.players ?? []).filter((p) => p.playerId !== viewer.id).flatMap(faceDownCards)]);
     const leaked = secretIn({ ...view, tonight: null }, faceDown);
     assert.equal(leaked, undefined, `${viewer.name}'s view holds a card that is face down for them`);
     assert.deepEqual(view.tonight, tonight, `${viewer.name} is shown other numbers for the night than the rest of the table`);

@@ -681,7 +681,7 @@ export class App {
     const picking = screen.seatMoves.picking;
     const turning = screen.shown.turning;
     const chances = screen.shown.chances;
-    const shows = [screen.shape, view.you, view.hostId, view.cohostIds, view.running, view.nextHandAt, view.nightEndedAt, view.config.actionSeconds, view.seats, handDrawn(view.hand), myRequest, picking, turning, chances];
+    const shows = [screen.shape, view.you, view.hostId, view.cohostIds, view.running, view.nextHandAt, view.nightEndedAt, view.config.actionSeconds, view.seats, handDrawn(view.hand), view.tonight.highHand.next, myRequest, picking, turning, chances];
 
     screen.stage.draw(shows, () => {
       return tableEl(

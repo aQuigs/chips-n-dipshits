@@ -220,15 +220,16 @@ for (const unit of ['chips', 'cents'] as const) {
   });
 }
 
-test('who leads in what: up the most, the most pots, the biggest pot and the best hand, shared when level and nobody when there is none', () => {
+test('who leads in what: up the most, the most pots and the biggest pot, shared when level and nobody when there is none, and the high hand, which the first to show it keeps', () => {
   const t = new TestTable({ stacks: [1000, 1000, 1000] });
+  const highHand = (view: TonightView) => view.highHand.best?.playerIds ?? [];
 
-  assert.deepEqual([tonight(t).upMost, tonight(t).mostPots, tonight(t).biggestPot, tonight(t).bestHand], [[], [], [], []]);
+  assert.deepEqual([tonight(t).upMost, tonight(t).mostPots, tonight(t).biggestPot, highHand(tonight(t))], [[], [], [], []]);
 
   acesBeatKings(t);
 
   const after = tonight(t);
-  assert.deepEqual([after.upMost, after.mostPots, after.biggestPot, after.bestHand].map((ids) => names(t, ids)), [['P0'], ['P0'], ['P0'], ['P0']]);
+  assert.deepEqual([after.upMost, after.mostPots, after.biggestPot, highHand(after)].map((ids) => names(t, ids)), [['P0'], ['P0'], ['P0'], ['P0']]);
 
   // Seat 2 wins the same pot back from seat 0, with the same aces
   t.deal({ button: 0, holes: { 0: KINGS, 1: QUEENS, 2: 'Ad Ac' }, board: BOARD });
@@ -239,7 +240,7 @@ test('who leads in what: up the most, the most pots, the biggest pot and the bes
   finish(t);
 
   const level = tonight(t);
-  assert.deepEqual([level.upMost, level.mostPots, level.biggestPot, level.bestHand].map((ids) => names(t, ids).sort()), [['P0', 'P2'], ['P0', 'P2'], ['P0', 'P2'], ['P0', 'P2']]);
+  assert.deepEqual([level.upMost, level.mostPots, level.biggestPot, highHand(level)].map((ids) => names(t, ids).sort()), [['P0', 'P2'], ['P0', 'P2'], ['P0', 'P2'], ['P0']]);
 });
 
 /** The night's standings for players given by what they are up or down, how often they rebought and how many pots they won. */

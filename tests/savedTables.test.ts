@@ -380,3 +380,31 @@ test('a hand record saved when a pick was a yes or no to twice reads each as the
 
   assert.deepEqual(upgradeRecord(asOnceSaved), record);
 });
+
+test('a table saved before the high hand was kept has it from the best hands shown, shared by two as good since which came first is not known, and pays it when the night ends', () => {
+  const t = TestTable.adopt(load('schema4-best-hands-shown.json'));
+  const idOf = (name: string) => t.state.members.find((member) => member.name === name)!.id;
+  const flush = ['Ah', 'Jh', '9h', '7h', '2h'];
+
+  assert.deepEqual(t.state.tonight.highHand, {
+    best: { playerIds: [idOf('P0'), idOf('P2')], cards: flush, hand: 0, paid: [] },
+    sincePaid: { [idOf('P0')]: { cards: flush, hand: 0 }, [idOf('P2')]: { cards: flush, hand: 0 } },
+  });
+  assert.deepEqual(t.view(1).tonight.highHand.next, { playerIds: [idOf('P0'), idOf('P2')], name: 'Flush, ace high', cards: flush, hand: 0 });
+  assertInvariants(t.state, t.now);
+
+  // The one who has shown nothing pays both, the odd chip to seat 2 on the button's left
+  t.cmd(0, { type: 'updateConfig', config: { highHandBonus: 5 } });
+  const before = t.state.seats.slice(0, 3).map((seat) => seat!.stack);
+  t.cmd(0, { type: 'endNight' });
+
+  assert.deepEqual(
+    t.state.seats.slice(0, 3).map((seat, index) => seat!.stack - before[index]!),
+    [2, -5, 3],
+  );
+  assert.deepEqual(t.state.tonight.highHand.best!.paid, [
+    { playerId: idOf('P2'), amount: 3 },
+    { playerId: idOf('P0'), amount: 2 },
+  ]);
+  assertInvariants(t.state, t.now);
+});

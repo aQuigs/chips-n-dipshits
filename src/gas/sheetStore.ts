@@ -204,9 +204,10 @@ function recordRow({ id, record }: Held, table: Denominated): unknown[] {
     const entry = record.entry;
     const amount = asNumber(entry.amount, table);
 
-    // Amount is what a player paid or was paid, so adding it up for one player gives what they owe. A transfer is
-    // no such thing: the chips it moved show up in that player's cash-out, so it is written beside the column instead
-    return entry.kind === 'transfer'
+    // Amount is what a player paid or was paid, so adding it up for one player gives what they owe. Chips moved
+    // between players, a transfer or the high-hand bonus, are no such thing: they show up in that player's
+    // cash-out, so they are written beside the column instead, with the other player and Type saying which
+    return 'otherId' in entry
       ? [new Date(entry.at), entry.tableId, entry.name, entry.kind, '', entry.playerId, id, amount, entry.otherName, entry.otherId]
       : [new Date(entry.at), entry.tableId, entry.name, entry.kind, amount, entry.playerId, id, '', '', ''];
   }
@@ -458,9 +459,9 @@ export class SheetStore implements TableStore {
         const arrived = retrying ? this.recentIds(sheet, idColumn) : new Set<string>();
         const fresh = mine.filter((item) => !arrived.has(item.id));
 
-        // The Ledger tab gained the transfer columns after Sheets were in use. Only a transfer fills them, so only
-        // then is a tab made before checked for their headers, which keeps that read off every other copy
-        if (fresh.some(({ record }) => record.type === 'ledger' && record.entry.kind === 'transfer')) {
+        // The Ledger tab gained the columns for chips moved between players after Sheets were in use. Only such a
+        // line fills them, so only then is a tab made before checked for their headers, which keeps that read off every other copy
+        if (fresh.some(({ record }) => record.type === 'ledger' && 'otherId' in record.entry)) {
           headBlankColumns(this.sheet(sheet), HEADERS[sheet]);
         }
 

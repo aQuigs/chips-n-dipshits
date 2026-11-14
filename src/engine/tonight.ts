@@ -139,7 +139,6 @@ export interface TonightView {
   upMost: string[];
   mostPots: string[];
   biggestPot: string[];
-  bestHand: string[];
   /**
    * The dipshit of the night, crowned only once the night is over: whoever is down the most, of those
    * level on that whoever rebought the most, and of those still level whoever won the fewest pots.
@@ -147,6 +146,7 @@ export interface TonightView {
    */
   dipshits: string[];
   crownedBy: CrownedBy;
+  /** The best hand shown down tonight, which is the best hand of whoever holds it, and the one the bonus is paid for next. */
   highHand: HighHandsView;
 }
 
@@ -191,15 +191,10 @@ export function tonightView(state: TableState, ledger: readonly LedgerRow[], ove
   const finished = state.handCount - (state.hand ? 1 : 0);
   const seated = new Set(state.seats.map((seat) => seat?.playerId));
 
-  // How good each player's best hand is, above zero so that having shown none is leading in nothing
-  const bestRank = new Map<string, number>();
-
   const players = ledger
     .map((row): TonightRow => {
       const { hands, won, biggest, best, rebuys, badges } = tonight.players[row.playerId] ?? newPlayerTonight();
       const value = best && evaluateHand(best);
-
-      bestRank.set(row.playerId, value ? value.score + 1 : 0);
 
       return {
         playerId: row.playerId,
@@ -223,7 +218,6 @@ export function tonightView(state: TableState, ledger: readonly LedgerRow[], ove
     upMost: ids(leaders(players, (row) => row.net)),
     mostPots: ids(leaders(players, (row) => row.won)),
     biggestPot: ids(leaders(players, (row) => row.biggest)),
-    bestHand: ids(leaders(players, (row) => bestRank.get(row.playerId)!)),
     ...(over ? crown(players) : { dipshits: [], crownedBy: 'net' }),
     highHand: highHandsView(state),
   };

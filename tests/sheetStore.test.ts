@@ -458,6 +458,42 @@ test('a Ledger tab made before transfers gets the transfer columns\' headers wit
   assert.deepEqual(ledgerAmounts(), [100, 200, -50, 50], 'the line written before the new columns was found by its id and not written again');
 });
 
+/** The lines a high-hand bonus of 5 is booked as, paid to Dana by Sam and by Kim, who had only 3. */
+function bonusPaid(tableId = 'ABC234'): Effect[] {
+  const line = { at: 1_700_000_000_000, tableId, kind: 'high hand' as const };
+  const pair = (playerId: string, name: string, amount: number): Effect[] => [
+    { type: 'ledger', entry: { ...line, playerId, name, amount: -amount, otherId: 'D1', otherName: 'Dana' } },
+    { type: 'ledger', entry: { ...line, playerId: 'D1', name: 'Dana', amount, otherId: playerId, otherName: name } },
+  ];
+
+  return [...pair('S1', 'Sam', 5), ...pair('K1', 'Kim', 3)];
+}
+
+test('a high-hand bonus reaches a Ledger tab made before chips moved between players as a pair of lines a payment, headed with the first, beside the Amount column', () => {
+  const { store, spreadsheet, lock } = setup();
+
+  // The tab as the code on main made it, before transfers
+  const baseHeaders = ['Time', 'Table', 'Player', 'Type', 'Amount', 'Player ID', 'Record ID'];
+  lock.waitLock();
+  const old = spreadsheet.insertSheet('Ledger');
+  old.getRange(1, 1, 1, 7).setValues([baseHeaders]);
+  lock.releaseLock();
+
+  save(store, table('ABC234'), [buyIn(1000), ...bonusPaid()]);
+
+  assert.deepEqual(old.cells[0], [...baseHeaders, 'Transferred', 'Other player', 'Other player ID']);
+  assert.deepEqual(
+    [3, 4, 5, 6].map((row) => [3, 4, 5, 6, 8, 9, 10].map((column) => old.shown(row, column))),
+    [
+      ['Sam', 'high hand', '', 'S1', '-5', 'Dana', 'D1'],
+      ['Dana', 'high hand', '', 'D1', '5', 'Sam', 'S1'],
+      ['Kim', 'high hand', '', 'K1', '-3', 'Dana', 'D1'],
+      ['Dana', 'high hand', '', 'D1', '3', 'Kim', 'K1'],
+    ],
+  );
+  assert.deepEqual(old.cells.slice(1).map((row) => row[4]), [1000, '', '', '', ''], 'a player\'s amounts still add up to what they paid');
+});
+
 test('a header someone renamed is kept when the transfer columns are headed', () => {
   const { store, spreadsheet, lock } = setup();
 
@@ -919,10 +955,17 @@ test('after the longest night the fullest table still fits its row and the cache
     t.state.tonight.players[member.id] = { hands: 99_999, won: 99_999, biggest: 10 * LIMITS.chips, best: ['As', 'Ks', 'Qs', 'Js', 'Ts'], rebuys: 9_999, busts: 9_999, streak: 9_999, badges: { ...everyBadge } };
   }
   t.state.tonight.hands = 99_999;
+
+  // A high hand all ten seated shared and were paid for, and a hand shown since by every member
+  const seated = t.state.seats.flatMap((seat) => (seat ? [seat.playerId] : []));
+  t.state.tonight.highHand = {
+    best: { playerIds: seated, cards: ['As', 'Ks', 'Qs', 'Js', 'Ts'], hand: 99_999, paid: seated.map((playerId) => ({ playerId, amount: 10 * LIMITS.chips })) },
+    sincePaid: Object.fromEntries(t.state.members.map((member) => [member.id, { cards: ['As', 'Ks', 'Qs', 'Js', 'Ts'], hand: 99_999 }])),
+  };
   t.state.feed = fullestChat();
 
   const numbers = JSON.stringify(t.state.tonight).length;
-  assert.ok(numbers <= LIMITS.members * 310, `the night's numbers for ${LIMITS.members} players take ${numbers} characters`);
+  assert.ok(numbers <= LIMITS.members * 380, `the night's numbers for ${LIMITS.members} players take ${numbers} characters`);
 
   save(store, t.state);
 

@@ -2,6 +2,7 @@ import type { TableView } from '../../../engine/view.ts';
 import { callBombPot, callOffBombPot } from './bombPot.ts';
 import { confirmDialog } from './confirm.ts';
 import type { DialogHandlers, DialogKind } from './dialog.ts';
+import { highHandDialog } from './highHand.ts';
 import { historyDialog } from './history.ts';
 import { inviteDialog } from './invite.ts';
 import { ledgerDialog } from './ledger.ts';
@@ -36,6 +37,7 @@ const REGISTERED = [
   callBombPot,
   callOffBombPot,
   lastHandsDialog,
+  highHandDialog,
   settingsDialog,
   pauseGame,
   startGame,

@@ -32,7 +32,7 @@ interface Hold {
   events: number;
   held: Held;
   /** What the view brought that is told once the cards are up. */
-  later: Pick<TableChange, 'events' | 'feed' | 'earned'>;
+  later: Pick<TableChange, 'events' | 'feed' | 'earned' | 'tookHighHand'>;
   waiting: boolean;
 }
 
@@ -72,16 +72,16 @@ export class Suspense {
 
       // More of the same hand: what was held is what came between, so it goes before what is new
       if (seen.current && seen.view.hand?.number === hold.hand) {
-        return { ...seen, events: [...hold.later.events, ...seen.events], feed: [...hold.later.feed, ...seen.feed], earned: [...hold.later.earned, ...seen.earned] };
+        return { ...seen, ...honors(hold, seen), events: [...hold.later.events, ...seen.events], feed: [...hold.later.feed, ...seen.feed] };
       }
 
-      // Badges are told once and were counted as told when they came, so whatever ends the hold tells them rather than lose them
-      if (hold.later.earned.length > 0) {
-        change = { ...seen, earned: [...hold.later.earned, ...seen.earned] };
+      // Badges and the high hand are told once and were counted as told when they came, so whatever ends the hold tells them rather than lose them
+      if (hold.later.earned.length > 0 || hold.later.tookHighHand) {
+        change = { ...seen, ...honors(hold, seen) };
       }
     }
 
-    const { before, view, events, feed, earned } = change;
+    const { before, view, events, feed, earned, tookHighHand } = change;
 
     const sweat = this.motion.seen() ? sweatOf(change) : null;
     if (!sweat) {
@@ -98,14 +98,14 @@ export class Suspense {
       hand: hand.number,
       events: hand.events.length,
       held: { cards, holding: withoutCards(view, hand, cards), standing: standingOf(before ?? view), line },
-      later: { events: events.slice(sweat.upTo), feed: feed.filter((entry) => !told(entry)), earned },
+      later: { events: events.slice(sweat.upTo), feed: feed.filter((entry) => !told(entry)), earned, tookHighHand },
       waiting: false,
     };
 
     // Whatever follows a hand's events takes the new ones for the last of the hand's, so the view told with them ends there too
     const upTo = { ...hand, events: hand.events.slice(0, hand.events.length - events.length + sweat.upTo) };
 
-    return { ...change, view: { ...view, hand: upTo }, events: events.slice(0, sweat.upTo), feed: feed.filter(told), earned: [] };
+    return { ...change, view: { ...view, hand: upTo }, events: events.slice(0, sweat.upTo), feed: feed.filter(told), earned: [], tookHighHand: false };
   }
 
   /** The last cards of a runout being turned over, which the table draws but which say nothing yet of the viewer's hand. */
@@ -142,7 +142,7 @@ export class Suspense {
       const events = view.hand?.events.length === hold.events ? hold.later.events : [];
 
       this.hold = null;
-      this.release({ before: view, view, feed: hold.later.feed, events, current: true, wentBack: false, nightEnded: false, earned: hold.later.earned, now: view.now });
+      this.release({ before: view, view, feed: hold.later.feed, events, current: true, wentBack: false, nightEnded: false, earned: hold.later.earned, tookHighHand: hold.later.tookHighHand, now: view.now });
     });
   }
 
@@ -150,6 +150,11 @@ export class Suspense {
   end(): void {
     this.hold = null;
   }
+}
+
+/** The viewer's own news a hold kept back, told with what the view that ends it brings. */
+function honors(hold: Hold, seen: TableChange): Pick<TableChange, 'earned' | 'tookHighHand'> {
+  return { earned: [...hold.later.earned, ...seen.earned], tookHighHand: hold.later.tookHighHand || seen.tookHighHand };
 }
 
 /** What the viewer's hand makes on each board without the cards being turned. */

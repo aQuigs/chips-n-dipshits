@@ -9,6 +9,7 @@ import type { EarnedBadge } from '../engine/badges.ts';
 import { prettyCards } from '../engine/cards.ts';
 import { listed } from '../engine/handNames.ts';
 import type { Card } from '../engine/cards.ts';
+import type { HighHandView } from '../engine/highHand.ts';
 import type { TonightRow } from '../engine/tonight.ts';
 import type { TableView } from '../engine/view.ts';
 import { nightOver } from './render/night.ts';
@@ -60,32 +61,58 @@ export interface Leader {
   label: string;
   who: string;
   what: string;
-  /** The cards of the best hand, when one player alone has it. */
+  /** The cards of the high hand, when one player alone has it. */
   cards: Card[] | null;
+  /** What its bonus came to, for the high hand. */
+  note?: string;
 }
+
+const whoOf = (rows: readonly TonightRow[]): string => (rows.length > MOST_NAMES ? `${rows.length} players` : listed(rows.map((row) => row.name)));
 
 /** Who leads in what, leaving out whatever nobody has any of yet. */
 export function leadersOf(view: TableView): Leader[] {
   const { tonight, config } = view;
 
-  const leader = (label: string, ids: string[], what: (row: TonightRow) => string, cards: (row: TonightRow) => Card[] | null = () => null): Leader[] => {
+  const leader = (label: string, ids: string[], what: (row: TonightRow) => string): Leader[] => {
     const rows = rowsOf(view, ids);
     if (rows.length === 0) {
       return [];
     }
 
-    const alone = rows.length === 1;
-    const who = rows.length > MOST_NAMES ? `${rows.length} players` : listed(rows.map((row) => row.name));
-
-    return [{ label, who, what: alone ? what(rows[0]!) : `${what(rows[0]!)} each`, cards: alone ? cards(rows[0]!) : null }];
+    return [{ label, who: whoOf(rows), what: rows.length === 1 ? what(rows[0]!) : `${what(rows[0]!)} each`, cards: null }];
   };
 
   return [
     ...leader('Up the most', tonight.upMost, (row) => signedAmount(row.net, config)),
     ...leader('Most pots won', tonight.mostPots, (row) => String(row.won)),
     ...leader('Biggest pot', tonight.biggestPot, (row) => formatAmount(row.biggest, config)),
-    ...leader('Best hand', tonight.bestHand, (row) => row.best!.name, (row) => row.best!.cards),
+    ...highHandLeaders(view),
   ];
+}
+
+/**
+ * The night's high hand, with what its bonus came to; and once that is paid, the high hand shown
+ * since, which the bonus is paid for next.
+ */
+function highHandLeaders(view: TableView): Leader[] {
+  const { best, next } = view.tonight.highHand;
+  if (!best) {
+    return [];
+  }
+
+  const { config } = view;
+  const nameOf = (id: string) => view.tonight.players.find((row) => row.playerId === id)?.name ?? 'Someone';
+  const shown = (label: string, hand: HighHandView, note: string | undefined): Leader => {
+    const rows = hand.playerIds.map((id) => view.tonight.players.find((row) => row.playerId === id)).filter((row) => row !== undefined);
+
+    return { label, who: whoOf(rows), what: hand.name, cards: hand.playerIds.length === 1 ? hand.cards : null, ...(note ? { note } : {}) };
+  };
+
+  const bonus = formatAmount(config.highHandBonus, config);
+  const toCome = config.highHandBonus > 0 ? `Bonus: ${bonus} from everyone else seated${nightOver(view) ? ', unpaid' : ' when the night ends'}` : undefined;
+  const paid = best.paid.length > 0 ? `Bonus paid: ${best.paid.map((each) => `${formatAmount(each.amount, config)} to ${nameOf(each.playerId)}`).join(', ')}` : toCome;
+
+  return [shown('High hand', best, paid), ...(best.paid.length > 0 && next ? [shown('High hand since', next, toCome)] : [])];
 }
 
 /** How many times a badge was earned, after its name: nothing for once. */
@@ -125,7 +152,7 @@ export function tonightText(view: TableView): string {
   const top = [
     `${view.config.name}: ${crown ? 'the night is over' : 'the night so far'}, ${hands}`,
     crown ? `${crown.title}${crown.names ? `: ${crown.names}` : ''}. ${crown.line}` : null,
-    ...leadersOf(view).map((leader) => `${leader.label}: ${leader.who}, ${leader.what}${leader.cards ? ` (${prettyCards(leader.cards)})` : ''}`),
+    ...leadersOf(view).map((leader) => `${leader.label}: ${leader.who}, ${leader.what}${leader.cards ? ` (${prettyCards(leader.cards)})` : ''}${leader.note ? `. ${leader.note}` : ''}`),
   ];
 
   const players = view.tonight.players.map((row) => [`${row.name}${row.seated ? '' : ' (left)'} ${signedAmount(row.net, view.config)} · ${countsOf(row)}`, ...row.badges.map(badgeText)].join(' · '));

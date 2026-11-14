@@ -1,0 +1,11 @@
+/* ---- The high hand: the mark beside its holder's name, and what Tonight says of its bonus ---- */
+
+/* The name gives way to the mark, which stays whole, as it does to the host's star */
+.plate .name .high-hand {
+  flex: none;
+  margin-left: 0.25em;
+}
+
+.tonight-leaders dd .note {
+  display: block;
+}

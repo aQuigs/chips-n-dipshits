@@ -11,6 +11,7 @@ import type { BoardCard, Place } from '../motion.ts';
 import type { ShownChances } from '../tableChances.ts';
 import { cardEl, h } from '../ui.ts';
 import { nightOver } from './night.ts';
+import { highHandMark } from './highHand.ts';
 import { hostOrCohost, roleMark } from './roles.ts';
 
 /** Whether the table is drawn lying down (desktop, landscape) or standing up (a phone held upright). */
@@ -287,7 +288,7 @@ function seatEl(view: TableView, seat: SeatView, slot: number, shape: Shape, clo
   const plate = h(
     'div.plate',
     null,
-    h('div.name', { title: seat.name }, h('span', null, seat.name), roleMark(view, seat.playerId)),
+    h('div.name', { title: seat.name }, h('span', null, seat.name), roleMark(view, seat.playerId), highHandMark(view, seat.playerId)),
     h('div.stack', { title: formatAmount(seat.stack, view.config) }, shortAmount(seat.stack, view.config), seat.pendingAdd > 0 ? h('span.pending', null, ` +${shortAmount(seat.pendingAdd, view.config)}`) : null),
     // The seat has one line. While hands are face up with cards to come it is the hand's chance, as at the result it is
     // what the hand won: that its player is all in, away or leaving is back on it once the hand is over

@@ -79,7 +79,7 @@ test('anyone with the table id can look it up and join under a free name', () =>
   const tableId = joined(service.handle({ op: 'create', name: 'Quigs' })).view.id;
 
   const info = service.handle({ op: 'info', tableId: tableId.toLowerCase() });
-  assert.deepEqual(info, { ok: true, kind: 'info', table: { id: tableId, name: "Chips n' Dipshits", unit: 'chips', smallBlind: 10, bigBlind: 20, players: [] } });
+  assert.deepEqual(info, { ok: true, kind: 'info', table: { id: tableId, name: "Chips n' Dipshits", unit: 'chips', smallBlind: 10, bigBlind: 20, ante: 0, anteFrom: 'everyone', players: [] } });
 
   const ann = joined(service.handle({ op: 'join', tableId: ` ${tableId.toLowerCase()} `, name: 'Ann' }));
   assert.equal(ann.view.you.role, 'member');
@@ -90,6 +90,15 @@ test('anyone with the table id can look it up and join under a free name', () =>
     code: 'invalid',
     error: 'Someone at this table is already called ann',
   });
+});
+
+test('someone looking a table up is told its ante and who pays it', () => {
+  const { service } = setup();
+  const tableId = joined(service.handle({ op: 'create', name: 'Quigs', config: { ante: 20, anteFrom: 'bigBlind' } })).view.id;
+
+  const info = service.handle({ op: 'info', tableId });
+  assert.ok(info.ok && info.kind === 'info');
+  assert.deepEqual([info.table.ante, info.table.anteFrom], [20, 'bigBlind']);
 });
 
 test('every member sees the voice chat link, and someone who has not joined learns nothing of it', () => {

@@ -63,6 +63,51 @@ export function fixCards(hand: Hand, options: DealOptions): void {
   hand.deck = [...spare, ...upcoming.reverse()];
 }
 
+const DECK_SIZE = freshDeck().length;
+
+/**
+ * The draws that make the engine's shuffle hand back `deck`. It asks once for each place from the last
+ * down to the second, and the answer is where the card for that place lies among those not yet placed.
+ */
+function shuffleDraws(deck: readonly Card[]): number[] {
+  const unplaced = freshDeck();
+  const draws: number[] = [];
+
+  for (let place = deck.length - 1; place > 0; place--) {
+    const from = unplaced.indexOf(deck[place]!);
+
+    draws.push(from);
+    unplaced[from] = unplaced[place]!;
+    unplaced.pop();
+  }
+
+  return draws;
+}
+
+/**
+ * An rng that answers the draws of the engine's shuffle with `shuffle` and every other draw with `other`.
+ * A shuffle is known by its first draw, the only one made among a whole deck.
+ */
+function steeredRng(shuffle: (maxExclusive: number) => number, other: (maxExclusive: number) => number): Rng {
+  let left = 0;
+
+  return {
+    int(maxExclusive: number): number {
+      if (left === 0 && maxExclusive === DECK_SIZE) {
+        left = DECK_SIZE - 1;
+      }
+
+      if (left === 0) {
+        return other(maxExclusive);
+      }
+
+      left -= 1;
+
+      return shuffle(maxExclusive);
+    },
+  };
+}
+
 /** A table with a player in each of the first seats, driven directly through the engine. */
 export class TestTable {
   state: TableState;
@@ -113,14 +158,53 @@ export class TestTable {
     applyCommand(this.state, this.ctx(), this.ids[seat]!, command);
   }
 
-  /** Starts a hand with the button and the cards fixed. */
+  /**
+   * Starts a hand with the button and the cards fixed. The deck is stacked before the hand begins, so
+   * whatever a hand does with its cards as it is dealt, such as turning them up when the blinds or the
+   * antes leave nobody to act, it does with the cards asked for.
+   */
   deal(options: DealOptions = {}): void {
     if (options.button !== undefined) {
       this.state.buttonSeat = (options.button - 1 + SEAT_COUNT) % SEAT_COUNT;
     }
 
-    startHand(this.state, this.ctx());
-    fixCards(this.state.hand!, options);
+    // Dealt first on a copy, from a deck left in order: where in the deck each player's cards come from is
+    // the engine's to say. The real rng is drawn from all the same, so what follows the hand is as random as ever
+    const copy: TableState = JSON.parse(JSON.stringify(this.state));
+    const others: number[] = [];
+
+    startHand(copy, {
+      now: this.now,
+      effects: [],
+      rng: steeredRng(
+        (maxExclusive) => {
+          this.rng.int(maxExclusive);
+
+          return maxExclusive - 1;
+        },
+        (maxExclusive) => {
+          others.push(this.rng.int(maxExclusive));
+
+          return others[others.length - 1]!;
+        },
+      ),
+    });
+
+    const inOrder = freshDeck();
+    const places = copy.hand!.players.map((player) => player.cards.map((card) => inOrder.indexOf(card)));
+
+    fixCards(copy.hand!, options);
+
+    const wanted = copy.hand!.players.map((player) => player.cards);
+    const deck = [...copy.hand!.deck];
+    places.forEach((ofPlayer, index) => ofPlayer.forEach((place, nth) => (deck[place] = wanted[index]![nth]!)));
+    assert.equal(new Set(deck).size, DECK_SIZE, 'the stacked deck is not a whole deck');
+
+    // Then for real, with every card where the copy says it has to be and every other draw as it fell there
+    const next = (answers: number[]) => () => answers.shift() ?? assert.fail('the hand drew differently when it was dealt again');
+    startHand(this.state, { ...this.ctx(), rng: steeredRng(next(shuffleDraws(deck)), next(others)) });
+
+    assert.deepEqual(this.state.hand!.players.map((player) => player.cards), wanted, 'the cards did not come out as stacked: has the shuffle or the deal changed?');
   }
 
   fold(seat: number): void {

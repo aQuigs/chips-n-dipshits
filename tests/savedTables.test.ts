@@ -112,3 +112,27 @@ test('a table saved before tables could play dollars and cents is a whole-chip t
   assert.ok(t.feedText().includes('P1 adds 500') && t.feedText().includes('P2 sits down with 600'), t.feedText().join(' / '));
   assert.match(t.state.hand!.log[0]!, / · blinds 10\/20 · /);
 });
+
+test('a table saved before antes has none, its hand in play holds no dead money, and an ante set on it is posted from the next hand', () => {
+  for (const file of FILES) {
+    const state = load(file);
+
+    assert.deepEqual([state.config.ante, state.config.anteFrom], [0, 'everyone'], file);
+    assert.ok((state.hand?.players ?? []).every((player) => player.dead === 0), file);
+  }
+
+  const t = TestTable.adopt(load('schema3-betting-straddle-side-pot.json'));
+  t.cmd(0, { type: 'updateConfig', config: { ante: 20, anteFrom: 'bigBlind' } });
+  assertInvariants(t.state, t.now);
+
+  t.fold(3);
+  t.fold(4);
+  while (handsFinished(t) === 0) {
+    t.wait(t.state.hand!.deadline! - t.now);
+  }
+
+  const hand = t.state.hand!;
+  assert.match(hand.log[0]!, / · blinds 10\/20 · BB ante 20 · /);
+  assert.equal(hand.players.find((player) => player.seat === hand.bbSeat)!.dead, 20);
+  assertInvariants(t.state, t.now);
+});

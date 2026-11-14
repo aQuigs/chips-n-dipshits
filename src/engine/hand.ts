@@ -3,11 +3,14 @@ import { bettingIsClosed, bettingOptions, owesAction } from './betting.ts';
 import { FLOP_SIZE, isSevenDeuce, prettyCards, shuffledDeck } from './cards.ts';
 import type { Card } from './cards.ts';
 import type { HandEvent } from './events.ts';
+import { forcedBets, openingBet, positionsOf } from './forcedBets.ts';
+import type { ForcedBet } from './forcedBets.ts';
 import { madeHandName, midSentence } from './handNames.ts';
 import { playerHand } from './handRank.ts';
 import type { HandValue } from './handRank.ts';
 import { buildPots, splitAmount } from './pots.ts';
 import { addFeed, addPendingChips, clockwiseAfter, clockwiseFrom, eligibleSeats, seatsClockwiseAfter, vacateSeat } from './seats.ts';
+import { stakesText } from './stakes.ts';
 import { GameError } from './types.ts';
 import type { BountyResult, Ctx, Hand, HandPlayer, HandResult, PotAward, PotResult, ShownHand, Street, TableState } from './types.ts';
 
@@ -24,7 +27,6 @@ export const TIMING = {
 
 const HOLE_CARDS = 2;
 const BOARD_SIZE = 5;
-const STRADDLE_BIG_BLINDS = 2;
 
 // A hand's log is saved with the table on every action, so a raising war can't be allowed to grow it without end
 const LOG_LIMIT = 240;
@@ -92,25 +94,89 @@ function show(state: TableState, ctx: Ctx, player: HandPlayer, made = ''): void 
   narrate(state, ctx, `${player.name} shows ${prettyCards(player.cards)}${made}`);
 }
 
-function pay(state: TableState, player: HandPlayer, amount: number): void {
+/** Takes chips from a player's stack into the hand. `as` says how they count there; a call or a raise is a live bet, like a blind. */
+function pay(state: TableState, player: HandPlayer, amount: number, as: ForcedBet['as'] = 'live'): void {
   const seat = state.seats[player.seat]!;
 
   seat.stack -= amount;
-  player.bet += amount;
-  player.committed += amount;
+
+  if (as === 'live') {
+    player.bet += amount;
+  }
+
+  if (as === 'dead') {
+    player.dead += amount;
+  } else {
+    player.committed += amount;
+  }
 
   if (seat.stack === 0) {
     player.allIn = true;
   }
 }
 
-function postBlind(state: TableState, ctx: Ctx, player: HandPlayer, amount: number, blind: 'small blind' | 'big blind' | 'straddle'): void {
-  const posted = Math.min(amount, state.seats[player.seat]!.stack);
+/** Splits a hand's forced bets where one kind of bet ends and the next begins. */
+function byKind(bets: readonly ForcedBet[]): ForcedBet[][] {
+  const kinds: ForcedBet[][] = [];
 
-  pay(state, player, posted);
-  player.lastAction = blind;
-  record(state.hand!, ['post', player.seat, blind, posted, state.seats[player.seat]!.stack]);
-  narrate(state, ctx, `${player.name} posts ${blind} ${formatAmount(posted, state.config)}${player.allIn ? ' and is all in' : ''}`);
+  for (const bet of bets) {
+    const kind = kinds[kinds.length - 1];
+
+    if (kind && kind[0]!.what === bet.what && kind[0]!.amount === bet.amount) {
+      kind.push(bet);
+    } else {
+      kinds.push([bet]);
+    }
+  }
+
+  return kinds;
+}
+
+/**
+ * Posts a hand's forced bets in the order they are listed, each as far as its player's stack goes.
+ * A bet the whole table posts is told in one line, and only a player it leaves short or all in gets a
+ * line of their own: an ante apiece on top of every hand would bury the chat.
+ */
+function postForcedBets(state: TableState, ctx: Ctx, bets: readonly ForcedBet[]): void {
+  const hand = state.hand!;
+  const tell = (who: string, bet: ForcedBet, posted: number, allIn: boolean) =>
+    narrate(state, ctx, `${who} posts ${bet.what} ${formatAmount(posted, state.config)}${allIn ? ' and is all in' : ''}`);
+
+  for (const kind of byKind(bets)) {
+    const fromEveryone = kind.length === hand.players.length;
+    const inFull: HandPlayer[] = [];
+
+    for (const bet of kind) {
+      const player = playerAt(hand, bet.seat)!;
+      const seat = state.seats[bet.seat]!;
+      const posted = Math.min(bet.amount, seat.stack);
+
+      // An earlier forced bet took the whole stack, so there is nothing left to post this one with
+      if (posted === 0) {
+        continue;
+      }
+
+      pay(state, player, posted, bet.as);
+      record(hand, bet.as === 'live' ? ['post', bet.seat, bet.what, posted, seat.stack] : ['post', bet.seat, bet.what, posted, seat.stack, bet.as]);
+
+      // The label by a seat names what is in front of it
+      if (bet.as === 'live') {
+        player.lastAction = bet.what;
+      }
+
+      if (fromEveryone && !player.allIn) {
+        inFull.push(player);
+      } else {
+        tell(player.name, bet, posted, player.allIn);
+      }
+    }
+
+    if (inFull.length === 1) {
+      tell(inFull[0]!.name, kind[0]!, kind[0]!.amount, false);
+    } else if (inFull.length > 1) {
+      tell(inFull.length === kind.length ? 'Everyone' : 'Everyone else', kind[0]!, kind[0]!.amount, false);
+    }
+  }
 }
 
 export function startHand(state: TableState, ctx: Ctx): void {
@@ -119,14 +185,15 @@ export function startHand(state: TableState, ctx: Ctx): void {
     throw new Error('A hand needs at least two players');
   }
 
-  const { smallBlind, bigBlind, allowStraddle, sevenDeuceBounty } = state.config;
+  const { smallBlind, bigBlind, ante, anteFrom, sevenDeuceBounty } = state.config;
   const button = state.buttonSeat === null ? eligible[ctx.rng.int(eligible.length)]! : seatsClockwiseAfter(eligible, state.buttonSeat)[0]!;
 
-  // Clockwise from the button's left, so the button comes last
-  const order = seatsClockwiseAfter(eligible, button);
-  const headsUp = eligible.length === 2;
-  const sbSeat = headsUp ? button : order[0]!;
-  const bbSeat = headsUp ? order[0]! : order[1]!;
+  const positions = positionsOf(eligible, button);
+  const { order, sbSeat, bbSeat } = positions;
+
+  // Worked out while every stack is still whole: what the hand starts with is settled before any of it is posted
+  const forced = forcedBets(state, positions);
+  const opening = openingBet(forced);
 
   const players: HandPlayer[] = eligible.map((seat) => {
     const playerId = state.seats[seat]!.playerId;
@@ -139,6 +206,7 @@ export function startHand(state: TableState, ctx: Ctx): void {
       startStack: state.seats[seat]!.stack,
       bet: 0,
       committed: 0,
+      dead: 0,
       folded: false,
       allIn: false,
       hasActed: false,
@@ -167,7 +235,7 @@ export function startHand(state: TableState, ctx: Ctx): void {
     button,
     sbSeat,
     bbSeat,
-    straddleSeat: null,
+    straddleSeat: forced.find((bet) => bet.what === 'straddle')?.seat ?? null,
     bounty: sevenDeuceBounty,
     deck,
     boards: [[]],
@@ -177,8 +245,8 @@ export function startHand(state: TableState, ctx: Ctx): void {
     street: 'preflop',
     stage: 'betting',
     players,
-    currentBet: bigBlind,
-    minRaise: bigBlind,
+    currentBet: opening.amount,
+    minRaise: opening.amount,
     toAct: null,
     lastAggressor: null,
     deadline: null,
@@ -188,29 +256,14 @@ export function startHand(state: TableState, ctx: Ctx): void {
   };
   state.hand = hand;
 
-  record(hand, ['start', hand.number, button, smallBlind, bigBlind, players.map((p) => [p.seat, p.name, p.startStack])]);
-  narrate(state, ctx, `Hand #${hand.number} · blinds ${formatAmount(smallBlind, state.config)}/${formatAmount(bigBlind, state.config)} · ${playerAt(hand, button)!.name} has the button`);
-  postBlind(state, ctx, playerAt(hand, sbSeat)!, smallBlind, 'small blind');
-  postBlind(state, ctx, playerAt(hand, bbSeat)!, bigBlind, 'big blind');
+  const stacks = players.map((p): [number, string, number] => [p.seat, p.name, p.startStack]);
 
-  // Under the gun is the seat after the big blind, which three-handed is the button
-  const underTheGun = order[2];
-  const straddle = STRADDLE_BIG_BLINDS * bigBlind;
-  if (allowStraddle && underTheGun !== undefined) {
-    const seat = state.seats[underTheGun]!;
-
-    if (seat.straddle && seat.stack >= straddle) {
-      postBlind(state, ctx, playerAt(hand, underTheGun)!, straddle, 'straddle');
-      hand.straddleSeat = underTheGun;
-
-      // A straddle plays as a third, bigger blind: it is the bet to call and the least a raise can add
-      hand.currentBet = straddle;
-      hand.minRaise = straddle;
-    }
-  }
+  record(hand, ante > 0 ? ['start', hand.number, button, smallBlind, bigBlind, stacks, ante, anteFrom] : ['start', hand.number, button, smallBlind, bigBlind, stacks]);
+  narrate(state, ctx, `Hand #${hand.number} · blinds ${stakesText(state.config)} · ${playerAt(hand, button)!.name} has the button`);
+  postForcedBets(state, ctx, forced);
 
   record(hand, ['deal']);
-  advance(state, ctx, hand.straddleSeat ?? bbSeat);
+  advance(state, ctx, opening.seat);
 }
 
 function actionDeadline(state: TableState, now: number): number | null {
@@ -290,13 +343,16 @@ function refundUncalledBet(state: TableState, ctx: Ctx): void {
     return;
   }
 
+  // More than the bet when part of an ante went unmatched too: an ante is a stake, and no part of the bet
+  const beyondTheBet = excess > top.bet;
+
   top.committed -= excess;
-  top.bet -= excess;
+  top.bet = Math.max(0, top.bet - excess);
   top.allIn = false;
   state.seats[top.seat]!.stack += excess;
 
   record(hand, ['return', top.seat, excess]);
-  narrate(state, ctx, `Uncalled bet of ${formatAmount(excess, state.config)} returned to ${top.name}`);
+  narrate(state, ctx, beyondTheBet ? `${formatAmount(excess, state.config)} that nobody could match returned to ${top.name}` : `Uncalled bet of ${formatAmount(excess, state.config)} returned to ${top.name}`);
 }
 
 /** Deals the next street onto one of the hand's boards. */

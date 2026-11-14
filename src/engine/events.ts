@@ -1,4 +1,5 @@
 import type { Card } from './cards.ts';
+import type { AnteFrom, Post } from './types.ts';
 
 /**
  * What happened in a hand, one entry per thing the dealer would call out, as data: the same story as
@@ -10,9 +11,13 @@ import type { Card } from './cards.ts';
  * table ever appear in one.
  */
 export type HandEvent =
-  /** Always first, with everything needed to set the table up as it was before the blinds. */
-  | [kind: 'start', hand: number, button: number, smallBlind: number, bigBlind: number, players: [seat: number, name: string, stack: number][]]
-  | [kind: 'post', seat: number, blind: 'small blind' | 'big blind' | 'straddle', amount: number, stackLeft: number]
+  /** Always first, with everything needed to set the table up as it was before the blinds. The ante and who pays it are left out of a hand without one. */
+  | [kind: 'start', hand: number, button: number, smallBlind: number, bigBlind: number, players: [seat: number, name: string, stack: number][], ante?: number, anteFrom?: AnteFrom]
+  /**
+   * A forced bet. Left out, `as` means a live one, in front of the player like any bet. With `as`, the
+   * chips went straight into the pot, as the player's own stake or as dead money: see `ForcedBet`.
+   */
+  | [kind: 'post', seat: number, what: Post, amount: number, stackLeft: number, as?: 'contribution' | 'dead']
   /** Everyone in the hand gets their two cards, face down. */
   | [kind: 'deal']
   | [kind: 'fold' | 'check', seat: number]
@@ -21,7 +26,7 @@ export type HandEvent =
   | [kind: 'bet' | 'raise', seat: number, to: number, stackLeft: number]
   /** The clock ran out on the seat; the check or fold that follows was made for them. */
   | [kind: 'timeout', seat: number]
-  /** The part of a bet nobody could call goes back. */
+  /** The part of a bet nobody could call goes back, and with it any part of an ante nobody could match. */
   | [kind: 'return', seat: number, amount: number]
   /** The cards a street adds to a board: board 0, or 1 for the second one when the hand is run twice. */
   | [kind: 'street', board: number, cards: Card[]]
@@ -95,13 +100,25 @@ export function replayHand(events: readonly HandEvent[], count = events.length):
 
   for (const event of rest) {
     switch (event[0]) {
-      case 'post':
+      case 'post': {
+        const [, seat, , amount, , as] = event;
+        const player = at(seat);
+
+        player.stack -= amount;
+
+        if (as) {
+          position.pot += amount;
+        } else {
+          player.bet += amount;
+        }
+        break;
+      }
+
       case 'call': {
         const player = at(event[1]);
-        const amount = event[0] === 'post' ? event[3] : event[2];
 
-        player.bet += amount;
-        player.stack -= amount;
+        player.bet += event[2];
+        player.stack -= event[2];
         break;
       }
 
@@ -120,8 +137,11 @@ export function replayHand(events: readonly HandEvent[], count = events.length):
 
       case 'return': {
         const player = at(event[1]);
+        // What is more than the bet is the part of an ante that nobody could match, which was already in the pot
+        const fromBet = Math.min(event[2], player.bet);
 
-        player.bet -= event[2];
+        player.bet -= fromBet;
+        position.pot -= event[2] - fromBet;
         player.stack += event[2];
         break;
       }

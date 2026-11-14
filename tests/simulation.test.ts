@@ -20,6 +20,9 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
   let runTwice = 0;
   let bounties = 0;
   const tablesPlaying = { chips: 0, cents: 0 };
+  const handsWithAnte = { everyone: 0, bigBlind: 0 };
+  const handsWithAnteIn = { chips: 0, cents: 0 };
+  let shortAntes = 0;
 
   for (let seed = 1; seed <= TABLES; seed++) {
     const rng = seededRng(seed * 7919);
@@ -53,6 +56,14 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
       showdowns += record.result.uncontested ? 0 : 1;
       runTwice += record.boards.length > 1 ? 1 : 0;
       bounties += record.result.bounty ? 1 : 0;
+
+      // A hand's first event says what ante it was dealt under, when there was one
+      const [dealt] = record.events;
+      if (dealt?.[0] === 'start' && dealt[6]) {
+        handsWithAnte[dealt[7]!] += 1;
+        handsWithAnteIn[config.unit] += 1;
+        shortAntes += record.events.some((event) => event[0] === 'post' && event[5] !== undefined && event[3] < dealt[6]!) ? 1 : 0;
+      }
     }
   }
 
@@ -63,4 +74,9 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
   assert.ok(runTwice >= TABLES, reached);
   assert.ok(bounties >= 1, reached);
   assert.ok(tablesPlaying.chips >= TABLES / 4 && tablesPlaying.cents >= TABLES / 4, `${tablesPlaying.chips} tables played whole chips and ${tablesPlaying.cents} dollars and cents`);
+
+  const antes = `${handsWithAnte.everyone} hands where everyone anted and ${handsWithAnte.bigBlind} with a big-blind ante, ${handsWithAnteIn.chips} of them in whole chips and ${handsWithAnteIn.cents} in dollars and cents, ${shortAntes} with a player short of the ante`;
+  assert.ok(handsWithAnte.everyone >= TABLES * 5 && handsWithAnte.bigBlind >= TABLES * 5, antes);
+  assert.ok(handsWithAnteIn.chips >= TABLES * 5 && handsWithAnteIn.cents >= TABLES * 5, antes);
+  assert.ok(shortAntes >= TABLES / 4, antes);
 });

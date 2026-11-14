@@ -34,7 +34,7 @@ export const SAVED_DEFAULTS: SavedDefaults = {
   member: () => ({}),
   seat: () => ({ moveTo: null }),
   hand: () => ({ events: [] }),
-  handPlayer: () => ({}),
+  handPlayer: () => ({ dead: 0 }),
   record: () => ({ events: [] }),
 };
 

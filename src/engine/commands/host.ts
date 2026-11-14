@@ -131,6 +131,12 @@ export const updateConfig: Handler<'updateConfig'> = {
       addFeed(state, ctx.now, 'system', null, `Blinds are ${formatAmount(state.config.smallBlind, state.config)}/${formatAmount(state.config.bigBlind, state.config)}${when}`);
     }
 
+    const { ante, anteFrom } = state.config;
+    if (ante !== before.ante || (ante > 0 && anteFrom !== before.anteFrom)) {
+      const paidBy = anteFrom === 'bigBlind' ? 'the big blind for the table' : 'everyone';
+      addFeed(state, ctx.now, 'system', null, ante > 0 ? `The ante is ${formatAmount(ante, state.config)}, paid by ${paidBy}${when}` : `The ante is off${when}`);
+    }
+
     if (state.config.sevenDeuceBounty !== before.sevenDeuceBounty) {
       const bounty = state.config.sevenDeuceBounty;
       addFeed(state, ctx.now, 'system', null, bounty > 0 ? `The seven-deuce bounty is ${formatAmount(bounty, state.config)}${when}` : `The seven-deuce bounty is off${when}`);

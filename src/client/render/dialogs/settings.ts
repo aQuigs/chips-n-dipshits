@@ -1,4 +1,4 @@
-import { formatAmount } from '../../../engine/amounts.ts';
+import { stakesText } from '../../../engine/stakes.ts';
 import type { TableConfig } from '../../../engine/types.ts';
 import type { TableView } from '../../../engine/view.ts';
 import { h } from '../../ui.ts';
@@ -27,7 +27,7 @@ function settings(view: TableView, handlers: DialogHandlers): HTMLElement {
         onsubmit: (event: Event) => submit(event, handlers, { type: 'updateConfig', config: changed(view.config, fields.read(event.target as HTMLFormElement)) }, handlers.close),
       },
       fields.rows,
-      h('p.note', null, 'New blinds and a new bounty apply from the next hand.'),
+      h('p.note', null, 'New blinds, a new ante and a new bounty apply from the next hand.'),
       h('button.btn.primary', { type: 'submit', 'data-action': 'save-settings' }, 'Save'),
     ),
   );
@@ -35,6 +35,6 @@ function settings(view: TableView, handlers: DialogHandlers): HTMLElement {
 
 export const settingsDialog: DialogKind<'settings'> = {
   kind: 'settings',
-  menu: { label: 'Table settings', who: hostOrCohost, note: (view) => `Blinds ${formatAmount(view.config.smallBlind, view.config)}/${formatAmount(view.config.bigBlind, view.config)}` },
+  menu: { label: 'Table settings', who: hostOrCohost, note: (view) => `Blinds ${stakesText(view.config)}` },
   draw: settings,
 };

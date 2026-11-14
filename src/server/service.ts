@@ -247,6 +247,8 @@ export class PokerService {
         unit: state.config.unit,
         smallBlind: state.config.smallBlind,
         bigBlind: state.config.bigBlind,
+        ante: state.config.ante,
+        anteFrom: state.config.anteFrom,
         players,
       },
     };

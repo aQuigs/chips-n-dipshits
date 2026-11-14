@@ -12,6 +12,9 @@ export const STATE_SCHEMA = 3;
 /** What a table's amounts count, since every one of them is kept as a whole number: chips, or the cents of an amount written in dollars. */
 export type Unit = 'chips' | 'cents';
 
+/** Who pays the ante: every player dealt in pays one each, or the big blind pays one for the whole table. */
+export type AnteFrom = 'everyone' | 'bigBlind';
+
 export interface TableConfig {
   /** Chosen when the table is created and fixed from then on: the chips already on it would change their worth. */
   unit: Unit;
@@ -20,6 +23,9 @@ export interface TableConfig {
   voiceLink: string;
   smallBlind: number;
   bigBlind: number;
+  /** Put in the pot before the cards are played, by whoever `anteFrom` says; 0 for none. */
+  ante: number;
+  anteFrom: AnteFrom;
   minBuyIn: number;
   maxBuyIn: number;
   /** Seconds a player has to act; 0 turns the clock off. */
@@ -78,7 +84,10 @@ export type Street = 'preflop' | 'flop' | 'turn' | 'river';
  */
 export type HandStage = 'betting' | 'ritVote' | 'runout' | 'done';
 
-export type PlayerAction = 'small blind' | 'big blind' | 'straddle' | 'fold' | 'check' | 'call' | 'bet' | 'raise';
+/** What a forced bet is called, in the play-by-play and in a hand's events. */
+export type Post = 'small blind' | 'big blind' | 'straddle' | 'ante' | 'big blind ante';
+
+export type PlayerAction = Post | 'fold' | 'check' | 'call' | 'bet' | 'raise';
 
 export interface HandPlayer {
   seat: number;
@@ -88,8 +97,10 @@ export interface HandPlayer {
   startStack: number;
   /** Chips put in on the current street. */
   bet: number;
-  /** Chips put in over the whole hand, the current street included. */
+  /** Chips put in over the whole hand as this player's own stake, the current street included. It caps what they can win from each opponent. */
   committed: number;
+  /** Chips put in as dead money: in the main pot for whoever wins it, and no part of this player's stake. */
+  dead: number;
   folded: boolean;
   allIn: boolean;
   /** Has acted on the current street; blinds don't count. */

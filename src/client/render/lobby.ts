@@ -1,5 +1,5 @@
-import { formatAmount } from '../../engine/amounts.ts';
 import { startingConfig } from '../../engine/config.ts';
+import { stakesText } from '../../engine/stakes.ts';
 import type { TableConfig } from '../../engine/types.ts';
 import type { TableInfo } from '../../server/api.ts';
 import { h } from '../ui.ts';
@@ -133,7 +133,7 @@ export function joinScreen(tableId: string, rememberedName: string, themePicker:
     showTable(info) {
       about.replaceChildren(
         h('h2', null, info.name),
-        h('p', null, `Blinds ${formatAmount(info.smallBlind, info)}/${formatAmount(info.bigBlind, info)}`),
+        h('p', null, `Blinds ${stakesText(info)}`),
         h('p.note', null, info.players.length > 0 ? `At the table: ${info.players.join(', ')}` : 'Nobody is seated yet.'),
       );
       joinButton.disabled = false;

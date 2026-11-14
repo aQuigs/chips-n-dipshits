@@ -676,7 +676,7 @@ test('a move shown early tells no badge: the badges of the hand it ends come fro
       { name: 'Quigs', stack: 1000 },
       { name: 'Stu', stack: 1000 },
     ],
-    { allowRunItTwice: false },
+    { maxRuns: 1 },
   );
   server.deal({ button: 0, holes: { 0: ACES, 1: KINGS }, board: '2c 7d 9h Jc 3s' });
   server.act('Quigs', { type: 'call' });
@@ -738,7 +738,7 @@ test('the hands’ chances are those of the cards face up: unchanged until a car
       { name: 'Quigs', stack: 1000 },
       { name: 'Stu', stack: 1000 },
     ],
-    { allowRunItTwice: false },
+    { maxRuns: 1 },
   );
   server.deal({ button: 0, holes: { 0: ACES, 1: KINGS }, board: '2c 7d 9h Jc 3s' });
   server.act('Quigs', { type: 'raise', to: 1000 });

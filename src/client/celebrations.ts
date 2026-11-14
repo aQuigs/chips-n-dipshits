@@ -11,7 +11,7 @@ export const BIG_POT_BIG_BLINDS = 50;
 /** How long the last card of an all-in runout lies face down before it is turned over. */
 export const FACE_DOWN_MS = 900;
 
-/** With two boards, how long after one board's last card starts to turn the other's does. */
+/** With several boards, how long after one board's last card starts to turn the next one's does. */
 export const NEXT_BOARD_MS = 550;
 
 /** The longest the end of a hand is held back, from the view that brought it to the last card face up. */

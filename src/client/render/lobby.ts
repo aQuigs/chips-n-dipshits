@@ -126,7 +126,7 @@ export function lobbyEl(rememberedName: string, themePicker: HTMLElement, handle
     nameField('host-name', rememberedName),
     presetPick,
     settings.rows,
-    h('p.note', null, 'You become the host. Clock, straddles, run it twice and the 7-2 bounty are in the table settings.'),
+    h('p.note', null, 'You become the host. Clock, straddles, running it more than once and the 7-2 bounty are in the table settings.'),
     createButton,
   );
 

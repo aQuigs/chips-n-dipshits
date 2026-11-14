@@ -28,11 +28,12 @@ test('a letter counts whatever case it is typed in, so Shift or Caps Lock change
   assert.deepEqual(keyAction(press('R'), turn()), { kind: 'aim' });
 });
 
-test('the run-it-twice question takes O and T', () => {
-  const vote = turn({ keys: new Set([HOTKEYS.once, HOTKEYS.twice]) });
+test('the question of how many times to run it takes O, T and 3', () => {
+  const vote = turn({ keys: new Set(HOTKEYS.runs) });
 
   assert.deepEqual(keyAction(press('o'), vote), { kind: 'press', key: 'O' });
   assert.deepEqual(keyAction(press('t'), vote), { kind: 'press', key: 'T' });
+  assert.deepEqual(keyAction(press('3'), vote), { kind: 'press', key: '3' });
   assert.equal(keyAction(press('f'), vote), null, 'a key with no button showing does nothing');
 });
 
@@ -108,7 +109,7 @@ test('the keyboard is typing in any field that takes text, and on the table anyw
 });
 
 test('every key is one character, and no two buttons on one screen share one', () => {
-  for (const keys of [[HOTKEYS.fold, HOTKEYS.pass, HOTKEYS.raise, ...HOTKEYS.sizes], [HOTKEYS.once, HOTKEYS.twice]]) {
+  for (const keys of [[HOTKEYS.fold, HOTKEYS.pass, HOTKEYS.raise, ...HOTKEYS.sizes], [...HOTKEYS.runs]]) {
     assert.equal(new Set(keys).size, keys.length);
     assert.ok(keys.every((key) => key.length === 1 && key === key.toUpperCase()));
   }

@@ -96,3 +96,11 @@
 [data-hand-hint='on'] .card.idle {
   opacity: 0.5;
 }
+
+/* A line a board would lift the viewer's cards onto the middle of three boards, so their hands share lines as they fit */
+.table[data-boards='3'] .seat.me .hint.per-board {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.1em 0.8em;
+}

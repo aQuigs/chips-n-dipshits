@@ -26,7 +26,7 @@ import { BADGES, badgeOf, DEFAULT_CONFIG, LIMITS, onTheClock, presetSettings } f
 import type { Command, Straddle, TableConfig, TableView } from '../src/engine/index.ts';
 import { contrast } from '../tests/colorVision.ts';
 import { boxes, Gate, overlap, Rig, RigTable, SCREENS, setStageHeight, squeezed, textBoxes } from './rig.ts';
-import type { Box, RigPlayer, ScreenName } from './rig.ts';
+import type { Box, RigDeal, RigPlayer, ScreenName } from './rig.ts';
 import { answeredAfter, complaints, MOTION, movesSent, NOTICES, ownComplaints, SPOTS, TITLES, toldOf } from './pageSpies.ts';
 import type { Flight, Spots } from './pageSpies.ts';
 import { STAND_IN_HOST } from './standInHost.ts';
@@ -42,7 +42,7 @@ const tenPlayers = (): RigPlayer[] => LONG_NAMES.map((name, index) => ({ name, s
 /** Checks or calls, whatever the decision. */
 const passive = (view: TableView): Command => ({ type: view.hand!.options!.canCheck ? 'check' : 'call' });
 
-/** Puts everything in, and says yes to running it twice. */
+/** Puts everything in, and picks running it twice. */
 const allIn = (view: TableView): Command => {
   const hand = view.hand!;
   if (hand.canVote) {
@@ -303,12 +303,12 @@ const DOUBLE_BOARD_RESULTS: Record<string, Record<keyof typeof DOUBLE_BOARD_HAND
   chips: {
     sidePot: ['Board 1: Marge Simpson-Jr +90, Quigs +225', 'Board 2: Quigs wins 315 with pair of kings'],
     oneEach: ['Board 1: WWWWWWWWWWWWWWWW wins 295 with three aces', 'Board 2: Ünïcödé Ñandú Ø! wins 295 with three kings'],
-    both: ['Board 1: WWWWWWWWWWWWWWWW wins 250 with three aces', 'Board 2: WWWWWWWWWWWWWWWW wins 250 with three aces'],
+    both: ['Both boards: WWWWWWWWWWWWWWWW wins 500'],
   },
   cents: {
     sidePot: ['Board 1: Marge Simpson-Jr +2.25, Quigs +5.63', 'Board 2: Quigs wins 7.87 with pair of kings'],
     oneEach: ['Board 1: WWWWWWWWWWWWWWWW wins 7.38 with three aces', 'Board 2: Ünïcödé Ñandú Ø! wins 7.37 with three kings'],
-    both: ['Board 1: WWWWWWWWWWWWWWWW wins 6.25 with three aces', 'Board 2: WWWWWWWWWWWWWWWW wins 6.25 with three aces'],
+    both: ['Both boards: WWWWWWWWWWWWWWWW wins 12.50'],
   },
 };
 
@@ -817,7 +817,7 @@ const SWEAT = `(() => {
 })()`;
 
 /** That the last card of a runout lies face down over its place, its face unseen, and nothing on the page says more than before the river. */
-async function sweating(page: Page, what: string, river: string): Promise<void> {
+async function sweating(page: Page, what: string, river: string, board = 0): Promise<void> {
   await page.waitForSelector('.board-card.stand-in');
 
   assert.deepEqual(await page.evaluate('window.sweat.telling()'), [], `${what}: the page gives the result away while the river is face down`);
@@ -826,8 +826,8 @@ async function sweating(page: Page, what: string, river: string): Promise<void> 
   // The river's own place, in the board's row a step on from the turn as the turn is from the card before it: the
   // river itself is on its edge, and a card the hand hint lifts is out of the row
   const [down] = await boxes(page, '.board-card.stand-in .card');
-  const [row] = await boxes(page, '.board[data-run="0"]');
-  const [, , third, turn] = await boxes(page, '.board[data-run="0"] .card');
+  const [row] = await boxes(page, `.board[data-run="${board}"]`);
+  const [, , third, turn] = await boxes(page, `.board[data-run="${board}"] .card`);
   const place = { left: 2 * turn!.left - third!.left, right: 2 * turn!.right - third!.right, top: row!.top, bottom: row!.bottom };
   assertOver(down!, place, `${what}: the face-down card lies on the river’s place`);
 }
@@ -1192,7 +1192,7 @@ const FELTED_TOAST = 'You earned 💰 Retirement Fund and 💀 Felted';
 
 /** Quigs, Stu and Pam with 1000 each and Kibitz watching: Pam folds, and Quigs's aces and Stu's kings go all in before the flop. */
 function feltingHand(rig: Rig): RigTable {
-  const table = rig.table([{ name: 'Quigs', stack: 1000 }, { name: 'Stu', stack: 1000 }, { name: 'Pam', stack: 1000 }], { allowRunItTwice: false });
+  const table = rig.table([{ name: 'Quigs', stack: 1000 }, { name: 'Stu', stack: 1000 }, { name: 'Pam', stack: 1000 }], { maxRuns: 1 });
 
   table.join('Kibitz');
   table.deal({ button: 0, holes: { 0: 'As Ah', 1: 'Ks Kh', 2: '8c 3d' }, board: '2c 7d 9h Jc 3s' });
@@ -1500,6 +1500,40 @@ const chopTurnedDownCheck = (kind: ChopTable): Check => [
 
 /** For a check that looks at the presets more than once, as in a round for each screen: the lobby of the next round would offer the ones the last saved. */
 const forgetPresets = (rig: Rig) => rig.presets.list().forEach((preset) => rig.presets.delete(preset.name));
+
+/** Puts everything in, and picks running it `runs` times. */
+const allInPicking =
+  (runs: number) =>
+  (view: TableView): Command =>
+    view.hand!.canVote ? { type: 'ritVote', runs } : allIn(view);
+
+/** Nine players, four of them all in before the flop for different stacks, so with two side pots, and a pair each, with a winner of their own on each of three boards. */
+const THREE_RUNS = {
+  names: LONG_NAMES.slice(0, 9),
+  stacks: [3000, 1000, 5000, 300, 20_000, 777, 2500, 12_345, 1200],
+  allIn: ['Quigs', 'WWWWWWWWWWWWWWWW', 'Ünïcödé Ñandú Ø!', 'Stu'],
+  deal: {
+    button: 0,
+    holes: { 0: 'As Ah', 1: 'Ks Kh', 2: 'Qs Qh', 3: 'Js Jh', 4: 'Ts Th', 5: '9s 9h', 6: '8s 8h', 7: '7s 7h', 8: '6s 6h' },
+    board: '2c 3d 4c 5d Jc',
+    secondBoard: 'Kd Qc 8d 7c 2d',
+    thirdBoard: 'Ad Tc 9d 4d 3c',
+  },
+};
+
+/** The middle of a table on several boards can be read: each board, the pot or the result under them, clear of each other and of every seat, and whole. */
+async function assertMiddleFits(page: Page, screen: ScreenName): Promise<void> {
+  const under = '.pot, .message > div, .message:not(:has(div))';
+  const runs = await page.locator('.board').count();
+  const middle = await boxes(page, `.board .card, ${under}`);
+
+  assertOnScreen([...middle, ...(await boxes(page, '.seat .plate'))], screen, 'a seat or the middle of the table');
+  assertApart(middle, await boxes(page, '.seat .plate, .seat .hole .card, .seat .tag'), 'the middle of the table and a seat');
+  for (let run = 0; run < runs; run++) {
+    assertApart(await boxes(page, `.board[data-run="${run}"] .card`), await boxes(page, `.board:not([data-run="${run}"]) .card, ${under}`), `board ${run + 1} and what is around it`);
+  }
+  assert.deepEqual(await squeezed(page, `.pot, .plate .stack, .message > div, .seat .tag`), [], 'something on the table is cut off');
+}
 
 const CHECKS: Check[] = [
   [
@@ -2261,36 +2295,38 @@ const CHECKS: Check[] = [
     },
   ],
   [
-    'O and T answer the run-it-twice question',
+    'O, T and 3 answer how many times to run it',
     async (rig) => {
       const table = rig.table([
         { name: 'Quigs', stack: 1000 },
         { name: 'Stu', stack: 1000 },
+        { name: 'Pam', stack: 1000 },
       ]);
       table.deal({ button: 0 });
       table.act('Quigs', { type: 'raise', to: 1000 });
       table.act('Stu', { type: 'call' });
+      table.act('Pam', { type: 'call' });
 
-      const pages = [await table.open('Quigs', 'desktop'), await table.open('Stu', 'desktop')];
+      const pages = [await table.open('Quigs', 'desktop'), await table.open('Stu', 'desktop'), await table.open('Pam', 'desktop')];
       const sent = pages.map(movesSent);
 
       for (const page of pages) {
-        await page.waitForSelector('.turn [data-action="rit-yes"]:enabled');
+        await page.waitForSelector('.turn [data-action="rit-3"]:enabled');
         await settle(page);
-        assert.equal(await hintShown(page, '.turn [data-action="rit-no"]'), true);
-        assert.equal(await hintShown(page, '.turn [data-action="rit-yes"]'), true);
+        for (const runs of [1, 2, 3]) {
+          assert.equal(await hintShown(page, `.turn [data-action="rit-${runs}"]`), true, `the key for ${runs}`);
+        }
       }
-      await shot(pages[0]!, 'hotkeys-run-it-twice-desktop');
+      await shot(pages[0]!, 'hotkeys-run-it-desktop');
 
-      // One no ends the vote, so the yes comes first
-      await pages[1]!.keyboard.press('t');
-      await pages[1]!.waitForSelector('.turn', { state: 'detached' });
-      assert.equal(table.view('Quigs').seats[1]!.ritVote, true, 'T did not say twice');
+      // A pick of once ends the picking, so it comes last
+      const picks: [number, string, number][] = [[1, '3', 3], [2, 't', 2], [0, 'o', 1]];
+      for (const [seat, key, runs] of picks) {
+        await answeredAfter(pages[seat]!, () => pages[seat]!.keyboard.press(key));
+        assert.equal(table.view('Quigs').seats[seat]!.ritVote, runs, `${key} did not pick ${runs}`);
+      }
 
-      await pages[0]!.keyboard.press('o');
-      await pages[0]!.waitForSelector('.turn', { state: 'detached' });
-      assert.deepEqual(sent, [['ritVote false'], ['ritVote true']]);
-      assert.equal(table.view('Stu').seats[0]!.ritVote, false, 'O did not say once');
+      assert.deepEqual(sent, [['ritVote 1'], ['ritVote 3'], ['ritVote 2']]);
 
       for (const page of pages) {
         await page.context().close();
@@ -4843,9 +4879,9 @@ const CHECKS: Check[] = [
           await page.locator('.history details').nth(1).locator('summary').click();
 
           const told = (await text(page, '.history details[open] pre')).split('\n');
-          const [first, second] = results.both.map((line) => line.replace(/^Board \d: /, '').replace(' with ', (_with) => ' on the BOARD with '));
+          const half = kind.name === 'cents' ? '6.25' : '250';
           assert.deepEqual(told.filter((line) => line.includes('River')), ['First board, River: A♥ 7♠ 2♣ 9♦ 4♥', 'Second board, River: A♣ 9♣ 8♥ 10♠ 3♠']);
-          assert.deepEqual(told.slice(-2), [first!.replace('BOARD', 'first board'), second!.replace('BOARD', 'second board')]);
+          assert.deepEqual(told.slice(-2), ['first', 'second'].map((board) => `WWWWWWWWWWWWWWWW wins ${half} on the ${board} board with three aces`));
           assert.deepEqual(await squeezed(page, '.history summary'), [], 'the hand\'s line in the history is cut off');
           await assertNoSidewaysScroll(page);
           await shot(page, `double-board-history-${kind.name}-${screen}`);
@@ -7267,7 +7303,7 @@ const CHECKS: Check[] = [
       assert.equal(await drawn('Tonight'), before.Tonight, where('the Tonight dialog, once the bet was confirmed'));
       await close('Tonight');
 
-      // ---- A move the page cannot play out: a run-it-twice vote ----
+      // ---- A move the page cannot play out: a pick of how many times to run it ----
 
       playOut(table);
       table.deal({ button: 3, holes: { 0: 'As Ah', 1: 'Ks Kh' }, board: '2c 7d 9h Jc 3s' });
@@ -7275,29 +7311,29 @@ const CHECKS: Check[] = [
       table.act('Al', { type: 'fold' });
       table.act('Quigs', { type: 'raise', to: table.view('Quigs').hand!.options!.maxRaiseTo });
       table.act('Stu', { type: 'call' });
-      await quigs.waitForSelector('.turn [data-action="rit-yes"]:enabled');
+      await quigs.waitForSelector('.turn [data-action="rit-3"]:enabled');
 
       const voting = await shownOn(quigs);
 
       // Sent, and that is all the page shows of it: the buttons are gone, and the table is as the server last told it
       await moves.close('requests');
-      await press('.turn [data-action="rit-yes"]');
+      await press('.turn [data-action="rit-3"]');
       await moves.holding();
       assert.equal(await quigs.locator('.turn').count(), 0, where('the vote’s buttons are still up while it is on its way'));
-      assert.equal(await text(quigs, '.controls .waiting'), 'Waiting for the run-it-twice votes', where('the bar with a vote sent'));
+      assert.equal(await text(quigs, '.controls .waiting'), 'Waiting for everyone to pick how many times to run it', where('the bar with a vote sent'));
       assertSameDrawn((await shownOn(quigs)).table, voting.table, where('the table with a vote sent'));
       assert.equal(table.view('Quigs').seats[0]!.ritVote, null, where('the server has the vote already'));
 
       // Refused, the buttons are back as they were
       await moves.refuse();
-      await quigs.waitForSelector('.turn [data-action="rit-yes"]:enabled');
+      await quigs.waitForSelector('.turn [data-action="rit-3"]:enabled');
       assertAsShown(await shownOn(quigs), voting, where('a vote the server refused'));
       await moves.open();
 
-      await answeredAfter(quigs, () => press('.turn [data-action="rit-yes"]'));
-      assert.equal(table.view('Quigs').seats[0]!.ritVote, true, where('the vote did not reach the server'));
+      await answeredAfter(quigs, () => press('.turn [data-action="rit-3"]'));
+      assert.equal(table.view('Quigs').seats[0]!.ritVote, 3, where('the vote did not reach the server'));
 
-      assert.deepEqual(sent, ['call', 'raise', 'ritVote true', 'ritVote true'], where('the moves sent'));
+      assert.deepEqual(sent, ['call', 'raise', 'ritVote 3', 'ritVote 3'], where('the moves sent'));
       assert.deepEqual(ownComplaints(said), [], where('the console'));
     },
   ]),
@@ -7614,7 +7650,7 @@ const CHECKS: Check[] = [
     'two hands all in show each one’s chance to win in its seat, the same for both players and for a watcher, from whichever street they went all in on; every street changes it and the result takes its place',
     async (rig) => {
       // Quigs has the short stack and wins every hand, so nobody is ever out of chips
-      const table = rig.table([{ name: 'Quigs', stack: 1000 }, { name: 'Stu', stack: 10_000 }], { allowRunItTwice: false });
+      const table = rig.table([{ name: 'Quigs', stack: 1000 }, { name: 'Stu', stack: 10_000 }], { maxRuns: 1 });
       table.join('Kibitz');
 
       const pages: [name: string, page: Page][] = [
@@ -7687,7 +7723,7 @@ const CHECKS: Check[] = [
           { name: 'Pam', stack: 1000 },
           { name: 'Al', stack: 1000 },
         ],
-        { ...CENTS, allowRunItTwice: false },
+        { ...CENTS, maxRuns: 1 },
       );
       const pages: [name: string, page: Page, screen: ScreenName][] = [
         ['Quigs', await table.open('Quigs', 'phone'), 'phone'],
@@ -7786,7 +7822,7 @@ const CHECKS: Check[] = [
   [
     'a hand run twice shows the chances while the vote is on and on the first board alone until the second is laid, then the first board as it ended beside the second as it stands',
     async (rig) => {
-      const table = rig.table([{ name: 'Quigs', stack: 1000 }, { name: 'Stu', stack: 1000 }], { allowRunItTwice: true });
+      const table = rig.table([{ name: 'Quigs', stack: 1000 }, { name: 'Stu', stack: 1000 }], { maxRuns: 2 });
       table.join('Kibitz');
 
       const pages: [name: string, page: Page][] = [
@@ -7805,7 +7841,7 @@ const CHECKS: Check[] = [
       table.play(allIn, (view) => view.hand!.stage === 'ritVote');
 
       // The hands are up and the players are asked: what they vote on is on the table
-      await quigs.waitForSelector('.turn [data-action="rit-yes"]');
+      await quigs.waitForSelector('.turn [data-action="rit-2"]');
       await shows({ 0: '~82%*', 1: '~18%' }, 'while the vote is on');
       await inEveryShape(quigs, async (shape) => {
         await assertChancesFit(quigs, `while the vote is on, ${shape}`);
@@ -7852,11 +7888,11 @@ const CHECKS: Check[] = [
       const wholeOf = (figure: string) => Number(figure.replace(/[~%*]/g, ''));
 
       for (const screen of ['smallPhone', 'desktop'] as const) {
-        const table = nineHandsDealt(rig, { allowRunItTwice: true });
+        const table = nineHandsDealt(rig, { maxRuns: 2 });
         const page = await table.open('Quigs', screen);
 
         table.play(allIn, (view) => view.hand!.stage === 'ritVote');
-        await page.waitForSelector('.turn [data-action="rit-yes"]');
+        await page.waitForSelector('.turn [data-action="rit-2"]');
 
         const voting = await chancesOn(page, table, 'Quigs');
         assert.deepEqual(voting, { 0: '~18%', 1: '~12%', 2: '~18%', 3: '~14%', 4: '~12%', 5: '~8%', 6: '~8%', 7: '~8%', 8: '~2%' }, `${screen}: nine hands before the flop, where the two best are level and neither is the favorite`);
@@ -7887,7 +7923,7 @@ const CHECKS: Check[] = [
     async (rig) => {
       const where = (what: string) => `${layout.name}, ${what}`;
       const held = !layout.slower;
-      const table = rig.table([{ name: 'Quigs', stack: 10_000 }, { name: 'Stu', stack: 10_000 }], { ...layout.config, allowRunItTwice: false });
+      const table = rig.table([{ name: 'Quigs', stack: 10_000 }, { name: 'Stu', stack: 10_000 }], { ...layout.config, maxRuns: 1 });
       table.join('Kibitz');
 
       const { moving, still } = await watch(table, 'Kibitz', layout);
@@ -7962,7 +7998,7 @@ const CHECKS: Check[] = [
   [
     'on a phone four times slower, the chances of nine hands all in before the flop are worked out a piece at a time: the page goes on drawing its frames while it does, and no seat grows or moves when the line that said ALL IN says its chance',
     async (rig) => {
-      const table = nineHandsDealt(rig, { allowRunItTwice: false });
+      const table = nineHandsDealt(rig, { maxRuns: 1 });
       const page = await table.open('Quigs', 'smallPhone', FRAME_GAPS);
       const session = await page.context().newCDPSession(page);
       await session.send('Emulation.setCPUThrottlingRate', { rate: 4 });
@@ -8016,6 +8052,246 @@ const CHECKS: Check[] = [
       }
 
       await page.context().close();
+    },
+  ],
+  [
+    'three boards nine-handed: run three times, the boards, the pot and the result are clear of each other and of every seat, on a 360 and a 375 phone standing and lying and on the desktop, in chips and in cents',
+    async (rig) => {
+      for (const kind of [{ name: 'chips', config: {} }, { name: 'cents', config: CENTS }]) {
+        for (const screen of ['smallPhone', 'phone', 'desktop'] as const) {
+          const table = rig.table(
+            THREE_RUNS.names.map((name, seat) => ({ name, stack: THREE_RUNS.stacks[seat]! })),
+            { ...kind.config, maxRuns: 3 },
+          );
+          table.deal(THREE_RUNS.deal);
+          const page = await table.open('Quigs', screen);
+          const look = (name: string) =>
+            inShapesOf(
+              page,
+              screen,
+              async (shape) => {
+                await shot(page, `three-runs-${name}-${shape}-${kind.name}-${screen}`);
+                await assertMiddleFits(page, screen);
+              },
+              { buttonsUp: false },
+            );
+
+          // Everyone picks three times but Quigs, whose pick the page shows as soon as it is made
+          table.play((view, name) => (THREE_RUNS.allIn.includes(name) ? allIn(view) : { type: 'fold' }), (view) => view.hand!.stage === 'ritVote');
+          for (const name of THREE_RUNS.allIn.slice(1)) {
+            table.act(name, { type: 'ritVote', runs: 3 });
+          }
+          await page.waitForFunction(`document.querySelectorAll('.tag.vote.picked').length === 3`);
+          await look('picking');
+
+          await answeredAfter(page, () => pressOn(page, screen)('.turn [data-action="rit-3"]'));
+          table.play(allInPicking(3), (view) => view.hand!.boards.length === 2 && view.hand!.boards[1]!.length === 3);
+          await page.waitForSelector('.board[data-run="1"] .card[data-card="Qc"]');
+          assert.deepEqual(await page.locator('.board').evaluateAll((boards) => boards.map((board) => board.className)), ['board', 'board', 'board later'], 'the third board has its place from the start');
+          await look('second-board');
+
+          // With the third board out, the viewer's hand is named on each board, a line each
+          table.play(allInPicking(3), (view) => view.hand!.boards.length === 3 && view.hand!.boards[2]!.length === 3);
+          await hintSays(page, 'Straight, five high', 'Pair of aces', 'Three aces');
+          await inShapesOf(
+            page,
+            screen,
+            async (shape) => {
+              await shot(page, `three-runs-third-board-${shape}-${kind.name}-${screen}`);
+              await assertMiddleFits(page, screen);
+              await assertHintFits(page);
+            },
+            { buttonsUp: false },
+          );
+
+          table.play(allInPicking(3), (view) => view.hand!.stage === 'done');
+          await page.waitForSelector('.message.result');
+          assert.equal(await page.locator('.table[data-boards="3"] .board .card[data-card]').count(), 15);
+          const lines = await texts(page, '.message.result > div');
+          assert.ok(lines.length <= 3, `the felt carries ${lines.length} result lines: ${lines.join(' / ')}`);
+          await look('result');
+
+          await page.context().close();
+        }
+      }
+    },
+  ],
+  ...[MOTION_LAYOUTS[0]!, MOTION_LAYOUTS[2]!].map((layout): Check => [
+    `a hand run three times holds each board's last card face down as it comes, and nothing names a winner before the third board's is up, for a player and for a watcher: ${layout.name}`,
+    async (rig) => {
+      const where = (what: string) => `${layout.name}, ${what}`;
+      const table = rig.table([{ name: 'Quigs', stack: 10_000 }, { name: 'Stu', stack: 10_000 }], { ...layout.config, maxRuns: 3 });
+      table.join('Kibitz');
+      const watched = [
+        ['Stu', await watch(table, 'Stu', layout)],
+        ['Kibitz', await watch(table, 'Kibitz', layout)],
+      ] as const;
+
+      table.deal({ button: 0, holes: { 0: 'Ah Ad', 1: 'Kh Kd' }, board: '2c 7d 9h Jc Ks', secondBoard: '5c 6d Th Qc 3s', thirdBoard: '8c 8d 4h 5s 4s' });
+      table.play(allInPicking(3), (view) => view.hand!.stage === 'runout');
+
+      const handNames = (page: Page) => texts(page, `${HINT} .name`);
+
+      while (table.view('Quigs').hand!.stage === 'runout') {
+        const before = table.view('Quigs').hand!.boards.map((board) => board.length);
+        const named: Record<string, string[]> = {};
+        for (const [name, { moving }] of watched) {
+          await moving.evaluate(SWEAT);
+          named[name] = await handNames(moving);
+        }
+
+        rig.advance(table.view('Quigs').hand!.deadline! - rig.now());
+        const view = table.view('Quigs');
+        const finished = view.hand!.boards.findIndex((board, run) => board.length === 5 && before[run] !== 5);
+
+        for (const [name, { moving, still }] of watched) {
+          await caughtUp(still, table.view(name));
+          if (finished === -1) {
+            await caughtUp(moving, table.view(name));
+            await moving.evaluate('window.land()');
+            continue;
+          }
+
+          // The page that moves is not caught up until the card is turned: the view that ends the hand is held back until then
+          const what = where(`board ${finished + 1}, as ${name}`);
+
+          // The view that brings a board's last card starts the next board, and the hint names the hand on it at
+          // once: that tells nothing, so only the line of the board whose card is face down must hold
+          if (finished < 2) {
+            await moving.waitForSelector('.board-card.stand-in');
+            assert.equal((await handNames(moving))[finished], named[name]![finished], `${what}: the hint names the hand the face-down card makes`);
+            await moving.evaluate(`window.sweat.hint = document.querySelector('.seat.me .hint')?.textContent ?? ''; delete window.sweat.said['the hint']`);
+          }
+
+          await sweating(moving, what, view.hand!.boards[finished]![4]!, finished);
+          if (finished === 2 && name === 'Stu') {
+            await shot(moving, `three-runs-sweat-${layout.name}`);
+          }
+
+          await moving.evaluate('window.land()');
+          await moving.waitForFunction('window.sweat.up.length === 1');
+          await assertCardsFirst(moving, 1, what);
+        }
+      }
+
+      for (const [name, { moving }] of watched) {
+        await moving.waitForSelector('.message.result');
+        assert.equal(await moving.locator('.board .card[data-card]').count(), 15, where(`every board is out, as ${name}`));
+        await moving.context().close();
+      }
+    },
+  ]),
+  [
+    'picking how many times to run it: a player has a button for each number the table allows, everyone sees each pick as it is made, and the hand is run once, twice or three times as the fewest picked, told in the play-by-play and the history',
+    async (rig) => {
+      const players = [{ name: 'Quigs', stack: 1000 }, { name: 'Stu', stack: 1000 }, { name: 'Pam', stack: 1000 }];
+      const toThePicking = (table: RigTable, cards: Omit<RigDeal, 'button'>) => {
+        table.deal({ button: 0, holes: { 0: 'As Ah', 1: 'Ks Kh' }, ...cards });
+        table.play((view, name) => (name === 'Pam' ? { type: 'fold' } : allIn(view)), (view) => view.hand!.stage === 'ritVote');
+      };
+      const boards = { board: '2c 7d 9h Jc 3s', secondBoard: 'Kd 5c 8h Ts 4d', thirdBoard: 'Ad 6c 8d 2s 4h' };
+
+      for (const screen of PHONE_AND_DESKTOP) {
+        const buttons = (page: Page) => page.locator('.turn [data-action^="rit-"]').evaluateAll((all) => all.map((button) => [button.getAttribute('data-action'), button.textContent]));
+
+        // A table that runs it twice at most offers no third
+        const upToTwice = rig.table(players, { maxRuns: 2 });
+        toThePicking(upToTwice, boards);
+        const capped = await upToTwice.open('Quigs', screen);
+        await capped.waitForSelector('.turn [data-action="rit-2"]:enabled');
+        assert.deepEqual(await buttons(capped), [['rit-1', 'Once'], ['rit-2', 'Twice']]);
+        await shot(capped, `run-it-up-to-twice-${screen}`);
+        await capped.context().close();
+
+        // Up to three times: the players still in have a button each, and a player who folded and a watcher are told what is going on
+        const table = rig.table(players, { maxRuns: 3 });
+        table.join('Kibitz');
+        toThePicking(table, boards);
+        const quigs = await table.open('Quigs', screen);
+        const others = [await table.open('Pam', screen), await table.open('Kibitz', screen)];
+
+        await quigs.waitForSelector('.turn [data-action="rit-3"]:enabled');
+        assert.deepEqual(await buttons(quigs), [['rit-1', 'Once'], ['rit-2', 'Twice'], ['rit-3', 'Three times']]);
+        assert.deepEqual(await squeezed(quigs, '.turn .btn, .turn .prompt'), [], 'a button or the question is cut off');
+
+        // Each pick shows on the seat that made it, to everyone
+        table.act('Stu', { type: 'ritVote', runs: 3 });
+        for (const page of [quigs, ...others]) {
+          await page.waitForSelector('.seat[data-seat="1"] .tag.vote.picked');
+          assert.deepEqual(await texts(page, '.seat .tag.vote'), ['Deciding…', 'Three ✓']);
+          assert.equal(await text(page, '.message'), 'All in. How many runs?');
+        }
+        for (const page of others) {
+          assert.equal(await page.locator('.turn').count(), 0, 'a player who folded or a watcher has nothing to pick');
+        }
+        assert.equal(await text(others[0]!, '.controls .waiting'), 'Waiting for everyone to pick how many times to run it');
+        await shot(quigs, `run-it-picking-${screen}`);
+        await shot(others[1]!, `run-it-picking-watcher-${screen}`);
+
+        // Twice is the fewest picked
+        await answeredAfter(quigs, () => pressOn(quigs, screen)('.turn [data-action="rit-2"]'));
+        table.play(allIn, (view) => view.hand!.stage === 'done');
+        await quigs.waitForSelector('.table[data-boards="2"] .message.result');
+        assert.equal(await quigs.locator('.board .card[data-card]').count(), 10);
+        await toggleFeed(quigs, screen);
+        assert.ok((await texts(quigs, '.entries li')).includes('Quigs picked twice, Stu three times: running it twice'));
+        await toggleFeed(quigs, screen);
+        await shot(quigs, `run-it-twice-${screen}`);
+
+        // A pick of once settles it at once
+        const once = rig.table(players, { maxRuns: 3 });
+        toThePicking(once, boards);
+        const solo = await once.open('Quigs', screen);
+        await answeredAfter(solo, () => pressOn(solo, screen)('.turn [data-action="rit-1"]'));
+        once.play(allIn, (view) => view.hand!.stage === 'done');
+        await solo.waitForSelector('.table[data-boards="1"] .message.result');
+        assert.equal(await solo.locator('.board .card[data-card]').count(), 5);
+        await toggleFeed(solo, screen);
+        assert.ok((await texts(solo, '.entries li')).includes('Quigs picked once: running it once'));
+        await toggleFeed(solo, screen);
+        await shot(solo, `run-it-once-${screen}`);
+        await solo.context().close();
+
+        // Three times, with Quigs winning two boards and Stu one
+        const thrice = rig.table(players, { maxRuns: 3 });
+        toThePicking(thrice, boards);
+        const page = await thrice.open('Quigs', screen);
+        thrice.act('Stu', { type: 'ritVote', runs: 3 });
+        await answeredAfter(page, () => pressOn(page, screen)('.turn [data-action="rit-3"]'));
+        thrice.play(allIn, (view) => view.hand!.stage === 'done');
+        await page.waitForSelector('.table[data-boards="3"] .message.result');
+        assert.deepEqual(await texts(page, '.message.result > div'), ['Boards 1 and 3: Quigs wins 1,347', 'Board 2: Stu wins 673 with three kings']);
+        await shot(page, `run-it-three-times-${screen}`);
+
+        await toggleFeed(page, screen);
+        const said = await texts(page, '.entries li');
+        assert.ok(said.includes('Everyone agreed: running it three times'));
+        assert.deepEqual(
+          said.filter((line) => line.includes('River')),
+          ['First board, River: 2♣ 7♦ 9♥ J♣ 3♠', 'Second board, River: K♦ 5♣ 8♥ 10♠ 4♦', 'Third board, River: A♦ 6♣ 8♦ 2♠ 4♥'],
+        );
+        assert.deepEqual(await squeezed(page, '.entries li'), [], 'a line of the play-by-play is cut off');
+        await shot(page, `run-it-three-times-play-by-play-${screen}`);
+        await toggleFeed(page, screen);
+
+        thrice.act('Quigs', { type: 'pause' });
+        thrice.play(passive, (view) => view.hand === null);
+        await pressOn(page, screen)('[data-action="menu"]');
+        await pressOn(page, screen)('.menu [data-action="history"]');
+        await page.waitForSelector('.history summary');
+        await pressOn(page, screen)('.history summary');
+        const told = (await text(page, '.history details[open] pre')).split('\n');
+        assert.ok(told.includes('Everyone agreed: running it three times'), told.join('\n'));
+        assert.deepEqual(told.filter((line) => line.includes('River')).length, 3);
+        assert.deepEqual(told.slice(-3), ['Quigs wins 674 on the first board with pair of aces', 'Stu wins 673 on the second board with three kings', 'Quigs wins 673 on the third board with three aces']);
+        assert.deepEqual(await squeezed(page, '.history summary'), [], 'the hand\'s line in the history is cut off');
+        await assertNoSidewaysScroll(page);
+        await shot(page, `run-it-three-times-history-${screen}`);
+
+        for (const open of [quigs, ...others, page]) {
+          await open.context().close();
+        }
+      }
     },
   ],
 ];

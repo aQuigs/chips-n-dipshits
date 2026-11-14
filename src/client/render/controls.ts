@@ -2,6 +2,8 @@ import { editableAmount, formatAmount, hasDecimals, parseAmount, shortAmount } f
 import type { Denominated } from '../../engine/amounts.ts';
 import type { BettingAction } from '../../engine/betting.ts';
 import { bombPotName } from '../../engine/bombPots.ts';
+import { capitalized } from '../../engine/handNames.ts';
+import { timesText } from '../../engine/runVote.ts';
 import { straddlesAllowed } from '../../engine/straddles.ts';
 import type { Command, PassedOver } from '../../engine/types.ts';
 import type { HandView, SeatView, TableView } from '../../engine/view.ts';
@@ -207,6 +209,27 @@ function chopQuestion(view: TableView, hand: HandView, handlers: ControlHandlers
   );
 }
 
+/** How many times to run the rest, up to what the hand allows: picking is a move, like any on the clock. */
+function runsQuestion(hand: HandView, handlers: ControlHandlers): HTMLElement {
+  const pick = (runs: number) =>
+    h(
+      runs === 1 ? 'button.btn.fold' : 'button.btn.raise',
+      { type: 'button', 'data-action': `rit-${runs}`, 'data-hotkey': HOTKEYS.runs[runs - 1], onclick: () => void handlers.send({ type: 'ritVote', runs }) },
+      capitalized(timesText(runs)),
+    );
+
+  return h(
+    'div.turn.runs-question',
+    null,
+    h('div.prompt', null, 'The betting is over. How many times to run the rest? The fewest picked wins'),
+    h(
+      'div.buttons',
+      null,
+      Array.from({ length: hand.maxRuns }, (_pick, nth) => pick(nth + 1)),
+    ),
+  );
+}
+
 function toggle(label: string, on: boolean, action: string, onChange: (next: boolean) => Promise<unknown>): HTMLElement {
   const button = h('button.toggle', { type: 'button', role: 'switch', 'aria-checked': String(on), 'data-action': action }, h('i'), label);
   button.addEventListener('click', () => holdWhile(button, () => onChange(!on)));
@@ -249,7 +272,7 @@ function waitingText(view: TableView, hand: HandView | null): string {
   }
 
   if (hand.stage === 'ritVote') {
-    return 'Waiting for the run-it-twice votes';
+    return 'Waiting for everyone to pick how many times to run it';
   }
 
   if (hand.stage === 'runout') {
@@ -371,17 +394,7 @@ function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandle
   } else if (hand?.canAnswerChop) {
     main = chopQuestion(view, hand, handlers);
   } else if (hand?.canVote) {
-    main = h(
-      'div.turn',
-      null,
-      h('div.prompt', null, 'The betting is over. Run the rest of the board twice?'),
-      h(
-        'div.buttons',
-        null,
-        h('button.btn.fold', { type: 'button', 'data-action': 'rit-no', 'data-hotkey': HOTKEYS.once, onclick: () => void handlers.send({ type: 'ritVote', runs: 1 }) }, 'Once'),
-        h('button.btn.raise', { type: 'button', 'data-action': 'rit-yes', 'data-hotkey': HOTKEYS.twice, onclick: () => void handlers.send({ type: 'ritVote', runs: 2 }) }, 'Twice'),
-      ),
-    );
+    main = runsQuestion(hand, handlers);
   } else {
     main = waitingEl(waiting === 'unconfirmed' ? `Waiting for the table to confirm your ${seat.lastAction ?? 'move'}…` : waitingText(view, hand), view, ownNote(settling.note, hand, view));
   }

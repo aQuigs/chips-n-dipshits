@@ -52,7 +52,7 @@ test('a spot is made of what the whole table sees: the same for a player in the 
 });
 
 test('there are spots from the moment hands are turned up with cards to come, a vote on running it twice included, and none once the result is in', () => {
-  const { t } = allInBeforeTheFlop({ allowRunItTwice: true });
+  const { t } = allInBeforeTheFlop({ maxRuns: 2 });
 
   assert.equal(t.state.hand!.stage, 'ritVote');
   assert.deepEqual(spotsOf(t.view(2))!.boards, [{ hands: [cards(ACES), cards(KINGS)], board: [], dead: [] }]);
@@ -89,11 +89,11 @@ test('a hand still in that the table cannot see leaves no spot at all, and neith
 });
 
 test('a hand run twice: the second board starts from the cards the two share, with the rest of the first out of its deck', () => {
-  const { t } = allInBeforeTheFlop({ allowRunItTwice: true });
+  const { t } = allInBeforeTheFlop({ maxRuns: 2 });
   const hands = [cards(ACES), cards(KINGS)];
 
-  t.cmd(0, { type: 'ritVote', agree: true });
-  t.cmd(1, { type: 'ritVote', agree: true });
+  t.cmd(0, { type: 'ritVote', runs: 2 });
+  t.cmd(1, { type: 'ritVote', runs: 2 });
   assert.deepEqual([t.state.hand!.stage, t.state.hand!.runs], ['runout', 2]);
 
   // While the first board is dealt there is no second on the table
@@ -115,15 +115,15 @@ test('a hand run twice: the second board starts from the cards the two share, wi
 });
 
 test('run twice from the flop: the flop is on both boards and out of the deck once', () => {
-  const t = new TestTable({ stacks: [1000, 1000], config: { allowRunItTwice: true } });
+  const t = new TestTable({ stacks: [1000, 1000], config: { maxRuns: 2 } });
 
   t.deal({ button: 0, holes: { 0: ACES, 1: KINGS }, board: BOARD, secondBoard: '8s Td' });
   t.call(0);
   t.check(1);
   t.raise(1, 980);
   t.call(0);
-  t.cmd(0, { type: 'ritVote', agree: true });
-  t.cmd(1, { type: 'ritVote', agree: true });
+  t.cmd(0, { type: 'ritVote', runs: 2 });
+  t.cmd(1, { type: 'ritVote', runs: 2 });
   nextStreet(t);
   nextStreet(t);
 

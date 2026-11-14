@@ -10,8 +10,8 @@ export const HOTKEYS = {
   raise: 'R',
   /** The size buttons, in the order they are shown. */
   sizes: ['1', '2', '3', '4', '5'],
-  once: 'O',
-  twice: 'T',
+  /** How many times to run it, by the number picked: once, twice, three times. Three times starts like twice, so it is its number. */
+  runs: ['O', 'T', '3'],
 } as const;
 
 /**
@@ -30,7 +30,7 @@ export const HOTKEY_LIST: readonly { term: string; meaning: string }[] = [
   { term: HOTKEYS.pass, meaning: 'Check or call' },
   { term: HOTKEYS.raise, meaning: 'Go to the amount: Enter bets or raises, Esc goes back' },
   { term: `${HOTKEYS.sizes[0]} to ${HOTKEYS.sizes.at(-1)}`, meaning: 'The bet sizes, in the order shown' },
-  { term: `${HOTKEYS.once} / ${HOTKEYS.twice}`, meaning: 'Run it once or twice' },
+  { term: HOTKEYS.runs.join(' / '), meaning: 'Run it once, twice or three times' },
 ];
 
 /** Where the keyboard is: on the table, in the raise amount, or in anything else that takes typing. */

@@ -51,7 +51,7 @@ function field(id: string, spec: ConfigSpec, value: string | number | boolean, t
         h(
           'div.options',
           null,
-          spec.options.map((option) => h('label.check', null, h('input', { type: 'radio', name: id, value: option.value, checked: option.value === value }), h('span', null, option.label))),
+          spec.options.map((option) => h('label.check', null, h('input', { type: 'radio', name: id, value: String(option.value), checked: option.value === value }), h('span', null, option.label))),
         ),
         hint,
       );
@@ -65,9 +65,14 @@ function held(form: HTMLFormElement, id: string, spec: ConfigSpec, table: TableC
 
     case 'text':
     case 'link':
-    // A group of radio buttons answers to its name with the value of the one that is picked
-    case 'choice':
       return inputOf(form, id).value;
+
+    // A group of radio buttons answers to its name with the value of the one that is picked, as text: a count is its number
+    case 'choice': {
+      const picked = inputOf(form, id).value;
+
+      return spec.options.find((option) => String(option.value) === picked)?.value ?? picked;
+    }
 
     case 'chips':
       return amountOf(form, id, table);

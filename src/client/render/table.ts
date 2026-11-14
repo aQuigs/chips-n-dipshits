@@ -5,6 +5,7 @@ import { BOARD_SIZE } from '../../engine/boards.ts';
 import type { ChanceFigure } from '../../engine/chances.ts';
 import { midSentence } from '../../engine/handNames.ts';
 import type { HandRead } from '../../engine/handNames.ts';
+import type { PotAward } from '../../engine/types.ts';
 import type { HandView, Holding, SeatView, TableView } from '../../engine/view.ts';
 import type { BoardCard, Place } from '../motion.ts';
 import type { ShownChances } from '../tableChances.ts';
@@ -192,7 +193,7 @@ function hintEl(holding: Holding): HTMLElement {
 
 /**
  * Picks out, among cards that could make the viewer's hand, the ones that do and the ones that don't,
- * given the reads they belong to. A hole card under two boards is marked only when the boards agree on it.
+ * given the reads they belong to. A hole card under several boards is marked only when every board agrees on it.
  */
 function markPlaying(cards: HTMLElement[], reads: readonly HandRead[]): HTMLElement[] {
   const made = reads.filter((read) => read.plays.length > 0);
@@ -271,9 +272,10 @@ function seatEl(view: TableView, seat: SeatView, slot: number, shape: Shape, clo
     timer = h('div.timer', null, h('i', { style: { '--from': String(fraction), 'animation-duration': `${left}ms` } }));
   }
 
+  // What each player picked shows as they pick it, as it would be heard at a real table
   let vote: HTMLElement | null = null;
   if (hand?.stage === 'ritVote' && seat.inHand && !seat.folded) {
-    vote = h('div.tag.vote', { class: seat.ritVote ? 'yes' : '' }, seat.ritVote ? 'Twice ✓' : 'Deciding…');
+    vote = h('div.tag.vote', { class: seat.ritVote ? 'picked' : '' }, seat.ritVote ? `${PICKED[seat.ritVote - 1] ?? seat.ritVote} ✓` : 'Deciding…');
   }
 
   const plate = h(
@@ -352,9 +354,9 @@ function boardEl(hand: HandView, turning: readonly BoardCard[]): HTMLElement {
     return h('div.board', { 'data-run': run }, slots);
   });
 
-  // Run twice, the second board only exists once the first is out. Its place is kept from the start, so the table doesn't shift when it comes
-  if (hand.runs > boards.length) {
-    boards.push(h('div.board.later', { 'data-run': boards.length }, Array.from({ length: BOARD_SIZE }, () => h('div.card.slot'))));
+  // Run more than once, each next board only exists once the one before is out. Its place is kept from the start, so the table doesn't shift when it comes
+  for (let run = boards.length; run < hand.runs; run++) {
+    boards.push(h('div.board.later', { 'data-run': run }, Array.from({ length: BOARD_SIZE }, () => h('div.card.slot'))));
   }
 
   return h('div.boards', null, boards);
@@ -363,6 +365,45 @@ function boardEl(hand: HandView, turning: readonly BoardCard[]): HTMLElement {
 /** How many boards a hand's result speaks of: one for a hand everyone else folded, which was won whole however many were out. */
 function boardsWonOn(hand: HandView): number {
   return hand.result?.uncontested ? 1 : hand.boards.length;
+}
+
+// A pick as the line under a seat says it, short enough for one line on the narrowest seat
+const PICKED = ['Once', 'Twice', 'Three'];
+
+/** Boards that paid the same players, in the order of their first board, with what each player took on them all. */
+function boardsByWinners(awards: readonly PotAward[], runs: number): { boards: number[]; won: Map<number, number> }[] {
+  const ways = new Map<string, { boards: number[]; won: Map<number, number> }>();
+
+  for (let run = 0; run < runs; run++) {
+    const here = awards.filter((award) => award.run === run && award.amount > 0);
+    const key = [...new Set(here.map((award) => award.seat))].sort((a, b) => a - b).join();
+    const way = ways.get(key) ?? { boards: [], won: new Map<number, number>() };
+
+    way.boards.push(run);
+    for (const award of here) {
+      way.won.set(award.seat, (way.won.get(award.seat) ?? 0) + award.amount);
+    }
+    ways.set(key, way);
+  }
+
+  return [...ways.values()];
+}
+
+const COUNT_WORDS = ['', 'one', 'two', 'three'];
+
+/** "Board 2", "Boards 1 and 3", "Both boards", "All three boards". */
+function boardsName(boards: number[], of: number): string {
+  const numbers = boards.map((board) => String(board + 1));
+
+  if (boards.length === 1) {
+    return `Board ${numbers[0]!}`;
+  }
+
+  if (boards.length === of) {
+    return of === 2 ? 'Both boards' : `All ${COUNT_WORDS[of] ?? of} boards`;
+  }
+
+  return `Boards ${numbers.slice(0, -1).join(', ')} and ${numbers.at(-1)!}`;
 }
 
 // More lines than this in the middle of the table run into the seats on a phone
@@ -387,27 +428,21 @@ function resultLines(view: TableView, hand: HandView): string[] {
   const lines: string[] = [];
   let fits = true;
 
-  for (let run = 0; run < runs; run++) {
-    const wonHere = new Map<number, number>();
-    for (const award of result.pots.flatMap((pot) => pot.awards)) {
-      if (award.run === run) {
-        wonHere.set(award.seat, (wonHere.get(award.seat) ?? 0) + award.amount);
-      }
-    }
+  for (const { boards, won } of boardsByWinners(result.pots.flatMap((pot) => pot.awards), runs)) {
+    const label = runs > 1 ? `${boardsName(boards, runs)}: ` : '';
 
-    const board = runs > 1 ? `Board ${run + 1}: ` : '';
-
-    // One of several boards keeps to a line: winners who split it, of a tie or of a side pot, are named with what each took and not their hands
-    if (runs > 1 && wonHere.size > 1) {
-      fits &&= wonHere.size <= WINNERS_ON_A_LINE;
-      lines.push(`${board}${[...wonHere].map(([seat, amount]) => `${nameAt(seat)} +${amountOf(amount)}`).join(', ')}`);
+    // Several boards keep to a line each way they went: winners who split one, of a tie or of a side pot, are named with what each took and not their hands
+    if (runs > 1 && won.size > 1) {
+      fits &&= won.size <= WINNERS_ON_A_LINE;
+      lines.push(`${label}${[...won].map(([seat, amount]) => `${nameAt(seat)} +${amountOf(amount)}`).join(', ')}`);
       continue;
     }
 
-    for (const [seat, amount] of wonHere) {
-      const made = result.hands.find((shown) => shown.seat === seat && shown.run === run)?.name;
+    for (const [seat, amount] of won) {
+      // A line for boards won alike names no hand, which is one per board
+      const made = boards.length === 1 ? result.hands.find((shown) => shown.seat === seat && shown.run === boards[0])?.name : undefined;
 
-      lines.push(`${board}${nameAt(seat)} wins ${amountOf(amount)}${made ? ` with ${midSentence(made)}` : ''}`);
+      lines.push(`${label}${nameAt(seat)} wins ${amountOf(amount)}${made ? ` with ${midSentence(made)}` : ''}`);
     }
   }
 
@@ -434,7 +469,7 @@ function messageEl(view: TableView, handlers: TableHandlers): HTMLElement | null
   const hand = view.hand;
 
   if (hand?.stage === 'ritVote') {
-    return h('div.message', null, 'All in. Run it twice?');
+    return h('div.message', null, 'All in. How many runs?');
   }
 
   if (hand?.stage === 'done') {

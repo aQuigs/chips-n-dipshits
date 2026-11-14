@@ -18,6 +18,9 @@
 
 .table {
   --card-w: clamp(24px, 6.6cqmin, 50px);
+  /* How near the middle of the table a bet's own middle may come: half of the board with the pot under it
+     (a card, the gap, the pot's line), half a bet, and a sliver of felt between them */
+  --center-reach: calc((var(--card-w) * 1.4 + 1.4cqmin + 1.75em) / 2 + 0.8em + 3px);
 
   position: absolute;
   inset: 0;

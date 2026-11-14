@@ -13,7 +13,7 @@ import type { Page } from 'playwright';
 
 import { KEYS_SETTLE_MS } from '../src/client/hotkeys.ts';
 import type { Command, TableView } from '../src/engine/index.ts';
-import { boxes, overlap, Rig, SCREENS, squeezed, textBoxes } from './rig.ts';
+import { boxes, overlap, Rig, SCREENS, setStageHeight, squeezed, textBoxes } from './rig.ts';
 import type { Box, RigPlayer, ScreenName } from './rig.ts';
 
 const OUT = fileURLToPath(new URL('../screenshots/', import.meta.url));
@@ -55,6 +55,16 @@ function assertApart(these: Box[], those: Box[], what: string): void {
       assert.ok(!overlap(a, b), `${what}: ${JSON.stringify(a)} is drawn over ${JSON.stringify(b)}`);
     }
   }
+}
+
+/** Every bet on the table can be read: none is drawn over the board, the pot, another bet or what a seat says. */
+async function assertBetsApart(page: Page): Promise<void> {
+  const bets = await boxes(page, '.bet');
+
+  assertApart(bets, await textBoxes(page, '.plate .stack, .plate .status'), 'a bet and what a seat says');
+  assertApart(bets, await boxes(page, '.board .card, .pot'), 'a bet and the middle of the table');
+  assertApart(await boxes(page, '.pot'), await boxes(page, '.seat .plate'), 'the pot and a seat');
+  bets.forEach((bet, index) => assertApart([bet], bets.slice(index + 1), 'two bets'));
 }
 
 /** Taps on a touch screen and clicks on the desktop, as the rig opens every screen but the desktop as a touch one. */
@@ -105,6 +115,9 @@ const FACE_DOWN = '.seat:not(.me) .card.back';
 
 const CENTS = { unit: 'cents', smallBlind: 25, bigBlind: 50 } as const;
 const PHONE_AND_DESKTOP = ['phone', 'desktop'] as const;
+
+// The least height at which a phone's table stands up: its width over WIDE_ASPECT in src/client/app.ts
+const JUST_STANDING = Math.ceil(SCREENS.phone.width / 1.15) + 1;
 
 const TO_THE_CENT = 'This table plays to the cent, so an amount has at most two decimals';
 
@@ -1112,15 +1125,25 @@ const CHECKS: Check[] = [
 
         assert.deepEqual(await squeezed(page, '.plate .stack, .bet, .pot, .topbar .title span'), [], 'an amount is cut off, so it reads wrong');
         assertOnScreen(await boxes(page, '.seat .plate, .bet, .pot'), screen, 'a seat, a bet or the pot');
-
-        const bets = await boxes(page, '.bet');
-        assertApart(bets, await textBoxes(page, '.plate .stack, .plate .status'), 'a bet and what a seat says');
-        assertApart(bets, await boxes(page, '.board .card, .pot'), 'a bet and the middle of the table');
-        assertApart(await boxes(page, '.pot'), await boxes(page, '.seat .plate'), 'the pot and a seat');
-        bets.forEach((bet, index) => assertApart([bet], bets.slice(index + 1), 'two bets'));
+        await assertBetsApart(page);
 
         await page.context().close();
       }
+
+      // A table only just taller than it is wide stands up with the least height it will ever have, which is
+      // where the bets beside the middle come nearest the board and the pot.
+      const page = await table.open('Quigs', 'phone');
+      await setStageHeight(page, JUST_STANDING);
+      await page.waitForSelector('.table.tall').catch(() => assert.fail(`a phone's table ${JUST_STANDING} tall is not standing up: has WIDE_ASPECT changed?`));
+      await shot(page, 'cents-table-phone-just-standing');
+
+      const [stage] = await boxes(page, '.stage');
+      for (const bet of await boxes(page, '.bet')) {
+        assert.ok(bet.top >= stage!.top && bet.bottom <= stage!.bottom, `a bet runs off the table: ${JSON.stringify(bet)}`);
+      }
+
+      await assertBetsApart(page);
+      await page.context().close();
     },
   ],
   [

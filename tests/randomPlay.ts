@@ -91,6 +91,8 @@ export const FUZZ_COMMANDS: ((fuzz: Fuzz) => void)[] = [
 
     attempt(t, chance(rng, 90) ? someoneRunningTheGame(t, rng) : rng.int(t.ids.length), { type: 'transferChips', from: from?.playerId ?? playerId, to, amount });
   },
+  // Called more often than taken back, so that some are dealt
+  ({ t, rng }) => attempt(t, chance(rng, 80) ? someoneRunningTheGame(t, rng) : rng.int(t.ids.length), { type: 'setBombPot', on: chance(rng, 75) }),
   ({ t, rng, who }) => attempt(t, who, { type: 'ritVote', agree: chance(rng, 70) }),
 
   ({ t, rng }) => {

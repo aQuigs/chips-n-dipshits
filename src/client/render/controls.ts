@@ -170,6 +170,22 @@ function waitingText(view: TableView, hand: HandView | null): string {
   return '';
 }
 
+/**
+ * What the bar says about the hand to come, or null for nothing. Left out while the viewer has a
+ * decision to make, so calling a bomb pot never redraws a bet being sized.
+ */
+function nextHandNote(view: TableView): string | null {
+  const deciding = view.hand?.options || view.hand?.canVote;
+
+  return view.nextBombPot && !deciding ? `Next hand is a bomb pot: ${formatAmount(view.nextBombPot.amount, view.config)} each` : null;
+}
+
+function waitingEl(text: string, view: TableView): HTMLElement {
+  const note = nextHandNote(view);
+
+  return h('div.waiting', null, text, note ? h('div.next-hand', null, note) : null);
+}
+
 function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandlers): HTMLElement {
   const hand = view.hand;
   const myRequest = view.requests.find((request) => request.playerId === view.you.id);
@@ -191,7 +207,7 @@ function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandle
       ),
     );
   } else {
-    main = h('div.waiting', null, waitingText(view, hand));
+    main = waitingEl(waitingText(view, hand), view);
   }
 
   const showCards = hand?.canShow ? commandButton('button.chip-btn', 'show', 'Show my cards', () => handlers.send({ type: 'showCards' })) : null;
@@ -241,12 +257,12 @@ export function controlsEl(view: TableView, handlers: ControlHandlers): HTMLElem
     return h(
       'div.controls',
       null,
-      h('div.waiting', null, `Asked the host for seat ${myRequest.seat + 1} with ${formatAmount(myRequest.amount, view.config)}`),
+      waitingEl(`Asked the host for seat ${myRequest.seat + 1} with ${formatAmount(myRequest.amount, view.config)}`, view),
       h('div.extras', null, commandButton('button.chip-btn', 'cancel-request', 'Cancel request', () => handlers.send({ type: 'cancelRequest' }))),
     );
   }
 
-  return h('div.controls', null, h('div.waiting', null, 'You are watching. Pick an open seat to play.'));
+  return h('div.controls', null, waitingEl('You are watching. Pick an open seat to play.', view));
 }
 
 /**
@@ -270,5 +286,6 @@ export function controlsSignature(view: TableView): string {
     [view.running, view.nextHandAt !== null, view.handCount === 0],
     view.requests.filter((request) => request.playerId === view.you.id),
     [view.config.allowStraddle, view.config.maxBuyIn],
+    nextHandNote(view),
   ]);
 }

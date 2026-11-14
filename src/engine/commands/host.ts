@@ -8,6 +8,7 @@ import { grant, isDealtIn, leaveSeat, turnAway } from '../seating.ts';
 import { addFeed, memberNamed, recordLedger, seatedMember, seatIndexOf } from '../seats.ts';
 import { transfer } from '../transfers.ts';
 import { GameError, SEAT_COUNT } from '../types.ts';
+import type { TableConfig } from '../types.ts';
 import { wholeNumber, yesOrNo } from '../validate.ts';
 import type { Handler } from './handler.ts';
 
@@ -114,6 +115,31 @@ export const transferChips: Handler<'transferChips'> = {
   run: ({ state, ctx, member, command }) => transfer(state, ctx, actorName(state, member), command.from, command.to, command.amount),
 };
 
+export const setBombPot: Handler<'setBombPot'> = {
+  by: 'host or cohost',
+  run: ({ state, ctx, member, command }) => {
+    const on = yesOrNo(command.on, 'A bomb pot');
+    if (on === state.bombPotCalled) {
+      return;
+    }
+
+    // The amount is left out: like the blinds, it is whatever the table plays when the hand is dealt
+    state.bombPotCalled = on;
+    addFeed(state, ctx.now, 'system', null, on ? `${actorName(state, member)} called a bomb pot for the next hand` : `${actorName(state, member)} called off the bomb pot`);
+  },
+};
+
+/** How the chat puts what the table plays for bomb pots. */
+function bombPotsText(config: TableConfig): string {
+  const amount = formatAmount(config.bombPotAmount, config);
+
+  if (config.bombPotEvery === 0) {
+    return `A bomb pot is ${amount} and comes only when called`;
+  }
+
+  return config.bombPotEvery === 1 ? `Every hand is a bomb pot of ${amount}` : `A bomb pot of ${amount} comes every ${config.bombPotEvery} hands`;
+}
+
 export const updateConfig: Handler<'updateConfig'> = {
   by: 'host or cohost',
   run: ({ state, ctx, member, command }) => {
@@ -135,6 +161,10 @@ export const updateConfig: Handler<'updateConfig'> = {
     if (state.config.sevenDeuceBounty !== before.sevenDeuceBounty) {
       const bounty = state.config.sevenDeuceBounty;
       addFeed(state, ctx.now, 'system', null, bounty > 0 ? `The seven-deuce bounty is ${formatAmount(bounty, state.config)}${when}` : `The seven-deuce bounty is off${when}`);
+    }
+
+    if (state.config.bombPotAmount !== before.bombPotAmount || state.config.bombPotEvery !== before.bombPotEvery) {
+      addFeed(state, ctx.now, 'system', null, `${bombPotsText(state.config)}${state.hand ? ', from the next hand' : ''}`);
     }
 
     if (state.config.voiceLink !== before.voiceLink) {

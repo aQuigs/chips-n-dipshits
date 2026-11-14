@@ -269,3 +269,29 @@ export class TestTable {
     return this.state.feed.map((entry) => entry.text);
   }
 }
+
+export const BOARD = '2c 7d 9h Jc 3s';
+export const ACES = 'As Ah';
+export const KINGS = 'Ks Kh';
+export const QUEENS = 'Qs Qh';
+
+/** What the player in a seat may do, who has to be the one on the clock. */
+export function options(t: TestTable, seat: number) {
+  const found = t.view(seat).hand?.options;
+  assert.ok(found, `seat ${seat} should be on the clock`);
+
+  return found;
+}
+
+export function checkAround(t: TestTable, seats: number[], streets: number): void {
+  for (let street = 0; street < streets; street++) {
+    for (const seat of seats) {
+      t.check(seat);
+    }
+  }
+}
+
+/** What each player has in front of them, has staked in all, and has put in as dead money. */
+export function chipsIn(t: TestTable): number[][] {
+  return t.state.hand!.players.map((p) => [p.bet, p.committed, p.dead]);
+}

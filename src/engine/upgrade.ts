@@ -1,4 +1,4 @@
-import { DEFAULT_CONFIG } from './config.ts';
+import { startingConfig } from './config.ts';
 import { STATE_SCHEMA } from './types.ts';
 import type { Hand, HandPlayer, HandRecord, Member, Seat, TableState } from './types.ts';
 
@@ -30,12 +30,12 @@ interface SavedDefaults {
  * the config registry. Each entry is a function so that no two tables are handed the same list.
  */
 export const SAVED_DEFAULTS: SavedDefaults = {
-  table: () => ({ cohostIds: [], shuffleAfterHand: false }),
+  table: () => ({ cohostIds: [], shuffleAfterHand: false, bombPotCalled: false, handsSinceBombPot: 0 }),
   member: () => ({ transferred: 0 }),
   seat: () => ({ moveTo: null }),
-  hand: () => ({ events: [] }),
+  hand: () => ({ events: [], bombPot: null }),
   handPlayer: () => ({ dead: 0 }),
-  record: () => ({ events: [] }),
+  record: () => ({ events: [], bombPot: null }),
 };
 
 function fillMissing<T extends object>(saved: T, defaults: Partial<T>): void {
@@ -48,7 +48,8 @@ function fillMissing<T extends object>(saved: T, defaults: Partial<T>): void {
 
 function fillDefaults(table: TableState): void {
   fillMissing(table, SAVED_DEFAULTS.table());
-  fillMissing(table.config, DEFAULT_CONFIG);
+  // A setting added since starts where a new table of this one's kind would start it
+  fillMissing(table.config, startingConfig(table.config));
 
   for (const member of table.members) {
     fillMissing(member, SAVED_DEFAULTS.member());

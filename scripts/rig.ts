@@ -10,12 +10,11 @@ import type { Browser, Page } from 'playwright';
 
 import { startDevServer } from '../src/dev/server.ts';
 import type { DevServer } from '../src/dev/server.ts';
-import { SEAT_COUNT, TIMING } from '../src/engine/index.ts';
 import type { Command, TableConfig, TableState, TableView } from '../src/engine/index.ts';
 import type { ApiResponse, Auth } from '../src/server/api.ts';
 import { MemoryStore } from '../src/server/memoryStore.ts';
 import { PokerService } from '../src/server/service.ts';
-import { fixCards, seededRng } from '../tests/helpers.ts';
+import { seededRng, TestTable } from '../tests/helpers.ts';
 import type { DealOptions } from '../tests/helpers.ts';
 import { assertInvariants } from '../tests/invariants.ts';
 import { clientPage } from './bundle.ts';
@@ -114,18 +113,19 @@ export class RigTable {
 
   /** Starts the game if need be and deals the next hand with the button and the cards fixed. */
   deal(deal: RigDeal): TableView {
-    this.alter((state) => {
-      state.buttonSeat = (deal.button - 1 + SEAT_COUNT) % SEAT_COUNT;
-    });
-
     if (!this.view(this.host).running) {
       this.act(this.host, { type: 'start' });
     }
 
-    this.rig.advance(TIMING.startDelayMs);
-    assert.ok(this.view(this.host).hand, 'no hand was dealt: are two players seated with chips?');
+    // Dealt here, before the table's clock deals it at random, from a deck stacked beforehand: cards a hand
+    // turns up as it starts, such as the flop of a bomb pot, are then the ones asked for
+    this.alter((state) => {
+      assert.ok(!state.hand, 'a hand is on the table already, with cards nobody chose');
 
-    this.alter((state) => fixCards(state.hand!, deal));
+      const dealer = TestTable.adopt(state);
+      dealer.now = this.rig.now();
+      dealer.deal(deal);
+    });
 
     return this.view(this.host);
   }

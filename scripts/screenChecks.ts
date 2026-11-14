@@ -181,6 +181,42 @@ const ANTE_TABLES = [
   },
 ];
 
+/**
+ * A table of whole chips and one of dollars and cents, each playing an ante that a bomb pot takes the
+ * place of, with what six players see when the host calls a bomb pot and it is dealt: five who sat down
+ * with `stack` and Marge, in seat 3, who sat down with `short` and cannot cover it.
+ */
+const BOMB_POT_TABLES = [
+  {
+    name: 'chips',
+    config: { ante: 5 } as Partial<TableConfig>,
+    stack: 1000,
+    short: 30,
+    amount: '100',
+    pot: '530',
+    stacks: ['900', '900', '900', '0', '900', '900'],
+    lines: ['Hand #123 · bomb pot 100 · Quigs has the button', 'Marge Simpson-Jr posts bomb pot 30 and is all in', 'Everyone else posts bomb pot 100', 'Flop: 2♣ 7♦ 9♥'],
+    bet: '20',
+    typed: '250',
+    shown: '250',
+  },
+  {
+    name: 'cents',
+    config: { ...CENTS, ante: 50, anteFrom: 'bigBlind' } as Partial<TableConfig>,
+    stack: 10_000,
+    short: 75,
+    amount: '2.50',
+    pot: '13.25',
+    stacks: ['97.50', '97.50', '97.50', '0.00', '97.50', '97.50'],
+    lines: ['Hand #123 · bomb pot 2.50 · Quigs has the button', 'Marge Simpson-Jr posts bomb pot 0.75 and is all in', 'Everyone else posts bomb pot 2.50', 'Flop: 2♣ 7♦ 9♥'],
+    bet: '0.50',
+    typed: '7.5',
+    shown: '7.50',
+  },
+];
+
+const nextIsBombPot = (amount: string) => `Next hand is a bomb pot: ${amount} each`;
+
 const stacksBySeat = (page: Page, seats: number) => Promise.all(Array.from({ length: seats }, (_, seat) => text(page, `.seat[data-seat="${seat}"] .stack`)));
 
 async function openLedger(page: Page, screen: ScreenName): Promise<void> {
@@ -284,6 +320,10 @@ async function inEveryShape(page: Page, look: (shape: string) => Promise<void>, 
     await look(`${shape}-${height}`);
   }
 }
+
+/** `inEveryShape` on a phone; on a desktop, whose table always lies down, one look. */
+const inShapesOf = (page: Page, screen: ScreenName, look: (shape: string) => Promise<void>, options?: { buttonsUp?: boolean }) =>
+  screen === 'desktop' ? look('wide') : inEveryShape(page, look, options);
 
 /** That the playing cards stand apart from the rest by where they sit, which reads the same in any theme or deck, and the rest are faded. */
 async function assertMarked(page: Page): Promise<void> {
@@ -1068,7 +1108,11 @@ const CHECKS: Check[] = [
           const member = await table.open('Pam', screen);
           await member.tap('[data-action="menu"]');
           await member.waitForSelector('.menu');
-          assert.equal(await member.locator('.menu [data-action="players"], .menu [data-action="shuffle"], .menu [data-action="settings"], .menu [data-action="start"]').count(), 0, 'a plain member is offered the host\'s tools');
+          assert.equal(
+            await member.locator('.menu [data-action="players"], .menu [data-action="shuffle"], .menu [data-action^="bomb-pot"], .menu [data-action="settings"], .menu [data-action="start"]').count(),
+            0,
+            'a plain member is offered the host\'s tools',
+          );
           assert.equal(await member.locator('.table.movable').count(), 0, 'a plain member can drag players to other seats');
           assert.equal(await member.locator('.message [data-action="start"]').count(), 0);
           await member.context().close();
@@ -2588,6 +2632,255 @@ const CHECKS: Check[] = [
         assert.equal(await page.evaluate('window.CND_BUILD'), build, 'the page that came back is not the updated one');
         assert.equal(await page.locator('.outdated').count(), 0);
         assert.equal(await page.locator('.turn [data-action="fold"]:enabled').count(), 1, 'back at the table, it is not this player’s turn anymore');
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'a bomb pot the host calls from the menu is told to everyone under the table, and can be called off again',
+    async (rig) => {
+      for (const kind of BOMB_POT_TABLES) {
+        for (const screen of ['smallPhone', 'desktop'] as const) {
+          const table = rig.table(
+            LONG_NAMES.slice(0, 6).map((name) => ({ name, stack: kind.stack })),
+            kind.config,
+          );
+          table.join('Zed');
+
+          const host = await table.open('Quigs', screen);
+          const player = await table.open('Stu', screen);
+          const watcher = await table.open('Zed', screen);
+          const everyone = { host, player, watcher };
+          const press = pressOn(host, screen);
+          const [roomBefore] = await boxes(player, '.stage');
+
+          await press('[data-action="menu"]');
+          assert.equal(await text(host, '.menu [data-action="bomb-pot"]'), `Bomb pot next hand${kind.amount} each, no blinds, starts on the flop`);
+          assert.equal(await host.locator('.menu [data-action="bomb-pot-off"]').count(), 0, 'a bomb pot nobody called can be called off');
+          await host.locator('.menu [data-action="bomb-pot"]').scrollIntoViewIfNeeded();
+          assert.deepEqual(await squeezed(host, '.menu-item, .menu-item small'), [], 'a line of the menu is cut off');
+          assertOnScreen(await boxes(host, '.menu [data-action="bomb-pot"]'), screen, 'the bomb pot in the menu');
+          await assertNoSidewaysScroll(host);
+          await shot(host, `bomb-pot-menu-${kind.name}-${screen}`);
+
+          await press('.menu [data-action="bomb-pot"]');
+          await host.waitForSelector('.dialog', { state: 'detached' });
+          assert.equal(table.view('Stu').feed.at(-1)!.text, 'The host called a bomb pot for the next hand');
+
+          // A seated player's bar keeps its height, so the word costs their table nothing
+          await player.waitForSelector('.controls .next-hand');
+          assert.deepEqual(await boxes(player, '.stage'), [roomBefore], 'word of the bomb pot took room from a seated player\'s table');
+
+          for (const [who, page] of Object.entries(everyone)) {
+            await page.waitForSelector('.controls .next-hand');
+            assert.equal(await text(page, '.controls .next-hand'), nextIsBombPot(kind.amount), who);
+
+            await inShapesOf(
+              page,
+              screen,
+              async (shape) => {
+                assert.deepEqual(await squeezed(page, '.controls .waiting, .controls .next-hand'), [], `what the ${who} is told about the next hand is cut off`);
+                assertOnScreen(await boxes(page, '.controls .next-hand, .seat .plate'), screen, `the ${who}'s table and what is said under it`);
+                assertApart(await boxes(page, '.controls .next-hand'), await boxes(page, '.stage, .controls .extras'), 'word of the bomb pot and what is around it');
+                await shot(page, `bomb-pot-next-${who}-${kind.name}-${screen}-${shape}`);
+              },
+              { buttonsUp: false },
+            );
+          }
+
+          await press('[data-action="menu"]');
+          assert.equal(await text(host, '.menu [data-action="bomb-pot-off"]'), 'Call off the bomb potThe next hand is an ordinary one');
+          assert.equal(await host.locator('.menu [data-action="bomb-pot"]').count(), 0, 'a bomb pot that is called already is offered again');
+          await press('.menu [data-action="bomb-pot-off"]');
+          await host.waitForSelector('.dialog', { state: 'detached' });
+          assert.equal(table.view('Stu').feed.at(-1)!.text, 'The host called off the bomb pot');
+
+          for (const page of Object.values(everyone)) {
+            await page.waitForSelector('.controls .next-hand', { state: 'detached' });
+            await page.context().close();
+          }
+        }
+      }
+    },
+  ],
+  [
+    'a bomb pot starts on the flop with what everyone posted in the pot, and the felt, the play-by-play and the hand history say what it is',
+    async (rig) => {
+      for (const kind of BOMB_POT_TABLES) {
+        for (const screen of ['smallPhone', 'desktop'] as const) {
+          const names = LONG_NAMES.slice(0, 6);
+          const firstToAct = names[1]!;
+          const table = rig.table(
+            names.map((name, seat) => ({ name, stack: seat === 3 ? kind.short : kind.stack })),
+            kind.config,
+          );
+          // A hand number of three digits, as in the checks of the antes
+          table.alter((state) => {
+            state.handCount = 122;
+          });
+          table.act('Quigs', { type: 'setBombPot', on: true });
+          table.deal({ button: 0, holes: { 1: 'As Ah', 3: 'Ks Kh' }, board: '2c 7d 9h Jc 3s' });
+
+          const page = await table.open(firstToAct, screen);
+          const press = pressOn(page, screen);
+
+          const lookInShapes = (name: string, buttonsUp: boolean) =>
+            inShapesOf(
+              page,
+              screen,
+              async (shape) => {
+                assert.deepEqual(await squeezed(page, '.pot, .bet, .plate .stack'), [], 'an amount on the table is cut off');
+                assertOnScreen(await boxes(page, '.seat .plate, .bet, .pot, .board .card'), screen, 'a seat, a bet, the pot or the board');
+                assertApart(await boxes(page, '.pot'), await boxes(page, '.board .card'), 'the pot and the board');
+                await assertBetsApart(page);
+                await shot(page, `bomb-pot-${name}-${shape}-${kind.name}-${screen}`);
+              },
+              { buttonsUp },
+            );
+
+          // The flop is out, everything posted is in the pot, and the player left of the button is asked first
+          assert.deepEqual((await texts(page, '.board .card:not(.slot)')).map((card) => card.replace(/\s/g, '')), ['2♣', '7♦', '9♥']);
+          assert.equal(await text(page, '.pot'), `Bomb pot${kind.pot}`);
+          assert.equal(await page.locator('.bet').count(), 0, 'what is posted for a bomb pot is in front of a player');
+          assert.deepEqual(await stacksBySeat(page, 6), kind.stacks);
+          assert.equal(await page.locator('.seat.acting').getAttribute('data-seat'), '1');
+          assert.equal(await text(page, '.turn [data-action="check"]'), 'Check');
+          assert.equal(await page.locator('.next-hand').count(), 0, 'the hand on the table is still called the next one');
+          await lookInShapes('start', true);
+
+          // Bets on the flop sit around a pot that is labeled as a bomb pot, with another called for the hand after
+          table.act(firstToAct, { type: 'raise', to: table.view(firstToAct).hand!.options!.minRaiseTo });
+          for (const caller of [names[2]!, names[4]!, names[5]!]) {
+            table.act(caller, { type: 'call' });
+          }
+          table.act('Quigs', { type: 'setBombPot', on: true });
+
+          await page.waitForSelector('.controls .next-hand');
+          assert.deepEqual(await texts(page, '.bet'), Array(4).fill(kind.bet));
+          assert.equal(await text(page, '.controls .waiting'), `Waiting for Quigs${nextIsBombPot(kind.amount)}`);
+          await lookInShapes('bets', false);
+
+          const feedToggle = async () => {
+            if (screen !== 'desktop') {
+              await page.tap('.feed-toggle');
+            }
+          };
+
+          await feedToggle();
+          const said = await texts(page, '.entries li');
+          const from = said.indexOf(kind.lines[0]!);
+          assert.deepEqual(said.slice(from, from + kind.lines.length), kind.lines);
+          assert.deepEqual(await squeezed(page, '.entries li'), [], 'a line of the play-by-play is cut off');
+          await assertNoSidewaysScroll(page);
+          await shot(page, `bomb-pot-play-by-play-${kind.name}-${screen}`);
+          await feedToggle();
+
+          table.act('Quigs', { type: 'pause' });
+          table.play(passive, (view) => view.hand === null);
+
+          await press('[data-action="menu"]');
+          await press('.menu [data-action="history"]');
+          await page.waitForSelector('.history summary');
+          assert.match(await text(page, '.history summary'), /^Hand #123 · bomb pot/);
+          await press('.history summary');
+          assert.deepEqual((await text(page, '.history pre')).split('\n').slice(0, 3), kind.lines.slice(0, 3));
+          assert.deepEqual(await squeezed(page, '.history summary'), [], 'the hand\'s line in the history is cut off');
+          await shot(page, `bomb-pot-history-${kind.name}-${screen}`);
+
+          await page.context().close();
+        }
+      }
+    },
+  ],
+  [
+    'the table settings take what a bomb pot costs and how often one comes, and the table says so from then on',
+    async (rig) => {
+      for (const kind of BOMB_POT_TABLES) {
+        for (const screen of PHONE_AND_DESKTOP) {
+          const table = rig.table(
+            [
+              { name: 'Quigs', stack: kind.stack },
+              { name: 'Stu', stack: kind.stack },
+            ],
+            kind.config,
+          );
+          const page = await table.open('Quigs', screen);
+          const press = pressOn(page, screen);
+          const values = async () => [await page.inputValue('#table-bomb-pot-amount'), await page.inputValue('#table-bomb-pot-every')];
+          const openSettings = async () => {
+            await press('[data-action="menu"]');
+            await press('.menu [data-action="settings"]');
+            await page.waitForSelector('#table-bomb-pot-amount');
+          };
+
+          await openSettings();
+          assert.deepEqual(await values(), [kind.amount, '0'], 'bomb pots come only when called unless the host says otherwise');
+          assert.equal(await text(page, 'label[for="table-bomb-pot-amount"] small'), 'What everyone puts in for a bomb pot: no blinds, and the hand starts on the flop');
+          assert.equal(await text(page, 'label[for="table-bomb-pot-every"] small'), '0 for only when the host calls one from the menu');
+
+          await page.locator('label[for="table-bomb-pot-every"]').scrollIntoViewIfNeeded();
+          assert.deepEqual(await squeezed(page, 'label[for^="table-bomb-pot"] span, label[for^="table-bomb-pot"] small, .dialog .field input'), [], 'part of the settings is cut off');
+          assertOnScreen(await boxes(page, '.dialog, #table-bomb-pot-amount, #table-bomb-pot-every, label[for="table-bomb-pot-every"]'), screen, 'the bomb pot settings');
+          await assertNoSidewaysScroll(page);
+
+          await page.fill('#table-bomb-pot-amount', kind.typed);
+          await page.fill('#table-bomb-pot-every', '3');
+          await shot(page, `bomb-pot-settings-${kind.name}-${screen}`);
+          await press('[data-action="save-settings"]');
+          await page.waitForSelector('.dialog', { state: 'detached' });
+
+          assert.equal(table.view('Stu').feed.at(-1)!.text, `A bomb pot of ${kind.shown} comes every 3 hands`);
+          assert.equal(await page.locator('.next-hand').count(), 0, 'the count has two hands to go');
+
+          // With one every hand, the next hand is one without being called, so there is nothing to call or call off
+          await openSettings();
+          assert.deepEqual(await values(), [kind.shown, '3']);
+          await page.fill('#table-bomb-pot-every', '1');
+          await press('[data-action="save-settings"]');
+          await page.waitForSelector('.controls .next-hand');
+          assert.equal(await text(page, '.controls .next-hand'), nextIsBombPot(kind.shown));
+
+          await press('[data-action="menu"]');
+          await page.waitForSelector('.menu [data-action="settings"]');
+          assert.equal(await page.locator('.menu [data-action^="bomb-pot"]').count(), 0, 'the menu offers a bomb pot that comes anyway, or to call off one nobody called');
+
+          await page.context().close();
+        }
+      }
+    },
+  ],
+  [
+    'the form for a new table takes the bomb pot settings, and starts the amount over in dollars',
+    async (rig) => {
+      for (const screen of PHONE_AND_DESKTOP) {
+        const page = await rig.lobby(screen);
+        const press = pressOn(page, screen);
+        const values = async () => [await page.inputValue('#new-table-bomb-pot-amount'), await page.inputValue('#new-table-bomb-pot-every')];
+
+        assert.deepEqual(await values(), ['100', '0']);
+
+        await page.fill('#host-name', 'Quigs');
+        await page.fill('#new-table-bomb-pot-amount', '300');
+        await page.fill('#new-table-bomb-pot-every', '4');
+
+        // What the table plays with starts the amounts over, the bomb pot among them, and keeps how often one comes
+        await press('#new-table-unit label:has-text("Dollars and cents")');
+        assert.deepEqual(await values(), ['2.50', '4']);
+        await page.fill('#new-table-bomb-pot-amount', '5');
+
+        await page.locator('label[for="new-table-bomb-pot-every"]').scrollIntoViewIfNeeded();
+        await shot(page, `bomb-pot-new-table-${screen}`);
+        assert.deepEqual(await squeezed(page, 'label[for^="new-table-bomb-pot"] span, label[for^="new-table-bomb-pot"] small, .card-panel .field input'), [], 'part of the form is cut off');
+        assertOnScreen(await boxes(page, '#new-table-bomb-pot-amount, #new-table-bomb-pot-every, label[for="new-table-bomb-pot-every"]'), screen, 'the bomb pot in the form for a new table');
+        await assertNoSidewaysScroll(page);
+
+        await press('[data-action="create-table"]');
+        await page.waitForSelector('#table-link');
+
+        const link = await page.inputValue('#table-link');
+        const { unit, bombPotAmount, bombPotEvery } = rig.store.read(new URL(link).searchParams.get('table')!)!.config;
+        assert.deepEqual({ unit, bombPotAmount, bombPotEvery }, { unit: 'cents', bombPotAmount: 500, bombPotEvery: 4 });
+
         await page.context().close();
       }
     },

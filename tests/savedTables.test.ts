@@ -136,3 +136,18 @@ test('a table saved before antes has none, its hand in play holds no dead money,
   assert.equal(hand.players.find((player) => player.seat === hand.bbSeat)!.dead, 20);
   assertInvariants(t.state, t.now);
 });
+
+test('a table saved before bomb pots has none called or counted, a hand in play that is an ordinary one, and the amount a new table of its kind starts with', () => {
+  for (const file of FILES) {
+    const state = load(file);
+
+    assert.deepEqual([state.bombPotCalled, state.handsSinceBombPot, state.config.bombPotAmount, state.config.bombPotEvery], [false, 0, 100, 0], file);
+    assert.equal(state.hand === null ? null : state.hand.bombPot, null, file);
+  }
+
+  // A table of dollars and cents starts a setting added since where a new one of its kind does
+  const cents = new TestTable({ stacks: [5000, 5000], config: { unit: 'cents', bombPotAmount: 900 } });
+  const { bombPotAmount: _amount, bombPotEvery: _every, ...asOnceSaved } = cents.state.config;
+  const restored = restoreState(JSON.stringify({ ...cents.state, config: asOnceSaved }));
+  assert.deepEqual([restored.config.bombPotAmount, restored.config.bombPotEvery, restored.config.smallBlind], [250, 0, 25]);
+});

@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import { addMember, EVENT_LIMIT, LIMITS, replayHand } from '../src/engine/index.ts';
 import type { HandEvent, HandRecord } from '../src/engine/index.ts';
 import { handRecords, TestTable } from './helpers.ts';
-import { assertEventsRetellTheHand, assertInvariants, assertRecordBalances, assertViewsKeepSecrets } from './invariants.ts';
+import { assertEventsRetellTheHand, assertHandRecordsHold, assertInvariants, assertRecordBalances, assertViewsKeepSecrets } from './invariants.ts';
 
 /** Plays the hand out to its record, however many steps of the clock that takes. */
 function recordOf(t: TestTable): HandRecord {
@@ -92,6 +92,7 @@ test('a hand can be followed one event at a time from its events alone', () => {
     button: 0,
     smallBlind: 10,
     bigBlind: 20,
+    bombPot: null,
     seats: [0, 1, 2, 3].map((seat) => ({ seat, name: `P${seat}`, stack: 1000, bet: 0, folded: false, cards: null })),
     pot: 0,
     boards: [[]],
@@ -381,4 +382,79 @@ test('a hand without an ante starts with the same event as before there were ant
   t.deal({ button: 0 });
 
   assert.deepEqual(t.state.hand!.events.slice(0, 3), [['start', 1, 0, 10, 20, [[0, 'P0', 1000], [1, 'P1', 1000]]], ['post', 0, 'small blind', 10, 990], ['post', 1, 'big blind', 20, 980]]);
+});
+
+test('a bomb pot says so in its first event, and is told as what everyone posted into the pot and then the flop', () => {
+  const t = new TestTable({ stacks: [1000, 30, 1000, 1000], config: { ante: 5 } });
+  t.cmd(0, { type: 'setBombPot', on: true });
+  t.deal({ button: 0, holes: { 1: 'As Ah', 3: 'Ks Kh', 0: 'Qs Qh' }, board: '2c 7d 9h Jc 3s' });
+
+  const events = t.state.hand!.events;
+  assert.deepEqual(events, [
+    ['start', 1, 0, 10, 20, [[0, 'P0', 1000], [1, 'P1', 30], [2, 'P2', 1000], [3, 'P3', 1000]], 0, 'everyone', { amount: 100 }],
+    ['post', 1, 'bomb pot', 30, 0, 'contribution'],
+    ['post', 2, 'bomb pot', 100, 900, 'contribution'],
+    ['post', 3, 'bomb pot', 100, 900, 'contribution'],
+    ['post', 0, 'bomb pot', 100, 900, 'contribution'],
+    ['deal'],
+    ['street', 0, ['2c', '7d', '9h']],
+  ]);
+  assert.deepEqual(t.view(2).hand!.events, events);
+
+  assert.deepEqual(replayHand(events, 1)!.bombPot, { amount: 100 }, 'a replay knows what kind of hand it is from the start');
+
+  const posted = replayHand(events, 5)!;
+  assert.equal(posted.pot, 330);
+  assert.deepEqual(posted.seats.map((seat) => [seat.stack, seat.bet]), [[900, 0], [0, 0], [900, 0], [900, 0]], 'what is posted is never in front of its player');
+
+  const flop = replayHand(events)!;
+  assert.deepEqual([flop.boards, flop.pot], [[['2c', '7d', '9h']], 330]);
+
+  t.check(2);
+  t.raise(3, 100);
+  t.call(0);
+  t.fold(2);
+  for (const seat of [3, 0, 3, 0]) {
+    t.check(seat);
+  }
+
+  const record = recordOf(t);
+  assert.deepEqual(record.bombPot, { amount: 100 });
+  assertHandRecordsHold(t.effects);
+
+  // The hand after it is an ordinary one again, and its first event has nothing about bomb pots
+  t.deal();
+  assert.deepEqual(t.state.hand!.events[0]!.slice(6), [5, 'everyone']);
+  assert.equal(replayHand(t.state.hand!.events)!.bombPot, null);
+});
+
+test('a bomb pot that is all in when dealt replays through what came back, a second board and every pot', () => {
+  const t = new TestTable({ stacks: [1000, 60, 50], config: { allowRunItTwice: true } });
+  t.cmd(0, { type: 'setBombPot', on: true });
+  t.deal({ button: 0, holes: { 0: 'Qs Qh', 1: 'Ks Kh', 2: 'As Ah' }, board: '2c 7d 9h Jc 3s', secondBoard: 'Kd 4c' });
+
+  const events = t.state.hand!.events;
+  assert.deepEqual(events.slice(1), [
+    ['post', 1, 'bomb pot', 60, 0, 'contribution'],
+    ['post', 2, 'bomb pot', 50, 0, 'contribution'],
+    ['post', 0, 'bomb pot', 100, 900, 'contribution'],
+    ['deal'],
+    ['return', 0, 40],
+    ['street', 0, ['2c', '7d', '9h']],
+    ['show', 0, ['Qs', 'Qh']],
+    ['show', 1, ['Ks', 'Kh']],
+    ['show', 2, ['As', 'Ah']],
+  ]);
+
+  const returned = replayHand(events, 6)!;
+  assert.equal(returned.pot, 170, 'what comes back comes out of the pot, where it was posted');
+  assert.deepEqual(returned.seats.map((seat) => [seat.stack, seat.bet]), [[940, 0], [0, 0], [0, 0]]);
+
+  for (const voter of [0, 1, 2]) {
+    t.cmd(voter, { type: 'ritVote', agree: true });
+  }
+
+  const record = recordOf(t);
+  assert.deepEqual(record.boards, [['2c', '7d', '9h', 'Jc', '3s'], ['2c', '7d', '9h', 'Kd', '4c']]);
+  assertHandRecordsHold(t.effects);
 });

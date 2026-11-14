@@ -625,7 +625,7 @@ test('a table saved by the version before this one is brought up to date, and an
 
 test('a table created to play dollars and cents starts at stakes that suit it, and says everything in dollars', () => {
   const { state } = createTable('ABC123', 'Quigs', { unit: 'cents' }, freshCtx());
-  assert.deepEqual(state.config, { ...DEFAULT_CONFIG, unit: 'cents', smallBlind: 25, bigBlind: 50, minBuyIn: 2000, maxBuyIn: 10_000 });
+  assert.deepEqual(state.config, { ...DEFAULT_CONFIG, unit: 'cents', smallBlind: 25, bigBlind: 50, minBuyIn: 2000, maxBuyIn: 10_000, bombPotAmount: 250 });
 
   const t = new TestTable({ stacks: [10_000, 2000], config: { unit: 'cents', minBuyIn: 2000, maxBuyIn: 10_000 } });
   const watcher = t.ids.push(addMember(t.state, 'Ann', t.ctx()).id) - 1;

@@ -27,7 +27,7 @@ function settings(view: TableView, handlers: DialogHandlers): HTMLElement {
         onsubmit: (event: Event) => submit(event, handlers, { type: 'updateConfig', config: changed(view.config, fields.read(event.target as HTMLFormElement)) }, handlers.close),
       },
       fields.rows,
-      h('p.note', null, 'New blinds, a new ante and a new bounty apply from the next hand.'),
+      h('p.note', null, 'New blinds, a new ante, a new bounty and new bomb pot settings apply from the next hand.'),
       h('button.btn.primary', { type: 'submit', 'data-action': 'save-settings' }, 'Save'),
     ),
   );

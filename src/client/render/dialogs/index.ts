@@ -1,4 +1,5 @@
 import type { TableView } from '../../../engine/view.ts';
+import { callBombPot, callOffBombPot } from './bombPot.ts';
 import { confirmDialog } from './confirm.ts';
 import type { DialogHandlers, DialogKind } from './dialog.ts';
 import { historyDialog } from './history.ts';
@@ -28,6 +29,8 @@ const REGISTERED = [
   historyDialog,
   playersDialog,
   shuffleSeats,
+  callBombPot,
+  callOffBombPot,
   settingsDialog,
   pauseGame,
   startGame,

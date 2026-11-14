@@ -76,6 +76,7 @@ function handRecord(tableId: string, number: number): HandRecord {
     number,
     summary: `Hand #${number}`,
     boards: [[]],
+    bombPot: null,
     players: [],
     result: { uncontested: true, pots: [], winnings: [], hands: [], bounty: null },
     events: [],
@@ -629,12 +630,12 @@ test('a hand with more to say than a cell holds is saved all the same, keeping t
   assert.ok(saved!.summary.endsWith('P1 wins 40'));
 });
 
-test('a hand saved before records kept events is served with none', () => {
+test('a hand saved before records kept events, or said whether it was a bomb pot, is served with no events as an ordinary hand', () => {
   const { store, spreadsheet } = setup();
   save(store, table('ABC234'), [{ type: 'hand', record: handRecord('ABC234', 1) }]);
 
   const row = spreadsheet.getSheetByName('Hands')!.cells[1]!;
-  const { events: _events, ...asOnceSaved } = handRecord('ABC234', 1);
+  const { events: _events, bombPot: _bombPot, ...asOnceSaved } = handRecord('ABC234', 1);
   row[4] = JSON.stringify(asOnceSaved);
 
   assert.deepEqual(store.recentHands('ABC234', 1), [handRecord('ABC234', 1)]);

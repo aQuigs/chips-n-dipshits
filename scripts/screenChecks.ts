@@ -24,7 +24,7 @@ import { THEMES } from '../src/client/themes.ts';
 import { shortAmount, signedAmount } from '../src/engine/amounts.ts';
 import { BADGES, badgeOf, DEFAULT_CONFIG, LIMITS, onTheClock, presetSettings, REACTION_GAP_MS, REACTION_LIFE_MS } from '../src/engine/index.ts';
 import { cardWords } from '../src/engine/handNames.ts';
-import type { Card, Command, Straddle, TableConfig, TableView } from '../src/engine/index.ts';
+import type { Bounty, Card, Command, Straddle, TableConfig, TableView } from '../src/engine/index.ts';
 import { PUT_AWAY_AFTER_MS, PUT_AWAY_MESSAGE } from '../src/server/putAway.ts';
 import { contrast } from '../tests/colorVision.ts';
 import { boxes, Gate, overlap, Rig, RigTable, SCREENS, setStageHeight, squeezed, textBoxes } from './rig.ts';
@@ -10706,6 +10706,197 @@ const CHECKS: Check[] = [
 
       await stu.context().close();
       await quigs.context().close();
+    },
+  ],
+  [
+    'the bounty hands in the table settings: as many as a table can have fit a small phone and the desktop, each says its hand in words, a refused row says why where it was typed, a row half typed stays through the table changing, and the list saved is the table’s',
+    async (rig) => {
+      for (const [screen, config] of [['smallPhone', {}], ['desktop', CENTS]] as const) {
+        const listed: Bounty[] = [['72', 25], ['72s', 100], ['J4s', 50], ['AA', 200], ['T9o', 20], ['K2o', 10], ['QQ', 75]];
+        const table = rig.table([{ name: 'Quigs', stack: 5000 }, { name: 'Stu', stack: 5000 }], { ...config, bounties: listed });
+        const page = await table.open('Quigs', screen);
+        const press = pressOn(page, screen);
+        const said = () => texts(page, '#table-bounties .said');
+        const hands = () => page.evaluate(`[...document.querySelectorAll('#table-bounties .bounty-hand')].map((input) => input.value)`) as Promise<string[]>;
+        const newHand = '#table-bounties-hand-7';
+        const newAmount = '#table-bounties-amount-7';
+
+        await press('[data-action="menu"]');
+        await press('.menu [data-action="settings"]');
+        await page.waitForSelector('#table-bounties');
+
+        assert.deepEqual(await hands(), ['72', '72s', 'J4s', 'AA', 'T9o', 'K2o', 'QQ']);
+        assert.deepEqual(await said(), ['Seven-deuce', 'Seven-deuce suited', 'Jack-four suited', 'Pocket aces', 'Ten-nine offsuit', 'King-deuce offsuit', 'Pocket queens']);
+        assert.equal(await page.inputValue('#table-bounties-amount-2'), screen === 'desktop' ? '0.50' : '50');
+
+        // The eighth is the last a table can have
+        await press('[data-action="add-bounty"]');
+        assert.equal(await page.evaluate('document.activeElement.id'), 'table-bounties-hand-7', 'the new row was not ready to type in');
+        assert.equal(await page.locator('[data-action="add-bounty"]:visible').count(), 0, 'a ninth hand can be added');
+        assert.equal(await page.locator('#table-bounties small:has-text("at most 8 bounty hands"):visible').count(), 1);
+
+        // Refused where it is typed, and the form isn't sent
+        await page.fill(newHand, 'j4s');
+        assert.equal((await said())[7], 'J4s is on the list already: give it one amount');
+        await page.fill(newHand, '7x');
+        const refusal = '“7x” isn\'t a hand. Write two ranks, such as 72 or AA, with s after them for suited only or o for offsuit only, such as J4s or 72o. A ten is T or 10';
+        assert.equal((await said())[7], refusal);
+        assert.equal(await complaintOf(page, newHand), refusal);
+        assert.equal(await page.locator('#table-bounties .said.warn').count(), 1);
+        await page.fill(newAmount, screen === 'desktop' ? '0.30' : '30');
+        await press('[data-action="save-settings"]');
+        assert.equal(await page.locator('#table-bounties').count(), 1, 'the settings were sent with a row that is no hand');
+        await page.locator(`${newHand}`).scrollIntoViewIfNeeded();
+        await shot(page, `bounties-refused-row-${screen}`);
+
+        // Half typed while the table changes, as when someone chats
+        await page.fill(newHand, '9 5s');
+        table.act('Stu', { type: 'chat', text: 'nice hand' });
+        await page.waitForSelector('.entries li:has-text("nice hand")', { state: 'attached' });
+        assert.deepEqual([await page.inputValue(newHand), await page.inputValue(newAmount)], ['9 5s', screen === 'desktop' ? '0.30' : '30'], 'the row being typed was redrawn');
+        await page.locator(newHand).blur();
+        assert.equal(await page.inputValue(newHand), '95s', 'the hand is not written back the one way it is kept');
+        assert.equal((await said())[7], 'Nine-five suited');
+
+        // The most rows lie whole across the screen, none of their parts over another
+        const { width } = SCREENS[screen];
+        await page.locator('#table-bounties').scrollIntoViewIfNeeded();
+        assert.deepEqual(await squeezed(page, '#table-bounties input, #table-bounties .said, #table-bounties legend, #table-bounties .bounty-heads span, #table-bounties button, #table-bounties small'), [], 'part of the bounty list is cut off');
+        for (let row = 0; row < 8; row++) {
+          const parts = await boxes(page, `#table-bounties .bounty-row:nth-child(${row + 1}) :is(input, button)`);
+          assert.equal(parts.length, 3);
+          parts.forEach((part, index) => {
+            assert.ok(part.left >= -1 && part.right <= width + 1, `row ${row + 1} runs off the side: ${JSON.stringify(part)}`);
+            assertApart([part], parts.slice(index + 1), `row ${row + 1}`);
+          });
+        }
+        await assertNoSidewaysScroll(page);
+        await shot(page, `bounties-settings-${screen}`);
+
+        // Taking one off makes room for another
+        await press('#table-bounties .bounty-row:nth-child(6) [data-action="remove-bounty"]');
+        assert.deepEqual(await hands(), ['72', '72s', 'J4s', 'AA', 'T9o', 'QQ', '95s']);
+        assert.equal(await page.locator('[data-action="add-bounty"]:visible').count(), 1);
+
+        await press('[data-action="save-settings"]');
+        await page.waitForSelector('.entries li:has-text("The bounties are")', { state: 'attached' });
+        assert.deepEqual(table.view('Quigs').config.bounties, [...listed.filter(([hand]) => hand !== 'K2o'), ['95s', 30]]);
+
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'the form for a new table takes bounty hands on a small phone and the desktop, and someone following the table’s link is told them under the blinds',
+    async (rig) => {
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        const cents = screen === 'desktop';
+        const page = await rig.lobby(screen);
+        const press = pressOn(page, screen);
+
+        assert.equal(await text(page, '#new-table-bounties .note'), 'No bounties.');
+        assert.equal(await page.locator('#new-table-bounties .bounty-heads:visible').count(), 0);
+
+        await page.fill('#host-name', `Quigs ${screen}`);
+        if (cents) {
+          await press('#new-table-unit label:has-text("Dollars and cents")');
+        }
+
+        await press('[data-action="add-bounty"]');
+        await page.fill('#new-table-bounties-hand-0', '27');
+        await page.fill('#new-table-bounties-amount-0', cents ? '.25' : '25');
+        await press('[data-action="add-bounty"]');
+        await page.fill('#new-table-bounties-hand-1', 'J4S');
+        await page.fill('#new-table-bounties-amount-1', cents ? '0.5' : '50');
+        await page.locator('#new-table-bounties-hand-1').blur();
+        assert.deepEqual(await texts(page, '#new-table-bounties .said'), ['Seven-deuce', 'Jack-four suited']);
+        assert.equal(await page.locator('#new-table-bounties .note:visible').count(), 0);
+
+        await page.locator('#new-table-bounties').scrollIntoViewIfNeeded();
+        assert.deepEqual(await squeezed(page, '#new-table-bounties input, #new-table-bounties .said, #new-table-bounties legend, #new-table-bounties button, #new-table-bounties small'), [], 'part of the bounty list is cut off');
+        await assertNoSidewaysScroll(page);
+        await shot(page, `bounties-new-table-${screen}`);
+
+        await press('[data-action="create-table"]');
+        await page.waitForSelector('#table-link');
+        const link = await page.inputValue('#table-link');
+        const tableId = new URL(link).searchParams.get('table')!;
+        assert.deepEqual(rig.store.read(tableId)!.config.bounties, [['72', 25], ['J4s', 50]]);
+
+        const visitor = await rig.page(screen, 'a visitor');
+        await visitor.goto(link);
+        await visitor.waitForSelector('[data-action="join-table"]:enabled');
+        assert.deepEqual(await texts(visitor, '.about p:not(.note)'), [cents ? 'Blinds 0.25/0.50' : 'Blinds 10/20', cents ? 'Bounties: 72 for 0.25 and J4s for 0.50' : 'Bounties: 72 for 25 and J4s for 50']);
+        assert.deepEqual(await squeezed(visitor, '.about p'), []);
+        await shot(visitor, `bounties-join-${screen}`);
+
+        await visitor.context().close();
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'a bounty hand that is not seven-deuce is pointed out under its holder’s cards with its amount, in every shape of the table, and won without a call its bounty is named over the table and in the play-by-play, in chips and in dollars',
+    async (rig) => {
+      for (const config of [{}, CENTS]) {
+        const cents = 'unit' in config;
+        const table = rig.table(['Quigs', 'Stu', 'Pam'].map((name) => ({ name, stack: 5000 })), { ...config, bounties: [['J4s', 50], ['72', 10]] });
+        table.deal({ button: 0, holes: { 0: 'Jd 4d', 1: '7h 2c' } });
+
+        const page = await table.open('Quigs', 'phone');
+        await hintSays(page, 'Jack-four suited');
+        assert.equal(await text(page, `${HINT} .bounty`), cents ? 'Bounty 0.50' : 'Bounty 50');
+        await shot(page, `bounty-hint-j4s-${cents ? 'cents' : 'chips'}`);
+        await inEveryShape(page, () => assertHintFits(page));
+
+        const raise = cents ? 150 : 60;
+        table.play((_view, name) => (name === 'Quigs' ? { type: 'raise', to: raise } : { type: 'fold' }), (view) => view.hand!.stage === 'done');
+        await page.waitForSelector('.message.result > div:has-text("bounty")');
+        assert.equal((await texts(page, '.message.result > div')).at(-1), `Quigs collects ${cents ? '1.00' : '100'} for the J4s bounty`);
+        await page.waitForSelector('.entries li:has-text("for the J4s bounty")', { state: 'attached' });
+        assert.deepEqual(await squeezed(page, '.message.result > div, .seat .plate .status'), [], 'the result or what a seat took is cut off');
+        assert.deepEqual(await drawnCards(page, 0), ['Jd', '4d']);
+        await shot(page, `bounty-paid-j4s-${cents ? 'cents' : 'chips'}`);
+
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'a table saved when its bounty was one amount for seven-deuce opens with 72 as the one hand on its list, points it out and pays it as before',
+    async (rig) => {
+      const table = rig.table(['Quigs', 'Stu', 'Pam'].map((name) => ({ name, stack: 1000 })));
+      table.deal({ button: 0, holes: { 0: '7h 2c' } });
+
+      // As the code before saved it: one amount in the settings, and the same on the hand
+      table.alter((state) => {
+        const old = state as unknown as { schema: number; config: Record<string, unknown>; hand: Record<string, unknown> };
+        old.schema = 6;
+        delete old.config.bounties;
+        old.config.sevenDeuceBounty = 25;
+        delete old.hand.bounties;
+        old.hand.bounty = 25;
+      });
+      assert.deepEqual(rig.store.read(table.id)!.config.bounties, [['72', 25]]);
+
+      const page = await table.open('Quigs', 'phone');
+      const press = pressOn(page, 'phone');
+      await hintSays(page, 'Seven-deuce offsuit');
+      assert.equal(await text(page, `${HINT} .bounty`), 'Bounty 25');
+
+      await press('[data-action="menu"]');
+      await press('.menu [data-action="settings"]');
+      await page.waitForSelector('#table-bounties');
+      assert.deepEqual([await page.inputValue('#table-bounties-hand-0'), await page.inputValue('#table-bounties-amount-0'), await text(page, '#table-bounties .said')], ['72', '25', 'Seven-deuce']);
+      await page.locator('#table-bounties').scrollIntoViewIfNeeded();
+      await shot(page, 'bounties-upgraded-72-phone');
+      await press('[data-action="close"]');
+
+      table.play((_view, name) => (name === 'Quigs' ? { type: 'raise', to: 60 } : { type: 'fold' }), (view) => view.hand!.stage === 'done');
+      await page.waitForSelector('.message.result > div:has-text("bounty")');
+      assert.equal((await texts(page, '.message.result > div')).at(-1), 'Quigs collects 50 for the 72 bounty');
+
+      await page.context().close();
     },
   ],
 ];

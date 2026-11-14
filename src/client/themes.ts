@@ -1,4 +1,4 @@
-/** How the whole app looks. Its colors, type and shapes live in styles.css under [data-theme="<id>"]. */
+/** How the whole app looks. Its colors, type and shapes live in styles/tokens.css under [data-theme="<id>"]. */
 export interface Theme {
   id: string;
   name: string;

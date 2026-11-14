@@ -1,0 +1,136 @@
+/* ---- Chat and play-by-play ---- */
+
+.feed {
+  grid-area: feed;
+  display: grid;
+  /* Without a width of its own the column would be as wide as the newest line, and push Send off a phone */
+  grid-template: auto minmax(0, 1fr) / minmax(0, 1fr);
+  min-height: 0;
+  border-top: 1px solid var(--line);
+  background: var(--bg);
+}
+
+.feed-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  padding: 0 12px;
+  border: 0;
+  background: none;
+  text-align: left;
+}
+
+.feed-toggle .label {
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.feed-toggle .latest {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.feed-body {
+  display: none;
+  grid-template: minmax(0, 1fr) auto / minmax(0, 1fr);
+  min-height: 0;
+}
+
+.feed.open .feed-body {
+  display: grid;
+  height: 38cqb;
+}
+
+/*
+ * Stacked, as on a phone held upright, an open chat takes its room from the bar under the table
+ * before it takes the table's: the bar gives up the height it keeps for a turn, and its extras go on
+ * one line. With the chat closed the bar is as tall as ever, so the table doesn't jump between turns.
+ */
+@container app ((max-width: 899.98px) and (min-height: 521px)) or (max-width: 559.98px) {
+  .app:has(.feed.open) .controls {
+    --turn-height: 0px;
+  }
+
+  .app:has(.feed.open) .extras {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .app:has(.feed.open) .extras > * {
+    flex: none;
+  }
+}
+
+.entries {
+  margin: 0;
+  padding: 4px 12px 8px;
+  overflow-y: auto;
+  list-style: none;
+  font-size: 13px;
+}
+
+.entries li {
+  padding: 2px 0;
+  overflow: hidden;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.entries li[data-kind='chat'] {
+  color: var(--text);
+}
+
+.entries li[data-kind='chat'] b {
+  color: var(--accent);
+}
+
+.entries li[data-kind='system'] {
+  font-style: italic;
+}
+
+.say {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--line);
+}
+
+.say input {
+  min-height: 36px;
+}
+
+.say .btn {
+  min-height: 36px;
+}
+
+@container app (min-width: 900px) and (min-height: 521px) {
+  .feed {
+    border-top: 0;
+    border-left: 1px solid var(--line);
+  }
+
+  .feed-toggle {
+    pointer-events: none;
+  }
+
+  .feed-toggle .latest {
+    display: none;
+  }
+
+  .feed .feed-body,
+  .feed.open .feed-body {
+    display: grid;
+    height: auto;
+  }
+}

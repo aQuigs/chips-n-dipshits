@@ -1,0 +1,73 @@
+/* ---- Theme picker: each option carries data-theme, so it is drawn in the colors it stands for ---- */
+
+.theme-options {
+  display: grid;
+  gap: 8px;
+}
+
+.theme-options.compact {
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.theme-option {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  text-align: left;
+}
+
+.theme-option[aria-pressed='true'] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.theme-section {
+  display: grid;
+  gap: 10px;
+  width: min(100%, 760px);
+}
+
+.panels.single .theme-section {
+  width: 100%;
+}
+
+.theme-section h2 {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.swatch {
+  display: flex;
+  flex: none;
+}
+
+.swatch i {
+  width: 22px;
+  height: 22px;
+  margin-left: -6px;
+  border: 2px solid var(--bg);
+  border-radius: 50%;
+}
+
+.swatch .felt-dot {
+  margin-left: 0;
+  background: var(--felt);
+}
+
+.swatch .accent-dot {
+  background: var(--accent);
+}
+
+.swatch .card-dot {
+  background: var(--card);
+}

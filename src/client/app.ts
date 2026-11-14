@@ -1,47 +1,27 @@
 import type { Command, HandRecord, TableConfig } from '../engine/types.ts';
 import type { TableView } from '../engine/view.ts';
 import type { ApiError, ApiRequest, ApiResponse, Auth } from '../server/api.ts';
-import type { Platform } from './platform.ts';
-import { controlsEl, controlsSignature, lockTurn } from './render/controls.ts';
+import { ask, isRefusal, nextRetry, ServerClock, sleep, TableConnection } from './connection.ts';
+import type { SendOutcome, Session } from './connection.ts';
+import { TableEffects } from './effects.ts';
+import { tableChange } from './tableChange.ts';
 import { Modal } from './modal.ts';
-import { dialogEl, dialogShows } from './render/dialogs.ts';
-import type { Dialog, DialogHandlers, SendOutcome } from './render/dialogs.ts';
+import type { Platform } from './platform.ts';
+import { PREFERENCES, Preferences } from './prefs.ts';
+import type { AppPreferences } from './prefs.ts';
+import { controlsEl, controlsSignature, lockTurn } from './render/controls.ts';
+import { dialogEl, dialogShows } from './render/dialogs/index.ts';
+import type { Dialog, DialogHandlers } from './render/dialogs/index.ts';
 import { createFeed } from './render/feed.ts';
 import type { Feed } from './render/feed.ts';
 import { joinScreen, lobbyEl, noticeEl, welcomeBackEl } from './render/lobby.ts';
 import { tableEl } from './render/table.ts';
 import { createThemePicker } from './render/themePicker.ts';
 import type { Shape } from './render/table.ts';
-import { allowSound, playTurnChime } from './sound.ts';
-import { DEFAULT_THEME, fontsUrl, themeById } from './themes.ts';
+import { allowSound } from './sound.ts';
+import { fontsUrl, themeById } from './themes.ts';
 import { chips, h, holdWhile, secondsUntil, Slot } from './ui.ts';
 
-// How long the server may sit on a poll before answering "nothing new"
-const HOLD_MS = 20_000;
-
-// A server that can't hold a poll answers at once, so those are spaced out instead
-const QUICK_POLL_GAP_MS = 1200;
-
-// Longer than any answer takes. Past this a request is taken for lost, as happens when a phone sleeps mid-request
-const REQUEST_TIMEOUT_MS = 30_000;
-
-const FIRST_RETRY_MS = 1000;
-const MAX_RETRY_MS = 10_000;
-
-// How many of the latest answers the server's clock is judged from
-const CLOCK_SAMPLES = 8;
-
-// A move in the hand. Only one may be on its way at a time, and it must not be repeated on a guess
-const MOVES = new Set<Command['type']>(['fold', 'check', 'call', 'raise', 'ritVote']);
-
-/** Why the table isn't being heard from: no answer at all, or an answer saying the server couldn't cope. */
-type Trouble = 'unreachable' | 'struggling';
-
-/**
- * Whether the buttons that play a move can be pressed. `sent` is a move on its way. `unanswered` is a
- * move that got no answer, so nobody knows yet whether it was played; the table has to be heard from first.
- */
-type TurnLock = 'open' | 'sent' | 'unanswered';
 const COUNTDOWN_TICK_MS = 250;
 const TOAST_MS = 4500;
 
@@ -49,16 +29,9 @@ const TOAST_MS = 4500;
 const WIDE_ASPECT = 1.15;
 
 const NAME_KEY = 'cnd.name';
-const THEME_KEY = 'cnd.theme';
-const SOUND_KEY = 'cnd.sound';
 const seatKey = (tableId: string) => `cnd.seat.${tableId}`;
 
 const FONTS_LINK_ID = 'theme-fonts';
-
-interface Session {
-  tableId: string;
-  auth: Auth;
-}
 
 /** The parts of the table screen that are built once and then filled in as views arrive. */
 interface TableScreen {
@@ -69,22 +42,10 @@ interface TableScreen {
   overlay: Slot;
   modal: Modal;
   feed: Feed;
+  effects: TableEffects;
   shape: Shape;
   seenCards: Set<string>;
   resizeObserver: ResizeObserver;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function nextRetry(last: number): number {
-  return Math.min(MAX_RETRY_MS, last ? last * 2 : FIRST_RETRY_MS);
-}
-
-/** The server has said this member or table isn't there, as opposed to not having managed to answer. */
-function isRefusal(response: ApiResponse | null): response is ApiError {
-  return response !== null && !response.ok && (response.code === 'unauthorized' || response.code === 'not_found');
 }
 
 function parseMember(value: string | null | undefined): Auth | null {
@@ -93,24 +54,24 @@ function parseMember(value: string | null | undefined): Auth | null {
   return id && token ? { id, token } : null;
 }
 
-/** Runs the whole page: which screen is up, the conversation with the server, and keeping the table drawn. */
+/** Runs the whole page: which screen is up, and keeping the table drawn from what its connection brings. */
 export class App {
+  /** What this viewer has chosen for themselves. */
+  readonly prefs: AppPreferences;
+
   private readonly root: HTMLElement;
   private readonly platform: Platform;
   private readonly themeHost: HTMLElement;
   private readonly toastEl = h('div.toast', { role: 'status', hidden: true });
 
-  private session: Session | null = null;
+  private readonly clock = new ServerClock();
+
+  /** The table this page is at, from sitting down at its screen until that screen is left. */
+  private table: TableConnection | null = null;
   private view: TableView | null = null;
   private screen: TableScreen | null = null;
   private dialog: Dialog | null = null;
   private dialogOpens = 0;
-
-  /** Server time minus this device's time, so countdowns agree with the server's clock. */
-  private clockOffset = 0;
-  private clockSamples: number[] = [];
-  private turnLock: TurnLock = 'open';
-  private trouble: Trouble | null = null;
 
   /**
    * A member the address names whom this browser hasn't taken up as its own. The address may be the
@@ -118,8 +79,8 @@ export class App {
    */
   private linked: Session | null = null;
 
-  /** Bumped to retire the running poll loop when the table changes or is left. */
-  private pollRun = 0;
+  /** Bumped whenever the screen is changed, to retire a wait for a linked member that began before. */
+  private leaves = 0;
   private toastTimer = 0;
 
   /**
@@ -130,6 +91,8 @@ export class App {
     this.root = root;
     this.platform = platform;
     this.themeHost = themeHost;
+    this.prefs = new Preferences(PREFERENCES, platform.memory, root);
+    this.prefs.watch('theme', (id) => this.applyTheme(id));
 
     root.classList.add('cnd');
   }
@@ -163,7 +126,7 @@ export class App {
   }
 
   private begin(): void {
-    this.applyTheme(this.theme());
+    this.applyTheme(this.prefs.get('theme'));
     setInterval(() => this.tickCountdowns(), COUNTDOWN_TICK_MS);
 
     document.addEventListener('keydown', (event) => {
@@ -174,8 +137,8 @@ export class App {
 
     // A phone that was asleep comes back with a request that may never be answered
     document.addEventListener('visibilitychange', () => {
-      if (!document.hidden && this.session) {
-        this.restartPolling();
+      if (!document.hidden) {
+        this.table?.refresh();
       }
     });
 
@@ -187,12 +150,7 @@ export class App {
 
   /** Switches the theme and remembers it for this browser. */
   setTheme(id: string): void {
-    this.platform.memory.set(THEME_KEY, themeById(id).id);
-    this.applyTheme(id);
-  }
-
-  setSound(on: boolean): void {
-    this.platform.memory.set(SOUND_KEY, on ? 'on' : 'off');
+    this.prefs.set('theme', themeById(id).id);
   }
 
   // ---- Screens ----
@@ -218,7 +176,7 @@ export class App {
 
   /** The compact theme picker for the screens before the table. */
   private themePicker(): HTMLElement {
-    return createThemePicker(this.theme(), (id) => this.setTheme(id), true).element;
+    return createThemePicker(this.prefs.get('theme'), (id) => this.setTheme(id), true).element;
   }
 
   private openTable(tableId: string): void {
@@ -253,13 +211,13 @@ export class App {
     this.linked = { tableId, auth };
     this.mount(noticeEl('Looking for your seat…', wayOut));
 
-    const run = this.pollRun;
+    const run = this.leaves;
     let view: TableView | null = null;
 
     for (let retryIn = 0; !view; ) {
       const response = await this.request({ op: 'poll', tableId, auth, since: -1 });
 
-      if (run !== this.pollRun) {
+      if (run !== this.leaves) {
         return;
       }
 
@@ -281,7 +239,7 @@ export class App {
         this.mount(noticeEl('Could not reach the table. Trying again…', wayOut));
         await sleep(retryIn);
 
-        if (run !== this.pollRun) {
+        if (run !== this.leaves) {
           return;
         }
       }
@@ -367,8 +325,15 @@ export class App {
 
   private enterTable(session: Session, view: TableView | null): void {
     this.leaveTableScreen();
-    this.session = session;
     this.pointAddress(session.tableId, session.auth);
+
+    const table = new TableConnection(this.platform.transport, session, this.clock, {
+      view: (shown, wentBack) => this.showView(shown, wentBack),
+      status: () => this.showStatus(),
+      refused: (error) => this.dropSession(error),
+      notice: (message) => this.toast(message),
+    });
+    this.table = table;
 
     const feed = createFeed((text) => void this.send({ type: 'chat', text }));
     const stage = new Slot(h('div.stage'));
@@ -381,6 +346,7 @@ export class App {
       overlay,
       modal: new Modal(overlay.element),
       feed,
+      effects: new TableEffects(this.prefs, stage.element),
       shape: 'wide',
       seenCards: new Set(),
       resizeObserver: new ResizeObserver(() => this.reshape()),
@@ -397,32 +363,23 @@ export class App {
     screen.resizeObserver.observe(stage.element);
 
     if (view) {
-      this.applyView(view);
+      table.take(view);
     } else {
       stage.element.appendChild(h('div.loading', null, 'Finding your seat…'));
     }
 
-    this.restartPolling();
-  }
-
-  /**
-   * Retires the request that is waiting on the server and asks afresh, so the table is current right
-   * away. `whole` asks for the table whether or not it has changed, for when what is on screen is in doubt.
-   */
-  private restartPolling(whole = false): void {
-    this.pollRun += 1;
-    void this.poll(this.pollRun, whole);
+    table.refresh();
   }
 
   private leaveTableScreen(): void {
-    this.pollRun += 1;
+    this.leaves += 1;
+    this.table?.close();
+    this.table = null;
     this.screen?.resizeObserver.disconnect();
+    this.screen?.effects.dispose();
     this.screen = null;
-    this.session = null;
     this.view = null;
     this.dialog = null;
-    this.trouble = null;
-    this.turnLock = 'open';
   }
 
   private mount(content: HTMLElement): void {
@@ -431,81 +388,17 @@ export class App {
 
   // ---- Talking to the server ----
 
-  /** One request; null when the server could not be reached, or took so long that the request must be lost. */
-  private async request(request: ApiRequest): Promise<ApiResponse | null> {
-    const patience = REQUEST_TIMEOUT_MS + (request.op === 'poll' ? (request.holdMs ?? 0) : 0);
-    let timer = 0;
-    const lost = new Promise<null>((resolve) => {
-      timer = setTimeout(() => resolve(null), patience);
-    });
-
-    try {
-      return await Promise.race([this.platform.transport.send(request), lost]);
-    } catch {
-      return null;
-    } finally {
-      clearTimeout(timer);
-    }
+  private request(request: ApiRequest): Promise<ApiResponse | null> {
+    return ask(this.platform.transport, request);
   }
 
   private async send(command: Command): Promise<SendOutcome> {
-    const session = this.session;
-    if (!session) {
-      return 'refused';
-    }
-
-    const move = MOVES.has(command.type);
-
-    if (move) {
-      // A second tap while the first move is on its way would be a second move
-      if (this.turnLock !== 'open') {
-        return 'refused';
-      }
-
-      this.setTurnLock('sent');
-    }
-
-    const response = await this.request({ op: 'act', tableId: session.tableId, auth: session.auth, command });
-
-    if (session !== this.session) {
-      return 'unanswered';
-    }
-
-    if (!response) {
-      // It may have been carried out all the same. Rather than invite a second try on a guess, ask the table what happened
-      if (move) {
-        this.setTurnLock('unanswered');
-      }
-
-      this.toast(`No answer from the table. Checking whether that ${move ? 'was played' : 'went through'}…`);
-      this.restartPolling(true);
-      return 'unanswered';
-    }
-
-    if (move) {
-      this.setTurnLock('open');
-    }
-
-    if (!response.ok) {
-      this.fail(response);
-    } else if (response.kind === 'view') {
-      this.applyView(response.view);
-    }
-
-    return response.ok ? 'taken' : 'refused';
-  }
-
-  private fail(error: ApiError): void {
-    if (error.code === 'unauthorized' || error.code === 'not_found') {
-      this.dropSession(error);
-    } else {
-      this.toast(error.error);
-    }
+    return (await this.table?.send(command)) ?? 'refused';
   }
 
   /** The server no longer knows this browser at the table, so start over from the join screen or the lobby. */
   private dropSession(error: ApiError): void {
-    const tableId = this.session?.tableId;
+    const tableId = this.table?.session.tableId;
 
     if (tableId) {
       this.platform.memory.remove(seatKey(tableId));
@@ -520,89 +413,11 @@ export class App {
     this.toast(error.code === 'not_found' ? 'That table no longer exists.' : 'This browser is not at the table anymore. Join again to keep playing.');
   }
 
-  private async poll(run: number, whole: boolean): Promise<void> {
-    let retryIn = 0;
+  /** Puts on screen a view the connection has taken up. */
+  private showView(view: TableView, wentBack: boolean): void {
+    const before = this.view;
 
-    while (run === this.pollRun && this.session) {
-      const { tableId, auth } = this.session;
-      const asked = Date.now();
-      const held = this.view?.version ?? -1;
-      const response = await this.request({ op: 'poll', tableId, auth, since: whole ? -1 : held, holdMs: HOLD_MS });
-
-      if (run !== this.pollRun) {
-        return;
-      }
-
-      if (isRefusal(response)) {
-        this.dropSession(response);
-        return;
-      }
-
-      if (!response || !response.ok) {
-        retryIn = nextRetry(retryIn);
-        this.setTrouble(response ? 'struggling' : 'unreachable');
-        await sleep(retryIn);
-        continue;
-      }
-
-      retryIn = 0;
-      whole = false;
-      this.setTrouble(null);
-
-      // The table has been heard from since the move that got no answer, so the screen can be trusted again
-      if (this.turnLock === 'unanswered') {
-        this.setTurnLock('open');
-      }
-
-      if (response.kind === 'view') {
-        // The server answered after this page already held `held`, so a version below that is no late
-        // arrival: the table itself has gone back, as after a restore of the Sheet, and the server is right.
-        // Anything from `held` up to what is showing was only overtaken by the answer to a move or a chat line
-        this.applyView(response.view, response.view.version < held);
-      } else if (response.kind === 'unchanged') {
-        this.noteServerTime(response.now);
-
-        if (Date.now() - asked < QUICK_POLL_GAP_MS) {
-          await sleep(QUICK_POLL_GAP_MS);
-        }
-      }
-    }
-  }
-
-  /**
-   * An answer's time is already old by however long it took to arrive, so every sample puts the
-   * server's clock a little behind. The largest of the recent ones traveled fastest and is closest,
-   * which also errs toward showing a player less time than they have, never more.
-   */
-  private noteServerTime(serverNow: number): void {
-    this.clockSamples.push(serverNow - Date.now());
-
-    if (this.clockSamples.length > CLOCK_SAMPLES) {
-      this.clockSamples.shift();
-    }
-
-    this.clockOffset = Math.max(...this.clockSamples);
-  }
-
-  /** Puts a view on screen, unless it is no newer than what is showing and the table hasn't `wentBack`. */
-  private applyView(view: TableView, wentBack = false): void {
-    const previous = this.view;
-
-    // An action's answer and a poll can cross; the older picture doesn't replace the newer one
-    if (previous && view.version <= previous.version && !wentBack) {
-      return;
-    }
-
-    this.noteServerTime(view.now);
     this.view = view;
-
-    const mySeat = view.you.seat;
-    const myTurn = mySeat !== null && view.hand?.stage === 'betting' && view.hand.toAct === mySeat;
-    const wasMyTurn = previous?.hand?.stage === 'betting' && previous.hand.toAct === previous.you.seat && previous.hand.number === view.hand?.number && previous.hand.street === view.hand?.street;
-
-    if (myTurn && !wasMyTurn && this.soundOn()) {
-      playTurnChime();
-    }
 
     // A table that can't be drawn must not be what stops it from updating
     try {
@@ -610,6 +425,26 @@ export class App {
     } catch (error) {
       console.error(error);
     }
+
+    // Only for a view that was taken up, so nothing happens twice for one that was dropped or is drawn again
+    this.screen?.effects.run(tableChange(before, view, this.clock.now(), wentBack));
+  }
+
+  /** Whether a move can be made, or whether the table is being heard from, has changed. */
+  private showStatus(): void {
+    if (!this.screen) {
+      return;
+    }
+
+    lockTurn(this.screen.controls.element, this.turnLocked());
+
+    if (this.view) {
+      this.drawBanners(this.screen, this.view);
+    }
+  }
+
+  private turnLocked(): boolean {
+    return this.table?.turnLocked ?? false;
   }
 
   // ---- Drawing the table screen ----
@@ -639,7 +474,7 @@ export class App {
     );
 
     // Freshly built buttons are free; a move still on its way keeps them locked
-    lockTurn(screen.controls.element, this.turnLock !== 'open');
+    lockTurn(screen.controls.element, this.turnLocked());
   }
 
   private drawTopbar(screen: TableScreen, view: TableView): void {
@@ -665,10 +500,12 @@ export class App {
   private drawBanners(screen: TableScreen, view: TableView): void {
     const requests = view.you.isHost ? view.requests : [];
 
+    const trouble = this.table?.trouble ?? null;
+
     const troubleText = { unreachable: 'Lost the connection to the table. Trying again…', struggling: 'The table is slow to answer. Trying again…' };
 
-    screen.banners.draw([this.trouble, requests], () => [
-      this.trouble ? h('div.banner.warn', null, troubleText[this.trouble]) : null,
+    screen.banners.draw([trouble, requests], () => [
+      trouble ? h('div.banner.warn', null, troubleText[trouble]) : null,
       requests.map((request) => {
         const what = request.kind === 'seat' ? `wants seat ${request.seat + 1} with ${chips(request.amount)}` : `wants to add ${chips(request.amount)}`;
         const approve = h('button.btn.small.primary', { type: 'button', 'data-action': 'approve' }, 'Approve');
@@ -687,7 +524,7 @@ export class App {
     const shows = [screen.shape, view.you, view.hostId, view.running, view.nextHandAt, view.config.actionSeconds, view.seats, view.hand, myRequest];
 
     screen.stage.draw(shows, () => {
-      const table = tableEl(view, screen.shape, this.clockOffset, {
+      const table = tableEl(view, screen.shape, this.clock.offset, {
         onSit: (seat) => this.openDialog({ kind: 'sit', seat }),
         onStart: () => void this.send({ type: 'start' }),
       });
@@ -732,25 +569,7 @@ export class App {
 
   private tickCountdowns(): void {
     for (const element of this.root.querySelectorAll<HTMLElement>('[data-countdown]')) {
-      element.textContent = String(secondsUntil(Number(element.dataset.countdown), this.clockOffset));
-    }
-  }
-
-  private setTurnLock(lock: TurnLock): void {
-    this.turnLock = lock;
-
-    if (this.screen) {
-      lockTurn(this.screen.controls.element, lock !== 'open');
-    }
-  }
-
-  private setTrouble(trouble: Trouble | null): void {
-    if (trouble !== this.trouble) {
-      this.trouble = trouble;
-
-      if (this.screen && this.view) {
-        this.drawBanners(this.screen, this.view);
-      }
+      element.textContent = String(secondsUntil(Number(element.dataset.countdown), this.clock.offset));
     }
   }
 
@@ -791,7 +610,7 @@ export class App {
   }
 
   private dialogHandlers(): DialogHandlers {
-    const session = this.session!;
+    const { session } = this.table!;
 
     return {
       send: (command) => this.send(command),
@@ -801,16 +620,13 @@ export class App {
       loadHistory: () => this.loadHistory(),
       tableLink: () => this.platform.links.tableLink(session.tableId),
       memberLink: () => this.platform.links.memberLink(session.tableId, session.auth),
-      theme: () => this.theme(),
-      setTheme: (id) => this.setTheme(id),
-      soundOn: () => this.soundOn(),
-      setSound: (on) => this.setSound(on),
+      prefs: this.prefs,
       toLobby: () => this.showLobby(true),
     };
   }
 
   private async loadHistory(): Promise<HandRecord[]> {
-    const session = this.session;
+    const session = this.table?.session;
     const response = session ? await this.request({ op: 'history', tableId: session.tableId, auth: session.auth }) : null;
 
     if (response?.ok && response.kind === 'history') {
@@ -849,14 +665,6 @@ export class App {
 
   private rememberedName(): string {
     return this.platform.memory.get(NAME_KEY) ?? '';
-  }
-
-  private theme(): string {
-    return themeById(this.platform.memory.get(THEME_KEY) ?? DEFAULT_THEME).id;
-  }
-
-  private soundOn(): boolean {
-    return this.platform.memory.get(SOUND_KEY) !== 'off';
   }
 
   private applyTheme(id: string): void {

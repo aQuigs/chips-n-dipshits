@@ -1,0 +1,53 @@
+import type { TableView } from '../../../engine/view.ts';
+import { settleUp } from '../../settle.ts';
+import { chips, h, signedChips } from '../../ui.ts';
+import { everyone, frame } from './dialog.ts';
+import type { DialogHandlers, DialogKind } from './dialog.ts';
+
+function ledger(view: TableView, handlers: DialogHandlers): HTMLElement {
+  const rows = [...view.ledger].sort((a, b) => b.net - a.net);
+  const payments = settleUp(rows);
+
+  const table = h(
+    'table.ledger',
+    null,
+    h('thead', null, h('tr', null, h('th', null, 'Player'), h('th', null, 'Bought'), h('th', null, 'Cashed out'), h('th', null, 'On table'), h('th', null, 'Net'))),
+    h(
+      'tbody',
+      null,
+      rows.map((row) =>
+        h(
+          'tr',
+          null,
+          h('td', null, row.name),
+          h('td', null, chips(row.buyIn)),
+          h('td', null, chips(row.cashOut)),
+          h('td', null, chips(row.stack)),
+          h('td', { class: row.net > 0 ? 'up' : row.net < 0 ? 'down' : '' }, signedChips(row.net)),
+        ),
+      ),
+    ),
+  );
+
+  return frame(
+    'Ledger',
+    handlers,
+    rows.length === 0 ? h('p.note', null, 'Nobody has bought in yet.') : h('div.scroll-x', null, table),
+    payments.length > 0
+      ? h(
+          'div.settle',
+          null,
+          h('h3', null, 'To settle up right now'),
+          h('ul', null, payments.map((p) => h('li', null, h('b', null, p.from), ' pays ', h('b', null, p.to), ` ${chips(p.amount)}`))),
+          h('p.note', null, 'Counts chips still on the table as if everyone cashed out now.'),
+        )
+      : null,
+  );
+}
+
+export const ledgerDialog: DialogKind<'ledger'> = {
+  kind: 'ledger',
+  menu: { label: 'Ledger', who: everyone, note: () => 'Who is up and who owes whom' },
+  shows: (view) => view.ledger,
+  draw: ledger,
+};

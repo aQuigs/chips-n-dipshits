@@ -1,0 +1,45 @@
+/* ---- Preferences: a row for each choice ---- */
+
+/* The switch from the bar under the table, laid out as a row of the dialog */
+.pref.toggle {
+  display: flex;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 14px 10px 10px;
+  border-radius: var(--radius);
+  background: var(--panel-raised);
+  font-size: inherit;
+  text-align: left;
+}
+
+.pref i {
+  flex: none;
+}
+
+.pref small {
+  display: block;
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.field select {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 16px;
+  font-weight: 500;
+}
+
+/* A slider is its own box: the one a field draws around its input would be a second */
+.field input[type='range'] {
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  background: none;
+  accent-color: var(--accent);
+}

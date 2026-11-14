@@ -1,0 +1,140 @@
+/* ---- Controls under the table ---- */
+
+.controls-slot {
+  grid-area: controls;
+  border-top: 1px solid var(--line);
+  background: var(--bg-raised);
+}
+
+.controls {
+  /* Bet sizing, a gap, the action buttons: the room a turn takes */
+  --turn-height: 140px;
+
+  display: grid;
+  gap: 8px;
+  width: 100%;
+  max-width: 880px;
+  margin-inline: auto;
+  padding: 10px 12px;
+}
+
+/* The taller size buttons a finger gets make a turn that much taller */
+@media (pointer: coarse) {
+  .controls {
+    --turn-height: 146px;
+  }
+}
+
+.turn {
+  display: grid;
+  align-content: end;
+  gap: 8px;
+}
+
+/* A seated player's bar keeps the height of a turn, so the table doesn't jump each time the action comes around */
+.controls.seated > .turn,
+.controls.seated > .waiting {
+  min-height: var(--turn-height);
+}
+
+.controls.seated > .waiting {
+  display: grid;
+  place-items: center;
+  text-align: center;
+}
+
+.turn .buttons,
+.dialog .buttons {
+  display: grid;
+  grid-auto-columns: minmax(0, 1fr);
+  grid-auto-flow: column;
+  gap: 8px;
+}
+
+.turn .btn {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: center;
+  justify-content: center;
+  gap: 0 0.3em;
+  min-height: 50px;
+  padding: 4px 8px;
+  font-size: 16px;
+  line-height: 1.15;
+}
+
+.turn .btn .amount-of {
+  font-variant-numeric: tabular-nums;
+}
+
+.sizing {
+  display: grid;
+  gap: 8px;
+}
+
+.presets,
+.extras {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.amount {
+  display: grid;
+  /* Wide enough for the ten digits of the largest stack a table allows */
+  grid-template-columns: minmax(0, 1fr) 132px;
+  align-items: center;
+  gap: 10px;
+}
+
+.amount input[type='range'] {
+  width: 100%;
+  height: 32px;
+  accent-color: var(--accent);
+}
+
+@container app (min-width: 640px) and (min-height: 521px) {
+  .controls {
+    --turn-height: 98px;
+  }
+
+  .sizing {
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    gap: 16px;
+  }
+}
+
+@container app (max-width: 420px) {
+  .extras .chip-btn,
+  .extras .toggle {
+    font-size: 12px;
+  }
+
+  .extras .chip-btn {
+    padding: 0 10px;
+  }
+}
+
+.amount input[type='number'] {
+  min-height: 40px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg);
+  font-size: 16px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.waiting,
+.prompt {
+  min-height: 20px;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.prompt {
+  color: var(--text);
+}

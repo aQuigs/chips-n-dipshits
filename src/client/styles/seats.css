@@ -1,0 +1,250 @@
+/* ---- Seats ---- */
+
+/* A column that centers its children, so a label wider than the seat spills evenly to both sides */
+.seat {
+  --seat-w: clamp(66px, 20cqmin, 128px);
+
+  position: absolute;
+  top: var(--y);
+  /* A seat near the side of a narrow table would otherwise hang off the screen and lose part of its stack */
+  left: clamp(var(--seat-w) / 2 + 6px, var(--x), 100% - var(--seat-w) / 2 - 6px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: var(--seat-w);
+  transform: translate(-50%, -50%);
+}
+
+.seat.at-top {
+  transform: translate(-50%, 0);
+}
+
+.seat.at-bottom {
+  transform: translate(-50%, -100%);
+}
+
+.seat .hole {
+  display: flex;
+  gap: 2px;
+  height: calc(var(--card-w) * 1.4 * 0.72);
+  margin-bottom: -2px;
+}
+
+.seat .hole.none {
+  visibility: hidden;
+}
+
+.seat.me {
+  --seat-w: clamp(84px, 24cqmin, 150px);
+}
+
+.seat.me .hole {
+  --card-w: clamp(32px, 9cqmin, 62px);
+}
+
+.plate {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  align-self: stretch;
+  padding: 0.35em 0.6em 0.4em;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--plate-radius);
+  background: var(--panel);
+  color: var(--text);
+  text-align: center;
+  line-height: 1.25;
+}
+
+.plate .name {
+  overflow: hidden;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plate .host {
+  margin-left: 0.3em;
+  color: var(--accent);
+}
+
+.plate .stack {
+  overflow: hidden;
+  color: var(--accent);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plate .status.clock::after {
+  content: 's';
+}
+
+.plate .status.clock:empty {
+  display: none;
+}
+
+.plate .pending {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.plate .status {
+  color: var(--muted);
+  font-size: 0.82em;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.plate .status[data-status='All in'] {
+  color: var(--bad);
+}
+
+.plate .status.won {
+  color: var(--win);
+  font-size: 1em;
+  font-weight: 800;
+  letter-spacing: 0;
+  animation: pop 0.35s ease-out;
+}
+
+.seat.acting .plate {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.seat.folded .hole,
+.seat.folded .plate,
+.seat.out .plate {
+  opacity: 0.5;
+}
+
+.seat.winner .plate {
+  border-color: var(--win);
+  box-shadow:
+    0 0 0 2px var(--win),
+    0 0 18px color-mix(in srgb, var(--win) 60%, transparent);
+}
+
+.timer {
+  position: absolute;
+  inset: auto 0 0;
+  height: 3px;
+  background: var(--line);
+}
+
+.timer i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transform: scaleX(var(--from));
+  transform-origin: left;
+  animation: drain linear forwards;
+}
+
+@keyframes drain {
+  to {
+    transform: scaleX(0);
+  }
+}
+
+.dealer-button {
+  position: absolute;
+  top: calc(var(--card-w) * 0.55);
+  right: -0.35em;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: 1.7em;
+  height: 1.7em;
+  border-radius: 50%;
+  background: var(--card);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 40%);
+  color: var(--suit-s);
+  font-size: 0.85em;
+  font-weight: 800;
+}
+
+/* The line under a seat: a made hand, or a run-it-twice vote */
+.tag {
+  flex: none;
+  max-width: 140%;
+  margin-top: 0.25em;
+  padding: 0.1em 0.7em;
+  border-radius: 0.9em;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 0.85em;
+  font-weight: 600;
+  text-align: center;
+  text-wrap: balance;
+}
+
+.seat.me .tag {
+  max-width: none;
+  white-space: nowrap;
+}
+
+.tag.vote.yes {
+  color: var(--good);
+}
+
+@keyframes pop {
+  from {
+    opacity: 0;
+    transform: translateY(40%) scale(0.8);
+  }
+}
+
+.seat.open .plate {
+  padding: 0.7em 0.4em;
+  border-style: dashed;
+  background: color-mix(in srgb, var(--panel) 55%, transparent);
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.seat.open button.plate {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Under a finger, the things tapped most get the height a fingertip needs */
+@media (pointer: coarse) {
+  .seat.open button.plate,
+  .chip-btn,
+  .toggle {
+    min-height: 40px;
+  }
+}
+
+.seat.open.idle .plate {
+  opacity: 0.4;
+}
+
+.bet {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: 0.4em;
+  padding: 0.1em 0.65em 0.1em 0.3em;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg) 78%, transparent);
+  color: var(--text);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  transform: translate(-50%, -50%);
+}
+
+.bet .chip {
+  width: 1.05em;
+  height: 1.05em;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle, var(--chip) 0 42%, transparent 46%),
+    repeating-conic-gradient(var(--chip) 0 30deg, var(--card) 30deg 60deg);
+}

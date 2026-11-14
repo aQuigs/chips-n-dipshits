@@ -1,0 +1,113 @@
+/* ---- Dialogs ---- */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: end center;
+  background: rgb(0 0 0 / 55%);
+}
+
+@container app (min-width: 600px) {
+  .overlay {
+    place-items: center;
+    padding: 16px;
+  }
+}
+
+.dialog:focus {
+  outline: none;
+}
+
+.dialog {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(100%, 460px);
+  max-height: 88cqb;
+  border: 1px solid var(--line);
+  border-radius: calc(var(--radius) + 4px) calc(var(--radius) + 4px) 0 0;
+  background: var(--panel);
+}
+
+@container app (min-width: 600px) {
+  .dialog {
+    border-radius: calc(var(--radius) + 4px);
+  }
+}
+
+.dialog header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.dialog-body,
+.dialog-body form,
+.dialog-body section {
+  display: grid;
+  gap: 14px;
+}
+
+.dialog-body {
+  padding: 16px;
+  overflow-y: auto;
+}
+
+.dialog h3 {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.menu {
+  display: grid;
+  gap: 6px;
+}
+
+.menu-item {
+  display: grid;
+  gap: 2px;
+  padding: 11px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-raised);
+  font-weight: 600;
+  text-align: left;
+}
+
+.menu-item small,
+.theme-option small {
+  display: block;
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.rows {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.rows li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}

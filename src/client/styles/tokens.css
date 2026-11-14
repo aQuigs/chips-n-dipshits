@@ -1,0 +1,185 @@
+/*
+ * Every color, face and shape the app uses is a token, and a theme is nothing more than a set of
+ * token values under [data-theme="<id>"]. The other stylesheets never name a color directly.
+ */
+
+/* Card Room: green felt, walnut rail, brass numbers. Also the fallback when no theme is set. */
+:root,
+[data-theme] {
+  --bg: #0d1512;
+  --bg-raised: #15211c;
+  --panel: #1a2a23;
+  --panel-raised: #23382f;
+  --line: #35503f;
+  --text: #eef4ee;
+  --muted: #9fb5a8;
+  --accent: #dcb561;
+  --accent-ink: #251a02;
+  --good: #49b883;
+  --good-ink: #03170d;
+  --bad: #d9675c;
+  --bad-ink: #1f0502;
+  --win: #ffd970;
+
+  --felt: radial-gradient(ellipse at 50% 38%, #348f63 0%, #1f6b47 55%, #13492f 100%);
+  --felt-win: var(--win);
+  --rail: #4d3020;
+  --rail-edge: #2a180e;
+  --rail-width: clamp(6px, 2.2cqmin, 16px);
+  --felt-glow: 0 18px 50px rgb(0 0 0 / 55%);
+  --felt-ink: #f0f7f1;
+  --felt-muted: #b5d6c2;
+
+  --card: #fbfaf4;
+  --card-edge: #d9d5c5;
+  --suit-s: #1b1d21;
+  --suit-c: #1b1d21;
+  --suit-h: #c8323d;
+  --suit-d: #c8323d;
+  --card-back: repeating-linear-gradient(45deg, #8c1f2b 0 5px, #a52a37 5px 10px);
+  --chip: #dcb561;
+
+  --font-display: 'Fraunces', Georgia, 'Times New Roman', serif;
+  --font-ui: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --display-weight: 800;
+  --display-case: none;
+  --display-spacing: -0.01em;
+  /* Wide display faces are set smaller so titles take the same room in every theme */
+  --display-scale: 1;
+  --radius: 10px;
+  --plate-radius: 10px;
+
+  color-scheme: dark;
+}
+
+/* Dive Bar: red felt, bar-sign lettering, amber light. */
+[data-theme='divebar'] {
+  --bg: #1a110d;
+  --bg-raised: #251813;
+  --panel: #2e1e17;
+  --panel-raised: #3d291f;
+  --line: #5e4331;
+  --text: #f7ecd9;
+  --muted: #c4aa8b;
+  --accent: #f3a43c;
+  --accent-ink: #2a1500;
+  --good: #7cc46a;
+  --good-ink: #0b1c05;
+  --bad: #e36a55;
+  --bad-ink: #240702;
+  --win: #ffe28c;
+
+  --felt: radial-gradient(ellipse at 50% 38%, #b03a46 0%, #84242f 55%, #561520 100%);
+  --rail: #6e4827;
+  --rail-edge: #382210;
+  --felt-ink: #fff3e2;
+  --felt-muted: #f0c3b7;
+
+  --card: #fff6e2;
+  --card-edge: #e1d0aa;
+  --suit-s: #241a14;
+  --suit-c: #241a14;
+  --suit-h: #c22b2b;
+  --suit-d: #c22b2b;
+  --card-back: repeating-linear-gradient(-45deg, #1f4d4a 0 5px, #286360 5px 10px);
+  --chip: #f3a43c;
+
+  --font-display: 'Bungee', Impact, 'Arial Black', sans-serif;
+  --font-ui: 'DM Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --display-weight: 400;
+  --display-case: uppercase;
+  --display-spacing: 0.02em;
+  --display-scale: 0.78;
+  --radius: 6px;
+  --plate-radius: 6px;
+}
+
+/* After Hours: dark indigo, a neon line for a rail, four-color deck. */
+[data-theme='afterhours'] {
+  --bg: #0a0920;
+  --bg-raised: #12103a;
+  --panel: #18154a;
+  --panel-raised: #231f66;
+  --line: #3d3696;
+  --text: #f2f0ff;
+  --muted: #a8a3db;
+  --accent: #ff55d6;
+  --accent-ink: #25001e;
+  --good: #3fe0c8;
+  --good-ink: #001f1a;
+  --bad: #ff6f7d;
+  --bad-ink: #2b0006;
+  --win: #b6ff5c;
+
+  --felt: radial-gradient(ellipse at 50% 40%, #25216b 0%, #17144a 60%, #0f0d33 100%);
+  --rail: #35e3ff;
+  --rail-edge: #35e3ff;
+  --rail-width: clamp(2px, 0.7cqmin, 4px);
+  --felt-glow: 0 0 22px rgb(53 227 255 / 55%), 0 0 70px rgb(255 85 214 / 22%);
+  --felt-ink: #f2f0ff;
+  --felt-muted: #a8a3db;
+
+  --card: #f6f5ff;
+  --card-edge: #cbc7f5;
+  --suit-s: #17144a;
+  --suit-c: #0f9d63;
+  --suit-h: #f0366f;
+  --suit-d: #1f86f0;
+  --card-back: linear-gradient(135deg, #ff55d6, #6f4dff 55%, #35e3ff);
+  --chip: #35e3ff;
+
+  --font-display: 'Unbounded', 'Arial Black', system-ui, sans-serif;
+  --font-ui: 'Sora', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --display-weight: 800;
+  --display-case: none;
+  --display-spacing: -0.02em;
+  --display-scale: 0.82;
+  --radius: 14px;
+  --plate-radius: 20px;
+}
+
+/* Daylight: light and flat, four-color deck, readable in the sun. */
+[data-theme='daylight'] {
+  --bg: #edf1f6;
+  --bg-raised: #e1e7ef;
+  --panel: #ffffff;
+  --panel-raised: #f2f5f9;
+  --line: #c6d0dc;
+  --text: #17212c;
+  --muted: #5a6979;
+  --accent: #2257e7;
+  --accent-ink: #ffffff;
+  --good: #14804a;
+  --good-ink: #ffffff;
+  --bad: #c9362f;
+  --bad-ink: #ffffff;
+  --win: #a86b00;
+
+  --felt: linear-gradient(180deg, #d5e3f3, #c2d5ea);
+  --felt-win: #17212c;
+  --rail: #93a9c2;
+  --rail-edge: #7c93ad;
+  --rail-width: clamp(3px, 1cqmin, 7px);
+  --felt-glow: 0 10px 30px rgb(40 70 110 / 18%);
+  --felt-ink: #17212c;
+  --felt-muted: #4c5f75;
+
+  --card: #ffffff;
+  --card-edge: #b9c5d3;
+  --suit-s: #17212c;
+  --suit-c: #14804a;
+  --suit-h: #d42f3b;
+  --suit-d: #2257e7;
+  --card-back: repeating-linear-gradient(45deg, #2257e7 0 5px, #3d6df0 5px 10px);
+  --chip: #2257e7;
+
+  --font-display: 'Space Grotesk', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-ui: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --display-weight: 700;
+  --display-case: none;
+  --display-spacing: -0.02em;
+  --radius: 10px;
+  --plate-radius: 10px;
+
+  color-scheme: light;
+}

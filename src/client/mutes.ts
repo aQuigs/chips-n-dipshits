@@ -20,6 +20,11 @@ export interface MuteList {
 // Beside the preferences' cnd.<key> and apart from the seat's cnd.seat.<table>, which muting never touches
 const muteKey = (tableId: string) => `cnd.mute.${tableId}`;
 
+/** Forgets the mutes of a table that is gone for good, with its seat: no one will be at it again to hide. */
+export function forgetMutes(memory: { remove(key: string): void }, tableId: string): void {
+  memory.remove(muteKey(tableId));
+}
+
 /** What the browser kept, read as a list of ids; anything else, as after a hand edit, is nobody muted. */
 function decode(text: string | null): string[] | null {
   if (text === null) {

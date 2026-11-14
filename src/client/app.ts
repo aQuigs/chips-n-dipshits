@@ -10,7 +10,7 @@ import type { SendOutcome, Session } from './connection.ts';
 import { TableEffects } from './effects.ts';
 import { HotkeyPresser } from './hotkeyPresser.ts';
 import { Modal } from './modal.ts';
-import { Mutes } from './mutes.ts';
+import { forgetMutes, Mutes } from './mutes.ts';
 import { sendersShown } from './senders.ts';
 import { Motion, motionAbility } from './motion.ts';
 import { pageMotion, pageWatching } from './pageMotion.ts';
@@ -429,11 +429,12 @@ export class App {
 
   /**
    * The server has said the table was put away. Nothing of it is kept here, neither in the address nor
-   * in the browser's memory, and the visitor is told why and offered a new one.
+   * in the browser's memory, mutes included, and the visitor is told why and offered a new one.
    */
   private showPutAway(tableId: string, error: ApiError): void {
     this.leaveTableScreen();
     this.platform.memory.remove(seatKey(tableId));
+    forgetMutes(this.platform.memory, tableId);
     this.pointAddress(null);
     this.mount(putAwayEl(tableId, error.error, () => this.showLobby()));
   }

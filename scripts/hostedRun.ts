@@ -880,7 +880,7 @@ try {
     google.close();
   }
 
-  console.log('A table that was put away says so once, stops asking, and is in neither the address nor the browser afterwards');
+  console.log('A table that was put away says so once, stops asking, and is in neither the address nor the browser afterwards, its mutes included');
   {
     // A game of its own, whose clock can be moved on two weeks
     let ahead = 0;
@@ -892,6 +892,7 @@ try {
       const old = await createTable(page, later.url, 'Marge');
       const member = inAddress(page, 'me')!;
       assert.equal(await remembered(page, old), member);
+      await page.evaluate(`localStorage.setItem('cnd.mute.${old}', '["someone"]')`);
 
       const polls: unknown[] = [];
       page.on('request', (request) => {
@@ -911,6 +912,7 @@ try {
       assert.equal(await page.innerText('[data-screen="put-away"] p >> nth=0'), PUT_AWAY_MESSAGE);
       assert.deepEqual([inAddress(page, 'table'), inAddress(page, 'me')], [null, null], 'the address still names the table that is gone');
       assert.equal(await remembered(page, old), null, 'the browser still remembers a seat at it');
+      assert.equal(await page.evaluate(`localStorage.getItem('cnd.mute.${old}')`), null, 'the browser still keeps who was muted at it');
 
       // The answer was a plain one, not a failure to be tried again
       const asked = polls.length;

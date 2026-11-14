@@ -40,7 +40,7 @@ class Recording extends TestTable {
 
 /** Random table number `seed`, started, with the generator that plays it and the settings it was given. */
 function randomTable(seed: number): { t: Recording; rng: Rng; config: TableConfig } {
-  const rng = seededRng(seed * 7949);
+  const rng = seededRng(seed * 7993);
   const players = 2 + rng.int(SEAT_COUNT - 1);
   const stacks = Array.from({ length: players }, () => (chance(rng, 15) ? 1 + rng.int(30) : 100 + rng.int(1900)));
 

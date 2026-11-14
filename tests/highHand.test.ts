@@ -280,7 +280,7 @@ test('everyone at the table sees the high hand the same way, watchers too, and w
   assert.deepEqual(seen[0], {
     best: { playerIds: [t.ids[0]], name: 'Pair of aces', cards: cards('As Ah Jc 9h 7d'), hand: 1 },
     next: { playerIds: [t.ids[0]], name: 'Pair of aces', cards: cards('As Ah Jc 9h 7d'), hand: 1 },
-    due: { playerIds: [t.ids[2]], hand: 1 },
+    due: { hand: 1, playerIds: [t.ids[2]], total: 10 },
     paid: [],
   });
 });
@@ -295,7 +295,7 @@ test('the host pays what they were shown, or nothing: a payout whose collector h
   t.cmd(0, { type: 'standUp' });
   assert.throws(cmd(t, 1, pay(t, 1, [0])), { message: 'The high hand has changed since you looked, so have another look before paying it' });
   assert.throws(cmd(t, 1, pay(t, 2, [0])), { message: 'The high hand has changed since you looked, so have another look before paying it' });
-  assert.deepEqual(t.view(1).tonight.highHand.due, { playerIds: [t.ids[2]], hand: 2 });
+  assert.deepEqual(t.view(1).tonight.highHand.due, { hand: 2, playerIds: [t.ids[2]], total: 10 });
 
   const before = t.stacks();
   t.cmd(1, pay(t, 2, [2]));

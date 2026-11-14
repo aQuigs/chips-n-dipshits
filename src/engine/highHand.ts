@@ -10,7 +10,8 @@ import type { Card } from './cards.ts';
 import type { HandFacts, HandShown } from './handFacts.ts';
 import { listed, madeHandName, midSentence } from './handNames.ts';
 import { evaluateHand } from './handRank.ts';
-import { addFeed, memberOf, recordMove } from './seats.ts';
+import { splitAmount } from './pots.ts';
+import { addFeed, memberOf, recordMove, seatsClockwiseAfter } from './seats.ts';
 import { GameError, SEAT_COUNT } from './types.ts';
 import type { Ctx, HighHands, ShownDown, TableState, Tonight } from './types.ts';
 
@@ -24,7 +25,7 @@ export function newHighHands(): HighHands {
 const rankOf = (cards: readonly Card[]): number => evaluateHand(cards).score;
 
 /** "Four of a kind, kings". */
-export const highHandName = (cards: readonly Card[]): string => madeHandName(evaluateHand(cards));
+const highHandName = (cards: readonly Card[]): string => madeHandName(evaluateHand(cards));
 
 /** The best of the hands a player turned up in one hand, one per board: the first board's when they are as good. */
 function bestOf(shown: readonly HandShown[]): HandShown | null {
@@ -132,28 +133,19 @@ export interface HighHandPayout {
   hand: number;
   /** The seats that collect, in the order the odd chip goes round. */
   collectors: number[];
-  /** Who they are, by member id, in the same order. */
-  collectorIds: string[];
   payments: BonusPayment[];
 }
 
-/** The seats in the order a split pot's odd chip goes round: the first left of the button first. */
-function fromTheButton(state: TableState, seats: number[]): number[] {
-  const button = state.buttonSeat ?? SEAT_COUNT - 1;
-  const order = (seat: number) => (seat - button - 1 + SEAT_COUNT) % SEAT_COUNT;
-
-  return [...seats].sort((a, b) => order(a) - order(b));
-}
-
 /**
- * What paying the bonus now would come to, or why it can't be paid. Only someone seated collects: the
- * best hand shown down since it was last paid, among those still seated, so a holder who has left
- * passes it to the next best. Everyone else seated pays the bonus, sitting out or not, whenever they
- * sat down, or their whole stack when it is less. Players who showed the same hand in the same hand
- * share it, the odd chips going round from the button as a split pot's does, on from one payer to the
- * next, so no collector ends up more than a chip ahead of another.
+ * What paying the bonus now would come to, or why it can't be paid. Only someone seated can be handed
+ * chips, so a holder who has left passes it to the best hand among those seated. The odd chips of a
+ * shared one carry on round from one payer to the next, or every payer's would go to the same collector.
  */
 export function highHandPayout(state: TableState): HighHandPayout | { refused: string } {
+  if (state.hand) {
+    return { refused: 'The high hand is paid between hands. Pause the game, and once this hand is over it can be paid' };
+  }
+
   const bonus = state.config.highHandBonus;
   if (bonus <= 0) {
     return { refused: 'There is no high-hand bonus: it is set in the table settings' };
@@ -170,12 +162,11 @@ export function highHandPayout(state: TableState): HighHandPayout | { refused: s
     return { refused: 'Nobody who has shown down since the high hand was last paid is still seated' };
   }
 
-  const collectors = fromTheButton(
-    state,
+  const collectors = seatsClockwiseAfter(
     top.playerIds.map((id) => seatOf.get(id)!),
+    state.buttonSeat ?? SEAT_COUNT - 1,
   );
   const payments: BonusPayment[] = [];
-  // Which collector the next odd chip goes to
   let oddTo = 0;
 
   state.seats.forEach((seat, from) => {
@@ -184,25 +175,21 @@ export function highHandPayout(state: TableState): HighHandPayout | { refused: s
     }
 
     const paying = Math.min(bonus, seat.stack);
-    const share = Math.floor(paying / collectors.length);
-    const odd = paying % collectors.length;
 
-    collectors.forEach((to, nth) => {
-      const amount = share + ((nth - oddTo + collectors.length) % collectors.length < odd ? 1 : 0);
-
+    for (const [to, amount] of splitAmount(paying, [...collectors.slice(oddTo), ...collectors.slice(0, oddTo)])) {
       if (amount > 0) {
         payments.push({ from, to, amount });
       }
-    });
+    }
 
-    oddTo = (oddTo + odd) % collectors.length;
+    oddTo = (oddTo + paying) % collectors.length;
   });
 
   if (payments.length === 0) {
     return { refused: 'Nobody else seated has chips to pay it' };
   }
 
-  return { hand: top.hand.hand, collectors, collectorIds: collectors.map((seat) => state.seats[seat]!.playerId), payments };
+  return { hand: top.hand.hand, collectors, payments };
 }
 
 /** The chat's line for a bonus paid. `by` names whoever paid it out early; null when the night's end did. */
@@ -217,10 +204,10 @@ function paidLine(state: TableState, payout: HighHandPayout, by: string | null):
   );
   const terms = `${formatAmount(config.highHandBonus, config)} from everyone else seated, ${total} in all`;
 
-  const gone = next.playerIds.filter((id) => !state.seats.some((seat) => seat?.playerId === id));
+  const holderGone = !next.playerIds.some((id) => state.seats.some((seat) => seat?.playerId === id));
   const what =
-    gone.length === next.playerIds.length
-      ? `${listed(gone.map((id) => memberOf(state, id).name))} ${gone.length > 1 ? 'have' : 'has'} left, so the high-hand bonus goes to ${collectors}, the best hand of anyone seated: ${terms}`
+    holderGone
+      ? `${listed(next.playerIds.map((id) => memberOf(state, id).name))} ${next.playerIds.length > 1 ? 'have' : 'has'} left, so the high-hand bonus goes to ${collectors}, the best hand of anyone seated: ${terms}`
       : `${collectors} ${payout.collectors.length > 1 ? 'share' : 'collects'} the high-hand bonus: ${terms}`;
 
   return by ? `${by} paid out the high hand. ${what}` : what;
@@ -261,17 +248,13 @@ export function payHighHand(state: TableState, ctx: Ctx, by: string | null): boo
  * collected by `to`. Between hands only.
  */
 export function payHighHandNow(state: TableState, ctx: Ctx, by: string, hand: number, to: readonly string[]): void {
-  if (state.hand) {
-    throw new GameError('The high hand is paid between hands. Pause the game, and once this hand is over it can be paid');
-  }
-
   const payout = highHandPayout(state);
   if ('refused' in payout) {
     throw new GameError(payout.refused);
   }
 
-  const same = (a: readonly string[], b: readonly string[]) => [...a].sort().join() === [...b].sort().join();
-  if (payout.hand !== hand || !same(payout.collectorIds, to)) {
+  const collectorIds = payout.collectors.map((seat) => state.seats[seat]!.playerId);
+  if (payout.hand !== hand || [...collectorIds].sort().join() !== [...to].sort().join()) {
     throw new GameError('The high hand has changed since you looked, so have another look before paying it');
   }
 
@@ -294,11 +277,8 @@ export interface HighHandsView {
   best: HighHandView | null;
   /** The high hand the bonus is paid for next: the night's best until that is paid, and after it the best shown down since. Null when none has been since. */
   next: HighHandView | null;
-  /**
-   * What the bonus would be paid for now: the best hand shown down since it was last paid by anyone still
-   * seated, and who would collect. Null when nobody seated has shown down since.
-   */
-  due: { playerIds: string[]; hand: number } | null;
+  /** What paying the bonus now would come to, as `highHandPayout` works it out, or why it can't be paid. */
+  due: { hand: number; playerIds: string[]; total: number } | { refused: string };
   /** What each player has collected of the bonus tonight, the most first. */
   paid: { playerId: string; amount: number }[];
 }
@@ -308,15 +288,15 @@ function shownAs(playerIds: string[], hand: ShownDown): HighHandView {
 }
 
 export function highHandsView(state: TableState): HighHandsView {
-  const { best, sincePaid, paid } = state.tonight.highHand;
+  const { best, paid } = state.tonight.highHand;
   const next = nextHighHand(state.tonight.highHand);
-  const seated = new Set(state.seats.map((seat) => seat?.playerId));
-  const due = topOf(sincePaid, (playerId) => seated.has(playerId));
+  const payout = highHandPayout(state);
+  const total = 'refused' in payout ? 0 : payout.payments.reduce((sum, payment) => sum + payment.amount, 0);
 
   return {
     best: best && shownAs(best.playerIds, best),
     next: next && shownAs(next.playerIds, next.hand),
-    due: due && { playerIds: due.playerIds, hand: due.hand.hand },
+    due: 'refused' in payout ? payout : { hand: payout.hand, playerIds: payout.collectors.map((seat) => state.seats[seat]!.playerId), total },
     paid: Object.entries(paid)
       .map(([playerId, amount]) => ({ playerId, amount }))
       .sort((a, b) => b.amount - a.amount),

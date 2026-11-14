@@ -101,13 +101,13 @@ test('players level in something are named together while they are few, and coun
   const everyone = view.tonight.players.map((row) => row.playerId);
 
   assert.deepEqual(led(everyone.slice(0, 2)), [
-    { label: 'Most pots won', who: 'P0 and P1', what: '1 each', cards: null },
-    { label: 'High hand', who: 'P0 and P1', what: 'Pair of aces', cards: null },
+    { label: 'Most pots won', who: 'P0 and P1', what: '1 each', cards: null, note: null },
+    { label: 'High hand', who: 'P0 and P1', what: 'Pair of aces', cards: null, note: null },
   ]);
   assert.equal(led(everyone)[0]!.who, 'P0, P1 and P2');
 
   const four = new TestTable({ stacks: [1000, 1000, 1000, 1000] }).view(0);
-  assert.deepEqual(leadersOf({ ...four, tonight: { ...four.tonight, mostPots: four.tonight.players.map((row) => row.playerId) } }), [{ label: 'Most pots won', who: '4 players', what: '0 each', cards: null }]);
+  assert.deepEqual(leadersOf({ ...four, tonight: { ...four.tonight, mostPots: four.tonight.players.map((row) => row.playerId) } }), [{ label: 'Most pots won', who: '4 players', what: '0 each', cards: null, note: null }]);
   assert.deepEqual(leadersOf(four), [], 'nothing is led before anything has happened');
 });
 

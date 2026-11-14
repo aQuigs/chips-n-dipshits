@@ -141,7 +141,8 @@ export const FUZZ_COMMANDS: ((fuzz: Fuzz) => void)[] = [
 
   // The high hand paid out early, mostly the one the sender sees and now and then one that has since changed
   ({ t, rng }) => {
-    const due = viewFor(t.state, t.ids[0]!, t.now).tonight.highHand.due ?? { hand: 0, playerIds: [] };
+    const shown = viewFor(t.state, t.ids[0]!, t.now).tonight.highHand.due;
+    const due = 'refused' in shown ? { hand: 0, playerIds: [] } : shown;
     const to = chance(rng, 90) ? due.playerIds : [t.ids[rng.int(t.ids.length)]!];
 
     attempt(t, chance(rng, 85) ? someoneRunningTheGame(t, rng) : rng.int(t.ids.length), { type: 'payHighHand', hand: chance(rng, 90) ? due.hand : due.hand + 1, to });

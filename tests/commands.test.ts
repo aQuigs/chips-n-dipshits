@@ -5,7 +5,7 @@ import { HANDLERS } from '../src/engine/commands/index.ts';
 import type { CommandOf, CommandType } from '../src/engine/commands/handler.ts';
 import { addMember, reaches, roleOf } from '../src/engine/index.ts';
 import type { Command, HostLevel, Role } from '../src/engine/index.ts';
-import { checkAround, TestTable } from './helpers.ts';
+import { ACES, BOARD, checkAround, KINGS, QUEENS, TestTable } from './helpers.ts';
 
 /** A table with the host and one other player seated, and a third member who is only watching. */
 function tableWithWatcher(): { t: TestTable; watcher: number } {
@@ -75,7 +75,7 @@ function tableWithCohost(): TestTable {
 /** A bonus on the high hand, and a first hand checked down to a showdown, so there is a high hand to pay. */
 function showDownWithBonus(t: TestTable): void {
   t.cmd(HOST, { type: 'updateConfig', config: { highHandBonus: 5 } });
-  t.deal({ button: 0, holes: { 0: 'As Ah', 1: 'Ks Kh', 2: 'Qs Qh' }, board: '2c 7d 9h Jc 3s' });
+  t.deal({ button: 0, holes: { 0: ACES, 1: KINGS, 2: QUEENS }, board: BOARD });
   t.call(0);
   t.call(1);
   t.check(2);

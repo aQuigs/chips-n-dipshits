@@ -64,10 +64,13 @@ export interface Leader {
   /** The cards of the high hand, when one player alone has it. */
   cards: Card[] | null;
   /** What its bonus came to, for the high hand. */
-  note?: string;
+  note: string | null;
 }
 
 const whoOf = (rows: readonly TonightRow[]): string => (rows.length > MOST_NAMES ? `${rows.length} players` : listed(rows.map((row) => row.name)));
+
+/** Players named in a line, as Tonight names them. */
+export const namesOf = (view: TableView, ids: readonly string[]): string => listed(ids.map((id) => view.tonight.players.find((row) => row.playerId === id)?.name ?? 'Someone'));
 
 /** Who leads in what, leaving out whatever nobody has any of yet. */
 export function leadersOf(view: TableView): Leader[] {
@@ -79,7 +82,7 @@ export function leadersOf(view: TableView): Leader[] {
       return [];
     }
 
-    return [{ label, who: whoOf(rows), what: rows.length === 1 ? what(rows[0]!) : `${what(rows[0]!)} each`, cards: null }];
+    return [{ label, who: whoOf(rows), what: rows.length === 1 ? what(rows[0]!) : `${what(rows[0]!)} each`, cards: null, note: null }];
   };
 
   return [
@@ -101,18 +104,19 @@ function highHandLeaders(view: TableView): Leader[] {
   }
 
   const { config } = view;
-  const nameOf = (id: string) => view.tonight.players.find((row) => row.playerId === id)?.name ?? 'Someone';
-  const shown = (label: string, hand: HighHandView, ...notes: (string | null)[]): Leader => {
-    const rows = hand.playerIds.map((id) => view.tonight.players.find((row) => row.playerId === id)).filter((row) => row !== undefined);
-    const note = notes.filter(Boolean).join('. ');
-
-    return { label, who: whoOf(rows), what: hand.name, cards: hand.playerIds.length === 1 ? hand.cards : null, ...(note ? { note } : {}) };
-  };
+  const shown = (label: string, hand: HighHandView, ...notes: (string | null)[]): Leader => ({
+    label,
+    who: whoOf(rowsOf(view, hand.playerIds)),
+    what: hand.name,
+    cards: hand.playerIds.length === 1 ? hand.cards : null,
+    note: notes.filter(Boolean).join('. ') || null,
+  });
 
   const bonus = formatAmount(config.highHandBonus, config);
   const toCome = config.highHandBonus > 0 ? `Bonus: ${bonus} from everyone else seated${nightOver(view) ? ', unpaid' : ' when the night ends'}` : null;
-  const paidSoFar = paid.length > 0 ? `Bonus paid: ${paid.map((each) => `${formatAmount(each.amount, config)} to ${nameOf(each.playerId)}`).join(', ')}` : null;
-  const bestIsNext = next !== null && next.hand === best.hand && [...next.playerIds].sort().join() === [...best.playerIds].sort().join();
+  const paidSoFar = paid.length > 0 ? `Bonus paid: ${paid.map((each) => `${formatAmount(each.amount, config)} to ${namesOf(view, [each.playerId])}`).join(', ')}` : null;
+  // A new best is always better than any hand before it, so one shown in the same hand is the same
+  const bestIsNext = next?.hand === best.hand;
 
   return [shown('High hand', best, paidSoFar, bestIsNext ? toCome : null), ...(next && !bestIsNext ? [shown('High hand since', next, toCome)] : [])];
 }

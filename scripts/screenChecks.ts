@@ -8434,7 +8434,8 @@ const CHECKS: Check[] = [
 
       for (const [, page] of pages) {
         await page.waitForSelector('.feed li:has-text("Stu takes the high hand with three kings")', { state: 'attached' });
-        await page.waitForFunction(`[...document.querySelectorAll('.plate:has(.high-hand) .name > span:first-child')].map((name) => name.textContent).join() === 'Stu'`);
+        await page.waitForSelector('.plate:has(.high-hand) .name > span:first-child:text-is("Stu")');
+        assert.deepEqual(await markedOn(page), ['Stu']);
       }
 
       await shot(stu, 'high-hand-taken-again-phone');
@@ -8469,7 +8470,7 @@ const CHECKS: Check[] = [
           assert.equal(await text(host, '.menu [data-action="highHand"] small'), 'Between hands only', what);
           await press('.menu [data-action="highHand"]');
           await host.waitForSelector('.dialog[aria-label="Pay the high hand?"]');
-          assert.deepEqual(await texts(host, '.dialog-body p'), ['Quigs holds the high hand with pair of aces.', "It moves everyone's chips, so it is paid between hands. Pause the game, and once this hand is over it can be paid here."], what);
+          assert.deepEqual(await texts(host, '.dialog-body p'), ['Quigs holds the high hand with pair of aces.', 'The high hand is paid between hands. Pause the game, and once this hand is over it can be paid.'], what);
           assert.equal(await host.locator('[data-action="pay-high-hand"]').count(), 0, `${what}: it can be paid during a hand`);
           await shot(host, `high-hand-pay-during-a-hand-${kind.name}-${screen}`);
           await press('.dialog .buttons .btn');

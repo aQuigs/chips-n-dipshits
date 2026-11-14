@@ -492,8 +492,7 @@ export type Command =
   | { type: 'endNight' }
   /** Starts dealing again after the night ended. */
   | { type: 'playOn' }
-  /** Pays the high-hand bonus now, for the high hand shown in hand number `hand`, as the sender saw it. */
-  /** `hand` and `to` are the hand number and the collectors the host was shown, so a payment that has since changed is refused rather than made. */
+  /** Pays the high-hand bonus now. `hand` and `to` are the hand number and the collectors the host was shown, so a payment that has since changed is refused rather than made. */
   | { type: 'payHighHand'; hand: number; to: string[] }
   | { type: 'forgiveBlinds'; playerId: string }
   | { type: 'updateConfig'; config: Partial<TableConfig> }

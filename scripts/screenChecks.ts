@@ -7188,6 +7188,21 @@ const CHECKS: Check[] = [
         assert.equal(await small.locator('.turn').count(), 0);
         await shot(small, `chop-unasked-${screen}`);
 
+        // The night counts the chopped hand as a hand played by everyone dealt in, and as a pot won by nobody
+        playOut(table);
+        await openTonight(small, screen);
+        assert.equal(await text(small, '.tonight-standing'), 'So far tonight, after 1 hand. The dipshit of the night is crowned when the night ends.');
+        assert.deepEqual(await texts(small, '.tonight-players .counts'), ['1 hand · 0 pots won', '1 hand · 0 pots won', '1 hand · 0 pots won', '1 hand · 0 pots won']);
+
+        await pressOn(small, screen)('[data-action="copy-tonight"]');
+        await small.waitForSelector('#tonight-text:visible');
+        const copied = (await small.evaluate(`document.querySelector('#tonight-text').value`)) as string;
+        assert.equal(copied.split('\n')[0], `${DEFAULT_CONFIG.name}: the night so far, 1 hand`);
+        assert.equal(copied.split('\n').filter((line) => line.endsWith('· 1 hand · 0 pots won')).length, 4, copied);
+        await assertTonightFits(small, screen);
+        await shot(small, `chop-tonight-${screen}`);
+        await closeRecap(small);
+
         // Switched off again, everyone's Always chop goes with it
         table.act('Quigs', { type: 'updateConfig', config: { allowChop: false } });
         await small.waitForSelector('.controls [data-action="always-chop"]', { state: 'detached' });

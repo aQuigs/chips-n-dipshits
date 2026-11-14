@@ -76,8 +76,8 @@ export interface HandFacts {
   number: number;
   /** When the hand was taken off the table. */
   at: number;
-  /** A showdown, or everyone folding to one player. */
-  ended: 'showdown' | 'folds';
+  /** A showdown, everyone folding to one player, or the two blinds chopping, which nobody won. */
+  ended: 'showdown' | 'folds' | 'chop';
   /** The bomb pot it was, or null for a hand with blinds. */
   bombPot: BombPot | null;
   /** How many boards were on the table when it ended. */
@@ -99,7 +99,19 @@ export function wonAPot(player: PlayerFacts): boolean {
 
 /** The seats still in the hand when it ended. A pot always holds a chip of every player who did not fold, so they are the ones in for the main pot. */
 function seatsStillIn(result: HandResult): number[] {
+  if (result.chopped) {
+    return result.chopped;
+  }
+
   return result.uncontested ? result.winnings.map((win) => win.seat) : (result.pots[0]?.eligible ?? []);
+}
+
+function endingOf(result: HandResult): HandFacts['ended'] {
+  if (result.chopped) {
+    return 'chop';
+  }
+
+  return result.uncontested ? 'folds' : 'showdown';
 }
 
 /** The facts of a finished hand, from its record. */
@@ -166,7 +178,7 @@ export function handFacts(record: HandRecord): HandFacts {
   return {
     number: record.number,
     at: record.at,
-    ended: result.uncontested ? 'folds' : 'showdown',
+    ended: endingOf(result),
     bombPot: record.bombPot,
     boards: record.boards.length,
     runTwice: record.boards.length > boardsDealt(record.bombPot),

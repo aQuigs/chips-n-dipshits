@@ -213,8 +213,8 @@ export interface BountyResult {
 export interface HandResult {
   /** There was no showdown: everyone else folded, or the blinds chopped. */
   uncontested: boolean;
-  /** The blinds chopped: each took back what they posted, and nobody won anything. Left out of every other hand. */
-  chopped?: true;
+  /** The blinds chopped, the small blind's seat and the big blind's: each took back what they posted, and nobody won anything. Left out of every other hand. */
+  chopped?: [smallBlind: number, bigBlind: number];
   pots: PotResult[];
   /** Chips each seat won from the pots, bounty excluded. */
   winnings: { seat: number; amount: number }[];

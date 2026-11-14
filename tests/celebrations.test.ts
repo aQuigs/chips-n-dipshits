@@ -205,6 +205,21 @@ test('a hand that ends with a fold has no sweat', () => {
   assert.deepEqual(sweats(changes), [null]);
 });
 
+test('a chop is never taken for an all-in runout, though the big blind is all in for the blind: no sweat while asked or once chopped', () => {
+  const { t, page } = dealt([1000, 1000, 20, 1000], {}, { allowChop: true, actionSeconds: 30 });
+  t.fold(3);
+  t.fold(0);
+
+  t.cmd(1, { type: 'offerChop' });
+  const asked = page.change();
+  t.cmd(2, { type: 'answerChop', agree: true });
+  const chopped = page.change();
+
+  assert.equal(asked.view.hand!.stage, 'chop');
+  assert.ok(chopped.view.hand!.result!.chopped);
+  assert.deepEqual(sweats([asked, chopped]), [null, null]);
+});
+
 test('run twice, each board’s last card is turned in the view that brings it: the first alone, the second with the result after it', () => {
   const { t, page } = dealt([1000, 1000], { 0: ACES, 1: KINGS }, { allowRunItTwice: true }, '2c 7d 9h Jc 3s', 'Kd 4c 5h 8s Td');
 

@@ -609,7 +609,7 @@ function chopTheBlinds(state: TableState, ctx: Ctx): void {
 
   narrate(state, ctx, `${blinds[0]!.name} and ${blinds[1]!.name} chop the blinds: each takes back their own`);
 
-  finishHand(state, ctx, { uncontested: true, chopped: true, pots: [], winnings: [], hands: [], bounty: null });
+  finishHand(state, ctx, { uncontested: true, chopped: [hand.sbSeat, hand.bbSeat], pots: [], winnings: [], hands: [], bounty: null });
 }
 
 /** The clock ran out on the player it was on: they check or fold, or say no to a chop, and sit out until they come back. */

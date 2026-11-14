@@ -438,6 +438,9 @@ function assertFactsAgreeWithEvents(record: HandRecord): void {
       case 'return':
         of(event[1]).putIn -= event[2];
         break;
+      case 'chop':
+        event[1].forEach(([seat, amount]) => (of(seat).putIn -= amount));
+        break;
       case 'street':
       case 'runs':
         newStreet();
@@ -475,7 +478,7 @@ const TABLES = Number(process.env.SIM_TABLES ?? 40);
 const STEPS_PER_TABLE = 600;
 
 test('over random games the numbers are at every step exactly what the hand records and the ledger make them, and no fact holds a card nobody was shown', () => {
-  const reached = { hands: 0, showdowns: 0, runTwice: 0, bombPots: 0, doubleBoards: 0, antes: 0, transfers: 0, rebuys: 0, left: 0, nightsEnded: 0, playedOn: 0, crowned: 0, busts: 0, splits: 0, bestHands: 0 };
+  const reached = { hands: 0, showdowns: 0, runTwice: 0, bombPots: 0, doubleBoards: 0, antes: 0, transfers: 0, rebuys: 0, left: 0, nightsEnded: 0, playedOn: 0, crowned: 0, busts: 0, splits: 0, bestHands: 0, chops: 0 };
   // Hands with each kind of straddle posted
   const straddled: Record<Straddle, number> = { straddle: 0, 'double straddle': 0, 'button straddle': 0, 'Mississippi straddle': 0 };
 
@@ -483,7 +486,11 @@ test('over random games the numbers are at every step exactly what the hand reco
     const rng = seededRng(seed * 104_729);
     const players = 2 + rng.int(SEAT_COUNT - 1);
     const stacks = Array.from({ length: players }, () => (chance(rng, 15) ? 1 + rng.int(30) : 100 + rng.int(1900)));
-    const config = randomConfig(rng);
+    // A chop needs three players or more and nothing but the blinds in, which random settings and play give
+    // too seldom to count on: a quarter of the tables let the blinds chop, deal without an ante or a straddle,
+    // and have players mostly fold before anyone has come in
+    const chopping = seed % 4 === 0;
+    const config = { ...randomConfig(rng), ...(chopping ? { allowChop: true, ante: 0 } : {}) };
 
     const t = new TestTable({ stacks, seed, config: fixedSettings(config) });
     t.cmd(0, { type: 'updateConfig', config });
@@ -497,16 +504,28 @@ test('over random games the numbers are at every step exactly what the hand reco
       const faceDown = done ? [...done.deck, ...done.players.filter((p) => !p.shown).flatMap((p) => p.cards)] : [];
       const over = nightIsOver(t.state);
 
-      randomStep(t, rng);
+      const hand = t.state.hand;
+      const nobodyIn = hand?.stage === 'betting' && hand.street === 'preflop' && hand.lastAggressor === null && hand.toAct !== hand.sbSeat && hand.toAct !== hand.bbSeat;
+
+      if (chopping && nobodyIn && chance(rng, 75)) {
+        t.cmd(t.ids.indexOf(t.state.seats[hand.toAct!]!.playerId), { type: 'fold' });
+      } else {
+        randomStep(t, rng);
+      }
 
       // Random play hardly ever leaves a straddle on until it is its player's to post, so now and then everyone asks for
       // every kind the table allows, or only for those from under the gun: a straddle from elsewhere leaves no room for a double
-      if (chance(rng, 15)) {
+      if (!chopping && chance(rng, 15)) {
         const wanted = chance(rng, 50) ? STRADDLES.slice(0, STRADDLES_IN_A_ROW) : STRADDLES;
 
         for (const kind of straddlesAllowed(t.state.config)) {
           t.state.seats.forEach((seat) => seat && t.cmd(t.ids.indexOf(seat.playerId), { type: 'setStraddle', kind: kind.what, on: wanted.includes(kind) }));
         }
+      }
+
+      // And now and then each player switches Always chop on or off, so that some hands chop with nobody asked
+      if (t.state.config.allowChop && chance(rng, 10)) {
+        t.state.seats.forEach((seat) => seat && t.cmd(t.ids.indexOf(seat.playerId), { type: 'setAlwaysChop', on: chance(rng, 50) }));
       }
 
       for (const record of recount.follow(t.effects)) {
@@ -519,6 +538,7 @@ test('over random games the numbers are at every step exactly what the hand reco
 
         reached.hands += 1;
         reached.showdowns += facts.ended === 'showdown' ? 1 : 0;
+        reached.chops += facts.ended === 'chop' ? 1 : 0;
         reached.runTwice += facts.runTwice ? 1 : 0;
         reached.bombPots += facts.bombPot ? 1 : 0;
         reached.doubleBoards += facts.bombPot?.boards === 2 ? 1 : 0;
@@ -562,6 +582,7 @@ test('over random games the numbers are at every step exactly what the hand reco
   assert.ok(reached.hands >= TABLES * 30 && reached.showdowns >= TABLES * 10, said);
   assert.ok(reached.runTwice >= TABLES / 2 && reached.bombPots >= TABLES && reached.doubleBoards >= TABLES / 2, said);
   assert.ok(reached.antes >= TABLES * 5, said);
+  assert.ok(reached.chops >= TABLES / 2, said);
   // A double needs four players, two of them wanting one in a row from under the gun, so it comes up least
   assert.ok(STRADDLES.every((kind) => straddled[kind.what] >= TABLES / 20), said);
   assert.ok(reached.transfers >= TABLES / 2 && reached.rebuys >= TABLES && reached.left >= TABLES, said);

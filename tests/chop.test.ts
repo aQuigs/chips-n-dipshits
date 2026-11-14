@@ -247,7 +247,7 @@ test('offered and agreed: each takes back their blind, nobody wins, and nothing 
 
   const hand = t.state.hand!;
   assert.equal(hand.stage, 'done');
-  assert.deepEqual(hand.result, { uncontested: true, chopped: true, pots: [], winnings: [], hands: [], bounty: null });
+  assert.deepEqual(hand.result, { uncontested: true, chopped: [SB, BB], pots: [], winnings: [], hands: [], bounty: null });
   assert.deepEqual(t.stacks(), [1000, 1000, 1000, 1000]);
   assert.ok(hand.players.every((player) => player.bet === 0 && player.committed === 0 && !player.shown));
   assert.deepEqual(hand.boards, [[]]);
@@ -258,7 +258,7 @@ test('offered and agreed: each takes back their blind, nobody wins, and nothing 
 
   t.finishHand();
   const [record] = handRecords(t.effects);
-  assert.equal(record!.result.chopped, true);
+  assert.deepEqual(record!.result!.chopped, [SB, BB]);
   assert.ok(record!.players.every((player) => player.endStack === player.startStack && player.cards === null));
   assertHandRecordsHold(t.effects);
 });
@@ -312,7 +312,7 @@ test('a big blind who switches Always chop on while asked takes the chop when th
 
   t.wait(CLOCK_MS);
 
-  assert.equal(t.state.hand!.result!.chopped, true);
+  assert.deepEqual(t.state.hand!.result!.chopped, [SB, BB]);
   assert.deepEqual(lastLines(t, 3), ['P2 ran out of time', 'P2 agrees to chop', 'P1 and P2 chop the blinds: each takes back their own']);
 });
 
@@ -369,7 +369,7 @@ test('a big blind who sits out while answering is still asked; one who leaves or
   sitting.cmd(BB, { type: 'sitOut' });
   assert.equal(sitting.state.hand!.stage, 'chop');
   sitting.cmd(BB, { type: 'answerChop', agree: true });
-  assert.equal(sitting.state.hand!.result!.chopped, true);
+  assert.deepEqual(sitting.state.hand!.result!.chopped, [SB, BB]);
 
   const leaving = offered();
   leaving.cmd(BB, { type: 'standUp' });
@@ -395,12 +395,12 @@ test('a big blind who always chops and leaves or is removed takes the chop', () 
   t.cmd(SB, { type: 'offerChop' });
 
   // Saying yes to every offer, they were never asked
-  assert.equal(t.state.hand!.result!.chopped, true);
+  assert.deepEqual(t.state.hand!.result!.chopped, [SB, BB]);
 
   const leaving = offered();
   leaving.cmd(BB, { type: 'setAlwaysChop', on: true });
   leaving.cmd(BB, { type: 'standUp' });
-  assert.equal(leaving.state.hand!.result!.chopped, true);
+  assert.deepEqual(leaving.state.hand!.result!.chopped, [SB, BB]);
 });
 
 test('a small blind who leaves while the offer stands folds once it is turned down', () => {
@@ -437,7 +437,7 @@ test('switching chops off refuses an offer, and leaves one already made to be an
   t.cmd(0, { type: 'updateConfig', config: { allowChop: false } });
   assert.deepEqual(lastLines(t, 1), ['The blinds no longer chop']);
   t.cmd(BB, { type: 'answerChop', agree: true });
-  assert.equal(t.state.hand!.result!.chopped, true);
+  assert.deepEqual(t.state.hand!.result!.chopped, [SB, BB]);
 });
 
 test('chips go back to the seat that posted them to the cent, and nobody is up or down', () => {
@@ -506,7 +506,7 @@ test('two blinds who always chop chop the moment it folds to them, without anyon
   t.fold(3);
   t.fold(0);
 
-  assert.equal(t.state.hand!.result!.chopped, true);
+  assert.deepEqual(t.state.hand!.result!.chopped, [SB, BB]);
   assert.deepEqual(kinds(t).slice(-3), ['fold', 'fold', 'chop']);
   assert.deepEqual(lastLines(t, 1), ['P1 and P2 chop the blinds: each takes back their own']);
   assert.deepEqual(t.stacks(), [1000, 1000, 1000, 1000]);
@@ -532,7 +532,7 @@ test('a player who is away chops by their standing choice, and folds without it'
   t.state.seats[SB]!.away = true;
   t.fold(3);
   t.fold(0);
-  assert.equal(t.state.hand!.result!.chopped, true);
+  assert.deepEqual(t.state.hand!.result!.chopped, [SB, BB]);
 
   const without = new TestTable({ stacks: [1000, 1000, 1000, 1000], config: CHOPS });
   without.deal({ button: 0 });
@@ -594,7 +594,7 @@ test('a table saved while the big blind answers loads still answering, and a han
   reloaded.now = t.now;
   assert.equal(reloaded.state.hand!.stage, 'chop');
   reloaded.cmd(reloaded.ids.indexOf(t.ids[BB]!), { type: 'answerChop', agree: true });
-  assert.equal(reloaded.state.hand!.result!.chopped, true);
+  assert.deepEqual(reloaded.state.hand!.result!.chopped, [SB, BB]);
 
   // As the code before this saved it: no setting, no standing choice, no word of an offer. The host allows chops once it is loaded
   const old = foldedToTheBlinds();
@@ -613,7 +613,7 @@ test('a table saved while the big blind answers loads still answering, and a han
   assert.ok(back.state.seats.every((seat) => !seat || seat.alwaysChop === false));
   back.cmd(back.ids.indexOf(old.ids[SB]!), { type: 'offerChop' });
   back.cmd(back.ids.indexOf(old.ids[BB]!), { type: 'answerChop', agree: true });
-  assert.equal(back.state.hand!.result!.chopped, true);
+  assert.deepEqual(back.state.hand!.result!.chopped, [SB, BB]);
 });
 
 /**

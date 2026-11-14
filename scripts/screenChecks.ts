@@ -911,6 +911,7 @@ const CHECKS: Check[] = [
       // Showing the hand they are leaving on is the one thing still theirs to do
       table.play(passive, (view) => view.hand!.stage === 'done');
       await page.tap('.controls [data-action="show"]');
+      await page.waitForSelector('.controls [data-action="show"]', { state: 'detached' });
       await page.waitForSelector('.seat.me .hole .card[data-card]');
       assert.equal(table.view('Quigs').seats.find((seat) => seat?.name === 'Pam')!.shown, true);
     },
@@ -3234,10 +3235,10 @@ const CHECKS: Check[] = [
 
           await press('.menu [data-action="bomb-pot"]');
           await host.waitForSelector('.dialog', { state: 'detached' });
-          assert.equal(table.view('Stu').feed.at(-1)!.text, 'The host called a bomb pot for the next hand');
 
           // A seated player's bar keeps its height, so the word costs their table nothing
           await player.waitForSelector('.controls .next-hand');
+          assert.equal(table.view('Stu').feed.at(-1)!.text, 'The host called a bomb pot for the next hand');
           assert.deepEqual(await boxes(player, '.stage'), [roomBefore], 'word of the bomb pot took room from a seated player\'s table');
 
           for (const [who, page] of Object.entries(everyone)) {
@@ -3262,6 +3263,7 @@ const CHECKS: Check[] = [
           assert.equal(await host.locator('.menu [data-action="bomb-pot"]').count(), 0, 'a bomb pot that is called already is offered again');
           await press('.menu [data-action="bomb-pot-off"]');
           await host.waitForSelector('.dialog', { state: 'detached' });
+          await host.waitForSelector('.controls .next-hand', { state: 'detached' });
           assert.equal(table.view('Stu').feed.at(-1)!.text, 'The host called off the bomb pot');
 
           for (const page of Object.values(everyone)) {
@@ -4260,10 +4262,10 @@ const CHECKS: Check[] = [
 
           await press('.hand-counts [data-hands="3"]');
           await host.waitForSelector('.dialog', { state: 'detached' });
-          assert.equal(table.view('Zed').feed.at(-1)!.text, 'The host calls it a night after this hand and 3 more');
 
           // A seated player's bar keeps its height, so the count costs their table nothing
           await host.waitForSelector('.controls .next-hand');
+          assert.equal(table.view('Zed').feed.at(-1)!.text, 'The host calls it a night after this hand and 3 more');
           assert.deepEqual(await boxes(host, '.stage'), [roomBefore], 'the count took room from a seated player\'s table');
           await lookInShapes('3', ['3 more hands after this one']);
 
@@ -4294,8 +4296,8 @@ const CHECKS: Check[] = [
           await shot(host, `last-hands-dialog-called-${kind.name}-${screen}`);
           await press('.this-hand [data-hands="0"]');
           await host.waitForSelector('.dialog', { state: 'detached' });
-          assert.equal(table.view('Zed').feed.at(-1)!.text, 'The host now calls it a night after this hand');
           await lookInShapes('last', ['Last hand of the night']);
+          assert.equal(table.view('Zed').feed.at(-1)!.text, 'The host now calls it a night after this hand');
           await press('[data-action="menu"]');
           await host.waitForSelector('.menu [data-action="lastHands"]');
           assert.equal(await host.locator('.menu [data-action="bomb-pot"]').count(), 0, 'a bomb pot is offered for a hand that never comes');

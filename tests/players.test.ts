@@ -410,25 +410,106 @@ test('what the list of players costs a join in calls to the Sheet: none without 
   }
 });
 
-test('a member whose player was taken off the list by hand goes on as they were, and so does their table', () => {
-  const { create, join, poll, act, identify, listed, cache, tab } = deployed();
+test('the list anyone with the address may ask for holds each player\'s id and name and nothing else: not when they were seen, nor anything of a table', () => {
+  const { service, create, join, clock } = deployed();
   const host = joined(create('Host', NEW));
   const bob = joined(join(host.view.id, 'Bob', NEW));
+
+  // Seen again on another night, at a table of his own
+  clock.time += DAY_MS;
+  const again = joined(create('Bob', known(bob.view.you.identity!)));
+
+  const response = service.handle({ op: 'players' });
+  assert.deepEqual(response, { ok: true, kind: 'players', players: [{ id: bob.view.you.identity, name: 'Bob' }, { id: host.view.you.identity, name: 'Host' }] });
+
+  const said = JSON.stringify(response);
+  for (const theirs of [host.view.id, again.view.id, host.auth.id, host.auth.token, bob.auth.id, bob.auth.token, again.auth.id, again.auth.token]) {
+    assert.ok(!said.includes(theirs), `the list held ${theirs}`);
+  }
+});
+
+test('a name gets on the list only with a table made, a table joined, or a member saying who they are: no other request puts one there, whatever it says of itself', () => {
+  const { service, create, join, identify, listed } = setup();
+  const host = joined(create('Host'));
+  const tableId = host.view.id;
+  const stranger = { id: 'STRANGER', token: 'X'.repeat(24) };
+  const asNew = { name: 'Mallory', who: NEW };
+
+  const tries: object[] = [
+    { op: 'players', ...asNew },
+    { op: 'info', tableId, ...asNew },
+    { op: 'presets', ...asNew },
+    { op: 'poll', tableId, auth: stranger, since: -1, ...asNew },
+    { op: 'history', tableId, auth: stranger, ...asNew },
+    { op: 'act', tableId, auth: stranger, command: { type: 'chat', text: 'hi' }, ...asNew },
+    { op: 'act', tableId, auth: host.auth, command: { type: 'chat', text: 'hi' }, ...asNew },
+    { op: 'identify', tableId, auth: stranger, ...asNew },
+    { op: 'identify', tableId, auth: { id: host.auth.id, token: stranger.token }, ...asNew },
+    { op: 'identify', tableId: 'NOSUCH', auth: host.auth, ...asNew },
+    { op: 'join', tableId: 'NOSUCH', ...asNew },
+    { op: 'join', tableId, name: 'host', who: NEW },
+    { op: 'create', config: { minBuyIn: 500, maxBuyIn: 100 }, ...asNew },
+    { op: 'nonsense', ...asNew },
+  ];
+
+  for (const request of tries) {
+    service.handle(request);
+    assert.deepEqual(listed(), [], JSON.stringify(request));
+  }
+
+  // Each of the three ways adds the one name, once
+  joined(create('Ann', NEW));
+  assert.deepEqual(listed().map((player) => player.name), ['Ann']);
+  joined(join(tableId, 'Bob', NEW));
+  assert.deepEqual(listed().map((player) => player.name).sort(), ['Ann', 'Bob']);
+  viewOf(identify(tableId, host.auth, NEW));
+  assert.deepEqual(listed().map((player) => player.name).sort(), ['Ann', 'Bob', 'Host']);
+});
+
+test('a member whose player was taken off the list by hand, or renamed there, goes on playing under the name the table has for them', () => {
+  const { store, clock, create, join, poll, act, identify, listed, cache, tab } = deployed();
+  const host = joined(create('Host', NEW, { minBuyIn: 100 }));
+  const tableId = host.view.id;
+  const bob = joined(join(tableId, 'Bob', NEW));
   const bobWas = bob.view.you.identity!;
 
+  // Whoever runs the game renames the host and clears Bob's row
+  tab().cells[1]![1] = 'Hostess';
   tab().cells[2] = ['', '', '', ''];
   cache.entries.clear();
-  assert.deepEqual(listed().map((player) => player.name), ['Host']);
+  assert.deepEqual(listed(), [{ id: host.view.you.identity, name: 'Hostess' }]);
 
-  assert.equal(viewOf(poll(host.view.id, bob.auth)).you.identity, bobWas);
-  assert.equal(viewOf(act(host.view.id, bob.auth, { type: 'chat', text: 'still here' })).members[1]!.identity, bobWas);
-  assert.equal(joined(join(host.view.id, 'Cy', NEW)).view.members.length, 3);
+  assert.equal(viewOf(poll(tableId, bob.auth)).you.identity, bobWas);
+  assert.equal(viewOf(act(tableId, bob.auth, { type: 'chat', text: 'still here' })).members[1]!.identity, bobWas);
+  assert.equal(joined(join(tableId, 'Cy', NEW)).view.members.length, 3);
+
+  // Both sit and play a hand, each shown by the name they joined under
+  for (const [seat, auth] of [host.auth, bob.auth].entries()) {
+    viewOf(act(tableId, auth, { type: 'requestSeat', seat, buyIn: 1000 }));
+  }
+  viewOf(act(tableId, host.auth, { type: 'approve', playerId: bob.auth.id }));
+  viewOf(act(tableId, host.auth, { type: 'start' }));
+
+  for (let waited = 0; !store.read(tableId)!.hand && waited < 50; waited++) {
+    clock.time += 1000;
+    poll(tableId, host.auth);
+  }
+
+  const mover = [host, bob].find((member) => member.auth.id === store.read(tableId)!.hand!.players[store.read(tableId)!.hand!.toAct!]!.playerId)!;
+  const played = viewOf(act(tableId, mover.auth, { type: 'fold' }));
+  assert.deepEqual(played.seats.slice(0, 2).map((seat) => seat!.name), ['Host', 'Bob']);
+  assert.deepEqual(played.members.map((member) => member.name), ['Host', 'Bob', 'Cy']);
+  assert.deepEqual(viewOf(poll(tableId, bob.auth)).you, { id: bob.auth.id, name: 'Bob', role: 'member', seat: 1, identity: bobWas });
+
+  // The renamed player is the list's name at the next table they come to, and the same player
+  const next = joined(create('Host', known(host.view.you.identity!)));
+  assert.deepEqual([next.view.you.name, next.view.you.identity], ['Hostess', host.view.you.identity]);
 
   // Saying it again finds nobody, and saying who they are now works as for anyone
-  assert.deepEqual(identify(host.view.id, bob.auth, known(bobWas)), { ok: false, code: 'invalid', error: 'That player is no longer on the list. Pick again' });
-  const now = viewOf(identify(host.view.id, bob.auth, NEW));
+  assert.deepEqual(identify(tableId, bob.auth, known(bobWas)), { ok: false, code: 'invalid', error: 'That player is no longer on the list. Pick again' });
+  const now = viewOf(identify(tableId, bob.auth, NEW));
   assert.notEqual(now.you.identity, bobWas);
-  assert.deepEqual(listed().map((player) => player.name).sort(), ['Bob', 'Cy', 'Host']);
+  assert.deepEqual(listed().map((player) => player.name).sort(), ['Bob', 'Cy', 'Hostess']);
 });
 
 test('a member can say who they are after joining, as someone on the list or someone new, and keeps their name, seat and token', () => {

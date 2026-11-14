@@ -162,7 +162,8 @@ The Players tab has a row for each known player: an ID the game gave them, their
 - A table with a member who was that player goes on as it was; the member is nobody the list knows until they say who they are again. A browser that remembered the player forgets them and asks.
 - Two rows can't be one name (capitals and spaces don't tell names apart): the upper one counts. A row the game can't read, such as an ID it didn't give or a name no table would take, is skipped and left as it is.
 - The first row is for the headers, which can say anything. If it is deleted, the player who moves up into it still counts.
-- The list holds 200 players. Once it is full, new players still get in and play; they are just not on the list until there is room.
+- The list holds 200 players. Once it is full, new players still get in and play; they are just not on the list until you make room by deleting rows.
+- A name gets on the list only when someone makes a table, joins one, or says who they are from a table's menu, one name each time. Anyone with the game's address can do that, as they can make tables, and can read the names on the list, though nothing else about the players. Delete the rows of names nobody knows.
 
 ## When something breaks
 

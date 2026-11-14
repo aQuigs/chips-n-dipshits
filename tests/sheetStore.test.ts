@@ -2388,8 +2388,9 @@ test('rows of the Players tab changed by hand: a renamed player keeps their id, 
   cells.push(['', 'Typed in by hand', '', '']);
   cells[40] = ['', '', '', '', '', 'ask Stu who this was'];
 
-  // Until the cache entry runs out the game goes on with the list as it was
+  // Until the cache entry runs out, which is five minutes at most, the game goes on with the list as it was
   assert.deepEqual(run().seen(bob!.id, NOW), bob);
+  assert.equal(cache.seconds.get('players'), 300);
   cache.entries.clear();
 
   assert.deepEqual(run().list(), [{ id: ann!.id, name: 'Annie' }]);

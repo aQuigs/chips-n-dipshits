@@ -10,6 +10,7 @@ import { chromium } from 'playwright';
 import type { Browser, Page } from 'playwright';
 
 import { THEMES } from '../src/client/themes.ts';
+import { LIMITS } from '../src/engine/index.ts';
 import { startDevServer } from '../src/dev/server.ts';
 import { clientPage } from './bundle.ts';
 
@@ -195,6 +196,13 @@ try {
   const watched = new Set([host, phone]);
 
   await shot(host.page, '06-ready-desktop');
+
+  // Each player's turn waits while their pictures are taken, which on a busy machine outlasts the usual clock and folds them
+  await openFromMenu(host.page, 'settings');
+  await host.page.fill('#table-action-seconds', String(LIMITS.maxActionSeconds));
+  await host.page.click('[data-action="save-settings"]');
+  await host.page.waitForSelector('.dialog', { state: 'detached' });
+
   await host.page.click('.message [data-action="start"]');
 
   // ---- Hand 1: bets on every street, down to a showdown ----

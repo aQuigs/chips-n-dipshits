@@ -4,7 +4,7 @@
  */
 import assert from 'node:assert/strict';
 
-import { BOARD_SIZE, boardsDealt, evaluateHand, FEED_LIMIT, FLOP_SIZE, LIMITS, nightIsOver, PLAYING_THE_BOARD, reaches, replayHand, roleOf, viewFor } from '../src/engine/index.ts';
+import { BOARD_SIZE, boardsDealt, evaluateHand, FEED_LIMIT, FLOP_SIZE, LIMITS, nightIsOver, owes, PLAYING_THE_BOARD, reaches, replayHand, roleOf, viewFor } from '../src/engine/index.ts';
 import type { Effect, FeedEntry, HandPlayer, HandRecord, TableState } from '../src/engine/index.ts';
 import { CACHE_VALUE_BYTES, utf8Bytes } from '../src/gas/sheetStore.ts';
 import { restoreState } from '../src/server/store.ts';
@@ -79,6 +79,30 @@ export function assertSeatingHolds(state: TableState): void {
 
   for (const player of state.hand?.players ?? []) {
     assert.equal(state.seats[player.seat]?.playerId, player.playerId, 'a player dealt into the hand is no longer in the seat the hand knows them by');
+  }
+}
+
+/**
+ * What players owe for blinds they missed is owed only where the table says it is and while there is a
+ * game for it to be owed in, a choice to post is about something owed, and nobody plays a hand with
+ * blinds while they owe: they posted, the big blind settled it, or they were not dealt in.
+ */
+export function assertBlindsHold(state: TableState): void {
+  const seated = state.seats.flatMap((seat, index) => (seat ? [{ seat, index }] : []));
+  const owing = seated.filter(({ seat }) => owes(seat));
+  const inSeatRange = (index: number) => Number.isInteger(index) && index >= 0 && index < state.seats.length;
+
+  assert.ok(state.config.missedBlinds === 'owed' || owing.length === 0, 'a player owes a blind at a table that forgives them');
+  assert.ok(state.blinds !== null || owing.length === 0, 'a player owes a blind with no game going');
+  assert.ok(seated.every(({ seat }) => !seat.postsOwed || owes(seat)), 'a player is set to post with nothing owed');
+  assert.ok(state.blinds === null || (inSeatRange(state.blinds.small) && inSeatRange(state.blinds.big)), 'the blinds are on a seat that is not there');
+  assert.ok(state.blinds === null || state.blinds.small !== state.blinds.big, 'the small blind and the big blind are on one seat');
+
+  if (state.hand && !state.hand.bombPot) {
+    const dealtIn = new Set(state.hand.players.map((player) => player.seat));
+
+    assert.ok(owing.every(({ index }) => !dealtIn.has(index)), 'a player is in a hand with blinds while owing one');
+    assert.ok(dealtIn.has(state.hand.bbSeat), 'a hand with blinds has nobody on the big blind');
   }
 }
 
@@ -271,6 +295,7 @@ export function assertInvariants(state: TableState, now: number): void {
   assertChipsConserved(state);
   assertRolesHold(state);
   assertSeatingHolds(state);
+  assertBlindsHold(state);
   assertBombPotsHold(state);
   assertBoardsHold(state);
   assertNightHolds(state);

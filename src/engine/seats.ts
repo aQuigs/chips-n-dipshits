@@ -5,7 +5,7 @@ import type { Ctx, FeedKind, LedgerDetail, Member, MoneyKind, Seat, TableState }
 export const FEED_LIMIT = 60;
 
 /** Steps clockwise from one seat to another; 0 when they are the same seat. */
-function stepsClockwise(from: number, to: number): number {
+export function stepsClockwise(from: number, to: number): number {
   return (to - from + SEAT_COUNT) % SEAT_COUNT;
 }
 
@@ -25,7 +25,7 @@ export function seatsClockwiseAfter(seats: readonly number[], seat: number): num
   return clockwiseAfter(seats.map((s) => ({ seat: s })), seat).map((item) => item.seat);
 }
 
-/** Seats that get cards in the next hand. */
+/** Seats whose players are there to play: in the game, with chips. Which of them the next hand is dealt to is for `planHand` to say. */
 export function eligibleSeats(state: TableState): number[] {
   const seats: number[] = [];
 

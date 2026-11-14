@@ -138,6 +138,8 @@ test('each kind of hand event moves what it should, or nothing', () => {
     ['a blind', DEALT.slice(0, 1), ['post', 1, 'small blind', 10, 990], ['bet seat1>bet1 @0']],
     ['an ante', DEALT.slice(0, 1), ['post', 1, 'ante', 5, 995, 'contribution'], ['chips seat1>pot @0']],
     ['a big-blind ante', DEALT.slice(0, 3), ['post', 2, 'big blind ante', 20, 960, 'dead'], ['chips seat2>pot @0']],
+    ['a missed big blind, in front of a seat that is not the big blind’s', DEALT.slice(0, 1), ['post', 0, 'missed big blind', 20, 980], ['bet seat0>bet0 @0']],
+    ['a missed small blind posted dead', [DEALT[0]!, ['post', 0, 'missed big blind', 20, 980]], ['post', 0, 'dead small blind', 10, 970, 'dead'], ['chips seat0>pot @0']],
     ['the deal', DEALT.slice(0, 3), ['deal'], ['deal deck>cards1 @0', 'deal deck>cards2 @60', 'deal deck>cards0 @120']],
     ['a fold', DEALT, ['fold', 1], ['muck cards1>deck @0']],
     ['a check', ON_THE_FLOP, ['check', 1], []],
@@ -145,10 +147,12 @@ test('each kind of hand event moves what it should, or nothing', () => {
     ['a bet', ON_THE_FLOP, ['bet', 1, 40, 940], ['bet seat1>bet1 @0']],
     ['a raise', DEALT, ['raise', 1, 60, 940], ['bet seat1>bet1 @0']],
     ['a clock run out', DEALT, ['timeout', 1], []],
+    ['a big blind posted alone going back when everyone folds to it', [DEALT[0]!, DEALT[2]!, ['deal'], ['fold', 0], ['fold', 1]], ['return', 2, 20], ['chips 20 bet2>seat2 @0']],
     ['an uncalled bet going back', [...ON_THE_FLOP, ['bet', 1, 500, 480], ['call', 2, 300, 0], ['fold', 0]], ['return', 1, 200], ['chips 200 bet1>seat1 @0']],
     ['the part of a bomb pot nobody could match going back', [DEALT[0]!, ['post', 0, 'bomb pot', 185, 815, 'contribution'], ['post', 1, 'bomb pot', 57, 943, 'contribution'], ['deal']], ['return', 0, 128], ['chips 128 pot>seat0 @0']],
     ['a blind and part of an ante going back', [DEALT[0]!, ['post', 1, 'ante', 6, 994, 'contribution'], ['post', 1, 'small blind', 3, 991], ['deal']], ['return', 1, 7], ['chips 3 bet1>seat1 @0', 'chips 4 pot>seat1 @0']],
     ['the flop, with the bets before it', ON_THE_FLOP.slice(0, -1), ON_THE_FLOP.at(-1)!, ['chips 20 bet0>pot @0', 'chips 20 bet1>pot @0', 'chips 20 bet2>pot @0', 'board >board0.0 @0', 'board >board0.1 @60', 'board >board0.2 @120']],
+    ['the flop, with a missed big blind among the bets and the small blind posted dead with it already in the pot', [DEALT[0]!, ['post', 0, 'missed big blind', 20, 980], ['post', 0, 'dead small blind', 10, 970, 'dead'], DEALT[1]!, DEALT[2]!, ['deal'], ['check', 0], ['call', 1, 10, 980], ['check', 2]], ['street', 0, ['As', 'Kd', '2c']], ['chips 20 bet0>pot @0', 'chips 20 bet1>pot @0', 'chips 20 bet2>pot @0', 'board >board0.0 @0', 'board >board0.1 @60', 'board >board0.2 @120']],
     ['the turn after checks', [...ON_THE_FLOP, ['check', 1], ['check', 2], ['check', 0]], ['street', 0, ['9h']], ['board >board0.3 @0']],
     ['a vote to run it twice', ON_THE_FLOP, ['vote', 1, true], []],
     ['the bets going in when the rest is run out', [...ON_THE_FLOP, ['bet', 1, 980, 0], ['call', 2, 980, 0], ['fold', 0]], ['runs', 1], ['chips 980 bet1>pot @0', 'chips 980 bet2>pot @0']],
@@ -184,6 +188,55 @@ test('a new hand slides the blinds in as the cards go out, around the table from
   assert.deepEqual(dealt.map((move) => where(move.to)), [7, 8, 9, 0, 1, 2, 3, 4, 5, 6].map((seat) => `cards${seat}`));
   assert.equal(dealt.at(-1)!.after, 240);
   assert.deepEqual(dealt.map((move) => move.after), [...dealt.map((move) => move.after)].sort((a, b) => a - b));
+});
+
+test('a missed big blind slides in front of its own seat, and the small blind posted dead with it goes straight to the pot and leaves nothing in front of the seat', () => {
+  const table = new TestTable({ stacks: [1000, 1000, 1000, 1000, 1000, 1000] });
+
+  // Seat 4 sits out while both blinds pass and the button after them, and comes back to post what they owe
+  table.deal({ button: 0 });
+  table.foldOut();
+  table.cmd(4, { type: 'sitOut' });
+
+  for (let hand = 0; hand < 3; hand++) {
+    table.deal();
+    table.foldOut();
+  }
+
+  table.cmd(4, { type: 'comeIn', post: true });
+
+  const page = new Page(table, 2);
+  page.arrive();
+  table.deal();
+
+  // The button is on seat 5, so the blinds of the hand are on seats 0 and 1 and the cards go around from seat 0
+  const moves = page.arrive();
+  assert.deepEqual(moves.filter((move) => !move.startsWith('deal')), ['bet seat4>bet4 @0', 'chips seat4>pot @0', 'bet seat0>bet0 @0', 'bet seat1>bet1 @0']);
+  assert.deepEqual(moves.filter((move) => move.startsWith('deal')).map((move) => move.split(' ')[1]), [0, 1, 2, 3, 4, 5].map((seat) => `deck>cards${seat}`));
+  assert.deepEqual([page.shown!.seats[4]!.bet, page.shown!.hand!.pot], [20, 60], 'the table draws the live blind in front of the seat and counts the dead one in the pot');
+});
+
+test('a hand with no small blind slides none from the seat it was due from, a big blind folded to alone goes back with no pot to follow, and under a dead button the cards still go around from its left', () => {
+  const table = new TestTable({ stacks: [1000, 1000, 1000, 1000] });
+  const page = new Page(table, 0);
+
+  // The big blind leaves: their seat is due the small blind next, and the button the hand after
+  table.deal({ button: 0 });
+  table.foldOut();
+  table.cmd(2, { type: 'standUp' });
+  page.arrive();
+
+  table.deal();
+  assert.deepEqual(page.arrive(), ['bet seat3>bet3 @0', 'deal deck>cards3 @0', 'deal deck>cards0 @60', 'deal deck>cards1 @120'], 'the button is on seat 1 and only the big blind is posted');
+
+  table.fold(0);
+  table.fold(1);
+  assert.deepEqual(page.arrive(), ['muck cards1>deck @0', 'chips 20 bet3>seat3 @0'], 'the viewer’s own cards stay, and nothing leaves a pot that has nothing in it');
+
+  table.finishHand();
+  page.arrive();
+  table.deal();
+  assert.deepEqual(page.arrive(), ['bet seat3>bet3 @0', 'bet seat0>bet0 @0', 'deal deck>cards3 @0', 'deal deck>cards0 @60', 'deal deck>cards1 @120'], 'the button is dead on seat 2, which nothing moves to or from');
 });
 
 test('a bet that is gathered in the same view is seen going to the pot, not sliding in front of its seat first', () => {

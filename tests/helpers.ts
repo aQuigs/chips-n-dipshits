@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 
 import type { PrefMemory } from '../src/client/prefs.ts';
-import { applyCommand, createTable, addMember, freshDeck, startHand, tick, viewFor, SEAT_COUNT } from '../src/engine/index.ts';
+import { applyCommand, createTable, addMember, freshDeck, startHand, startOver, tick, viewFor, SEAT_COUNT } from '../src/engine/index.ts';
 import type { Card, Command, Ctx, Effect, Hand, HandRecord, LedgerEntry, Rng, TableConfig, TableState, TableView } from '../src/engine/index.ts';
 
 /** A small repeatable generator (mulberry32); the same seed always deals the same cards. */
@@ -36,6 +36,8 @@ export interface DealOptions {
 
 export interface TableOptions {
   stacks: number[];
+  /** The seat each player takes; seats 0, 1, 2 and so on when left out. */
+  seats?: number[];
   config?: Partial<TableConfig>;
   seed?: number;
   /** What the players are called, by seat; P0, P1 and so on when left out. */
@@ -130,7 +132,7 @@ export class TestTable {
   now = 1_000_000;
   rng: Rng;
   effects: Effect[] = [];
-  /** Player id by the seat they were first given; for a table taken over with `adopt`, in the order they joined. */
+  /** Player id in the order of `stacks`, which is by seat unless `seats` says otherwise; for a table taken over with `adopt`, in the order they joined. */
   ids: string[] = [];
 
   constructor(options: TableOptions) {
@@ -146,11 +148,11 @@ export class TestTable {
       this.ids.push(addMember(state, name(seat), this.ctx()).id);
     }
 
-    options.stacks.forEach((stack, seat) => {
-      this.cmd(seat, { type: 'requestSeat', seat, buyIn: stack });
+    options.stacks.forEach((stack, player) => {
+      this.cmd(player, { type: 'requestSeat', seat: options.seats?.[player] ?? player, buyIn: stack });
 
-      if (seat > 0) {
-        this.cmd(0, { type: 'approve', playerId: this.ids[seat]! });
+      if (player > 0) {
+        this.cmd(0, { type: 'approve', playerId: this.ids[player]! });
       }
     });
   }
@@ -175,12 +177,15 @@ export class TestTable {
   }
 
   /**
-   * Starts a hand with the button and the cards fixed. The deck is stacked before the hand begins, so
-   * whatever a hand does with its cards as it is dealt, such as turning them up when the blinds or the
-   * antes leave nobody to act, it does with the cards asked for.
+   * Starts a hand with the cards fixed. Given a button, the hand starts a new game with the button
+   * there and the blinds on its left, whatever was played before; given none, it follows on from the
+   * last hand as any hand does. The deck is stacked before the hand begins, so whatever a hand does with
+   * its cards as it is dealt, such as turning them up when the blinds or the antes leave nobody to act,
+   * it does with the cards asked for.
    */
   deal(options: DealOptions = {}): void {
     if (options.button !== undefined) {
+      startOver(this.state);
       this.state.buttonSeat = (options.button - 1 + SEAT_COUNT) % SEAT_COUNT;
     }
 
@@ -243,6 +248,30 @@ export class TestTable {
   wait(ms: number): void {
     this.now += ms;
     tick(this.state, this.ctx());
+  }
+
+  /** The player in a seat, as `cmd` and the moves of a hand name them. */
+  playerIn(seat: number): number {
+    return this.ids.indexOf(this.state.seats[seat]!.playerId);
+  }
+
+  /** A new member takes an open seat with the host's approval. Gives back what `cmd` names them by. */
+  sitDown(name: string, seat: number, buyIn = 1000): number {
+    const player = this.ids.push(addMember(this.state, name, this.ctx()).id) - 1;
+
+    this.cmd(player, { type: 'requestSeat', seat, buyIn });
+    this.cmd(0, { type: 'approve', playerId: this.ids[player]! });
+
+    return player;
+  }
+
+  /** Plays the hand on the table to its end by folding round to the last player in it, and clears it away. */
+  foldOut(): void {
+    while (this.state.hand?.stage === 'betting') {
+      this.fold(this.playerIn(this.toAct!));
+    }
+
+    this.finishHand();
   }
 
   /** Keeps stepping time until the hand on the table is over and cleared away. */

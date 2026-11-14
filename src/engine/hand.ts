@@ -4,9 +4,10 @@ import { boardsComplete, dealStreet, newBoards, potShares, runOut } from './boar
 import { boardsDealt, bombPotName, claimBombPot } from './bombPots.ts';
 import { isSevenDeuce, prettyCards, shuffledDeck } from './cards.ts';
 import type { HandEvent } from './events.ts';
-import { forcedBets, openingBet, positionsOf } from './forcedBets.ts';
+import { openingBet } from './forcedBets.ts';
 import type { ForcedBet } from './forcedBets.ts';
 import { madeHandName, midSentence } from './handNames.ts';
+import { planHand, takeUp } from './handPlan.ts';
 import { playerHand } from './handRank.ts';
 import type { HandValue } from './handRank.ts';
 import { buildPots, splitAmount } from './pots.ts';
@@ -182,25 +183,22 @@ function postForcedBets(state: TableState, ctx: Ctx, bets: readonly ForcedBet[])
 }
 
 export function startHand(state: TableState, ctx: Ctx): void {
-  const eligible = eligibleSeats(state);
-  if (eligible.length < 2) {
+  if (eligibleSeats(state).length < 2) {
     throw new Error('A hand needs at least two players');
   }
 
   const { smallBlind, bigBlind, sevenDeuceBounty } = state.config;
-  const button = state.buttonSeat === null ? eligible[ctx.rng.int(eligible.length)]! : seatsClockwiseAfter(eligible, state.buttonSeat)[0]!;
-
-  const positions = positionsOf(eligible, button);
-  const { order, sbSeat, bbSeat } = positions;
   const bombPot = claimBombPot(state);
 
   // Worked out while every stack is still whole: what the hand starts with is settled before any of it is posted
-  const forced = forcedBets(state, positions, bombPot);
+  const plan = planHand(state, bombPot, ctx.rng);
+  const { button, order, sbSeat, bbSeat, bets: forced } = plan;
 
   // A bomb pot has no bet to call before the flop, and no betting there
   const opening = bombPot ? null : openingBet(forced);
 
-  const players: HandPlayer[] = eligible.map((seat) => {
+  // Kept in seat order, whatever order they are dealt in
+  const players: HandPlayer[] = [...order].sort((a, b) => a - b).map((seat) => {
     const playerId = state.seats[seat]!.playerId;
 
     return {
@@ -229,8 +227,8 @@ export function startHand(state: TableState, ctx: Ctx): void {
   }
 
   state.handCount += 1;
-  state.buttonSeat = button;
   state.nextHandAt = null;
+  takeUp(state, plan);
 
   const hand: Hand = {
     number: state.handCount,
@@ -262,8 +260,16 @@ export function startHand(state: TableState, ctx: Ctx): void {
   const stacks = players.map((p): [number, string, number] => [p.seat, p.name, p.startStack]);
   const terms = bombPot ? `${bombPotName(bombPot)} ${formatAmount(bombPot.amount, state.config)}` : `blinds ${stakesText(state.config)}`;
 
+  const onTheButton = playerAt(hand, button);
+
   record(hand, ['start', hand.number, button, smallBlind, bigBlind, stacks, ...startTerms(state, bombPot)]);
-  narrate(state, ctx, `Hand #${hand.number} · ${terms} · ${playerAt(hand, button)!.name} has the button`);
+  narrate(state, ctx, `Hand #${hand.number} · ${terms} · ${onTheButton ? `${onTheButton.name} has the button` : `dead button on seat ${button + 1}`}`);
+
+  // Said, since a hand that starts with one blind looks like a mistake: whoever had the big blind is not in this hand
+  if (!bombPot && !order.includes(sbSeat)) {
+    narrate(state, ctx, 'No small blind this hand');
+  }
+
   postForcedBets(state, ctx, forced);
 
   record(hand, ['deal']);
@@ -762,7 +768,9 @@ function finishUncontested(state: TableState, ctx: Ctx, winner: HandPlayer): voi
 
   state.seats[winner.seat]!.stack += total;
   pots.forEach((pot, potIndex) => record(hand, ['win', winner.seat, pot.amount, potIndex, 0]));
-  narrate(state, ctx, `${winner.name} wins ${formatAmount(total, state.config)}`);
+
+  // A big blind posted with no small blind and no ante, and folded to, went back as an uncalled bet: nothing is left to win
+  narrate(state, ctx, total > 0 ? `${winner.name} wins ${formatAmount(total, state.config)}` : `Everyone folded to ${winner.name}`);
 
   finishHand(state, ctx, {
     uncontested: true,

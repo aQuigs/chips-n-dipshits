@@ -6,6 +6,8 @@ import type { Card } from './cards.ts';
 import type { HandEvent } from './events.ts';
 import { readHand } from './handNames.ts';
 import type { HandRead } from './handNames.ts';
+import { comingIn } from './handPlan.ts';
+import type { ComesIn } from './handPlan.ts';
 import { reaches, roleOf } from './hosts.ts';
 import type { Role } from './hosts.ts';
 import { handsLeft, nightIsOver, onLastHand } from './night.ts';
@@ -29,6 +31,11 @@ export interface SeatView {
   pendingAdd: number;
   /** The seat the host is moving them to when the hand ends. */
   moveTo: number | null;
+  /** The blinds they missed and have yet to settle. For the whole table to see, as a missed-blind button on the felt is. */
+  owesBigBlind: boolean;
+  owesSmallBlind: boolean;
+  /** How a player who owes blinds and is there to play gets back in, as things stand, which says what they chose; null for anyone else. */
+  comesIn: ComesIn | null;
   /** Dealt into the hand on the table. */
   inHand: boolean;
   bet: number;
@@ -143,6 +150,8 @@ export function viewFor(state: TableState, playerId: string, now: number): Table
   const role = roleOf(state, playerId);
   const hand = state.hand;
 
+  const comesIn = comingIn(state);
+
   const seats = state.seats.map((seat, index): SeatView | null => {
     if (!seat) {
       return null;
@@ -162,6 +171,9 @@ export function viewFor(state: TableState, playerId: string, now: number): Table
       straddle: seat.straddle,
       pendingAdd: seat.pendingAdd,
       moveTo: seat.moveTo,
+      owesBigBlind: seat.owesBigBlind,
+      owesSmallBlind: seat.owesSmallBlind,
+      comesIn: comesIn.get(index) ?? null,
       inHand: player !== undefined,
       bet: player?.bet ?? 0,
       folded: player?.folded ?? false,

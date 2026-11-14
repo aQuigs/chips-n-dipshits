@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
-import { replayHand, STATE_SCHEMA, TIMING } from '../src/engine/index.ts';
+import { owes, replayHand, STATE_SCHEMA, TIMING } from '../src/engine/index.ts';
 import type { TableState } from '../src/engine/index.ts';
 import { restoreState } from '../src/server/store.ts';
 import { checkAround, handRecords, seededRng, TestTable } from './helpers.ts';
@@ -150,6 +150,49 @@ test('a table saved before bomb pots has none called or counted, a hand in play 
   const { bombPotAmount: _amount, bombPotEvery: _every, ...asOnceSaved } = cents.state.config;
   const restored = restoreState(JSON.stringify({ ...cents.state, config: asOnceSaved }));
   assert.deepEqual([restored.config.bombPotAmount, restored.config.bombPotEvery, restored.config.smallBlind], [250, 0, 25]);
+});
+
+test('a table saved in the middle of a hand before missed blinds finishes that hand, moves the button on once as it used to, and follows the dead button from there', () => {
+  for (const file of FILES) {
+    const state = load(file);
+
+    assert.deepEqual([state.blinds, state.config.missedBlinds], [null, 'owed'], file);
+    assert.ok(state.seats.every((seat) => !seat || (!owes(seat) && !seat.postsOwed)), file);
+  }
+
+  // Five players, the button on seat 0, and the hand before the flop
+  const t = TestTable.adopt(load('schema3-betting-straddle-side-pot.json'));
+  t.cmd(0, { type: 'pause' });
+  assert.deepEqual([t.state.hand!.button, t.state.hand!.sbSeat, t.state.hand!.bbSeat], [0, 1, 2]);
+
+  t.fold(3);
+  t.fold(4);
+  while (handsFinished(t) === 0) {
+    t.wait(t.state.hand!.deadline! - t.now);
+  }
+  t.finishHand();
+  assert.equal(t.state.blinds, null, 'the hand it was saved in left blinds behind that it never recorded');
+
+  // Nothing says where that hand's blinds were, so the next starts from the button alone, as every hand used to
+  t.deal();
+  assert.deepEqual([t.state.hand!.button, t.state.hand!.sbSeat, t.state.hand!.bbSeat], [1, 2, 3]);
+  assert.deepEqual(t.state.blinds, { small: 2, big: 3 });
+  assertInvariants(t.state, t.now);
+
+  // From here a player who steps out is owed for: the big blind passes seat 4, and the button is dead on seat 2
+  const seated = (seat: number) => t.ids.indexOf(t.state.seats[seat]!.playerId);
+  for (const seat of [4, 0, 1, 2]) {
+    t.fold(seated(seat));
+  }
+  t.finishHand();
+  t.cmd(seated(4), { type: 'sitOut' });
+  t.cmd(seated(2), { type: 'sitOut' });
+  t.deal();
+
+  assert.deepEqual([t.state.hand!.button, t.state.hand!.sbSeat, t.state.hand!.bbSeat], [2, 3, 0]);
+  assert.match(t.state.hand!.log[0]!, / · dead button on seat 3$/);
+  assert.deepEqual([t.state.seats[4]!.owesBigBlind, t.state.seats[4]!.owesSmallBlind, t.state.seats[2]!.owesBigBlind], [true, true, false]);
+  assertInvariants(t.state, t.now);
 });
 
 test('a bomb pot saved in the middle by the code before there were two boards goes on as it was, on one', () => {

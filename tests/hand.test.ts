@@ -750,7 +750,7 @@ test('chips approved during a hand wait for the hand to end', () => {
   assertChipsConserved(t.state);
 });
 
-test('the button moves to the next player who is playing', () => {
+test('the button takes its turn on the seat of a player who stepped out, and the blinds move on as if they had not', () => {
   const t = new TestTable({ stacks: [1000, 1000, 1000, 1000] });
   t.deal({ button: 0 });
   t.fold(3);
@@ -762,8 +762,10 @@ test('the button moves to the next player who is playing', () => {
   t.deal();
 
   const hand = t.state.hand!;
-  assert.deepEqual([hand.button, hand.sbSeat, hand.bbSeat], [2, 3, 0]);
+  assert.deepEqual([hand.button, hand.sbSeat, hand.bbSeat], [1, 2, 3]);
   assert.deepEqual(hand.players.map((p) => p.seat), [0, 2, 3]);
+  assert.equal(hand.log[0], 'Hand #2 · blinds 10/20 · dead button on seat 2');
+  assert.equal(t.toAct, 0, 'the action does not start left of the big blind');
 });
 
 test('with the game running, hands follow each other by themselves', () => {
@@ -1384,15 +1386,15 @@ test('a move that waited for a hand to end is made before the next hand\'s force
     t.finishHand();
     assert.equal(t.state.seats[5]!.playerId, t.ids[1]);
 
-    // The button passes to seat 2, so the blinds are the player now in seat 5 and the one in seat 0
+    // The big blind moves on from seat 2 to the next player, who is now the one in seat 5
     const before = t.stacks();
     t.deal();
     assert.deepEqual(t.state.hand!.players.map((p) => p.seat), [0, 2, 5]);
     assert.deepEqual(
       posts(t),
       config === EVERYONE_ANTES
-        ? ['5 ante 5 980 contribution', '0 ante 5 990 contribution', '2 ante 5 1015 contribution', '5 small blind 10 970', '0 big blind 20 970']
-        : ['5 small blind 10 980', '0 big blind 20 980', '0 big blind ante 20 960 dead'],
+        ? ['2 ante 5 1015 contribution', '5 ante 5 980 contribution', '0 ante 5 990 contribution', '2 small blind 10 1005', '5 big blind 20 960']
+        : ['2 small blind 10 1000', '5 big blind 20 970', '5 big blind ante 20 950 dead'],
     );
     assert.equal(t.stacks().reduce((sum, stack) => sum + stack, 0) + t.view(0).hand!.pot, before.reduce((sum, stack) => sum + stack, 0));
     assertInvariants(t.state, t.now);

@@ -93,6 +93,8 @@ function players(view: TableView, handlers: DialogHandlers): HTMLElement {
       : null;
   };
 
+  const owes = (seat: SeatView) => [seat.owesBigBlind ? 'the big blind' : '', seat.owesSmallBlind ? 'the small blind' : ''].filter(Boolean).join(' and ');
+
   const seatedIds = new Set(view.seats.flatMap((seat) => (seat ? [seat.playerId] : [])));
   const seated = view.seats.flatMap((seat) =>
     seat
@@ -106,12 +108,14 @@ function players(view: TableView, handlers: DialogHandlers): HTMLElement {
               nameOf(seat.playerId, seat.name),
               ` · seat ${seat.seat + 1} · ${formatAmount(seat.stack, view.config)}`,
               seat.moveTo !== null ? h('small.move-note', null, `Moves to seat ${seat.moveTo + 1} after this hand`) : null,
+              owes(seat) ? h('small.owes-note', null, `Owes ${owes(seat)}`) : null,
             ),
             h(
               'span.row-actions',
               null,
               h('button.btn.small', { type: 'button', 'data-action': 'set-stack', onclick: () => handlers.open({ kind: 'setStack', playerId: seat.playerId }) }, 'Set stack'),
               move(seat),
+              owes(seat) ? h('button.btn.small', { type: 'button', 'data-action': 'forgive-blinds', onclick: () => void handlers.send({ type: 'forgiveBlinds', playerId: seat.playerId }) }, 'Forgive blinds') : null,
               roleButtons(seat.playerId, seat.name),
               remove(seat.playerId, seat.name, 'They lose their seat and their chips are cashed out in the ledger. They can ask for a seat again.', false),
             ),
@@ -168,7 +172,7 @@ export const playersDialog: DialogKind<'players'> = {
     view.cohostIds,
     view.hand?.number,
     view.shuffleAfterHand,
-    view.seats.map((seat) => seat && [seat.playerId, seat.name, seat.seat, seat.moveTo, seat.leaving, view.hand ? null : seat.stack]),
+    view.seats.map((seat) => seat && [seat.playerId, seat.name, seat.seat, seat.moveTo, seat.leaving, seat.owesBigBlind, seat.owesSmallBlind, view.hand ? null : seat.stack]),
   ],
   draw: players,
 };

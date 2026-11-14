@@ -58,6 +58,7 @@ const BET_SPOTS: Record<Shape, Spot[]> = {
 const ACTION_LABELS: Record<string, string> = {
   'small blind': 'SB',
   'big blind': 'BB',
+  'missed big blind': 'Missed BB',
   straddle: 'Straddle',
   fold: 'Fold',
   check: 'Check',
@@ -130,8 +131,19 @@ function statusOf(seat: SeatView, hand: HandView | null): string | null {
     return 'Sitting out';
   }
 
+  // Back at the table with blinds to settle: why they have no cards, for everyone to see
+  if (!seat.inHand && seat.comesIn === 'big blind') {
+    return 'Waiting for BB';
+  }
+
+  if (!seat.inHand && (seat.comesIn === 'button' || seat.comesIn === 'posting')) {
+    return 'Waiting to post';
+  }
+
   return null;
 }
+
+const dealerButtonEl = (title: string) => h('div.dealer-button', { title }, 'D');
 
 /** The line under a seat for the hand it showed down. */
 function shownLabel(seat: SeatView, hand: HandView): string | null {
@@ -197,6 +209,8 @@ function seatEl(view: TableView, seat: SeatView, slot: number, shape: Shape, clo
   const result = hand?.result;
   const won = sum(result?.winnings.filter((win) => win.seat === seat.seat).map((win) => win.amount) ?? []);
   const bounty = result?.bounty?.seat === seat.seat ? sum(result.bounty.payments.map((payment) => payment.amount)) : 0;
+  // A bounty can be all a hand brought in: a big blind everyone folded to, with no small blind or ante, wins nothing else
+  const took = won + bounty;
   const status = statusOf(seat, hand);
   // A seat makes a hand per board on more than one, and once they are shown down the result in the middle names them: on a phone it needs the room
   const middleNamesHands = hand?.stage === 'done' && boardsWonOn(hand) > 1;
@@ -211,7 +225,7 @@ function seatEl(view: TableView, seat: SeatView, slot: number, shape: Shape, clo
     acting && 'acting',
     seat.folded && 'folded',
     !seat.inHand && (seat.sittingOut || seat.stack === 0) && 'out',
-    won > 0 && 'winner',
+    took > 0 && 'winner',
     moving === seat.playerId && 'moving',
   ].filter(Boolean);
 
@@ -238,7 +252,7 @@ function seatEl(view: TableView, seat: SeatView, slot: number, shape: Shape, clo
     null,
     h('div.name', { title: seat.name }, h('span', null, seat.name), roleMark(view, seat.playerId)),
     h('div.stack', { title: formatAmount(seat.stack, view.config) }, shortAmount(seat.stack, view.config), seat.pendingAdd > 0 ? h('span.pending', null, ` +${shortAmount(seat.pendingAdd, view.config)}`) : null),
-    won > 0 ? h('div.status.won', null, `+${shortAmount(won + bounty, view.config)}`) : status ? h('div.status', { 'data-status': status }, status) : null,
+    took > 0 ? h('div.status.won', null, `+${shortAmount(took, view.config)}`) : status ? h('div.status', { 'data-status': status }, status) : null,
     // The seconds left, for everyone: the bar under the name alone is easy to miss until the time is gone
     timer ? h('div.status.clock', { 'data-countdown': hand!.deadline }, '') : null,
     // In the plate, in short: a line under the seat would run onto the next one down the side of a phone's table
@@ -251,7 +265,7 @@ function seatEl(view: TableView, seat: SeatView, slot: number, shape: Shape, clo
     { class: classes.join(' '), style: place.style, 'data-seat': seat.seat },
     hole,
     plate,
-    hand?.button === seat.seat ? h('div.dealer-button', { title: 'Dealer button' }, 'D') : null,
+    hand?.button === seat.seat ? dealerButtonEl('Dealer button') : null,
     vote,
     hint,
     label ? h('div.tag', null, label) : null,
@@ -276,7 +290,9 @@ function chipsEl(amount: number | undefined, table: Denominated, style: Record<s
 function openSeatEl(view: TableView, seat: number, slot: number, shape: Shape, handlers: TableHandlers): HTMLElement {
   const myRequest = view.requests.find((request) => request.playerId === view.you.id && request.kind === 'seat');
   const place = seatPlace(shape, slot);
-  const open = (kind: string, plate: HTMLElement) => h('div', { class: `${place.class} open ${kind}`, style: place.style, 'data-open-seat': seat }, plate);
+  // The button takes its turn on a seat nobody is in
+  const deadButton = view.hand?.button === seat ? dealerButtonEl('Dealer button, on an empty seat this hand') : null;
+  const open = (kind: string, plate: HTMLElement) => h('div', { class: `${place.class} open ${kind}`, style: place.style, 'data-open-seat': seat }, plate, deadButton);
   const moving = handlers.moving;
 
   // A seat that a move waiting for the hand will fill is not offered to another
@@ -356,6 +372,11 @@ function resultLines(view: TableView, hand: HandView): string[] {
 
       lines.push(`${board}${nameAt(seat)} wins ${amountOf(amount)}${made ? ` with ${midSentence(made)}` : ''}`);
     }
+  }
+
+  // Folded to a big blind that was the only chips in the hand, which went back to its player
+  if (result.uncontested && lines.length === 0) {
+    lines.push(`Everyone folded to ${nameAt(result.winnings[0]!.seat)}`);
   }
 
   const bountyLine = result.bounty ? [`Seven-deuce! ${nameAt(result.bounty.seat)} collects a ${amountOf(sum(result.bounty.payments.map((payment) => payment.amount)))} bounty`] : [];

@@ -198,16 +198,56 @@ function nextHandNote(view: TableView): string[] {
   return [countdown, bombPot].filter((part) => part !== null);
 }
 
-function waitingEl(text: string, view: TableView): HTMLElement {
+/** What the bar says to a player who owes blinds about getting back into the game, and the buttons they settle it with. */
+interface Settling {
+  note: string | null;
+  buttons: HTMLElement[];
+}
+
+function settlingOf(view: TableView, seat: SeatView, handlers: ControlHandlers): Settling {
+  const amount = (seat.owesBigBlind ? view.config.bigBlind : 0) + (seat.owesSmallBlind ? view.config.smallBlind : 0);
+  const owed = formatAmount(amount, view.config);
+
+  // Short, since they share a row of a phone with the switch for sitting out: the line above them says the rest
+  const post = (label: string) => commandButton('button.chip-btn', 'post-blinds', label, () => handlers.send({ type: 'comeIn', post: true }));
+  const wait = (spec: `button.${string}`) => commandButton(spec, 'wait-for-blind', 'Wait for big blind', () => handlers.send({ type: 'comeIn', post: false }));
+
+  if (amount === 0) {
+    return { note: null, buttons: [] };
+  }
+
+  if (seat.sittingOut || seat.away) {
+    return { note: `You owe ${owed} for the blinds you missed`, buttons: [wait('button.chip-btn.strong'), post(`Post ${owed} and play`)] };
+  }
+
+  switch (seat.comesIn) {
+    case 'big blind':
+      return { note: 'You are dealt in when the big blind reaches you', buttons: [post(`Post ${owed} instead`)] };
+
+    case 'button':
+      return { note: `You post ${owed} and are dealt in once the button has passed you`, buttons: [wait('button.chip-btn')] };
+
+    case 'posting':
+      // A bomb pot has no blinds to post, so it is dealt to them like anyone and the posting waits for the hand after
+      return { note: view.nextBombPot ? `You post ${owed} in the hand after the bomb pot` : `You post ${owed} and are dealt in next hand`, buttons: [wait('button.chip-btn')] };
+
+    default:
+      return { note: null, buttons: [] };
+  }
+}
+
+function waitingEl(text: string, view: TableView, owed: string | null = null): HTMLElement {
   const note = nextHandNote(view);
 
-  return h('div.waiting', null, text, note.length > 0 ? h('div.next-hand', null, note.map((part) => h('span', null, part))) : null);
+  return h('div.waiting', null, text, note.length > 0 ? h('div.next-hand', null, note.map((part) => h('span', null, part))) : null, owed ? h('div.owed-note', null, owed) : null);
 }
 
 function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandlers): HTMLElement {
   const hand = view.hand;
   const myRequest = view.requests.find((request) => request.playerId === view.you.id);
   const room = view.config.maxBuyIn - seat.stack - seat.pendingAdd;
+  // With the night over no hand is coming to settle anything in; the seat still says who is waiting
+  const settling = nightOver(view) ? { note: null, buttons: [] } : settlingOf(view, seat, handlers);
 
   let main: HTMLElement;
   if (hand?.options) {
@@ -225,7 +265,7 @@ function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandle
       ),
     );
   } else {
-    main = waitingEl(waitingText(view, hand), view);
+    main = waitingEl(waitingText(view, hand), view, settling.note);
   }
 
   const showCards = hand?.canShow ? commandButton('button.chip-btn', 'show', 'Show my cards', () => handlers.send({ type: 'showCards' })) : null;
@@ -242,11 +282,14 @@ function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandle
 
   const extras: HTMLElement[] = [];
 
-  if (seat.sittingOut || seat.away) {
-    extras.push(commandButton('button.chip-btn.strong', 'sit-in', "I'm back", () => handlers.send({ type: 'sitIn' })));
-  } else {
+  // Coming back owing blinds is a choice between two ways of settling them, which takes the place of the one button
+  if (!seat.sittingOut && !seat.away) {
     extras.push(toggle('Sit out next hand', false, 'sit-out', () => handlers.send({ type: 'sitOut' })));
+  } else if (settling.buttons.length === 0) {
+    extras.push(commandButton('button.chip-btn.strong', 'sit-in', "I'm back", () => handlers.send({ type: 'sitIn' })));
   }
+
+  extras.push(...settling.buttons);
 
   if (view.config.allowStraddle) {
     extras.push(toggle('Straddle', seat.straddle, 'straddle', (on) => handlers.send({ type: 'setStraddle', on })));
@@ -304,11 +347,11 @@ export function controlsSignature(view: TableView): string {
   const hand = view.hand;
 
   return JSON.stringify([
-    seat && [seat.stack, seat.pendingAdd, seat.sittingOut, seat.away, seat.straddle, seat.leaving],
+    seat && [seat.stack, seat.pendingAdd, seat.sittingOut, seat.away, seat.straddle, seat.leaving, seat.owesBigBlind, seat.owesSmallBlind, seat.comesIn],
     hand && [hand.number, hand.stage, hand.street, hand.toAct, hand.turn, hand.currentBet, hand.pot, hand.options, hand.canVote, hand.canShow],
     [view.running, view.nextHandAt !== null, view.handCount === 0, nightOver(view), hand?.stage === 'done' && onLastHand(view)],
     view.requests.filter((request) => request.playerId === view.you.id),
-    [view.config.allowStraddle, view.config.maxBuyIn],
+    [view.config.allowStraddle, view.config.maxBuyIn, view.config.smallBlind, view.config.bigBlind],
     nextHandNote(view),
   ]);
 }

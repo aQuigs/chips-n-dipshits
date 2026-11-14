@@ -1,5 +1,6 @@
 /* What a player asks for about their own seat. */
 import { formatAmount, validAmount } from '../amounts.ts';
+import { choosePosting } from '../handPlan.ts';
 import { leaveSeat, submit } from '../seating.ts';
 import { seatIndexOf } from '../seats.ts';
 import { GameError, SEAT_COUNT } from '../types.ts';
@@ -67,6 +68,15 @@ export const sitOut: Handler<'sitOut'> = {
 export const sitIn: Handler<'sitIn'> = {
   by: 'seat',
   run: ({ seat }) => {
+    seat.sittingOut = false;
+    seat.away = false;
+  },
+};
+
+export const comeIn: Handler<'comeIn'> = {
+  by: 'seat',
+  run: ({ command, seat }) => {
+    choosePosting(seat, yesOrNo(command.post, 'Posting what you owe'));
     seat.sittingOut = false;
     seat.away = false;
   },

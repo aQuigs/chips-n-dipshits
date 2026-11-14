@@ -33,4 +33,5 @@ export const STYLESHEETS = [
   'presets.css',
   'attention.css',
   'last-hands.css',
+  'missed-blinds.css',
 ];

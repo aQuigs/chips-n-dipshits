@@ -16,10 +16,11 @@ function history(table: Denominated, handlers: DialogHandlers): HTMLElement {
           : [...hands].reverse().map((hand) => {
               const bounty = hand.result.bounty;
               const collected = bounty ? bounty.payments.reduce((sum, payment) => sum + payment.amount, 0) : 0;
-              const winners = hand.result.winnings.map((win) => {
+              const winners = hand.result.winnings.flatMap((win) => {
                 const withBounty = win.amount + (bounty?.seat === win.seat ? collected : 0);
 
-                return `${hand.players.find((p) => p.seat === win.seat)?.name ?? '?'} +${formatAmount(withBounty, table)}`;
+                // A hand folded to a big blind that was its only chips was won by nobody
+                return withBounty > 0 ? [`${hand.players.find((p) => p.seat === win.seat)?.name ?? '?'} +${formatAmount(withBounty, table)}`] : [];
               });
 
               const title = `Hand #${hand.number}${hand.bombPot ? ` · ${bombPotName(hand.bombPot)}` : ''}`;

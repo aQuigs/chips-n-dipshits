@@ -3,6 +3,7 @@ import { formatAmount, validAmount } from '../amounts.ts';
 import { bombPotName, bombPotOf } from '../bombPots.ts';
 import { validatedConfig } from '../config.ts';
 import { restartActionClock } from '../hand.ts';
+import { forgive, forgiveEveryone, owes } from '../handPlan.ts';
 import { actorName, dropCohost, requireMayRemove } from '../hosts.ts';
 import { callLastHands, endNight, nightIsOver, onLastHand, restartNight } from '../night.ts';
 import { movePlayer, shuffleEveryone } from '../reseating.ts';
@@ -164,6 +165,19 @@ export const playOn: Handler<'playOn'> = {
   run: ({ state, ctx, member }) => restartNight(state, ctx, actorName(state, member)),
 };
 
+export const forgiveBlinds: Handler<'forgiveBlinds'> = {
+  by: 'host or cohost',
+  run: ({ state, ctx, member, command }) => {
+    const { member: target, seat } = seatedMember(state, command.playerId);
+    if (!owes(seat)) {
+      return;
+    }
+
+    forgive(seat);
+    addFeed(state, ctx.now, 'system', null, `${actorName(state, member)} forgave ${target.name} the blinds they missed`);
+  },
+};
+
 const BOMB_POT_SETTINGS = ['bombPotAmount', 'bombPotEvery', 'bombPotBoards'] as const;
 
 /** How the chat puts what the table plays for bomb pots. */
@@ -224,6 +238,16 @@ export const updateConfig: Handler<'updateConfig'> = {
           seat.straddle = false;
         }
       }
+    }
+
+    if (state.config.missedBlinds !== before.missedBlinds) {
+      const forgiven = state.config.missedBlinds === 'forgiven';
+
+      if (forgiven) {
+        forgiveEveryone(state);
+      }
+
+      addFeed(state, ctx.now, 'system', null, forgiven ? 'Missed blinds are forgiven: nobody owes any' : `Missed blinds are owed${when}`);
     }
 
     if (state.config.actionSeconds !== before.actionSeconds) {

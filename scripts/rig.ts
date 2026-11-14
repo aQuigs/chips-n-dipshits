@@ -118,8 +118,17 @@ export class RigTable {
     });
   }
 
-  /** Starts the game if need be and deals the next hand with the button and the cards fixed. */
+  /** Starts the game if need be and deals a hand with the button and the cards fixed: a new game, with the blinds left of that button. */
   deal(deal: RigDeal): TableView {
+    return this.dealFixed(deal);
+  }
+
+  /** Deals the hand that follows the last one, as the table itself would: the button, the blinds and who is dealt in go by the rule, and only the cards are fixed. */
+  dealNext(cards: Omit<DealOptions, 'button'> = {}): TableView {
+    return this.dealFixed(cards);
+  }
+
+  private dealFixed(deal: DealOptions): TableView {
     if (!this.view(this.host).running) {
       this.act(this.host, { type: 'start' });
     }

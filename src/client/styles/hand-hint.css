@@ -1,0 +1,62 @@
+/* ---- The hand hint: what the viewer's own cards make and which cards make it, shown on the app as data-hand-hint ---- */
+
+[data-hand-hint='off'] .hint {
+  display: none;
+}
+
+/* The hint already names the viewer's hand, so the name it showed down is not said twice */
+[data-hand-hint='on'] .seat.me .hint ~ .tag {
+  display: none;
+}
+
+.hint {
+  display: grid;
+  justify-items: center;
+  gap: 0.1em;
+}
+
+/* On a phone held upright the seats beside the viewer's come close under it, so a long name wraps inside the seat instead of running under them */
+.table.tall .seat.me .hint {
+  max-width: calc(var(--seat-w) + 1.5em);
+  padding-inline: 0.5em;
+  white-space: normal;
+}
+
+.hint .read {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 0 0.4em;
+}
+
+.hint .name {
+  text-wrap: balance;
+}
+
+.hint .run {
+  display: grid;
+  place-items: center;
+  width: 1.4em;
+  height: 1.4em;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font-size: 0.8em;
+}
+
+.hint .bounty {
+  color: var(--accent);
+  font-size: 0.8em;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* Lifted and set apart by shape, not color, so the marking reads the same in every theme and deck */
+[data-hand-hint='on'] .card.plays {
+  transform: translateY(calc(var(--card-w) * -0.16));
+}
+
+[data-hand-hint='on'] .card.idle {
+  opacity: 0.5;
+}

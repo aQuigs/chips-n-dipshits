@@ -79,6 +79,14 @@ export const PREFERENCES = {
     css: 'attribute',
     preview: [null],
   },
+  handHint: {
+    kind: 'onOff',
+    label: 'Hand hint',
+    hint: 'Names what your cards make and lifts the cards that make it',
+    group: 'Cards',
+    default: true,
+    css: 'attribute',
+  },
   // Off on a phone whatever is chosen: there the keys do nothing and no key is shown
   hotkeys: {
     kind: 'onOff',

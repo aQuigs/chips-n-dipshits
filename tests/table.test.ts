@@ -684,3 +684,67 @@ test('whole chips or dollars and cents is chosen when the table is created and n
     assert.deepEqual([t.state.config.unit, t.state.config.bigBlind], [from, 400]);
   }
 });
+
+test('a player is told what their own cards make, on every street, and nobody else is', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 1000] });
+  t.deal({ button: 0, holes: { 0: 'As Kd', 1: 'Ks Kh', 2: 'Qs Jh' }, board: 'Kc 7d 2s Ad 9h' });
+
+  assert.deepEqual(t.view(0).hand!.holding, { reads: [{ name: 'Ace-king offsuit', plays: [] }], bounty: false });
+  assert.deepEqual(t.view(1).hand!.holding!.reads[0]!.name, 'Pocket kings');
+
+  // Nothing in one player's view says what another holds, not even in words
+  for (const others of ['Pocket kings', 'Queen-jack offsuit']) {
+    assert.ok(!JSON.stringify(t.view(0)).includes(others), `the view tells P0 "${others}"`);
+  }
+
+  const watcher = addMember(t.state, 'Watcher', t.ctx());
+  assert.equal(viewFor(t.state, watcher.id, t.now).hand!.holding, null, 'someone only watching has no cards to read');
+
+  t.fold(0);
+  assert.equal(t.view(0).hand!.holding, null, 'a folded hand is not read');
+
+  t.call(1);
+  t.check(2);
+  const [flop] = t.view(1).hand!.holding!.reads;
+  assert.equal(flop!.name, 'Three kings');
+  assert.deepEqual([...flop!.plays].sort(), ['2s', '7d', 'Kc', 'Kh', 'Ks']);
+  assert.equal(t.view(2).hand!.holding!.reads[0]!.name, 'King high');
+
+  t.check(1);
+  t.check(2);
+  assert.equal(t.view(2).hand!.holding!.reads[0]!.name, 'Ace high');
+  assert.equal(t.view(1).hand!.holding!.reads[0]!.name, 'Three kings');
+
+  t.check(1);
+  t.check(2);
+  assert.equal(t.view(2).hand!.holding!.reads[0]!.name, 'Ace high');
+  assertViewsKeepSecrets(t.state, t.now);
+});
+
+test('a hand run twice is read on each board', () => {
+  const t = new TestTable({ stacks: [500, 500], config: { allowRunItTwice: true } });
+  t.deal({ button: 0, holes: { 0: 'As Ah', 1: 'Ks Kh' }, board: '2c 7d 9h Jc 3s', secondBoard: 'Kd Kc' });
+  t.call(0);
+  t.check(1);
+  t.raise(1, 480);
+  t.call(0);
+  t.cmd(0, { type: 'ritVote', agree: true });
+  t.cmd(1, { type: 'ritVote', agree: true });
+  t.runToResult();
+
+  const reads = t.view(1).hand!.holding!.reads;
+  assert.deepEqual(reads.map((read) => read.name), ['Pair of kings', 'Four kings']);
+  assert.deepEqual([...reads[1]!.plays].sort(), ['9h', 'Kc', 'Kd', 'Kh', 'Ks']);
+  assertViewsKeepSecrets(t.state, t.now);
+});
+
+test('seven-deuce is pointed out at a table that pays the bounty for it, and only there', () => {
+  const withBounty = new TestTable({ stacks: [1000, 1000], config: { sevenDeuceBounty: 50 } });
+  withBounty.deal({ button: 0, holes: { 0: '7h 2c', 1: '7s 3c' } });
+  assert.deepEqual(withBounty.view(0).hand!.holding, { reads: [{ name: 'Seven-deuce offsuit', plays: [] }], bounty: true });
+  assert.equal(withBounty.view(1).hand!.holding!.bounty, false);
+
+  const without = new TestTable({ stacks: [1000, 1000] });
+  without.deal({ button: 0, holes: { 0: '7h 2h' } });
+  assert.deepEqual(without.view(0).hand!.holding, { reads: [{ name: 'Seven-deuce suited', plays: [] }], bounty: false });
+});

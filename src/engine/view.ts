@@ -1,13 +1,16 @@
 import { bettingOptions } from './betting.ts';
 import type { BettingOptions } from './betting.ts';
+import { isSevenDeuce } from './cards.ts';
 import type { Card } from './cards.ts';
 import type { HandEvent } from './events.ts';
+import { readHand } from './handNames.ts';
+import type { HandRead } from './handNames.ts';
 import { reaches, roleOf } from './hosts.ts';
 import type { Role } from './hosts.ts';
 import { buildPots } from './pots.ts';
 import type { Pot } from './pots.ts';
 import { memberOf, seatIndexOf } from './seats.ts';
-import type { FeedEntry, HandResult, HandStage, PlayerAction, RequestKind, Street, TableConfig, TableState } from './types.ts';
+import type { FeedEntry, Hand, HandPlayer, HandResult, HandStage, PlayerAction, RequestKind, Street, TableConfig, TableState } from './types.ts';
 
 /** A hole card as one viewer sees it: the card, or null when it is face down for them. */
 export type VisibleCard = Card | null;
@@ -35,6 +38,14 @@ export interface SeatView {
   /** The cards are face up for the whole table, not just for this viewer. */
   shown: boolean;
   ritVote: boolean | null;
+}
+
+/** What the viewer's own two cards make, for them alone. */
+export interface Holding {
+  /** One for each board dealt so far, which is two once a hand run twice deals its second. */
+  reads: HandRead[];
+  /** Seven-deuce in a hand that pays the bounty for it. */
+  bounty: boolean;
 }
 
 export interface HandView {
@@ -65,6 +76,8 @@ export interface HandView {
   result: HandResult | null;
   /** Everything that has happened in the hand so far, in order. The same for every viewer: it holds no face-down card. */
   events: HandEvent[];
+  /** Null for a viewer who has no cards in the hand or has folded them. */
+  holding: Holding | null;
 }
 
 export interface RequestView {
@@ -174,6 +187,7 @@ export function viewFor(state: TableState, playerId: string, now: number): Table
       canShow: hand.stage === 'done' && mine !== undefined && !mine.shown,
       result: hand.result,
       events: hand.events,
+      holding: mine && !mine.folded ? holdingOf(hand, mine) : null,
     };
   }
 
@@ -198,6 +212,13 @@ export function viewFor(state: TableState, playerId: string, now: number): Table
     requests: visibleRequests.map((request) => ({ ...request, name: memberOf(state, request.playerId).name })),
     ledger: ledgerOf(state),
     members: state.members.map((m) => ({ id: m.id, name: m.name })),
+  };
+}
+
+function holdingOf(hand: Hand, player: HandPlayer): Holding {
+  return {
+    reads: hand.boards.map((board) => readHand(player.cards, board)),
+    bounty: hand.bounty > 0 && isSevenDeuce(player.cards),
   };
 }
 

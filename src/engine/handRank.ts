@@ -17,7 +17,6 @@ export interface HandValue {
   category: number;
   /** The five cards that make the hand, most significant first. */
   cards: Card[];
-  name: string;
 }
 
 const HAND_SIZE = 5;
@@ -26,30 +25,6 @@ const WHEEL_HIGH = 5;
 
 // One more than the highest rank, so each tiebreak rank is one base-15 digit below the category
 const SCORE_BASE = 15;
-
-const RANK_NAMES: Record<number, [singular: string, plural: string]> = {
-  2: ['Two', 'Twos'],
-  3: ['Three', 'Threes'],
-  4: ['Four', 'Fours'],
-  5: ['Five', 'Fives'],
-  6: ['Six', 'Sixes'],
-  7: ['Seven', 'Sevens'],
-  8: ['Eight', 'Eights'],
-  9: ['Nine', 'Nines'],
-  10: ['Ten', 'Tens'],
-  11: ['Jack', 'Jacks'],
-  12: ['Queen', 'Queens'],
-  13: ['King', 'Kings'],
-  14: ['Ace', 'Aces'],
-};
-
-function one(rank: number): string {
-  return RANK_NAMES[rank]![0];
-}
-
-function many(rank: number): string {
-  return RANK_NAMES[rank]![1];
-}
 
 interface FiveCardValue {
   category: number;
@@ -147,31 +122,6 @@ function scoreOf(value: FiveCardValue): number {
   return score;
 }
 
-function nameOf(value: FiveCardValue): string {
-  const [first, second] = value.tiebreak as [number, number];
-
-  switch (value.category) {
-    case STRAIGHT_FLUSH:
-      return first === ACE ? 'Royal Flush' : `Straight Flush, ${one(first)} high`;
-    case FOUR_OF_A_KIND:
-      return `Four of a Kind, ${many(first)}`;
-    case FULL_HOUSE:
-      return `Full House, ${many(first)} full of ${many(second)}`;
-    case FLUSH:
-      return `Flush, ${one(first)} high`;
-    case STRAIGHT:
-      return `Straight, ${one(first)} high`;
-    case THREE_OF_A_KIND:
-      return `Three of a Kind, ${many(first)}`;
-    case TWO_PAIR:
-      return `Two Pair, ${many(first)} and ${many(second)}`;
-    case PAIR:
-      return `Pair of ${many(first)}`;
-    default:
-      return `${one(first)} high`;
-  }
-}
-
 const subsetIndexesByCount = new Map<number, number[][]>();
 
 /** Every way to pick five positions out of a hand of the given size, worked out once per size. */
@@ -225,5 +175,24 @@ export function evaluateHand(cards: readonly Card[]): HandValue {
     }
   }
 
-  return { score: bestScore, category: best!.category, cards: inPlayingOrder(bestCards, best!), name: nameOf(best!) };
+  return { score: bestScore, category: best!.category, cards: inPlayingOrder(bestCards, best!) };
+}
+
+/**
+ * A player's best hand from their hole cards and the board. Of the ways to make it, `cards` is
+ * the one with the fewest hole cards, so a hole card is among them only when the hand needs it: a
+ * hand made by the board alone is the board's five.
+ */
+export function playerHand(hole: readonly Card[], board: readonly Card[]): HandValue {
+  const best = evaluateHand([...board, ...hole]);
+  const fewerHoleCards = [[], ...hole.map((card) => [card])].filter((used) => board.length + used.length >= HAND_SIZE);
+
+  for (const used of fewerHoleCards) {
+    const value = evaluateHand([...board, ...used]);
+    if (value.score === best.score) {
+      return value;
+    }
+  }
+
+  return best;
 }

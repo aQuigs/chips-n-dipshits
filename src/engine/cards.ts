@@ -46,6 +46,13 @@ export function suitOf(card: Card): string {
   return card[1]!;
 }
 
+/** The hand the seven-deuce bounty is paid for, suited or not. */
+export function isSevenDeuce(cards: readonly Card[]): boolean {
+  const ranks = cards.map(rankOf).sort((a, b) => a - b);
+
+  return ranks[0] === 2 && ranks[1] === 7;
+}
+
 export const SUIT_SYMBOLS: Record<string, string> = { c: '♣', d: '♦', h: '♥', s: '♠' };
 
 export function prettyCard(card: Card): string {

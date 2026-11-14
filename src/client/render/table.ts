@@ -1,7 +1,8 @@
 import { formatAmount, shortAmount } from '../../engine/amounts.ts';
 import type { Denominated } from '../../engine/amounts.ts';
-import { evaluateHand } from '../../engine/handRank.ts';
-import type { HandView, SeatView, TableView } from '../../engine/view.ts';
+import type { Card } from '../../engine/cards.ts';
+import { midSentence } from '../../engine/handNames.ts';
+import type { HandView, Holding, SeatView, TableView } from '../../engine/view.ts';
 import { cardEl, h } from '../ui.ts';
 import { hostOrCohost, roleMark } from './roles.ts';
 
@@ -128,30 +129,46 @@ function statusOf(seat: SeatView, hand: HandView | null): string | null {
   return null;
 }
 
-/** What the viewer currently holds, e.g. "Pair of Aces", once there is a flop to make a hand with. */
-function holdingName(seat: SeatView, hand: HandView): string | null {
-  const board = hand.boards[0] ?? [];
-  const cards = seat.cards;
-
-  if (hand.boards.length > 1 || seat.folded || !cards || cards.some((card) => card === null) || board.length < 3) {
+/** The line under a seat for the hand it showed down. Run twice, a seat makes a hand per board, which is too much for one label; the result in the middle names them. */
+function shownLabel(seat: SeatView, hand: HandView | null): string | null {
+  if (hand?.stage !== 'done' || hand.boards.length > 1) {
     return null;
   }
 
-  return evaluateHand([...(cards as string[]), ...board]).name;
+  return hand.result?.hands.find((entry) => entry.seat === seat.seat)?.name ?? null;
 }
 
-/** The line under a seat: the hand it showed down, or for the viewer what they hold so far. */
-function handLabel(seat: SeatView, hand: HandView | null, isMe: boolean): string | null {
-  if (!hand) {
-    return null;
+/**
+ * What the viewer's cards make, a line per board, with room in each line for one more short figure.
+ * Drawn whether or not the player wants it, so the preference only has to hide it.
+ */
+function hintEl(holding: Holding): HTMLElement {
+  const twice = holding.reads.length > 1;
+
+  return h(
+    'div.tag.hint',
+    null,
+    holding.reads.map((read, run) =>
+      h(
+        'div.read',
+        null,
+        twice ? h('span.run', { 'aria-label': `Board ${run + 1}:` }, String(run + 1)) : null,
+        h('span.name', null, read.name),
+        run === 0 && holding.bounty ? h('span.bounty', null, 'Bounty hand') : null,
+      ),
+    ),
+  );
+}
+
+/** Picks out, among cards that could make the viewer's hand, the ones that do and the ones that don't. */
+function markPlaying(cards: HTMLElement[], plays: ReadonlySet<Card>): HTMLElement[] {
+  if (plays.size > 0) {
+    for (const card of cards) {
+      card.classList.add(plays.has(card.dataset.card ?? '') ? 'plays' : 'idle');
+    }
   }
 
-  if (hand.stage === 'done') {
-    // Run twice, a seat makes a hand per board, which is too much for one label; the result in the middle names them
-    return hand.boards.length === 1 ? (hand.result?.hands.find((entry) => entry.seat === seat.seat)?.name ?? null) : null;
-  }
-
-  return isMe ? holdingName(seat, hand) : null;
+  return cards;
 }
 
 function seatEl(view: TableView, seat: SeatView, slot: number, shape: Shape, clockOffset: number, moving: string | null): HTMLElement[] {
@@ -162,7 +179,10 @@ function seatEl(view: TableView, seat: SeatView, slot: number, shape: Shape, clo
   const won = sum(result?.winnings.filter((win) => win.seat === seat.seat).map((win) => win.amount) ?? []);
   const bounty = result?.bounty?.seat === seat.seat ? sum(result.bounty.payments.map((payment) => payment.amount)) : 0;
   const status = statusOf(seat, hand);
-  const label = handLabel(seat, hand, isMe);
+  const label = shownLabel(seat, hand);
+  const holding = isMe ? (hand?.holding ?? null) : null;
+  // Once a hand run twice is over, the result in the middle names the hands on each board, and on a phone it needs the room
+  const hint = holding && !(hand!.stage === 'done' && holding.reads.length > 1) ? hintEl(holding) : null;
   const place = seatPlace(shape, slot);
 
   const classes = [
@@ -177,7 +197,8 @@ function seatEl(view: TableView, seat: SeatView, slot: number, shape: Shape, clo
 
   // Folded hands leave the table, except the viewer's own, which stays to look at
   const showCards = seat.cards !== null && (!seat.folded || isMe || seat.shown);
-  const hole = showCards ? h('div.hole', null, seat.cards!.map((card) => cardEl(card))) : h('div.hole.none');
+  const playing = new Set(holding?.reads.flatMap((read) => read.plays));
+  const hole = showCards ? h('div.hole', null, markPlaying(seat.cards!.map((card) => cardEl(card)), playing)) : h('div.hole.none');
 
   let timer: HTMLElement | null = null;
   if (acting && hand.deadline !== null && view.config.actionSeconds > 0) {
@@ -213,6 +234,7 @@ function seatEl(view: TableView, seat: SeatView, slot: number, shape: Shape, clo
     plate,
     hand?.button === seat.seat ? h('div.dealer-button', { title: 'Dealer button' }, 'D') : null,
     vote,
+    hint,
     label ? h('div.tag', null, label) : null,
   );
 
@@ -248,7 +270,8 @@ function openSeatEl(view: TableView, seat: number, slot: number, shape: Shape, h
 
 function boardEl(hand: HandView): HTMLElement {
   const boards = hand.boards.map((board, run) => {
-    const slots = Array.from({ length: BOARD_SIZE }, (_slot, index) => (board[index] ? cardEl(board[index]) : h('div.card.slot')));
+    const dealt = markPlaying(board.map((card) => cardEl(card)), new Set(hand.holding?.reads[run]?.plays));
+    const slots = Array.from({ length: BOARD_SIZE }, (_slot, index) => dealt[index] ?? h('div.card.slot'));
 
     return h('div.board', { 'data-run': run }, slots);
   });
@@ -286,7 +309,7 @@ function resultLines(view: TableView, hand: HandView): string[] {
       const made = result.hands.find((shown) => shown.seat === seat && shown.run === run)?.name;
       const board = runs > 1 ? `Board ${run + 1}: ` : '';
 
-      lines.push(`${board}${nameAt(seat)} wins ${formatAmount(amount, view.config)}${made ? ` with ${made}` : ''}`);
+      lines.push(`${board}${nameAt(seat)} wins ${formatAmount(amount, view.config)}${made ? ` with ${midSentence(made)}` : ''}`);
     }
   }
 

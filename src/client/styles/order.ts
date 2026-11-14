@@ -27,4 +27,5 @@ export const STYLESHEETS = [
   'voice.css',
   'hotkeys.css',
   'seat-moves.css',
+  'hand-hint.css',
 ];

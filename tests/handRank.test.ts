@@ -23,21 +23,6 @@ function hand(text: string) {
   return evaluateHand(cards(text));
 }
 
-test('names every category', () => {
-  assert.equal(hand('As Ks Qs Js Ts').name, 'Royal Flush');
-  assert.equal(hand('9h 8h 7h 6h 5h').name, 'Straight Flush, Nine high');
-  assert.equal(hand('5d 4d 3d 2d Ad').name, 'Straight Flush, Five high');
-  assert.equal(hand('Kc Kd Kh Ks 2c').name, 'Four of a Kind, Kings');
-  assert.equal(hand('Kc Kd Kh Ts Tc').name, 'Full House, Kings full of Tens');
-  assert.equal(hand('Ac Jc 8c 4c 2c').name, 'Flush, Ace high');
-  assert.equal(hand('Tc 9d 8h 7s 6c').name, 'Straight, Ten high');
-  assert.equal(hand('5c 4d 3h 2s Ac').name, 'Straight, Five high');
-  assert.equal(hand('7c 7d 7h Ks 2c').name, 'Three of a Kind, Sevens');
-  assert.equal(hand('Ac Ad Kh Ks 2c').name, 'Two Pair, Aces and Kings');
-  assert.equal(hand('6c 6d Kh Qs 2c').name, 'Pair of Sixes');
-  assert.equal(hand('Ac Jd 8h 4s 2c').name, 'Ace high');
-});
-
 test('ranks the categories in order', () => {
   const ascending = [
     'Ac Kd Qh Js 9c',
@@ -56,7 +41,7 @@ test('ranks the categories in order', () => {
   });
 
   for (let i = 1; i < ascending.length; i++) {
-    assert.ok(ascending[i]!.score > ascending[i - 1]!.score, `${ascending[i]!.name} should beat ${ascending[i - 1]!.name}`);
+    assert.ok(ascending[i]!.score > ascending[i - 1]!.score, `${ascending[i]!.cards.join(' ')} should beat ${ascending[i - 1]!.cards.join(' ')}`);
   }
 });
 
@@ -86,13 +71,11 @@ test('suits never break a tie', () => {
 });
 
 test('picks the best five of seven', () => {
-  assert.equal(hand('As Ah Kd Kc Qs Qh Jd').name, 'Two Pair, Aces and Kings');
   assert.deepEqual(hand('As Ah Kd Kc Qs Qh Jd').cards, cards('As Ah Kd Kc Qs'));
-
-  assert.equal(hand('2c 3c 4c 5c 6c 7c 8c').name, 'Straight Flush, Eight high');
-  assert.equal(hand('Ac Ad Ah Kc Kd Kh 2s').name, 'Full House, Aces full of Kings');
-  assert.equal(hand('Ac Kc Qc 2c 3c 4d 5d').name, 'Flush, Ace high');
-  assert.equal(hand('Ac 2d 3h 4s 5c 6d 9h').name, 'Straight, Six high');
+  assert.deepEqual(hand('2c 3c 4c 5c 6c 7c 8c').cards, cards('8c 7c 6c 5c 4c'));
+  assert.deepEqual(hand('Ac Ad Ah Kc Kd Kh 2s').cards, cards('Ac Ad Ah Kc Kd'));
+  assert.equal(hand('Ac Kc Qc 2c 3c 4d 5d').category, FLUSH);
+  assert.deepEqual(hand('Ac 2d 3h 4s 5c 6d 9h').cards, cards('6d 5c 4s 3h 2d'));
   assert.deepEqual(hand('5c 4d 3h 2s Ac Kd Kh').cards, cards('5c 4d 3h 2s Ac'));
 });
 

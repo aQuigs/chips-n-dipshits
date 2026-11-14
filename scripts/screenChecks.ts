@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import type { Page } from 'playwright';
 
 import { KEYS_SETTLE_MS } from '../src/client/hotkeys.ts';
+import { THEMES } from '../src/client/themes.ts';
 import type { Command, TableView } from '../src/engine/index.ts';
 import { boxes, overlap, Rig, SCREENS, setStageHeight, squeezed, textBoxes } from './rig.ts';
 import type { Box, RigPlayer, ScreenName } from './rig.ts';
@@ -165,6 +166,54 @@ function movesSent(page: Page): string[] {
   });
 
   return sent;
+}
+
+const HINT = '.seat.me .hint';
+
+/** The cards on the table the hand hint picks out as making the viewer's hand, and the ones it says do not. */
+const marking = (page: Page) =>
+  page.evaluate(`({
+    plays: [...document.querySelectorAll('.table .card.plays')].map((card) => card.dataset.card).sort(),
+    idle: [...document.querySelectorAll('.table .card.idle')].map((card) => card.dataset.card).sort(),
+  })`) as Promise<{ plays: string[]; idle: string[] }>;
+
+const sortedCards = (text: string) => text.split(' ').sort();
+
+/** Waits for the hint to name a hand, and for the cards just dealt to land, so the page shows the street the check moved the table to. */
+async function hintSays(page: Page, ...names: string[]): Promise<void> {
+  await page.waitForFunction(`JSON.stringify([...document.querySelectorAll(${JSON.stringify(`${HINT} .name`)})].map((name) => name.textContent)) === ${JSON.stringify(JSON.stringify(names))}`);
+  await page.waitForFunction(`document.getAnimations().every((animation) => animation.animationName !== 'deal')`);
+}
+
+/** That the hint is whole, on the screen and clear of everything else on the table, and the seat's own text is not squeezed by it. */
+async function assertHintFits(page: Page, screen: ScreenName): Promise<void> {
+  const hint = await boxes(page, HINT);
+
+  assertOnScreen(hint, screen, 'the hand hint');
+  assert.deepEqual(await squeezed(page, `${HINT}, ${HINT} .read, .seat.me .plate .name span, .plate .stack`), [], 'the hint, or the seat it is under, is cut off');
+  assertApart(hint, await boxes(page, '.board .card, .seat:not(.me) .plate, .seat:not(.me) .hole .card, .bet, .pot'), 'the hand hint and the table');
+}
+
+/** That the playing cards stand out by being lifted, which reads the same in any theme or deck, and the rest are faded. */
+async function assertMarked(page: Page): Promise<void> {
+  const raised = await page.evaluate(`[...document.querySelectorAll('.table .card.plays')].every((card) => getComputedStyle(card).transform !== 'none')`);
+  const faded = await page.evaluate(`[...document.querySelectorAll('.table .card.idle')].every((card) => Number(getComputedStyle(card).opacity) < 1)`);
+  assert.equal(raised, true, 'a card that plays is not lifted');
+  assert.equal(faded, true, 'a card that does not play is not faded');
+
+  const [playing] = await boxes(page, '.board .card.plays');
+  const [resting] = await boxes(page, '.board .card.idle');
+  if (playing && resting) {
+    assert.ok(resting.top - playing.top >= 3, `a playing board card sits only ${resting.top - playing.top}px above one that does not`);
+  }
+}
+
+/** Sets the viewer's own choices as if made on an earlier visit, and loads the page again with them. */
+async function choose(page: Page, prefs: Record<string, string>): Promise<void> {
+  await page.evaluate(`Object.entries(${JSON.stringify(prefs)}).forEach(([key, value]) => localStorage.setItem('cnd.' + key, value))`);
+  await page.reload();
+  await page.waitForSelector('.stage .table');
+  await page.evaluate('document.fonts.ready.then(() => undefined)');
 }
 
 type Check = [name: string, run: (rig: Rig) => Promise<void>];
@@ -1819,6 +1868,141 @@ const CHECKS: Check[] = [
       await page.keyboard.press('f');
       await page.waitForTimeout(300);
       assert.deepEqual(sent, ['fold']);
+      await page.context().close();
+    },
+  ],
+  [
+    'the hand hint names your two cards, then your hand on every street, and lifts the cards that make it',
+    async (rig) => {
+      for (const screen of ['phone', 'smallPhone', 'desktop'] as const) {
+        const table = rig.table([
+          { name: 'Quigs', stack: 1000 },
+          { name: 'Stu', stack: 1000 },
+        ]);
+        table.deal({ button: 0, holes: { 0: 'Ks 7d', 1: 'Qc Qd' }, board: 'Kh 7s 2c 9d Ah' });
+
+        const page = await table.open('Quigs', screen);
+        await hintSays(page, 'King-seven offsuit');
+        assert.deepEqual(await marking(page), { plays: [], idle: [] }, 'cards are picked out before there is a hand to make');
+        await shot(page, `hint-preflop-${screen}`);
+        await assertHintFits(page, screen);
+
+        table.play(passive, (view) => view.hand!.street === 'flop');
+        await hintSays(page, 'Two pair, kings and sevens');
+        assert.deepEqual(await marking(page), { plays: sortedCards('Ks 7d Kh 7s 2c'), idle: [] });
+        await shot(page, `hint-flop-${screen}`);
+
+        table.play(passive, (view) => view.hand!.street === 'river');
+        await page.waitForSelector('.board .card[data-card="Ah"]');
+        await hintSays(page, 'Two pair, kings and sevens');
+        assert.deepEqual(await marking(page), { plays: sortedCards('Ks 7d Kh 7s Ah'), idle: sortedCards('2c 9d') });
+        await assertMarked(page);
+        await shot(page, `hint-river-${screen}`);
+        await assertHintFits(page, screen);
+
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'the hand hint says when the board plays, points out a bounty hand, reads both boards run twice, and keeps a long name clear of the seats',
+    async (rig) => {
+      const heads = () =>
+        rig.table(
+          [
+            { name: 'Quigs', stack: 1000 },
+            { name: 'Stu', stack: 1000 },
+          ],
+          { allowRunItTwice: true, sevenDeuceBounty: 50 },
+        );
+
+      const boardPlays = heads();
+      boardPlays.deal({ button: 0, holes: { 0: '2c 3d', 1: '4c 5d' }, board: 'As Ks Qs Js Ts' });
+      boardPlays.play(passive, (view) => view.hand!.street === 'river');
+      let page = await boardPlays.open('Quigs', 'phone');
+      await hintSays(page, 'Playing the board');
+      assert.deepEqual(await marking(page), { plays: sortedCards('As Ks Qs Js Ts'), idle: ['2c', '3d'] });
+      await assertMarked(page);
+      await shot(page, 'hint-board-plays-phone');
+      await page.context().close();
+
+      const bounty = heads();
+      bounty.deal({ button: 0, holes: { 0: '7h 2c' } });
+      page = await bounty.open('Quigs', 'smallPhone');
+      await hintSays(page, 'Seven-deuce offsuit');
+      assert.equal(await text(page, `${HINT} .bounty`), 'Bounty hand');
+      await shot(page, 'hint-bounty-small-phone');
+      await assertHintFits(page, 'smallPhone');
+      await page.context().close();
+
+      const twice = heads();
+      twice.deal({ button: 0, holes: { 0: 'Ks Kh', 1: 'As Ah' }, board: '2c 7d 9h Jc 3s', secondBoard: 'Kd 4c 5h 8s Td' });
+      page = await twice.open('Quigs', 'phone');
+
+      // The second board's turn is out: each board read as far as it goes
+      twice.play(allIn, (view) => view.hand!.boards[1]?.length === 4);
+      await hintSays(page, 'Pair of kings', 'Three kings');
+      assert.deepEqual(await texts(page, `${HINT} .run`), ['1', '2']);
+      assert.equal(await page.locator('.board[data-run="0"] .card.plays').count(), 3, 'the first board\'s jack, nine and seven play');
+      assert.equal(await page.locator('.board[data-run="1"] .card.plays').count(), 3, 'the second board\'s king, eight and five play');
+      await shot(page, 'hint-run-twice-phone');
+      await assertMarked(page);
+      await assertHintFits(page, 'phone');
+
+      // Over, the result in the middle names each board's hands, and the hint gives it the room
+      twice.play(allIn, (view) => view.hand!.stage === 'done');
+      await page.waitForSelector('.message.result');
+      assert.equal(await page.locator(HINT).count(), 0);
+      assert.equal(await page.locator('.board[data-run="1"] .card.plays').count(), 3, 'the cards that play stay picked out');
+      assertApart(await boxes(page, '.message.result > div'), await boxes(page, '.seat .plate, .seat .hole .card'), 'a result line and a seat');
+      await page.context().close();
+
+      // The longest kind of name, at a full table on the smallest phone
+      const full = rig.table(tenPlayers());
+      full.deal({ button: 0, holes: { 0: '7c 3d' }, board: '7h 7s 3c 2d 5h' });
+      full.play(passive, (view) => view.hand!.street === 'river');
+      page = await full.open('Quigs', 'smallPhone');
+      await hintSays(page, 'Full house, sevens over threes');
+      await shot(page, 'hint-long-small-phone');
+      await assertHintFits(page, 'smallPhone');
+      await page.context().close();
+    },
+  ],
+  [
+    'the cards the hand hint picks out are clear in every theme and with the four-color deck, and the hint can be switched off',
+    async (rig) => {
+      const table = rig.table([
+        { name: 'Quigs', stack: 1000 },
+        { name: 'Stu', stack: 1000 },
+      ]);
+      table.deal({ button: 0, holes: { 0: 'Ks 7d', 1: 'Qc Qd' }, board: 'Kh 7s 2c 9d Ah' });
+      table.play(passive, (view) => view.hand!.street === 'river');
+
+      const page = await table.open('Quigs', 'phone');
+      for (const theme of THEMES) {
+        await choose(page, { theme: theme.id });
+        await hintSays(page, 'Two pair, kings and sevens');
+        await assertMarked(page);
+        await shot(page, `hint-theme-${theme.id}-phone`);
+      }
+
+      await choose(page, { theme: 'cardroom', deck: 'four' });
+      await assertMarked(page);
+      await shot(page, 'hint-four-color-phone');
+
+      await page.tap('[data-action="menu"]');
+      await page.tap('.menu [data-action="preferences"]');
+      await page.tap('#pref-handHint');
+      await page.waitForSelector('#pref-handHint[aria-checked="false"]');
+      await page.tap('[data-action="close"]');
+
+      assert.deepEqual(await boxes(page, HINT), [], 'the hint is still shown');
+      assert.equal(await page.evaluate(`[...document.querySelectorAll('.table .card')].every((card) => getComputedStyle(card).transform === 'none' && getComputedStyle(card).opacity === '1')`), true, 'a card is still lifted or faded');
+      await shot(page, 'hint-off-phone');
+
+      await page.reload();
+      await page.waitForSelector('.board .card[data-card="Ah"]');
+      assert.deepEqual(await boxes(page, HINT), [], 'the hint came back with a reload');
       await page.context().close();
     },
   ],

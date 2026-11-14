@@ -1,9 +1,10 @@
 import { formatAmount } from './amounts.ts';
 import { bettingIsClosed, bettingOptions, owesAction } from './betting.ts';
-import { prettyCards, rankOf, shuffledDeck } from './cards.ts';
+import { isSevenDeuce, prettyCards, shuffledDeck } from './cards.ts';
 import type { Card } from './cards.ts';
 import type { HandEvent } from './events.ts';
-import { evaluateHand } from './handRank.ts';
+import { madeHandName, midSentence } from './handNames.ts';
+import { playerHand } from './handRank.ts';
 import type { HandValue } from './handRank.ts';
 import { buildPots, splitAmount } from './pots.ts';
 import { addFeed, addPendingChips, clockwiseAfter, clockwiseFrom, eligibleSeats, seatsClockwiseAfter, vacateSeat } from './seats.ts';
@@ -573,7 +574,7 @@ function revealAtShowdown(state: TableState, ctx: Ctx): void {
   const live = livePlayers(hand);
   const board = hand.boards[0]!;
   const pots = buildPots(hand.players);
-  const values = new Map(live.map((p) => [p.seat, evaluateHand([...p.cards, ...board])]));
+  const values = new Map(live.map((p) => [p.seat, playerHand(p.cards, board)]));
 
   const aggressor = live.find((p) => p.seat === hand.lastAggressor);
   const order = aggressor ? clockwiseFrom(live, aggressor.seat) : clockwiseAfter(live, hand.button);
@@ -591,7 +592,7 @@ function revealAtShowdown(state: TableState, ctx: Ctx): void {
 
     if (canStillWin) {
       shown.push(player.seat);
-      show(state, ctx, player, ` (${mine.name})`);
+      show(state, ctx, player, ` (${madeHandName(mine)})`);
     } else {
       record(hand, ['muck', player.seat]);
       narrate(state, ctx, `${player.name} mucks`);
@@ -615,7 +616,7 @@ function settleShowdown(state: TableState, ctx: Ctx): void {
 
   const pots = buildPots(hand.players);
   const values: Map<number, HandValue>[] = hand.boards.map(
-    (board) => new Map(live.map((p) => [p.seat, evaluateHand([...p.cards, ...board])])),
+    (board) => new Map(live.map((p) => [p.seat, playerHand(p.cards, board)])),
   );
 
   const potResults: PotResult[] = [];
@@ -654,7 +655,7 @@ function settleShowdown(state: TableState, ctx: Ctx): void {
         record(hand, ['win', seat, share, potIndex, run]);
 
         const winner = playerAt(hand, seat)!;
-        const handName = values[run]!.get(seat)!.name;
+        const handName = midSentence(madeHandName(values[run]!.get(seat)!));
         narrate(state, ctx, `${winner.name} wins ${formatAmount(share, state.config)}${potLabel(potIndex, pots.length)}${runLabel} with ${handName}`);
       }
     });
@@ -671,7 +672,7 @@ function settleShowdown(state: TableState, ctx: Ctx): void {
     for (const player of live) {
       if (player.shown) {
         const value = values[run]!.get(player.seat)!;
-        hands.push({ seat: player.seat, run, name: value.name, cards: value.cards });
+        hands.push({ seat: player.seat, run, name: madeHandName(value), cards: value.cards });
       }
     }
   });
@@ -713,12 +714,6 @@ function finishUncontested(state: TableState, ctx: Ctx, winner: HandPlayer): voi
     hands: [],
     bounty: payBounty(state, ctx, winner.seat),
   });
-}
-
-function isSevenDeuce(cards: readonly Card[]): boolean {
-  const ranks = cards.map(rankOf).sort((a, b) => a - b);
-
-  return ranks[0] === 2 && ranks[1] === 7;
 }
 
 /** Whoever wins a hand holding seven-deuce collects the bounty from everyone else who was dealt in. */

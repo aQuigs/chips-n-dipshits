@@ -733,6 +733,9 @@ async function caughtUp(page: Page, view: TableView): Promise<void> {
   ]) === ${JSON.stringify(JSON.stringify(wanted))}`);
 }
 
+// Longer than a runout's step and the sweat's room together: on a page whose clock ran on, the river would come too late to sweat
+const SLOW_RUNNER_LAG_MS = 6000;
+
 interface MotionLayout {
   name: string;
   screen: ScreenName;
@@ -782,6 +785,13 @@ async function holdShape(page: Page, layout: MotionLayout): Promise<void> {
 async function watch(table: RigTable, name: string, layout: MotionLayout, holdAt: number | null = 0): Promise<Watched> {
   const moving = await table.open(name, layout.screen, MOTION, { moving: true });
   const still = await table.open(name, layout.screen);
+
+  // The rig's clock stands still between its steps, and a page reckons the server's time from the times its
+  // answers carry: with its own clock running, a page slow between steps would think the table later than it is
+  // and fit no sweat before the next hand. Held still too, the page's reckoning is the rig's clock exactly
+  for (const page of [moving, still]) {
+    await page.clock.setFixedTime(Date.now() - 60_000);
+  }
 
   await holdShape(moving, layout);
   await holdShape(still, layout);
@@ -6866,6 +6876,12 @@ const CHECKS: Check[] = [
         table.act('Stu', { type: 'raise', to: 10_000 });
         table.act('Pam', { type: 'call' });
       });
+
+      // A slow runner loses seconds between the turn and the river while the rig's clock stands still: lost here on
+      // purpose, they must not cost the slow page its sweat (see `watch`)
+      if (layout.slower) {
+        await new Promise((resolve) => setTimeout(resolve, SLOW_RUNNER_LAG_MS));
+      }
 
       rig.advance(table.view('Quigs').hand!.deadline! - rig.now());
       const small = table.view('Quigs');

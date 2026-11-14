@@ -7,8 +7,13 @@ export function pageWays(parts: Pick<WayParts, 'sounds' | 'touch' | 'root' | 'ow
   return waysFor({
     ...parts,
     sight: {
-      hidden: () => document.hidden,
-      onShown: (listener) => document.addEventListener('visibilitychange', () => !document.hidden && listener()),
+      away: () => document.hidden || !document.hasFocus(),
+      onBack: (listener) => {
+        const back = () => !document.hidden && document.hasFocus() && listener();
+
+        document.addEventListener('visibilitychange', back);
+        window.addEventListener('focus', back);
+      },
     },
     handheld: matchMedia('(pointer: coarse)').matches,
     vibrate: typeof navigator.vibrate === 'function' ? (pattern) => void navigator.vibrate(pattern) : null,

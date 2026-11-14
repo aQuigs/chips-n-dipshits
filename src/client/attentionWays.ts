@@ -14,10 +14,15 @@ export const BUZZ_PATTERN = [120, 80, 120];
 // The tab's title changes this often, about as fast as a glance away notices without it being a strobe
 export const TITLE_SWAP_MS = 1000;
 
-/** Whether the page is out of sight, and word of when it comes back: another tab, a phone asleep. */
+// The title blinks between these in front of the words. Both say it is the player's turn, so a browser
+// that runs the swaps of a tab long out of sight only once a minute still shows it
+const TITLE_MARKS = ['●', '○'];
+
+/** Whether the player is away from the page, and word of when they come back. */
 export interface Sight {
-  hidden(): boolean;
-  onShown(listener: () => void): void;
+  /** Out of sight, as in another tab or on a phone asleep, or behind another window. */
+  away(): boolean;
+  onBack(listener: () => void): void;
 }
 
 /** The chime, through the sounds, which hold it to the sound switch and volume. */
@@ -35,7 +40,7 @@ export function buzzWay(vibrate: ((pattern: number[]) => void) | null, touch: To
     ability: () => (vibrate ? 'yes' : 'no'),
     call: () => {
       // Browsers refuse it before a touch, with a warning, and ignore it out of sight
-      if (vibrate && touch.touched && !sight.hidden()) {
+      if (vibrate && touch.touched && !sight.away()) {
         vibrate(BUZZ_PATTERN);
       }
     },
@@ -82,7 +87,7 @@ export type Focus = () => void;
 
 const ABILITY_OF: Record<Permission, Ability> = { granted: 'yes', default: 'ask', denied: 'blocked' };
 
-/** A notification while the page is out of sight, taken back when the call ends or the player comes back. `notices` is null where the page can't have them. */
+/** A notification while the player is away, taken back when the call ends or the player comes back. `notices` is null where the page can't have them. */
 export function notifyWay(notices: Notices | null, sight: Sight, focus: Focus): AttentionWay {
   let shown: { call: Call; close: () => void } | null = null;
 
@@ -91,13 +96,13 @@ export function notifyWay(notices: Notices | null, sight: Sight, focus: Focus): 
     shown = null;
   };
 
-  sight.onShown(close);
+  sight.onBack(close);
 
   return {
     ability: () => (notices ? ABILITY_OF[notices.permission()] : 'no'),
     ask: async () => (notices ? ABILITY_OF[await notices.request()] : 'no'),
     call: (call) => {
-      if (!notices || !sight.hidden()) {
+      if (!notices || !sight.away()) {
         return;
       }
 
@@ -128,7 +133,7 @@ export interface Timers {
   every(ms: number, act: () => void): () => void;
 }
 
-/** While the page is out of sight, the tab's title swaps between the reason and its own until the player comes back. `tab` is null where the page doesn't own it. */
+/** While the player is away, the tab's title says why the page wants them, blinking, until they come back. `tab` is null where the page doesn't own it. */
 export function tabTitleWay(tab: TabTitle | null, sight: Sight, timers: Timers): AttentionWay {
   let showing: { call: Call; own: string; stop: () => void } | null = null;
 
@@ -141,12 +146,12 @@ export function tabTitleWay(tab: TabTitle | null, sight: Sight, timers: Timers):
     showing = null;
   };
 
-  sight.onShown(restore);
+  sight.onBack(restore);
 
   return {
     ability: () => (tab ? 'yes' : 'no'),
     call: (call) => {
-      if (!tab || !sight.hidden()) {
+      if (!tab || !sight.away()) {
         return;
       }
 
@@ -154,9 +159,11 @@ export function tabTitleWay(tab: TabTitle | null, sight: Sight, timers: Timers):
 
       const own = tab.title;
       const words = WORDS_FOR[call.why](call.table.name);
+      let swaps = 0;
+      const swap = () => (tab.title = `${TITLE_MARKS[swaps++ % TITLE_MARKS.length]} ${words}`);
 
-      tab.title = words;
-      showing = { call, own, stop: timers.every(TITLE_SWAP_MS, () => (tab.title = tab.title === words ? own : words)) };
+      swap();
+      showing = { call, own, stop: timers.every(TITLE_SWAP_MS, swap) };
     },
     end: (call) => {
       if (showing?.call.why === call.why && showing.call.table.id === call.table.id) {

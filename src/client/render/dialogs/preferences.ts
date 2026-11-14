@@ -66,13 +66,15 @@ function onOff(prefs: AnyPreferences, abilities: Abilities, key: string, pref: O
   button.addEventListener('click', async () => {
     const ability = abilities.of(key);
 
-    if (ability === 'yes') {
-      prefs.set(key, !prefs.get(key));
-    } else if (ability === 'ask' && (await abilities.ask(key)) === 'yes') {
-      prefs.set(key, true);
+    try {
+      if (ability === 'yes') {
+        prefs.set(key, !prefs.get(key));
+      } else if (ability === 'ask' && (await abilities.ask(key)) === 'yes') {
+        prefs.set(key, true);
+      }
+    } finally {
+      paint();
     }
-
-    paint();
   });
   paint();
 

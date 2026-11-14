@@ -3583,7 +3583,7 @@ const CHECKS: Check[] = [
       await page.waitForTimeout(2300);
       const titles = (await page.evaluate('window.titles')) as string[];
       assert.ok(titles.length >= 3, `the title changed ${titles.length} times in two seconds`);
-      assert.deepEqual([...new Set(titles)].sort(), [own, words].sort());
+      assert.deepEqual([...new Set(titles)].sort(), [`● ${words}`, `○ ${words}`].sort(), 'a title that does not say it is the player’s turn');
 
       // Acting from another device, or the clock acting for the player, ends the turn the same way
       table.act('Quigs', { type: 'check' });
@@ -3661,9 +3661,9 @@ const CHECKS: Check[] = [
       await page.click('#pref-notify', { force: true });
       assert.match(await text(page, '#pref-notify'), /Blocked in this browser’s settings/);
       assert.deepEqual(await page.evaluate('window.asks'), []);
+      await page.locator('.switches').scrollIntoViewIfNeeded();
       assert.deepEqual(await squeezed(page, '.switches [data-pref], .switches [data-pref] span'), [], 'the blocked switch is cut off');
       assertOnScreen(await boxes(page, '.switches [data-pref]'), 'desktop', 'the blocked switch');
-      await page.locator('.switches').scrollIntoViewIfNeeded();
       await shot(page, 'preferences-attention-blocked-desktop');
       await page.context().close();
     },

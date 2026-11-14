@@ -65,9 +65,11 @@ function start(root: HTMLElement): void {
 
   // Both screens are the same player, as when someone carries on from their phone
   const apps = [laptop.screen, phone.screen].map((screen) => new App(screen, demoPlatform(demo), preview));
-  // Two screens playing the bots' hands aloud is noise, so the showcase is silent until the visitor switches sound on in one
+  // Two screens playing the bots' hands aloud is noise, so the showcase is silent until the visitor switches sound on in one,
+  // and a phone showing it never buzzes for the bots' game
   for (const app of apps) {
     app.prefs.set('sound', false);
+    app.prefs.set('buzz', false);
   }
 
   // Both hear every key, and one move is enough

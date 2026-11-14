@@ -294,7 +294,7 @@ class Browser {
       sounds: new Sounds({ play: (sound) => void this.played.push(sound) }, new Preferences(PREFERENCES, mapMemory()), { now: () => 0, inView: () => !this.hidden }),
       touch: { get touched() { return touch.touched(); }, onTouch: () => undefined },
       root: this.root,
-      sight: { hidden: () => this.hidden, onShown: (listener) => this.shownListeners.push(listener) },
+      sight: { away: () => this.hidden, onBack: (listener) => this.shownListeners.push(listener) },
       ownsTab: true,
       handheld: false,
       vibrate: (pattern) => void this.buzzes.push(pattern),
@@ -446,7 +446,7 @@ test('a second notification for the table takes the place of the first, and comi
   assert.equal(browser.shown[2]!.open, false);
 });
 
-test('the tab’s title swaps while the page is out of sight, and is put back when the turn ends or the player comes back', () => {
+test('the tab’s title blinks that it is the player’s turn while they are away, and is put back when the turn ends or they come back', () => {
   browser = new Browser();
   const ways = waysFor(browser.parts());
   const own = browser.tab.title;
@@ -462,7 +462,7 @@ test('the tab’s title swaps while the page is out of sight, and is put back wh
     browser.tick();
     seen.push(browser.tab.title);
   }
-  assert.deepEqual(seen, ['Your turn at Friday Night', own, 'Your turn at Friday Night', own]);
+  assert.deepEqual(seen, ['● Your turn at Friday Night', '○ Your turn at Friday Night', '● Your turn at Friday Night', '○ Your turn at Friday Night'], 'every swap says it is the player’s turn');
 
   ways.tabTitle.end(FRIDAY);
   assert.equal(browser.tab.title, own);

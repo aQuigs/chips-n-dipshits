@@ -26,8 +26,8 @@ const QUIET_MS = 2500;
 const NEWER_BUILD = 'newerbuild00';
 
 
-// Runs in Apps Script's frame, not in the page around it: the page out of sight, and every call that asks
-// the browser for notifications, makes one or names the tab written down
+// Runs in Apps Script's frame, not in the page around it: the page out of sight, notifications that would be
+// allowed, and every call that asks for them, makes one or names the tab written down
 const ATTENTION_SPIES = `
 (() => {
   if (window.top === window) {
@@ -38,16 +38,17 @@ const ATTENTION_SPIES = `
   Object.defineProperty(document, 'hidden', { get: () => true });
   Object.defineProperty(document, 'visibilityState', { get: () => 'hidden' });
 
-  const Real = window.Notification;
-  window.Notification = class extends Real {
-    constructor(...args) {
-      window.asked.notices += 1;
-      super(...args);
-    }
-    static requestPermission(...args) {
+  // A browser that would say yes, which Chrome never does in another site's frame, so only the page's own knowledge holds it back
+  window.Notification = class {
+    static permission = 'granted';
+    static requestPermission() {
       window.asked.permission += 1;
-      return Real.requestPermission(...args);
+      return Promise.resolve('granted');
     }
+    constructor() {
+      window.asked.notices += 1;
+    }
+    close() {}
   };
 
   const title = Object.getOwnPropertyDescriptor(Document.prototype, 'title');
@@ -602,6 +603,12 @@ try {
 
     assert.deepEqual(await frame.evaluate('window.asked'), { permission: 0, notices: 0, titles: [] });
     assert.equal(await outside.title(), "Google's page");
+
+    // Preferences offers neither, so there is no switch to tap that would ask
+    await frame.click('[data-action="menu"]');
+    await frame.click('.menu [data-action="preferences"]');
+    await frame.waitForSelector('#pref-flash');
+    assert.equal(await frame.locator('#pref-notify, #pref-tabTitle').count(), 0);
     assert.deepEqual(said, [], 'the frame complained in the console');
 
     await context.close();

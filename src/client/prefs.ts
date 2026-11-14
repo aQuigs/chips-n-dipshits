@@ -54,11 +54,6 @@ export const PREFERENCES = {
   theme: { kind: 'choice', label: 'Theme', options: THEMES.map((theme) => ({ value: theme.id, label: theme.name })), default: DEFAULT_THEME },
   sound: { kind: 'onOff', label: 'Sound', hint: 'Chips, cards, and a chime when it is your turn', group: 'Sound', default: true },
   volume: { kind: 'range', label: 'Volume', hint: 'Plays a sample as you set it', group: 'Sound', min: 0, max: 100, step: 10, default: 50 },
-  // The ways of getting a player's attention (attentionWays.ts) beside the chime, each left out where the device can't do it
-  buzz: { kind: 'onOff', label: 'Buzz', hint: 'Two short buzzes on a phone', group: 'When it’s your turn', compact: true, default: true },
-  flash: { kind: 'onOff', label: 'Flash', hint: 'The table lights up for a moment', group: 'When it’s your turn', compact: true, default: true },
-  notify: { kind: 'onOff', label: 'Notification', hint: 'While the game is in another tab', group: 'When it’s your turn', compact: true, default: true },
-  tabTitle: { kind: 'onOff', label: 'Tab title', hint: 'The tab’s name flashes while you are in another tab', group: 'When it’s your turn', compact: true, default: true },
   deck: {
     kind: 'choice',
     label: 'Deck',
@@ -95,6 +90,12 @@ export const PREFERENCES = {
     default: true,
     css: 'attribute',
   },
+  // The ways of getting a player's attention (attentionWays.ts) beside the chime, each left out where the device can't do it.
+  // After the cards, so they stay in sight when Preferences opens on a small phone
+  buzz: { kind: 'onOff', label: 'Buzz', hint: 'Two short buzzes on a phone', group: 'When it’s your turn', compact: true, default: true },
+  flash: { kind: 'onOff', label: 'Flash', hint: 'The table lights up for a moment', group: 'When it’s your turn', compact: true, default: true },
+  notify: { kind: 'onOff', label: 'Notification', hint: 'While the game is in another tab', group: 'When it’s your turn', compact: true, default: true },
+  tabTitle: { kind: 'onOff', label: 'Tab title', hint: 'The tab’s name flashes while you are in another tab', group: 'When it’s your turn', compact: true, default: true },
   // Off on a phone whatever is chosen: there the keys do nothing and no key is shown
   hotkeys: {
     kind: 'onOff',

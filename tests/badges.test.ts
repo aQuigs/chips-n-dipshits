@@ -150,6 +150,28 @@ const CASES: Record<string, { earns: Case[]; misses: Case[] }> = {
           return earnedIn(t, 0, () => headsUp(t, true));
         },
       },
+      {
+        said: 'two wins, a hand the blinds chopped, a win: nobody won the chop, so the run goes on',
+        earned: () => {
+          const t = new TestTable({ stacks: [1000, 1000, 1000], config: { allowChop: true } });
+          const winsFromTheButton = () => {
+            t.deal({ button: 0 });
+            t.raise(0, 60);
+            t.foldOut();
+          };
+
+          winsFromTheButton();
+          winsFromTheButton();
+          t.deal({ button: 0 });
+          t.fold(0);
+          t.cmd(1, { type: 'offerChop' });
+          t.cmd(2, { type: 'answerChop', agree: true });
+          t.finishHand();
+          assert.equal(handRecords(t.effects).at(-1)!.result.chopped?.length, 2, 'the blinds did not chop');
+
+          return earnedIn(t, 0, winsFromTheButton);
+        },
+      },
     ],
     misses: [
       {
@@ -555,6 +577,28 @@ test('a side pot nobody else was in for is no win at a showdown: ace high that l
 
   const quads = sidePotNobodyContested({ 0: 'Qd 2c', 1: KINGS, 2: '3c 4c' }, 'Kd Kc 9d Td Jd');
   assert.deepEqual(badgesOf(quads, 1), { quads: 1, cooler: 1 });
+});
+
+test('a hand the blinds chop the moment it folds to them, both on Always chop, earns nothing and leaves every run as it was', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 1000], config: { allowChop: true } });
+  t.cmd(1, { type: 'setAlwaysChop', on: true });
+  t.cmd(2, { type: 'setAlwaysChop', on: true });
+
+  // Seat 1 wins two from the button, then is the small blind of a hand that chops
+  for (let hand = 0; hand < 2; hand++) {
+    t.deal({ button: 1 });
+    t.raise(1, 60);
+    t.foldOut();
+  }
+
+  const before = structuredClone(t.state.tonight.players);
+  t.deal({ button: 0 });
+  t.fold(0);
+  assert.deepEqual(t.state.hand!.result!.chopped, [1, 2]);
+  t.finishHand();
+
+  assert.deepEqual(Object.values(t.state.tonight.players).map(({ badges, streak }) => [badges, streak]), Object.values(before).map(({ badges, streak }) => [badges, streak]));
+  assert.ok(!t.feedText().some((line) => line.includes(' earned ')), 'a line was told for the chop');
 });
 
 test('a big blind folded to with seven-deuce and nothing in the pot wins the hand on the bounty alone: it earns the badge and counts toward a run', () => {

@@ -409,3 +409,41 @@ test('badges earned before the page opened, or shown again after the table went 
   assert.deepEqual(earned(opened.arrive(table, true)), []);
   assert.deepEqual(earned(opened.arrive(table)), []);
 });
+
+test('a hand the blinds chop at once tells no badge, though the small blind is a win short of a run of three', () => {
+  const table = new TestTable({ stacks: [1000, 1000, 1000], config: { allowChop: true } });
+  const page = new Page();
+  const told: TableChange[] = [];
+  const see = () => told.push(page.arrive(table));
+  const cleared = () => {
+    while (table.state.hand) {
+      table.wait(table.state.hand.deadline! - table.now);
+      see();
+    }
+  };
+
+  table.cmd(0, { type: 'setAlwaysChop', on: true });
+  table.cmd(1, { type: 'setAlwaysChop', on: true });
+  for (let hand = 0; hand < 2; hand++) {
+    table.deal({ button: 0 });
+    table.raise(0, 60);
+    table.foldOut();
+    see();
+    cleared();
+  }
+
+  // Seat 0, whose page this is, is the small blind, and the two blinds chop the moment the button folds
+  table.deal({ button: 2 });
+  table.fold(2);
+  assert.deepEqual(table.state.hand!.result!.chopped, [0, 1]);
+  see();
+  cleared();
+  assert.deepEqual(told.flatMap((change) => change.earned), []);
+
+  table.deal({ button: 0 });
+  table.raise(0, 60);
+  table.foldOut();
+  see();
+  cleared();
+  assert.deepEqual(told.flatMap((change) => change.earned), [{ id: 'heater', times: 1 }], 'the run of three was not told');
+});

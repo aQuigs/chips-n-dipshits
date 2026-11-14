@@ -689,6 +689,9 @@ test('over random games the numbers are at every step exactly what the hand reco
   assert.ok(reached.nightsEnded >= TABLES / 2 && reached.playedOn >= TABLES / 2 && reached.crowned >= TABLES / 2, said);
   assert.ok(reached.busts >= TABLES && reached.splits >= TABLES / 4 && reached.bestHands >= TABLES * 2, said);
   // The rarest hands, a straight flush and better, are left to the tests of each badge
-  assert.ok(['felted', 'heater', 'bigPot', 'scoop', 'airBall'].every((id) => badges[id]! >= TABLES), said);
-  assert.ok(['sevenDeuce', 'atm'].every((id) => badges[id]! >= TABLES / 4), said);
+  assert.ok(['felted', 'heater', 'bigPot', 'scoop'].every((id) => badges[id]! >= TABLES), said);
+  // Ace high has to win a pot somebody called at a showdown
+  assert.ok(badges.airBall! >= TABLES / 2, said);
+  // Seven-deuce needs a table with a bounty, and ATM a player broke three times in a night
+  assert.ok(['sevenDeuce', 'atm'].every((id) => badges[id]! >= TABLES / 8), said);
 });

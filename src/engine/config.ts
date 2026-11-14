@@ -1,7 +1,7 @@
 import { formatAmount, validAmount } from './amounts.ts';
 import type { Denominated } from './amounts.ts';
 import { bountiesText, handListedTwice, SEVEN_DEUCE, validBounties } from './bounties.ts';
-import type { Bounty } from './bounties.ts';
+import type { Bounty, BountyLimits } from './bounties.ts';
 import { STRADDLES } from './straddles.ts';
 import type { StraddleKind } from './straddles.ts';
 import { GameError } from './types.ts';
@@ -82,13 +82,9 @@ export interface ChoiceSpec<V extends string | number = string | number> extends
 }
 
 /** A list of starting hands, each with an amount, as the table's bounties are; empty for none. Its amounts obey what a `chips` setting's do. */
-export interface HandAmountsSpec extends SpecBase {
+export interface HandAmountsSpec extends SpecBase, BountyLimits {
   kind: 'handAmounts';
   default: Bounty[];
-  min: number;
-  max?: number;
-  /** The most hands on the list. */
-  most: number;
 }
 
 export type ConfigSpec = TextSpec | LinkSpec | NumberSpec | ToggleSpec | ChoiceSpec | HandAmountsSpec;
@@ -362,8 +358,8 @@ export function fieldsOf(input: unknown): Record<string, unknown> {
  */
 export function startingConfig(chosen?: unknown): TableConfig {
   const given = fieldsOf(chosen);
-  // A copy all through, so no two tables are handed the same list
-  const start = JSON.parse(JSON.stringify(DEFAULT_CONFIG)) as Partial<Record<ConfigKey, unknown>>;
+  // Each list a copy, so no two tables are handed the same one
+  const start: Partial<Record<ConfigKey, unknown>> = Object.fromEntries(Object.entries(DEFAULT_CONFIG).map(([key, value]) => [key, Array.isArray(value) ? [...value] : value]));
 
   for (const key of CONFIG_KEYS) {
     const spec = CONFIG_SPECS[key];

@@ -1,4 +1,5 @@
 import type { Denominated } from '../../engine/amounts.ts';
+import { listedTwice } from '../../engine/bounties.ts';
 import type { Bounty } from '../../engine/bounties.ts';
 import type { HandAmountsSpec } from '../../engine/config.ts';
 import { capitalized, startingHandWords } from '../../engine/handNames.ts';
@@ -42,7 +43,7 @@ export function bountyListField(id: string, spec: HandAmountsSpec, value: readon
       const input = handInputOf(row);
       const said = row.querySelector<HTMLElement>('.said')!;
       const { hand, problem } = typedHand(input.value);
-      const twice = hand !== null && seen.has(hand) ? `${hand} is on the list already: give it one amount` : null;
+      const twice = hand !== null && seen.has(hand) ? listedTwice(hand) : null;
       const wrong = twice ?? problem;
 
       input.setCustomValidity(wrong ?? '');

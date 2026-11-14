@@ -6,7 +6,7 @@ import { formatAmount, validAmount } from './amounts.ts';
 import type { Denominated } from './amounts.ts';
 import type { Card } from './cards.ts';
 import { listed } from './handNames.ts';
-import { isStartingHand, parseStartingHand, suitednessOf } from './startingHands.ts';
+import { parseStartingHand, startingHandOf } from './startingHands.ts';
 import { GameError } from './types.ts';
 
 /** A starting hand in kept form and what each player pays for it. A pair, not an object: a table keeps its list twice, in its settings and on the hand in play. */
@@ -31,9 +31,13 @@ export interface BountyLimits {
  * the same hand written twice is refused.
  */
 export function bountyFor(cards: readonly Card[], bounties: readonly Bounty[]): Bounty | null {
-  const matches = bounties.filter(([hand]) => isStartingHand(cards, hand));
+  if (cards.length !== 2) {
+    return null;
+  }
 
-  return matches.find(([hand]) => suitednessOf(hand) !== null) ?? matches[0] ?? null;
+  const exactly = startingHandOf(cards);
+
+  return bounties.find(([hand]) => hand === exactly) ?? bounties.find(([hand]) => hand === exactly.slice(0, 2)) ?? null;
 }
 
 /** A list of bounties as sent, each hand in kept form and each amount one the table can pay, or a refusal that names the bounty. */
@@ -61,7 +65,12 @@ export function validBounties(value: unknown, table: Denominated, limits: Bounty
 export function handListedTwice(bounties: readonly Bounty[]): string | null {
   const twice = bounties.find(([hand], index) => bounties.findIndex(([other]) => other === hand) !== index);
 
-  return twice ? `${twice[0]} is on the list of bounties twice: give it one amount` : null;
+  return twice ? listedTwice(twice[0]) : null;
+}
+
+/** The refusal of a hand put on the list a second time. */
+export function listedTwice(hand: string): string {
+  return `${hand} is on the list of bounties twice: give it one amount`;
 }
 
 /** A bounty collected, as the play-by-play and the table's result say it: "Ann collects 150 for the J4s bounty". */

@@ -1,5 +1,5 @@
 import { bountiesText } from '../../engine/bounties.ts';
-import { CONFIG_SPECS, holdsAmounts, sameSetting, settingText, startingConfig } from '../../engine/config.ts';
+import { CONFIG_SPECS, sameSetting, settingText, startingConfig } from '../../engine/config.ts';
 import type { ConfigKey } from '../../engine/config.ts';
 import { fromPreset, PRESET_KEYS } from '../../engine/presets.ts';
 import type { Preset } from '../../engine/presets.ts';
@@ -98,7 +98,7 @@ export function lobbyEl(visitor: Visitor, themePicker: HTMLElement, handlers: Lo
 
   // An amount means something else once what the table plays with changes, so the preset's unseen ones start over too
   const startedOver = (start: TableConfig): void => {
-    const amounts = (Object.keys(unseen) as ConfigKey[]).filter(holdsAmounts);
+    const amounts = (Object.keys(unseen) as ConfigKey[]).filter((key) => CONFIG_SPECS[key].kind === 'chips');
 
     unseen = { ...unseen, ...Object.fromEntries(amounts.map((key) => [key, start[key]])) };
     notes.replaceChildren(...alsoSet({ ...start, ...unseen }));

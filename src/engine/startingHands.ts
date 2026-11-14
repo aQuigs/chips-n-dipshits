@@ -7,8 +7,6 @@ import { RANKS, rankOf, suitOf } from './cards.ts';
 import type { Card } from './cards.ts';
 import { GameError } from './types.ts';
 
-export type Suitedness = 's' | 'o';
-
 const HOW_TO_WRITE = 'Write two ranks, such as 72 or AA, with s after them for suited only or o for offsuit only, such as J4s or 72o. A ten is T or 10';
 
 const MOST_QUOTED = 8;
@@ -40,20 +38,20 @@ export function parseStartingHand(typed: string): string {
   return `${high}${low}${suitedness}`;
 }
 
-/** Whether a hand in kept form names suited hands only or offsuit hands only, which makes it narrower than the same ranks written bare. */
-export function suitednessOf(hand: string): Suitedness | null {
-  return (hand[2] as Suitedness | undefined) ?? null;
+/** Two hole cards as exactly as kept form says them: suited or offsuit unless a pair ("J4s", "72o", "AA"). */
+export function startingHandOf(cards: readonly Card[]): string {
+  const [high, low] = [...cards].sort((a, b) => rankOf(b) - rankOf(a)).map((card) => card[0]!);
+
+  return high === low ? `${high}${low}` : `${high}${low}${suitOf(cards[0]!) === suitOf(cards[1]!) ? 's' : 'o'}`;
 }
 
-/** Whether two hole cards are the hand, written in kept form. */
+/** Whether two hole cards are the hand, written in kept form: the very hand, or the same ranks written bare. */
 export function isStartingHand(cards: readonly Card[], hand: string): boolean {
   if (cards.length !== 2) {
     return false;
   }
 
-  const [high, low] = cards.map(rankOf).sort((a, b) => b - a);
-  const suited = suitOf(cards[0]!) === suitOf(cards[1]!);
-  const suitedness = suitednessOf(hand);
+  const exactly = startingHandOf(cards);
 
-  return high === rankOf(hand[0]!) && low === rankOf(hand[1]!) && (suitedness === null || (suitedness === 's') === suited);
+  return hand === exactly || hand === exactly.slice(0, 2);
 }

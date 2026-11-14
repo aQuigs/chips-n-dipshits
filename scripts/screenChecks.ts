@@ -10737,7 +10737,7 @@ const CHECKS: Check[] = [
 
         // Refused where it is typed, and the form isn't sent
         await page.fill(newHand, 'j4s');
-        assert.equal((await said())[7], 'J4s is on the list already: give it one amount');
+        assert.equal((await said())[7], 'J4s is on the list of bounties twice: give it one amount');
         await page.fill(newHand, '7x');
         const refusal = '“7x” isn\'t a hand. Write two ranks, such as 72 or AA, with s after them for suited only or o for offsuit only, such as J4s or 72o. A ten is T or 10';
         assert.equal((await said())[7], refusal);

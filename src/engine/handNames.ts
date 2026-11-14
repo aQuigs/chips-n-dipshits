@@ -2,6 +2,7 @@ import { FLOP_SIZE, rankOf, suitOf } from './cards.ts';
 import type { Card } from './cards.ts';
 import { ACE, FLUSH, FOUR_OF_A_KIND, FULL_HOUSE, HIGH_CARD, PAIR, playerHand, STRAIGHT, STRAIGHT_FLUSH, THREE_OF_A_KIND, TWO_PAIR } from './handRank.ts';
 import type { HandValue } from './handRank.ts';
+import { startingHandOf } from './startingHands.ts';
 
 /*
  * Every name a hand is given, at showdown and in a player's own hint. Kickers are left out to keep a
@@ -74,13 +75,7 @@ export function midSentence(name: string): string {
 
 /** Two hole cards in words, such as "Pocket aces", "Ace-king suited" or "Seven-deuce offsuit". */
 export function startingHandName(hole: readonly Card[]): string {
-  const [high, low] = hole.map(rankOf).sort((a, b) => b - a) as [number, number];
-
-  if (high === low) {
-    return `Pocket ${many(high)}`;
-  }
-
-  return `${capitalized(one(high))}-${one(low)} ${suitOf(hole[0]!) === suitOf(hole[1]!) ? 'suited' : 'offsuit'}`;
+  return capitalized(startingHandWords(startingHandOf(hole)));
 }
 
 /** A starting hand in kept form (`startingHands.ts`) as it is said aloud: "jack-four suited", "seven-deuce", "pocket aces". */

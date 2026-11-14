@@ -32,16 +32,18 @@ interface SchemaSix {
   hand: (Partial<Hand> & { bounty?: number }) | null;
 }
 
-/**
- * A hand's events and result with every bounty naming the hand it was paid for: one that names none
- * was paid before a table could have any bounty but seven-deuce. Records keep no schema, so both kinds
- * may be read.
+/*
+ * A bounty that names no hand was paid before a table could have any bounty but seven-deuce. Records
+ * keep no schema, so both kinds may be read.
  */
-function bountiesNamed(events: HandEvent[], result: HandResult | null): HandEvent[] {
+
+function nameBountyHand(result: HandResult | null): void {
   if (result?.bounty) {
     result.bounty.hand ??= SEVEN_DEUCE;
   }
+}
 
+function bountyEventsNamed(events: HandEvent[]): HandEvent[] {
   return events.map((event) => (event[0] === 'bounty' && event[3] === undefined ? ['bounty', event[1], event[2], SEVEN_DEUCE] : event));
 }
 
@@ -103,7 +105,8 @@ const STEPS: Record<number, (state: TableState) => void> = {
     if (hand) {
       hand.bounties = hand.bounty! > 0 ? [[SEVEN_DEUCE, hand.bounty!]] : [];
       delete hand.bounty;
-      hand.events = bountiesNamed(hand.events ?? [], hand.result ?? null);
+      hand.events = bountyEventsNamed(hand.events ?? []);
+      nameBountyHand(hand.result ?? null);
     }
   },
 };
@@ -201,7 +204,8 @@ export function upgradeState(saved: TableState): TableState {
 /** Gives a hand record saved by older code the fields added since. Records keep no schema, so what changed shape is read either way. */
 export function upgradeRecord(saved: HandRecord): HandRecord {
   fillMissing(saved, SAVED_DEFAULTS.record());
-  saved.events = bountiesNamed(votesAsRuns(saved.events), saved.result);
+  saved.events = bountyEventsNamed(votesAsRuns(saved.events));
+  nameBountyHand(saved.result);
 
   for (const player of saved.players) {
     fillMissing(player, SAVED_DEFAULTS.recordPlayer());

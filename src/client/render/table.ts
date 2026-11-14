@@ -3,7 +3,7 @@ import type { Denominated } from '../../engine/amounts.ts';
 import { onTheClock } from '../../engine/betting.ts';
 import { BOARD_SIZE } from '../../engine/boards.ts';
 import type { ChanceFigure } from '../../engine/chances.ts';
-import { midSentence } from '../../engine/handNames.ts';
+import { listed, midSentence } from '../../engine/handNames.ts';
 import type { HandRead } from '../../engine/handNames.ts';
 import type { PotAward } from '../../engine/types.ts';
 import type { HandView, Holding, SeatView, TableView } from '../../engine/view.ts';
@@ -403,7 +403,7 @@ function boardsName(boards: number[], of: number): string {
     return of === 2 ? 'Both boards' : `All ${COUNT_WORDS[of] ?? of} boards`;
   }
 
-  return `Boards ${numbers.slice(0, -1).join(', ')} and ${numbers.at(-1)!}`;
+  return `Boards ${listed(numbers)}`;
 }
 
 // More lines than this in the middle of the table run into the seats on a phone

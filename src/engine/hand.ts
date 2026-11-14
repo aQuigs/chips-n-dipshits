@@ -690,11 +690,12 @@ function startRunout(state: TableState, ctx: Ctx, runs: number): void {
 export function pickRuns(state: TableState, ctx: Ctx, seatIndex: number, runs: number): void {
   const hand = state.hand;
   const player = hand ? playerAt(hand, seatIndex) : undefined;
-  const cap = hand?.maxRuns ?? 1;
 
   if (!hand || hand.stage !== 'ritVote' || !player || player.folded) {
     throw new GameError('There is nothing to pick for you right now');
   }
+
+  const cap = hand.maxRuns;
 
   if (player.ritVote !== null) {
     throw new GameError('You already picked');

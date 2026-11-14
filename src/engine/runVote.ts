@@ -4,6 +4,8 @@
  * from there on everything goes by the number of boards the hand is played on.
  */
 
+import { listed } from './handNames.ts';
+
 /** The most times a table may have the rest run. */
 export const MOST_RUNS = 3;
 
@@ -35,10 +37,6 @@ export function timesText(count: number): string {
   return TIMES[count - 1] ?? `${count} times`;
 }
 
-function inSentence(names: string[]): string {
-  return names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)!}`;
-}
-
 /**
  * The play-by-play's line for how the picking came out: what each player still in picked, in seat
  * order, who never did, and how many times the rest is run. "Dana picked three times, Sam once: running it once".
@@ -53,7 +51,7 @@ export function voteStory(players: readonly Picker[], runs: number, unpicked?: U
   if (unpicked?.why === 'left') {
     parts.push(`${unpicked.name} left without picking`);
   } else if (unpicked?.why === 'time') {
-    parts.push(`${inSentence(players.filter((player) => player.ritVote === null).map((player) => player.name))} didn't pick in time`);
+    parts.push(`${listed(players.filter((player) => player.ritVote === null).map((player) => player.name))} didn't pick in time`);
   }
 
   return `${parts.join(', ')}: running it ${timesText(runs)}`;

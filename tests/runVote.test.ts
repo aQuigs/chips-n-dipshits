@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { timesToRun, TIMING, voteStory } from '../src/engine/index.ts';
+import { HOTKEYS } from '../src/client/hotkeys.ts';
+import { CONFIG_SPECS, MOST_RUNS, timesText, timesToRun, TIMING, voteStory } from '../src/engine/index.ts';
 import { assertChipsConserved, assertInvariants } from './invariants.ts';
 import { ACES, BOARD, KINGS, QUEENS, TestTable } from './helpers.ts';
 
@@ -164,4 +165,12 @@ test('a hand is run on the terms it was dealt under: the most times changed whil
     t.call(t.toAct!);
   }
   assert.deepEqual([t.state.hand!.stage, t.view(2).hand!.maxRuns], ['ritVote', 3]);
+});
+
+test('every list of how many times it can be run goes up to the most there is: the setting, the words and the keys', () => {
+  const upTo = Array.from({ length: MOST_RUNS }, (_runs, nth) => nth + 1);
+
+  assert.deepEqual(CONFIG_SPECS.maxRuns.options.map((option) => option.value), upTo);
+  assert.ok(upTo.every((runs) => !timesText(runs).includes(String(runs))), 'each number has its word');
+  assert.equal(HOTKEYS.runs.length, MOST_RUNS);
 });

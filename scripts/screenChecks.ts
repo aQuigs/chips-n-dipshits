@@ -42,15 +42,19 @@ const tenPlayers = (): RigPlayer[] => LONG_NAMES.map((name, index) => ({ name, s
 /** Checks or calls, whatever the decision. */
 const passive = (view: TableView): Command => ({ type: view.hand!.options!.canCheck ? 'check' : 'call' });
 
-/** Puts everything in, and picks running it twice. */
-const allIn = (view: TableView): Command => {
-  const hand = view.hand!;
-  if (hand.canVote) {
-    return { type: 'ritVote', runs: 2 };
-  }
+/** Puts everything in, and picks running it `runs` times. */
+const allInPicking =
+  (runs: number) =>
+  (view: TableView): Command => {
+    const hand = view.hand!;
+    if (hand.canVote) {
+      return { type: 'ritVote', runs };
+    }
 
-  return hand.options!.canRaise ? { type: 'raise', to: hand.options!.maxRaiseTo } : { type: 'call' };
-};
+    return hand.options!.canRaise ? { type: 'raise', to: hand.options!.maxRaiseTo } : { type: 'call' };
+  };
+
+const allIn = allInPicking(2);
 
 async function shot(page: Page, name: string): Promise<void> {
   await page.screenshot({ path: `${OUT}check-${name}.png` });
@@ -1500,12 +1504,6 @@ const chopTurnedDownCheck = (kind: ChopTable): Check => [
 
 /** For a check that looks at the presets more than once, as in a round for each screen: the lobby of the next round would offer the ones the last saved. */
 const forgetPresets = (rig: Rig) => rig.presets.list().forEach((preset) => rig.presets.delete(preset.name));
-
-/** Puts everything in, and picks running it `runs` times. */
-const allInPicking =
-  (runs: number) =>
-  (view: TableView): Command =>
-    view.hand!.canVote ? { type: 'ritVote', runs } : allIn(view);
 
 /** Nine players, four of them all in before the flop for different stacks, so with two side pots, and a pair each, with a winner of their own on each of three boards. */
 const THREE_RUNS = {

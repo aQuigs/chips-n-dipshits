@@ -39,4 +39,5 @@ export const STYLESHEETS = [
   'tonight.css',
   'unconfirmed.css',
   'chop.css',
+  'badges.css',
 ];

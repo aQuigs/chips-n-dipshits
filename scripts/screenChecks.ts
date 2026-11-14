@@ -21,7 +21,7 @@ import { KEYS_SETTLE_MS } from '../src/client/hotkeys.ts';
 import { RECIPES } from '../src/client/soundRecipes.ts';
 import { THEMES } from '../src/client/themes.ts';
 import { shortAmount, signedAmount } from '../src/engine/amounts.ts';
-import { DEFAULT_CONFIG, LIMITS, onTheClock, presetSettings } from '../src/engine/index.ts';
+import { BADGES, badgeOf, DEFAULT_CONFIG, LIMITS, onTheClock, presetSettings } from '../src/engine/index.ts';
 import type { Command, Straddle, TableConfig, TableView } from '../src/engine/index.ts';
 import { contrast } from '../tests/colorVision.ts';
 import { boxes, Gate, overlap, Rig, RigTable, SCREENS, setStageHeight, squeezed, textBoxes } from './rig.ts';
@@ -1090,16 +1090,16 @@ async function assertTonightFits(page: Page, screen: ScreenName): Promise<void> 
   assertOnScreen(await boxes(page, '.dialog'), screen, 'the Tonight dialog');
   assert.deepEqual(await squeezed(page, '.dialog :is(h2, h3, p, dt, dd, strong, button, textarea, .who, .net, .counts), .dialog-body'), [], 'part of the Tonight dialog is cut off');
 
-  const rows = await page.locator('.tonight-players li').count();
+  const rows = await page.locator('.tonight-players > li').count();
   for (let row = 1; row <= rows; row++) {
-    const line = `.tonight-players li:nth-child(${row}) summary`;
+    const line = `.tonight-players > li:nth-child(${row}) summary`;
 
     assertApart(await textBoxes(page, `${line} .who`), await boxes(page, `${line} .net, ${line} .fold`), 'a name and what its player is up or down');
   }
 }
 
 /** Every player with what they are up or down, by name, as the Tonight dialog and as the ledger write it. */
-const tonightNets = (page: Page) => page.evaluate(`[...document.querySelectorAll('.tonight-players li')].map((row) => [row.dataset.player, row.querySelector('.net').textContent]).sort()`) as Promise<string[][]>;
+const tonightNets = (page: Page) => page.evaluate(`[...document.querySelectorAll('.tonight-players > li')].map((row) => [row.dataset.player, row.querySelector('.net').textContent]).sort()`) as Promise<string[][]>;
 const ledgerNets = (page: Page) => page.evaluate(`[...document.querySelectorAll('.ledger tbody tr')].map((row) => [row.firstElementChild.textContent, row.lastElementChild.textContent]).sort()`) as Promise<string[][]>;
 
 /** The table and the bar under it as a page draws them, less the mark of a move the server has yet to confirm. */
@@ -1145,6 +1145,58 @@ const typedAs = (amount: number, view: TableView) => (view.config.unit === 'cent
 
 /** Where a player's own move is shown early: a phone's table standing up, with motion on, and lying down, and a desktop that plays to the cent. */
 const TAP_FIRST_LAYOUTS: (MotionLayout & { moving?: boolean })[] = [{ ...MOTION_LAYOUTS[0]!, moving: true }, MOTION_LAYOUTS[1]!, MOTION_LAYOUTS[2]!];
+/** Every badge there is, each earned `times`, as a player's badges are saved. */
+const everyBadge = (times: number): Record<string, number> => Object.fromEntries(BADGES.map((badge) => [badge.id, times]));
+
+/** The table of `tonightTable` with every badge on every player who has played, the widest name having earned each one 99 times: the most a row has to fit. */
+function badgedTable(rig: Rig): RigTable {
+  const table = tonightTable(rig, {});
+  const widest = table.auth(WIDEST).id;
+
+  table.alter((state) => {
+    for (const [id, numbers] of Object.entries(state.tonight.players)) {
+      numbers.badges = everyBadge(id === widest ? 99 : 1);
+    }
+  });
+
+  return table;
+}
+
+/** The badges beside each player's name can all be seen: on the screen, none cut off, clear of the name and of what follows it. */
+async function assertBadgesFit(page: Page, screen: ScreenName, rows: string, apartFrom: string, what: string): Promise<void> {
+  const count = await page.locator(rows).count();
+  const [body] = await boxes(page, '.dialog-body');
+
+  // Up and down the dialog scrolls, so only its sides are a limit
+  assert.ok((await boxes(page, `${rows} .badge`)).every((badge) => badge.left >= body!.left && badge.right <= body!.right), `a badge in ${what} runs out of the dialog on ${screen}`);
+  assert.deepEqual(await squeezed(page, `${rows} .badge, ${rows} .badges`), [], `a badge in ${what} is cut off`);
+  await assertNoSidewaysScroll(page);
+
+  for (let row = 1; row <= count; row++) {
+    const line = `${rows}:nth-child(${row})`;
+
+    assertApart(await boxes(page, `${line} .badge`), await textBoxes(page, `${line} ${apartFrom}`), `a badge and the rest of a row in ${what}`);
+  }
+}
+
+/** Quigs's line in the play-by-play for the badges of a hand in which his aces took every chip of Stu's kings, all in for 1000 each. */
+const FELTED_LINES = ['Quigs earned 💰 Retirement Fund: took 100 big blinds or more out of one hand', "Quigs earned 💀 Felted: took Stu's last chip"];
+const FELTED_TOAST = 'You earned 💰 Retirement Fund and 💀 Felted';
+
+/** Quigs, Stu and Pam with 1000 each and Kibitz watching: Pam folds, and Quigs's aces and Stu's kings go all in before the flop. */
+function feltingHand(rig: Rig): RigTable {
+  const table = rig.table([{ name: 'Quigs', stack: 1000 }, { name: 'Stu', stack: 1000 }, { name: 'Pam', stack: 1000 }], { allowRunItTwice: false });
+
+  table.join('Kibitz');
+  table.deal({ button: 0, holes: { 0: 'As Ah', 1: 'Ks Kh', 2: '8c 3d' }, board: '2c 7d 9h Jc 3s' });
+  table.act('Quigs', { type: 'pause' });
+  table.play((view, name) => (name === 'Pam' ? { type: 'fold' } : allIn(view)), (view) => view.hand!.stage !== 'betting');
+
+  return table;
+}
+
+const toastShown = (page: Page) => page.locator('.toast:visible').count();
+
 
 type Check = [name: string, run: (rig: Rig) => Promise<void>];
 
@@ -6406,7 +6458,8 @@ const CHECKS: Check[] = [
 
           // What is folded away under a player, which stays unfolded when a change at the table draws the dialog again
           await press(`.tonight-players li[data-player="${WIDEST}"] summary`);
-          assert.deepEqual(await texts(host, '.tonight-players details[open] dl div'), [`Biggest pot\n${kind.pot}`, 'Best hand shown\nThree jacks J♣ J♦ J♠ 9♥ 7♦']);
+          // The two who went all in in the second hand: the winner took every chip of a pot that size, which earns two badges
+          assert.deepEqual(await texts(host, '.tonight-players details[open] dl div'), [`Biggest pot\n${kind.pot}`, 'Best hand shown\nThree jacks J♣ J♦ J♠ 9♥ 7♦', `Badges\n${['bigPot', 'felted'].map((id) => `${badgeOf(id)!.mark} ${badgeOf(id)!.name}\n${badgeOf(id)!.description}`).join('\n')}`]);
           await press('.tonight-players li[data-player="Quigs"] summary');
           assert.deepEqual(await texts(host, '.tonight-players li[data-player="Quigs"] dl div'), [`Biggest pot\n${kind.first}`, 'Best hand shown\nPair of aces A♠ A♥ J♣ 9♥ 7♦']);
           await press('.tonight-players li[data-player="Big Al"] summary');
@@ -6414,7 +6467,7 @@ const CHECKS: Check[] = [
 
           // Scrolled to the last player, as someone reading down the list would be
           const scrolledTo = () => host.evaluate(`document.querySelector('.dialog-body').scrollTop`) as Promise<number>;
-          await host.evaluate(`document.querySelector('.tonight-players li:last-child').scrollIntoView()`);
+          await host.evaluate(`document.querySelector('.tonight-players > li:last-child').scrollIntoView()`);
           const scrolled = await scrolledTo();
           assert.ok(scrolled > 0, 'ten players fit the dialog without scrolling, so this proves nothing');
 
@@ -7027,6 +7080,12 @@ const CHECKS: Check[] = [
       table.deal({ button: 3, holes: { 0: 'As Ah' }, board: '2c 7d 9h Jc 3s' });
       table.act('Pam', { type: 'call' });
       table.act('Al', { type: 'call' });
+      // Badges are the server's too, so Tonight is checked with some to show
+      table.alter((state) => {
+        for (const numbers of Object.values(state.tonight.players)) {
+          numbers.badges = everyBadge(1);
+        }
+      });
 
       const quigs = await table.open('Quigs', layout.screen);
       const press = pressOn(quigs, layout.screen);
@@ -7061,6 +7120,8 @@ const CHECKS: Check[] = [
         before[label] = await drawn(label);
         await close(label);
       }
+
+      assert.ok(before.Tonight!.includes('class="badge"'), where('the Tonight dialog shows no badges'));
 
       await moves.close('requests');
       await press('.turn [data-action="call"]');
@@ -7283,6 +7344,163 @@ const CHECKS: Check[] = [
 
         await host.context().close();
         await small.context().close();
+      }
+    },
+  ],
+  [
+    'a badge earned is a line in the play-by-play for everyone and a toast for whoever earned it alone, once the hand is off the table',
+    async (rig) => {
+      const table = feltingHand(rig);
+      table.play(() => null, (view) => view.hand!.stage === 'done');
+
+      const quigs = await table.open('Quigs', 'smallPhone');
+      const stu = await table.open('Stu', 'phone');
+      const kibitz = await table.open('Kibitz', 'desktop');
+      const pages = [quigs, stu, kibitz];
+
+      for (const page of pages) {
+        assert.equal(await page.locator('.feed li:has-text("earned")').count(), 0, 'a badge is told before the hand is off the table');
+      }
+
+      rig.advance(table.view('Quigs').hand!.deadline! - rig.now());
+      assert.deepEqual(table.view('Quigs').feed.map((entry) => entry.text).filter((line) => line.includes(' earned ')), FELTED_LINES);
+
+      await quigs.waitForSelector('.toast:visible');
+      assert.equal(await text(quigs, '.toast'), FELTED_TOAST);
+      assertOnScreen(await boxes(quigs, '.toast'), 'smallPhone', 'the toast');
+      await shot(quigs, 'badges-toast-smallPhone');
+
+      for (const page of pages) {
+        for (const line of FELTED_LINES) {
+          await page.waitForSelector(`.feed li:has-text(${JSON.stringify(line)})`, { state: 'attached' });
+        }
+      }
+
+      for (const [who, page] of [['the player who lost', stu], ['a watcher', kibitz]] as const) {
+        assert.equal(await toastShown(page), 0, `${who} is shown a toast for someone else's badge`);
+      }
+
+      await shot(kibitz, 'badges-line-desktop');
+
+      // A page opened afterwards finds the badges and is told nothing
+      const late = await table.open('Quigs', 'phone');
+      await late.waitForSelector('.feed li:has-text("Felted")', { state: 'attached' });
+      table.act('Kibitz', { type: 'chat', text: 'brutal' });
+      await late.waitForSelector('.feed li:has-text("brutal")', { state: 'attached' });
+      assert.equal(await toastShown(late), 0, 'a page opened after the badge was earned was told of it');
+
+      for (const page of [...pages, late]) {
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'every badge on ten players with the longest names fits beside each name in Tonight, unfolded and in its copied text, and in the Players dialog, on the smallest phone and the desktop',
+    async (rig) => {
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        const table = badgedTable(rig);
+        const host = await table.open('Quigs', screen);
+        const press = pressOn(host, screen);
+        const marks = BADGES.map((badge) => badge.mark);
+
+        await openTonight(host, screen);
+        assert.deepEqual(await host.locator('.tonight-players li[data-player="Quigs"] .badge').allInnerTexts(), marks, 'the badges, in the order of the list');
+        assert.deepEqual(await host.locator(`.tonight-players li[data-player="${WIDEST}"] .badge`).allInnerTexts(), marks.map((mark) => `${mark}×99`));
+        assert.equal(await host.locator('.tonight-players li[data-player="Stu"] .badge').count(), BADGES.length, 'a player who left keeps their badges');
+        await assertTonightFits(host, screen);
+        await assertBadgesFit(host, screen, '.tonight-players > li', ':is(.who, .net, .counts)', 'Tonight');
+        await shot(host, `badges-tonight-${screen}`);
+
+        await press(`.tonight-players li[data-player="${WIDEST}"] summary`);
+        const named = await host.locator(`.tonight-players li[data-player="${WIDEST}"] .badge-list li`).allInnerTexts();
+        assert.deepEqual(named, BADGES.map((badge) => `${badge.mark} ${badge.name} ×99\n${badge.description}`));
+        assert.deepEqual(await squeezed(host, '.badge-list :is(b, small)'), [], 'a badge named in an unfolded line is cut off');
+        await assertTonightFits(host, screen);
+        await shot(host, `badges-tonight-unfolded-${screen}`);
+
+        await host.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+        await press('[data-action="copy-tonight"]');
+        await host.waitForSelector('[data-action="copy-tonight"]:has-text("Copied")');
+        const copied = ((await host.evaluate('navigator.clipboard.readText()')) as string).split('\n');
+        assert.ok(copied.some((line) => line.startsWith(`${WIDEST} +`) && line.endsWith(` · ${BADGES.map((badge) => `${badge.mark} ${badge.name} ×99`).join(' · ')}`)), copied.join('\n'));
+        await press('.dialog [data-action="close"]');
+
+        await press('[data-action="menu"]');
+        await press('.menu [data-action="players"]');
+        await host.waitForSelector('.dialog .badges');
+        assert.deepEqual(await host.locator(`.dialog li:has-text("${WIDEST}") .badge`).allInnerTexts(), marks.map((mark) => `${mark}×99`));
+        assert.equal(await host.locator('.dialog li:has-text("Lurker") .badges').count(), 0, 'someone who only watched has badges');
+        await assertBadgesFit(host, screen, '.dialog .rows li', ':is(b, .row-actions .btn)', 'the Players dialog');
+        assert.deepEqual(await squeezed(host, '.dialog .row-actions .btn'), [], 'a button in the Players dialog is cut off');
+        await shot(host, `badges-players-${screen}`);
+
+        await host.context().close();
+      }
+    },
+  ],
+  [
+    'while an all-in hand’s last card lies face down no badge, toast or line is shown, to a player or a watcher, and the hand’s badges come once it is off the table, to a page that saw the card turned and to one still waiting on it',
+    async (rig) => {
+      const { screen } = MOTION_LAYOUTS[0]!;
+      const table = feltingHand(rig);
+      table.play(() => null, (view) => view.hand!.boards[0]!.length === 4);
+
+      const open = async (name: string) => {
+        const page = await table.open(name, screen, MOTION, { moving: true });
+        await page.evaluate('window.holdAt = 0');
+
+        return page;
+      };
+      const turnUp = (page: Page) => page.evaluate('window.holdAt = null; window.land()');
+      const [quigs, stu, kibitz] = [await open('Quigs'), await open('Stu'), await open('Kibitz')];
+      const reading = [['a player', stu], ['a watcher', kibitz]] as const;
+
+      for (const [, page] of reading) {
+        await openTonight(page, screen);
+      }
+
+      const nothingTold = async (when: string) => {
+        assert.equal(await toastShown(quigs), 0, `${when}: the toast came`);
+
+        for (const [who, page] of [...reading, ['the earner', quigs]] as const) {
+          assert.equal(await page.locator('.feed li:has-text("earned")').count(), 0, `${who}, ${when}: the line came`);
+          assert.equal(await page.locator('.badges').count(), 0, `${who}, ${when}: a badge is drawn`);
+        }
+      };
+
+      rig.advance(table.view('Quigs').hand!.deadline! - rig.now());
+      assert.equal(table.view('Quigs').hand!.stage, 'done');
+
+      for (const page of [quigs, stu, kibitz]) {
+        await page.waitForSelector('.board-card.stand-in', { state: 'attached' });
+      }
+
+      await nothingTold('the river face down');
+
+      // The card comes up for the two reading, and the hand is still on the table
+      for (const [, page] of reading) {
+        await turnUp(page);
+        await page.waitForFunction(`/^Up the most\\s+Quigs\\b/.test(document.querySelector('.tonight-leaders div')?.innerText)`);
+      }
+
+      await nothingTold('the hand still on the table');
+
+      // Quigs's river is still face down when the hand is taken off the table: the wait ends there, and the toast comes with the card up
+      rig.advance(table.view('Quigs').hand!.deadline! - rig.now());
+
+      await quigs.waitForSelector('.toast:visible');
+      assert.equal(await text(quigs, '.toast'), FELTED_TOAST);
+      assert.equal(await quigs.locator('.board-card.stand-in').count(), 0, 'a card lies face down under the toast');
+
+      for (const [who, page] of reading) {
+        await page.waitForSelector('.tonight-players li[data-player="Quigs"] .badges');
+        assert.deepEqual(await page.locator('.tonight-players li[data-player="Quigs"] .badge').allInnerTexts(), ['💰', '💀'], who);
+        await page.waitForSelector(`.feed li:has-text(${JSON.stringify(FELTED_LINES[1])})`, { state: 'attached' });
+        assert.equal(await toastShown(page), 0, `${who} is shown a toast for Quigs's badges`);
+      }
+
+      for (const page of [quigs, stu, kibitz]) {
+        await page.context().close();
       }
     },
   ],

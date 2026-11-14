@@ -294,6 +294,12 @@ export interface PlayerTonight {
   best: Card[] | null;
   /** Times they bought chips after the first. */
   rebuys: number;
+  /** Hands that left them with no chips. */
+  busts: number;
+  /** Hands won in a row, up to the last hand that somebody won. */
+  streak: number;
+  /** The badges they have earned tonight (`badges.ts`), by id, and how many times each. */
+  badges: Record<string, number>;
 }
 
 /**

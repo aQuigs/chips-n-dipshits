@@ -1,3 +1,4 @@
+import type { EarnedBadge } from '../engine/badges.ts';
 import type { HandEvent } from '../engine/events.ts';
 import type { FeedEntry } from '../engine/types.ts';
 import type { TableView } from '../engine/view.ts';
@@ -35,7 +36,25 @@ export interface TableChange {
    * already told. What happens for everyone when a night ends hangs off this.
    */
   nightEnded: boolean;
+  /** The badges the viewer has earned that this is the first `current` view to show, in the order of the list. */
+  earned: EarnedBadge[];
 }
+
+/** What is told once, even past a late view: by the first view on time that shows it, and never by a page that opened after it. */
+interface Told {
+  nightEndedAt: number | null;
+  /** How many times the viewer has earned each badge, by its id. */
+  badges: Map<string, number>;
+}
+
+const badgesOf = (view: TableView): EarnedBadge[] => view.tonight.players.find((row) => row.playerId === view.you.id)?.badges ?? [];
+
+/** What a view has to tell of these, all of it. */
+function toldIn(view: TableView | null): Told {
+  return { nightEndedAt: view?.nightEndedAt ?? null, badges: new Map(view ? badgesOf(view).map((badge) => [badge.id, badge.times]) : []) };
+}
+
+const newBadges = (view: TableView, told: Told): EarnedBadge[] => badgesOf(view).filter((badge) => badge.times > (told.badges.get(badge.id) ?? 0));
 
 /**
  * What `view` adds to `before`, the one shown until now, so that whatever reacts to the table hears
@@ -44,12 +63,12 @@ export interface TableChange {
  *
  * `now` is the server's time as the page reckons it, which is well past the view's own when the view
  * was slow to arrive. `wentBack` says the table itself returned to an earlier state, so nothing in
- * the view is news. `nightTold` is the end of the night already told, which `TableNews` remembers
- * past a view that came late.
+ * the view is news. `told` is the end of the night and the badges already told, which `TableNews`
+ * remembers past a view that came late.
  */
-export function tableChange(before: TableView | null, view: TableView, now: number, wentBack = false, nightTold = before?.nightEndedAt ?? null): TableChange {
+export function tableChange(before: TableView | null, view: TableView, now: number, wentBack = false, told = toldIn(before)): TableChange {
   if (!before || wentBack) {
-    return { before, view, feed: [], events: [], current: false, wentBack, nightEnded: false, now };
+    return { before, view, feed: [], events: [], current: false, wentBack, nightEnded: false, earned: [], now };
   }
 
   // A line is known by its number and its time together: a table put back to an earlier state numbers its next lines like ones it had
@@ -62,23 +81,24 @@ export function tableChange(before: TableView | null, view: TableView, now: numb
   const current = feed.length === lines.length && now - view.now <= FRESH_MS;
 
   // Compared by time, so a night started again and ended again between two views is still news
-  const nightEnded = current && view.nightEndedAt !== null && view.nightEndedAt !== nightTold;
+  const nightEnded = current && view.nightEndedAt !== null && view.nightEndedAt !== told.nightEndedAt;
 
-  return { before, view, feed, events: current ? newEvents(before, view) : [], current, wentBack, nightEnded, now };
+  return { before, view, feed, events: current ? newEvents(before, view) : [], current, wentBack, nightEnded, earned: current ? newBadges(view, told) : [], now };
 }
 
 /**
- * The changes of one table screen, one view after another. The end of the night is told by the first
- * view on time that shows it, so one that came late passes it on rather than losing it; an end the
- * page found already there when it opened, or after the table went back, is never told.
+ * The changes of one table screen, one view after another. The end of the night and the badges
+ * earned are told by the first view on time that shows them, so one that came late passes them on
+ * rather than losing them; what the page found already there when it opened, or after the table
+ * went back, is never told.
  */
 export class TableNews {
-  private nightTold: number | null = null;
+  private told: Told | null = null;
 
   change(before: TableView | null, view: TableView, now: number, wentBack = false): TableChange {
-    const change = tableChange(before, view, now, wentBack, this.nightTold);
-    if (!before || wentBack || change.nightEnded) {
-      this.nightTold = view.nightEndedAt;
+    const change = tableChange(before, view, now, wentBack, this.told ?? toldIn(before));
+    if (!before || wentBack || change.current) {
+      this.told = toldIn(view);
     }
 
     return change;

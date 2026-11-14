@@ -349,3 +349,101 @@ test('a page opened on a table whose night ended long ago, or shown it again aft
   assert.equal(page.arrive(table, true).nightEnded, false);
   assert.equal(page.arrive(table).nightEnded, false);
 });
+
+/**
+ * Seat 0 takes every chip of seat 1, heads-up, and earns badges for it once the hand is cleared. The
+ * page sees each step on time but the last, which arrives `late` ms late; gives back what that brought.
+ */
+function felt(table: TestTable, page: Page, late = 0): TableChange {
+  table.deal({ button: 0, holes: { 0: 'As Ah', 1: 'Ks Kh' }, board: '2c 7d 9h Jc 3s' });
+  table.raise(0, 1000);
+  table.call(1);
+  page.arrive(table);
+
+  while (table.state.hand!.stage !== 'done') {
+    table.wait(table.state.hand!.deadline! - table.now);
+    page.arrive(table);
+  }
+
+  table.wait(table.state.hand!.deadline! - table.now);
+
+  return page.arrive(table, false, late);
+}
+
+function rebuy(table: TestTable): void {
+  table.cmd(1, { type: 'requestRebuy', amount: 1000 });
+  table.cmd(0, { type: 'approve', playerId: table.ids[1]! });
+}
+
+const earned = (change: TableChange) => change.earned.map((badge) => [badge.id, badge.times]);
+
+test('a badge is told once, to whoever earned it, by the first view on time that shows it, and one earned again is told again', () => {
+  const table = new TestTable({ stacks: [1000, 1000] });
+  const page = new Page();
+  page.arrive(table);
+
+  assert.deepEqual(earned(felt(table, page)), [['bigPot', 1], ['felted', 1]]);
+
+  table.cmd(1, { type: 'chat', text: 'gg' });
+  assert.deepEqual(earned(page.arrive(table)), [], 'told again');
+
+  // Late on its way, the view tells nothing, and the next on time tells what it brought
+  rebuy(table);
+  assert.deepEqual(earned(felt(table, page, 30_000)), []);
+  assert.deepEqual(earned(page.arrive(table)), [['bigPot', 2], ['felted', 2]]);
+});
+
+test('badges earned before the page opened, or shown again after the table went back, are never told', () => {
+  const table = new TestTable({ stacks: [1000, 1000] });
+  const before = new Page();
+  before.arrive(table);
+  felt(table, before);
+
+  const opened = new Page();
+  assert.deepEqual(earned(opened.arrive(table)), []);
+  table.cmd(1, { type: 'chat', text: 'still here' });
+  assert.deepEqual(earned(opened.arrive(table)), [], 'the next view on time');
+
+  rebuy(table);
+  felt(table, before);
+  assert.deepEqual(earned(opened.arrive(table, true)), []);
+  assert.deepEqual(earned(opened.arrive(table)), []);
+});
+
+test('a hand the blinds chop at once tells no badge, though the small blind is a win short of a run of three', () => {
+  const table = new TestTable({ stacks: [1000, 1000, 1000], config: { allowChop: true } });
+  const page = new Page();
+  const told: TableChange[] = [];
+  const see = () => told.push(page.arrive(table));
+  const cleared = () => {
+    while (table.state.hand) {
+      table.wait(table.state.hand.deadline! - table.now);
+      see();
+    }
+  };
+
+  table.cmd(0, { type: 'setAlwaysChop', on: true });
+  table.cmd(1, { type: 'setAlwaysChop', on: true });
+  for (let hand = 0; hand < 2; hand++) {
+    table.deal({ button: 0 });
+    table.raise(0, 60);
+    table.foldOut();
+    see();
+    cleared();
+  }
+
+  // Seat 0, whose page this is, is the small blind, and the two blinds chop the moment the button folds
+  table.deal({ button: 2 });
+  table.fold(2);
+  assert.deepEqual(table.state.hand!.result!.chopped, [0, 1]);
+  see();
+  cleared();
+  assert.deepEqual(told.flatMap((change) => change.earned), []);
+
+  table.deal({ button: 0 });
+  table.raise(0, 60);
+  table.foldOut();
+  see();
+  cleared();
+  assert.deepEqual(told.flatMap((change) => change.earned), [{ id: 'heater', times: 1 }], 'the run of three was not told');
+});

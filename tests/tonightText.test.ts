@@ -118,3 +118,13 @@ test('a table that began counting late says how many hands its numbers leave out
   assert.equal(missedOf(late(1)), 'These numbers start partway through the night: 1 hand was played before the count began. The money is all there.');
   assert.equal(tonightText(late(12)).split('\n').at(-1), 'These numbers start partway through the night: 12 hands were played before the count began. The money is all there.');
 });
+
+test('the night as text gives each player\'s badges after what they did, in the order of the list, with how many times', () => {
+  const t = oneHandIn();
+  t.state.tonight.players[t.ids[0]!]!.badges = { felted: 2, quads: 1 };
+
+  const lines = tonightText(t.view(1)).split('\n');
+
+  assert.ok(lines.includes('P0 +30 · 1 hand · 1 pot won · 🍀 Quads · 💀 Felted ×2'), lines.join('\n'));
+  assert.ok(lines.includes('P2 -20 · 1 hand · 0 pots won'), 'a player with no badges gets no more');
+});

@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { addMember, evaluateHand, handFacts, isStraddle, ledgerOf, newTonight, nightIsOver, SEAT_COUNT, STRADDLES, STRADDLES_IN_A_ROW, straddlesAllowed, tonightView } from '../src/engine/index.ts';
-import type { Effect, HandRecord, PlayerTonight, Straddle, TableState, Tonight, TonightView } from '../src/engine/index.ts';
+import { addMember, evaluateHand, handFacts, HIGH_CARD, isSevenDeuce, isStraddle, ledgerOf, newTonight, nightIsOver, SEAT_COUNT, STRADDLES, STRADDLES_IN_A_ROW, STRAIGHT_FLUSH, straddlesAllowed, tonightView } from '../src/engine/index.ts';
+import type { Card, Effect, HandRecord, PlayerTonight, Straddle, TableState, Tonight, TonightView } from '../src/engine/index.ts';
 import { restoreState } from '../src/server/store.ts';
 import { ACES, BOARD, cards, checkAround, handRecords, KINGS, QUEENS, seededRng, TestTable } from './helpers.ts';
 import { assertInvariants } from './invariants.ts';
@@ -12,7 +12,7 @@ import { chance, randomStep } from './randomPlay.ts';
 // On the first board aces beat kings beat queens; on the second a king makes the kings three of a kind
 const SECOND = 'Kd 4c 5h 8s Td';
 
-const NOTHING: PlayerTonight = { hands: 0, won: 0, biggest: 0, best: null, rebuys: 0 };
+const NOTHING: PlayerTonight = { hands: 0, won: 0, biggest: 0, best: null, rebuys: 0, busts: 0, streak: 0, badges: {} };
 
 /** A player's numbers as the table keeps them, by where they stand in the test table's list. */
 const numbers = (t: TestTable, player: number): PlayerTonight => t.state.tonight.players[t.ids[player]!] ?? NOTHING;
@@ -52,9 +52,9 @@ test('a hand played is one a player was dealt, folded at once or not; a pot won 
   acesBeatKings(t);
 
   assert.equal(t.state.tonight.hands, 1);
-  assert.deepEqual(numbers(t, 0), { hands: 1, won: 1, biggest: 50, best: cards('As Ah Jc 9h 7d'), rebuys: 0 });
-  assert.deepEqual(numbers(t, 1), { hands: 1, won: 0, biggest: 0, best: null, rebuys: 0 }, 'folded before the flop, and still a hand played');
-  assert.deepEqual(numbers(t, 2), { hands: 1, won: 0, biggest: 0, best: cards('Ks Kh Jc 9h 7d'), rebuys: 0 }, 'the kings lost, and are still the best hand this player has shown');
+  assert.deepEqual(numbers(t, 0), { ...NOTHING, hands: 1, won: 1, biggest: 50, best: cards('As Ah Jc 9h 7d'), streak: 1 });
+  assert.deepEqual(numbers(t, 1), { ...NOTHING, hands: 1 }, 'folded before the flop, and still a hand played');
+  assert.deepEqual(numbers(t, 2), { ...NOTHING, hands: 1, best: cards('Ks Kh Jc 9h 7d') }, 'the kings lost, and are still the best hand this player has shown');
 
   // Sitting a hand out is not playing it, and a walk is a pot won
   t.cmd(2, { type: 'sitOut' });
@@ -193,7 +193,7 @@ for (const unit of ['chips', 'cents'] as const) {
     assert.deepEqual(rows.map((row) => [row.name, row.net, row.seated]), [['P1', 127, true], ['P3', 0, false], ['P2', -20, true], ['P0', -107, true]], 'the best night first');
     assert.deepEqual(rows.map((row) => [row.playerId, row.net]).sort(), view.ledger.map((row) => [row.playerId, row.net]).sort(), 'the same players and the same money as the ledger');
     assert.equal(rows.reduce((sum, row) => sum + row.net, 0), 0);
-    assert.deepEqual(rows.find((row) => row.name === 'P3'), { playerId: t.ids[3], name: 'P3', seated: false, net: 0, hands: 1, won: 0, biggest: 0, best: null, rebuys: 0 });
+    assert.deepEqual(rows.find((row) => row.name === 'P3'), { playerId: t.ids[3], name: 'P3', seated: false, net: 0, hands: 1, won: 0, biggest: 0, best: null, rebuys: 0, badges: [] });
     assert.deepEqual(rows.find((row) => row.name === 'P0')!.best, { name: 'Pair of aces', cards: cards('As Ah Jc 9h 7d') });
 
     assert.deepEqual(t.view(watcher).tonight, view.tonight, 'someone watching is shown the same night');
@@ -365,27 +365,119 @@ class Recount {
   }
 
   private of(playerId: string): PlayerTonight {
-    return (this.tonight.players[playerId] ??= { ...NOTHING });
+    return (this.tonight.players[playerId] ??= { ...NOTHING, badges: {} });
   }
 
   private count(record: HandRecord): void {
+    const { result } = record;
+    const took = (seat: number) => result.pots.flatMap((pot) => pot.awards).reduce((sum, award) => sum + (award.seat === seat ? award.amount : 0), 0);
+    // Winning a hand is taking chips from its pots or collecting the bounty, which a big blind folded to can do from an empty pot
+    const wonIt = (seat: number) => took(seat) > 0 || result.bounty?.seat === seat;
+    const somebodyTook = record.players.some((player) => wonIt(player.seat));
+
     this.tonight.hands += 1;
+
+    if (somebodyTook) {
+      for (const [playerId, numbers] of Object.entries(this.tonight.players)) {
+        if (!record.players.some((player) => player.playerId === playerId)) {
+          numbers.streak = 0;
+        }
+      }
+    }
 
     for (const player of record.players) {
       const numbers = this.of(player.playerId);
-      const took = record.result.pots.flatMap((pot) => pot.awards).reduce((sum, award) => sum + (award.seat === player.seat ? award.amount : 0), 0);
+      const { busts, streak } = numbers;
 
       numbers.hands += 1;
-      numbers.won += took > 0 ? 1 : 0;
-      numbers.biggest = Math.max(numbers.biggest, took);
+      numbers.won += took(player.seat) > 0 ? 1 : 0;
+      numbers.biggest = Math.max(numbers.biggest, took(player.seat));
+      numbers.busts += player.endStack === 0 ? 1 : 0;
+      numbers.streak = !somebodyTook ? streak : wonIt(player.seat) ? streak + 1 : 0;
 
-      for (const shown of record.result.hands.filter((hand) => hand.seat === player.seat)) {
+      for (const shown of result.hands.filter((hand) => hand.seat === player.seat)) {
         if (numbers.best === null || evaluateHand(shown.cards).score > evaluateHand(numbers.best).score) {
           numbers.best = shown.cards;
         }
       }
+
+      if (somebodyTook) {
+        for (const id of badgesEarned(record, player, { busts, streak }, numbers)) {
+          numbers.badges[id] = (numbers.badges[id] ?? 0) + 1;
+          this.earned.push({ hand: record.number, seat: player.seat, id });
+        }
+      }
     }
   }
+
+  /** Each badge earned, by the hand and the seat that earned it. */
+  readonly earned: { hand: number; seat: number; id: string }[] = [];
+}
+
+/**
+ * The badges a player earned in a hand somebody won, as the README says each is earned, read from the
+ * record by none of the code that earns them. `before` is their busts and streak before the hand.
+ */
+function badgesEarned(record: HandRecord, player: HandRecord['players'][number], before: Pick<PlayerTonight, 'busts' | 'streak'>, after: PlayerTonight): string[] {
+  const { result } = record;
+  const { seat } = player;
+  const hole = player.cards ?? [];
+  const awards = result.pots.flatMap((pot) => pot.awards.filter((award) => award.amount > 0));
+  const took = awards.filter((award) => award.seat === seat).reduce((sum, award) => sum + award.amount, 0);
+  // Won at the showdown: paid from a pot on that run that somebody else was in for too
+  const wonOn = (run: number) => result.pots.some((pot) => pot.eligible.length > 1 && pot.awards.some((award) => award.seat === seat && award.run === run && award.amount > 0));
+  const ranks = (shown: Card[]) => shown.map((card) => card[0]);
+
+  const shown = result.hands.filter((hand) => hand.seat === seat).map((hand) => ({ ...hand, value: evaluateHand(hand.cards) }));
+  // A straight flush is the player's when any of its cards is; four of a kind when one of the four is
+  const ownFlush = shown.filter((hand) => hand.value.category === STRAIGHT_FLUSH && hand.cards.some((card) => hole.includes(card)));
+  const royal = (hand: { cards: Card[] }) => ranks(hand.cards).includes('A') && ranks(hand.cards).includes('K');
+  const ownQuads = shown.filter((hand) => {
+    const four = ranks(hand.cards).find((rank) => ranks(hand.cards).filter((other) => other === rank).length === 4);
+
+    return four !== undefined && hole.some((card) => card[0] === four);
+  });
+
+  // Whose last chips the player took alone: the bounty's collector took them when the bounty emptied a stack, else everyone paid from a pot the broke player was in
+  const feltedBy = (broke: HandRecord['players'][number]) => {
+    const bounty = result.bounty?.payments.some((payment) => payment.seat === broke.seat) ? [result.bounty.seat] : [];
+    const takers = bounty.length > 0 ? bounty : result.pots.filter((pot) => pot.eligible.includes(broke.seat)).flatMap((pot) => pot.awards.filter((award) => award.amount > 0).map((award) => award.seat));
+
+    return new Set(takers.filter((taker) => taker !== broke.seat));
+  };
+  const felted = record.players.some((other) => other !== player && other.endStack === 0 && feltedBy(other).size === 1 && feltedBy(other).has(seat));
+
+  // Runs the main pot paid nothing on, being too small to split, are not asked about
+  const beatEveryone = record.boards.every((_board, run) => {
+    if (!result.pots[0]?.awards.some((award) => award.run === run && award.amount > 0)) {
+      return true;
+    }
+
+    const mine = shown.find((hand) => hand.run === run);
+    const theirs = result.hands.filter((hand) => hand.seat !== seat && hand.run === run);
+
+    return mine !== undefined && theirs.every((hand) => evaluateHand(hand.cards).score < mine.value.score);
+  });
+  const outright = result.uncontested ? result.winnings[0]?.seat === seat : beatEveryone;
+
+  const every = (count: number, was: number, step: number) => count > was && count % step === 0;
+  const pot = result.pots.reduce((sum, each) => sum + each.amount, 0);
+
+  const earned: Record<string, boolean> = {
+    royal: ownFlush.some(royal),
+    straightFlush: ownFlush.some((hand) => !royal(hand)),
+    quads: ownQuads.length > 0,
+    bigPot: record.bigBlind > 0 && took >= 100 * record.bigBlind,
+    heater: every(after.streak, before.streak, 3),
+    felted,
+    scoop: record.boards.length === 2 && !result.uncontested && took === pot,
+    sevenDeuce: player.cards !== null && isSevenDeuce(player.cards) && outright,
+    airBall: shown.some((hand) => hand.value.category === HIGH_CARD && wonOn(hand.run)),
+    cooler: [...ownQuads, ...ownFlush].some((hand) => !wonOn(hand.run)),
+    atm: every(after.busts, before.busts, 3),
+  };
+
+  return Object.keys(earned).filter((id) => earned[id]);
 }
 
 /**
@@ -481,6 +573,7 @@ test('over random games the numbers are at every step exactly what the hand reco
   const reached = { hands: 0, showdowns: 0, runTwice: 0, bombPots: 0, doubleBoards: 0, antes: 0, transfers: 0, rebuys: 0, left: 0, nightsEnded: 0, playedOn: 0, crowned: 0, busts: 0, splits: 0, bestHands: 0, chops: 0 };
   // Hands with each kind of straddle posted
   const straddled: Record<Straddle, number> = { straddle: 0, 'double straddle': 0, 'button straddle': 0, 'Mississippi straddle': 0 };
+  const badges: Record<string, number> = {};
 
   for (let seed = 1; seed <= TABLES; seed++) {
     const rng = seededRng(seed * 104_729);
@@ -545,6 +638,9 @@ test('over random games the numbers are at every step exactly what the hand reco
         reached.antes += record.events[0]?.[0] === 'start' && record.events[0][6] ? 1 : 0;
         new Set(record.events.flatMap((event) => (event[0] === 'post' && isStraddle(event[2]) ? [event[2]] : []))).forEach((what) => (straddled[what] += 1));
         reached.busts += facts.players.some((p) => p.busted) ? 1 : 0;
+
+        const bounty = record.result.bounty;
+        assert.ok(!bounty || recount.earned.some((earned) => earned.hand === record.number && earned.seat === bounty.seat && earned.id === 'sevenDeuce'), `hand ${record.number}: a bounty was paid for seven-deuce and the badge was not earned`);
         reached.splits += facts.players.some((p) => p.wins.some((win) => win.between > 1)) ? 1 : 0;
       }
 
@@ -570,6 +666,10 @@ test('over random games the numbers are at every step exactly what the hand reco
       }
     }
 
+    for (const { id } of recount.earned) {
+      badges[id] = (badges[id] ?? 0) + 1;
+    }
+
     const last = t.view(0).tonight;
     reached.transfers += t.state.members.some((member) => member.transferred !== 0) ? 1 : 0;
     reached.rebuys += last.players.reduce((sum, row) => sum + row.rebuys, 0);
@@ -578,7 +678,7 @@ test('over random games the numbers are at every step exactly what the hand reco
   }
 
   // The run only proves something if it reached the parts of the game the numbers have to survive
-  const said = JSON.stringify({ ...reached, straddled });
+  const said = JSON.stringify({ ...reached, straddled, badges });
   assert.ok(reached.hands >= TABLES * 30 && reached.showdowns >= TABLES * 10, said);
   assert.ok(reached.runTwice >= TABLES / 2 && reached.bombPots >= TABLES && reached.doubleBoards >= TABLES / 2, said);
   assert.ok(reached.antes >= TABLES * 5, said);
@@ -588,4 +688,10 @@ test('over random games the numbers are at every step exactly what the hand reco
   assert.ok(reached.transfers >= TABLES / 2 && reached.rebuys >= TABLES && reached.left >= TABLES, said);
   assert.ok(reached.nightsEnded >= TABLES / 2 && reached.playedOn >= TABLES / 2 && reached.crowned >= TABLES / 2, said);
   assert.ok(reached.busts >= TABLES && reached.splits >= TABLES / 4 && reached.bestHands >= TABLES * 2, said);
+  // The rarest hands, a straight flush and better, are left to the tests of each badge
+  assert.ok(['felted', 'heater', 'bigPot', 'scoop'].every((id) => badges[id]! >= TABLES), said);
+  // Ace high has to win a pot somebody called at a showdown
+  assert.ok(badges.airBall! >= TABLES / 2, said);
+  // Seven-deuce needs a table with a bounty, and ATM a player broke three times in a night
+  assert.ok(['sevenDeuce', 'atm'].every((id) => badges[id]! >= TABLES / 8), said);
 });

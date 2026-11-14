@@ -663,6 +663,68 @@ test('the last card of an all-in runout is held back from the view that confirms
   assert.equal(page.events().filter((event) => event[0] === 'call').length, 1);
 });
 
+test('a move shown early tells no badge: the badges of the hand it ends come from the server, once, in the view that clears it', async (t) => {
+  const server = new Server(
+    [
+      { name: 'Quigs', stack: 1000 },
+      { name: 'Stu', stack: 1000 },
+    ],
+    { allowRunItTwice: false },
+  );
+  server.deal({ button: 0, holes: { 0: ACES, 1: KINGS }, board: '2c 7d 9h Jc 3s' });
+  server.act('Quigs', { type: 'call' });
+  server.act('Stu', { type: 'raise', to: 1000 });
+
+  const page = await pageOf(t, server, 'Quigs');
+  page.moving = true;
+  const before = page.told.length;
+
+  // The call that will take every chip of Stu's shows at once, and with it no badge
+  const sending = page.move('call');
+  assert.equal(page.table, 'call, 1000 in front, 0 behind, pot 2000, nobody to act');
+  await page.wire.answer('act');
+  await sending;
+
+  // The board comes a card at a time, and the hand is cleared once the result has been on the table its while
+  const told = () => page.told.slice(before).flatMap((change) => change.earned);
+  for (let steps = 0; server.view('Quigs').hand; steps++) {
+    assert.deepEqual(told(), [], 'a badge was told before the hand was cleared');
+    assert.ok(steps < 10, 'the hand was never cleared');
+
+    server.now = server.view('Quigs').hand!.deadline!;
+    await page.wire.answer('poll');
+    await page.land();
+  }
+
+  assert.deepEqual(told(), [{ id: 'bigPot', times: 1 }, { id: 'felted', times: 1 }]);
+});
+
+test('a fold shown early into two blinds who always chop tells no badge, nor does the chop the server makes of it', async (t) => {
+  const server = new Server(THREE, { allowChop: true });
+  server.act('Stu', { type: 'setAlwaysChop', on: true });
+  server.act('Pam', { type: 'setAlwaysChop', on: true });
+  server.deal({ button: 0, holes: { 0: ACES, 1: KINGS }, board: '2c 7d 9h Jc 3s' });
+
+  const page = await pageOf(t, server, 'Quigs');
+  assert.equal(page.view.hand!.foldChops, true);
+  const before = page.told.length;
+
+  const sending = page.move('fold');
+  assert.equal(page.table, 'fold, 0 in front, 1000 behind, pot 30, nobody to act');
+  await page.wire.answer('act');
+  await sending;
+  assert.deepEqual(server.view('Quigs').hand!.result!.chopped, [1, 2]);
+
+  // Cleared once its result has been on the table its while, and the next hand is dealt
+  const chopped = page.view.hand!.number;
+  server.now = server.view('Quigs').hand!.deadline!;
+  await page.wire.answer('poll');
+  assert.notEqual(page.view.hand?.number, chopped, 'the chopped hand was not cleared');
+
+  assert.deepEqual(page.told.slice(before).flatMap((change) => change.earned), []);
+  assert.ok(!page.view.feed.some((entry) => entry.text.includes(' earned ')), 'a badge line came with the chop');
+});
+
 test('a move is marked as not confirmed once it has waited long enough, by this device’s clock', async (t) => {
   const { page } = await quigsToAct(t);
 

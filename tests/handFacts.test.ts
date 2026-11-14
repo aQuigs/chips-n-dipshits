@@ -94,7 +94,7 @@ test('a showdown: what each player put in and took out, who won the pot, and the
   assert.deepEqual(chips(facts), [[20, 50, 30], [10, 0, -10], [20, 0, -20]]);
   assert.deepEqual(facts.players.map((p) => p.folded), [false, true, false]);
   assert.deepEqual(facts.players.map(wonAPot), [true, false, false]);
-  assert.deepEqual(at(facts, 0).wins, [{ pot: 0, board: 0, amount: 50, between: 1 }]);
+  assert.deepEqual(at(facts, 0).wins, [{ pot: 0, board: 0, amount: 50, between: 1, contested: true }]);
 
   // The kings were turned up first and lost: they are a hand shown all the same
   assert.deepEqual(facts.players.map((p) => p.cards), [cards(ACES), null, cards(KINGS)]);
@@ -120,7 +120,7 @@ test('a hand everyone folds: the winner took the pot without a hand being shown,
   assert.equal(facts.pot, 130, 'the 340 nobody called went back and was never played for');
   assert.deepEqual(chips(facts), [[60, 0, -60], [10, 0, -10], [60, 130, 70]]);
   assert.deepEqual(facts.players.map((p) => p.folded), [true, true, false]);
-  assert.deepEqual(at(facts, 2).wins, [{ pot: 0, board: 0, amount: 130, between: 1 }]);
+  assert.deepEqual(at(facts, 2).wins, [{ pot: 0, board: 0, amount: 130, between: 1, contested: false }]);
   assert.deepEqual(facts.players.map((p) => [p.cards, p.shown]), [[null, []], [null, []], [null, []]], 'the winner mucked: aces nobody saw are no hand of the night');
 });
 
@@ -169,8 +169,8 @@ test('a split pot: both players won a share, each what they were paid', () => {
   const facts = factsOf(t);
 
   assert.equal(facts.pot, 45);
-  assert.deepEqual(at(facts, 0).wins, [{ pot: 0, board: 0, amount: 22, between: 2 }]);
-  assert.deepEqual(at(facts, 2).wins, [{ pot: 0, board: 0, amount: 23, between: 2 }]);
+  assert.deepEqual(at(facts, 0).wins, [{ pot: 0, board: 0, amount: 22, between: 2, contested: true }]);
+  assert.deepEqual(at(facts, 2).wins, [{ pot: 0, board: 0, amount: 23, between: 2, contested: true }]);
   assert.deepEqual(facts.players.map(wonAPot), [true, false, true]);
   assert.deepEqual(chips(facts), [[20, 22, 2], [5, 0, -5], [20, 23, 3]]);
 });
@@ -185,8 +185,8 @@ test('side pots: a short stack wins the main pot and the next best hand the side
   const facts = factsOf(t);
 
   assert.deepEqual([facts.pot, facts.bigBlind], [700, 20], 'a pot of 35 big blinds');
-  assert.deepEqual(at(facts, 0).wins, [{ pot: 0, board: 0, amount: 300, between: 1 }]);
-  assert.deepEqual(at(facts, 1).wins, [{ pot: 1, board: 0, amount: 400, between: 1 }]);
+  assert.deepEqual(at(facts, 0).wins, [{ pot: 0, board: 0, amount: 300, between: 1, contested: true }]);
+  assert.deepEqual(at(facts, 1).wins, [{ pot: 1, board: 0, amount: 400, between: 1, contested: true }]);
   assert.deepEqual(at(facts, 2).wins, []);
   assert.deepEqual(chips(facts), [[100, 300, 200], [300, 400, 100], [300, 0, -300]]);
   assert.deepEqual(facts.players.map((p) => p.busted), [false, false, false], 'the loser had chips behind');
@@ -230,8 +230,8 @@ test('run twice with a winner on each board: the hand was run twice, each won th
   const facts = factsOf(t);
 
   assert.deepEqual([facts.boards, facts.runTwice, facts.bombPot, facts.ended], [2, true, null, 'showdown']);
-  assert.deepEqual(at(facts, 0).wins, [{ pot: 0, board: 0, amount: 503, between: 1 }]);
-  assert.deepEqual(at(facts, 2).wins, [{ pot: 0, board: 1, amount: 502, between: 1 }]);
+  assert.deepEqual(at(facts, 0).wins, [{ pot: 0, board: 0, amount: 503, between: 1, contested: true }]);
+  assert.deepEqual(at(facts, 2).wins, [{ pot: 0, board: 1, amount: 502, between: 1, contested: true }]);
   assert.deepEqual(facts.players.map(wonAPot), [true, false, true]);
   assert.deepEqual(at(facts, 0).shown.map((hand) => [hand.board, hand.name]), [[0, 'Pair of aces'], [1, 'Pair of aces']]);
   assert.deepEqual(at(facts, 2).shown.map((hand) => [hand.board, hand.name, hand.category]), [[0, 'Pair of kings', PAIR], [1, 'Three kings', THREE_OF_A_KIND]]);
@@ -250,7 +250,7 @@ test('a double-board bomb pot: scooped, one player is paid on both boards; with 
 
   assert.deepEqual([scoop.boards, scoop.runTwice, scoop.bombPot], [2, false, { amount: 100, boards: 2 }]);
   assert.equal(scoop.pot, 500);
-  assert.deepEqual(at(scoop, 0).wins, [{ pot: 0, board: 0, amount: 250, between: 1 }, { pot: 0, board: 1, amount: 250, between: 1 }]);
+  assert.deepEqual(at(scoop, 0).wins, [{ pot: 0, board: 0, amount: 250, between: 1, contested: true }, { pot: 0, board: 1, amount: 250, between: 1, contested: true }]);
   assert.deepEqual(chips(scoop), [[200, 500, 300], [200, 0, -200], [100, 0, -100]]);
 
   // Everyone plays the second board, a royal flush
@@ -262,8 +262,8 @@ test('a double-board bomb pot: scooped, one player is paid on both boards; with 
 
   const split = factsOf(tied);
 
-  assert.deepEqual(at(split, 0).wins, [{ pot: 0, board: 0, amount: 150, between: 1 }, { pot: 0, board: 1, amount: 75, between: 2 }]);
-  assert.deepEqual(at(split, 1).wins, [{ pot: 0, board: 1, amount: 75, between: 2 }]);
+  assert.deepEqual(at(split, 0).wins, [{ pot: 0, board: 0, amount: 150, between: 1, contested: true }, { pot: 0, board: 1, amount: 75, between: 2, contested: true }]);
+  assert.deepEqual(at(split, 1).wins, [{ pot: 0, board: 1, amount: 75, between: 2, contested: true }]);
   assert.deepEqual(at(split, 1).shown.map((hand) => [hand.board, hand.name, hand.category]), [[0, 'Pair of kings', PAIR], [1, 'Royal flush', STRAIGHT_FLUSH]]);
   assert.equal(at(split, 0).shown[1]!.rank, at(split, 1).shown[1]!.rank, 'the same hand ranks the same whoever shows it');
 });
@@ -319,7 +319,7 @@ test('a tie over a single chip pays one of the players, and that is how it is to
   const facts = factsOf(t);
   const onSecond = facts.players.flatMap((p) => p.wins.filter((win) => win.pot === 0 && win.board === 1));
 
-  assert.deepEqual(onSecond, [{ pot: 0, board: 1, amount: 1, between: 1 }]);
+  assert.deepEqual(onSecond, [{ pot: 0, board: 1, amount: 1, between: 1, contested: true }]);
   assert.equal(facts.players.filter((p) => p.shown.some((hand) => hand.board === 1 && hand.name === 'Royal flush')).length, 3, 'all three played the board');
 });
 

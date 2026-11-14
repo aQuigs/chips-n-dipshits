@@ -413,7 +413,15 @@ export class App {
     const stage = new Slot(h('div.stage'));
     const overlay = new Slot(h('div.overlay', { hidden: true }));
     const motion = new Motion(pageMotion(stage.element), this.prefs, this.watching);
-    const effects = new TableEffects(this.prefs, stage.element, this.sounds, this.attention, motion, { offer: (dialog, still) => this.offerDialog(dialog, still) });
+    const effects = new TableEffects({
+      prefs: this.prefs,
+      stage: stage.element,
+      sounds: this.sounds,
+      attention: this.attention,
+      motion,
+      dialogs: { offer: (dialog, still) => this.offerDialog(dialog, still) },
+      toast: (message) => this.toast(message),
+    });
     const screen: TableScreen = {
       topbar: new Slot(h('header.topbar')),
       banners: new Slot(h('div.banners')),

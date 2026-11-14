@@ -21,6 +21,8 @@ export interface PotWon {
   amount: number;
   /** How many players were paid from that pot on that board, this one among them: more than 1 is a split. A tie over a single chip pays one of them, and is 1. */
   between: number;
+  /** Another player was in for the pot too. False for a pot nobody else could win: everyone else folded, or a side pot of chips only this player was left in for. */
+  contested: boolean;
 }
 
 /** A hand a player turned up at a showdown, on one board. */
@@ -97,6 +99,16 @@ export function wonAPot(player: PlayerFacts): boolean {
   return player.tookOut > 0;
 }
 
+/** What counts as winning a hand: taking chips from its pots, or collecting the bounty, which a big blind folded to can do with nothing in the pot. */
+export function wonTheHand(player: PlayerFacts): boolean {
+  return wonAPot(player) || player.bounty > 0;
+}
+
+/** Whether anybody won the hand. Nobody did in one whose pot went back to its players, or that had nothing in it and paid no bounty. */
+export function somebodyWon(facts: HandFacts): boolean {
+  return facts.players.some(wonTheHand);
+}
+
 /** The seats still in the hand when it ended. A pot always holds a chip of every player who did not fold, so they are the ones in for the main pot. */
 function seatsStillIn(result: HandResult): number[] {
   if (result.chopped) {
@@ -128,7 +140,7 @@ export function handFacts(record: HandRecord): HandFacts {
     const wins = result.pots.flatMap((each, index) =>
       each.awards
         .filter((award) => award.seat === seat && award.amount > 0)
-        .map((award): PotWon => ({ pot: index, board: award.run, amount: award.amount, between: each.awards.filter((other) => other.run === award.run && other.amount > 0).length })),
+        .map((award): PotWon => ({ pot: index, board: award.run, amount: award.amount, between: each.awards.filter((other) => other.run === award.run && other.amount > 0).length, contested: each.eligible.length > 1 })),
     );
     const tookOut = wins.reduce((sum, win) => sum + win.amount, 0);
 

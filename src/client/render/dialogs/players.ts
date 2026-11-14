@@ -2,6 +2,7 @@ import { formatAmount } from '../../../engine/amounts.ts';
 import type { SeatView, TableView } from '../../../engine/view.ts';
 import { h } from '../../ui.ts';
 import { roleOf } from '../../../engine/hosts.ts';
+import { badgeMarks } from '../badges.ts';
 import { hostAlone, hostOrCohost, roleMark } from '../roles.ts';
 import { frame } from './dialog.ts';
 import type { DialogHandlers, DialogKind } from './dialog.ts';
@@ -80,7 +81,8 @@ function players(view: TableView, handlers: DialogHandlers): HTMLElement {
           'Remove',
         );
 
-  const nameOf = (playerId: string, name: string) => h('b', null, name, roleMark(view, playerId));
+  const badges = new Map(view.tonight.players.map((row) => [row.playerId, row.badges]));
+  const nameOf = (playerId: string, name: string) => [h('b', null, name, roleMark(view, playerId)), badgeMarks(badges.get(playerId) ?? [])];
 
   // Only to an open seat, not for a player already on their way out, and not while a shuffle is coming. A move that waits can be taken back
   const move = (seat: SeatView) => {
@@ -172,6 +174,7 @@ export const playersDialog: DialogKind<'players'> = {
     view.cohostIds,
     view.hand?.number,
     view.shuffleAfterHand,
+    view.tonight.players.map((row) => [row.playerId, row.badges]),
     view.seats.map((seat) => seat && [seat.playerId, seat.name, seat.seat, seat.moveTo, seat.leaving, seat.owesBigBlind, seat.owesSmallBlind, view.hand ? null : seat.stack]),
   ],
   draw: players,

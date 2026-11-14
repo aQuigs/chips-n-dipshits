@@ -6,8 +6,10 @@
  * Money is not counted here. Who is up and who is down is the ledger's to say, and the standings are
  * handed its rows, so the two can never disagree.
  */
+import { badgesIn } from './badges.ts';
+import type { EarnedBadge } from './badges.ts';
 import type { Card } from './cards.ts';
-import { wonAPot } from './handFacts.ts';
+import { somebodyWon, wonAPot, wonTheHand } from './handFacts.ts';
 import type { HandFacts } from './handFacts.ts';
 import { madeHandName } from './handNames.ts';
 import { evaluateHand } from './handRank.ts';
@@ -18,8 +20,25 @@ export function newTonight(): Tonight {
   return { hands: 0, players: {} };
 }
 
+function newPlayerTonight(): PlayerTonight {
+  return { hands: 0, won: 0, biggest: 0, best: null, rebuys: 0, busts: 0, streak: 0, badges: {} };
+}
+
 function numbersOf(tonight: Tonight, playerId: string): PlayerTonight {
-  return (tonight.players[playerId] ??= { hands: 0, won: 0, biggest: 0, best: null, rebuys: 0 });
+  return (tonight.players[playerId] ??= newPlayerTonight());
+}
+
+/** A player's numbers without their badges, which are earned from the numbers and never read by what earns them. */
+export type Counts = Omit<PlayerTonight, 'badges'>;
+
+/** What a hand did to a player's numbers. */
+export interface Counted {
+  before: Counts;
+  after: Counts;
+}
+
+function withoutBadges({ badges: _badges, ...counts }: PlayerTonight): Counts {
+  return counts;
 }
 
 const rankOfBest = (best: Card[] | null): number => (best ? evaluateHand(best).score : -1);
@@ -29,15 +48,35 @@ const rankOfBest = (best: Card[] | null): number => (best ? evaluateHand(best).s
  * a hand played is one a player was dealt into, however soon they folded;
  * a pot won is a hand they took chips from the pots of (`wonAPot`), counted once however many pots or boards paid them;
  * the biggest pot is the most they took from the pots of one hand, so their share of a split pot, and both boards added up;
- * the best hand is the best one they turned up at a showdown, on either board, won or lost. The first to be shown stays when a later one ties it.
+ * the best hand is the best one they turned up at a showdown, on either board, won or lost. The first to be shown stays when a later one ties it;
+ * a bust is a hand that left them with no chips;
+ * the streak is the hands they won in a row (`wonTheHand`), of every hand somebody won: losing one, folding or sitting it out ends it, and a hand nobody won leaves it as it was.
+ * Gives back what the hand did to the numbers of each player in it, by member id.
  */
-export function countHand(tonight: Tonight, facts: HandFacts): void {
+export function countHand(tonight: Tonight, facts: HandFacts): Map<string, Counted> {
+  const counted = new Map<string, Counted>();
+  const won = somebodyWon(facts);
+
   tonight.hands += 1;
+
+  if (won) {
+    const dealt = new Set(facts.players.map((player) => player.playerId));
+
+    for (const [playerId, numbers] of Object.entries(tonight.players)) {
+      numbers.streak = dealt.has(playerId) ? numbers.streak : 0;
+    }
+  }
 
   for (const player of facts.players) {
     const numbers = numbersOf(tonight, player.playerId);
+    const before = withoutBadges(numbers);
 
     numbers.hands += 1;
+    numbers.busts += player.busted ? 1 : 0;
+
+    if (won) {
+      numbers.streak = wonTheHand(player) ? numbers.streak + 1 : 0;
+    }
 
     if (wonAPot(player)) {
       numbers.won += 1;
@@ -49,7 +88,18 @@ export function countHand(tonight: Tonight, facts: HandFacts): void {
         numbers.best = hand.cards;
       }
     }
+
+    counted.set(player.playerId, { before, after: withoutBadges(numbers) });
   }
+
+  return counted;
+}
+
+/** Counts a badge a player earned, and gives back how many times they have earned it tonight. */
+export function countBadge(tonight: Tonight, playerId: string, badge: string): number {
+  const { badges } = numbersOf(tonight, playerId);
+
+  return (badges[badge] = (badges[badge] ?? 0) + 1);
 }
 
 /** Counts chips bought by a member who had bought before: a rebuy, whether they were broke, topping up or sitting down again. */
@@ -70,6 +120,7 @@ export interface TonightRow {
   biggest: number;
   best: { name: string; cards: Card[] } | null;
   rebuys: number;
+  badges: EarnedBadge[];
 }
 
 /** What settled who the dipshit is: the worst net by itself, or a tie on it broken by rebuys, or one on both broken by pots won. */
@@ -142,7 +193,7 @@ export function tonightView(state: TableState, ledger: readonly LedgerRow[], ove
 
   const players = ledger
     .map((row): TonightRow => {
-      const { hands = 0, won = 0, biggest = 0, best = null, rebuys = 0 } = tonight.players[row.playerId] ?? {};
+      const { hands, won, biggest, best, rebuys, badges } = tonight.players[row.playerId] ?? newPlayerTonight();
       const value = best && evaluateHand(best);
 
       bestRank.set(row.playerId, value ? value.score + 1 : 0);
@@ -157,6 +208,7 @@ export function tonightView(state: TableState, ledger: readonly LedgerRow[], ove
         biggest,
         best: value && { name: madeHandName(value), cards: best! },
         rebuys,
+        badges: badgesIn(badges),
       };
     })
     .sort(byStanding);

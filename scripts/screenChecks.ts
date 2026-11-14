@@ -1192,7 +1192,8 @@ async function assertBadgesFit(page: Page, screen: ScreenName, rows: string, apa
 
 /** Quigs's line in the play-by-play for the badges of a hand in which his aces took every chip of Stu's kings, all in for 1000 each. */
 const FELTED_LINES = ['Quigs earned 💰 Retirement Fund: took 100 big blinds or more out of one hand', "Quigs earned 💀 Felted: took Stu's last chip"];
-const FELTED_TOAST = 'You earned 💰 Retirement Fund and 💀 Felted';
+// The hand is the first shown down, so its aces take the high hand too, which the same toast tells
+const FELTED_TOAST = 'You earned 💰 Retirement Fund and 💀 Felted, and 🏆 the high hand with pair of aces';
 
 /** Quigs, Stu and Pam with 1000 each and Kibitz watching: Pam folds, and Quigs's aces and Stu's kings go all in before the flop. */
 function feltingHand(rig: Rig): RigTable {
@@ -1307,6 +1308,42 @@ function nineHandsDealt(rig: Rig, config: Partial<TableConfig> = {}): RigTable {
 
   return table;
 }
+
+/** A table of whole chips and one of dollars and cents for the checks of the high hand, with its bonus as each writes it and what two players pay. */
+const HIGH_HAND_TABLES = [
+  { name: 'chips', config: { highHandBonus: 5 } as Partial<TableConfig>, stack: 1000, bonus: '5', total: '10', zero: '0' },
+  { name: 'cents', config: { ...CENTS, highHandBonus: 25 } as Partial<TableConfig>, stack: 10_000, bonus: '0.25', total: '0.50', zero: '0.00' },
+];
+
+const HIGH_HAND_BOARD = '2c 7d 9h Jc 3s';
+
+/** Quigs, Stu and Pam, Quigs the host, with Kibitz watching. */
+function highHandTable(rig: Rig, config: Partial<TableConfig>, stack: number): RigTable {
+  const table = rig.table([{ name: 'Quigs', stack }, { name: 'Stu', stack }, { name: 'Pam', stack }], { ...config, maxRuns: 1 });
+
+  table.join('Kibitz');
+
+  return table;
+}
+
+/** A hand everyone checks or calls down to a showdown, played to the end of its result with the game paused after it. */
+function toShowdown(table: RigTable, holes: Record<number, string>, board = HIGH_HAND_BOARD, first = false): void {
+  if (first) {
+    table.deal({ button: 0, holes, board });
+  } else {
+    table.dealNext({ holes, board });
+  }
+
+  table.act('Quigs', { type: 'pause' });
+  table.play(passive, (view) => view.hand!.stage === 'done');
+}
+
+/** Takes the finished hand off the table. */
+const clear = (rig: Rig, table: RigTable) => rig.advance(table.view('Quigs').hand!.deadline! - rig.now());
+
+/** Whose plates carry the high hand's trophy. */
+const markedOn = (page: Page) => texts(page, '.plate:has(.high-hand) .name > span:first-child');
+
 
 type Check = [name: string, run: (rig: Rig) => Promise<void>];
 
@@ -6589,7 +6626,7 @@ const CHECKS: Check[] = [
           await openTonight(host, screen);
           assert.equal(await host.locator('.tonight-crown, .tonight-missed').count(), 0, 'someone is crowned before the night is over, or a table that counted from its first hand says it missed some');
           assert.equal(await text(host, '.tonight-standing'), 'So far tonight, after 2 hands. The dipshit of the night is crowned when the night ends.');
-          assert.deepEqual(await texts(host, '.tonight-leaders div'), [`Up the most\n${WIDEST} ${kind.up}`, `Most pots won\n${WIDEST} and Quigs 1 each`, `Biggest pot\n${WIDEST} ${kind.pot}`, `Best hand\n${WIDEST} Three jacks J♣ J♦ J♠ 9♥ 7♦`]);
+          assert.deepEqual(await texts(host, '.tonight-leaders div'), [`Up the most\n${WIDEST} ${kind.up}`, `Most pots won\n${WIDEST} and Quigs 1 each`, `Biggest pot\n${WIDEST} ${kind.pot}`, `High hand\n${WIDEST} Three jacks J♣ J♦ J♠ 9♥ 7♦`]);
           assert.deepEqual(await texts(host, '.tonight-players .who'), [WIDEST, 'Quigs', 'Big Al', 'Pocket Pam', 'Stu left', 'iiiiiiiiiiiiiiii', '你好你好你好你好', 'Ünïcödé Ñandú Ø!', 'Marge Simpson-Jr', 'Zed'], 'the best night first and the worst last');
           assert.equal(await text(host, '.tonight-players li[data-player="Zed"] .counts'), '2 hands · 0 pots won · 1 rebuy');
           assert.equal(await text(host, '.tonight-players li.me .who'), 'Quigs');
@@ -8344,6 +8381,264 @@ const CHECKS: Check[] = [
         for (const open of [quigs, ...others, page]) {
           await open.context().close();
         }
+      }
+    },
+  ],
+  [
+    'the high hand is a line in the play-by-play for everyone, a toast for whoever took it alone and a trophy beside their name on every page, once the hand is off the table; a better hand takes it and the trophy moves, and a worse one leaves it',
+    async (rig) => {
+      const table = highHandTable(rig, {}, 1000);
+      toShowdown(table, { 0: 'As Ah', 1: 'Ks Kh', 2: '8c 4d' }, HIGH_HAND_BOARD, true);
+
+      const quigs = await table.open('Quigs', 'smallPhone');
+      const stu = await table.open('Stu', 'phone');
+      const kibitz = await table.open('Kibitz', 'desktop');
+      const pages = [['Quigs', quigs], ['Stu', stu], ['a watcher', kibitz]] as const;
+
+      for (const [who, page] of pages) {
+        assert.deepEqual(await markedOn(page), [], `${who}: the high hand is marked before the hand is off the table`);
+        assert.equal(await page.locator('.feed li:has-text("high hand")').count(), 0, `${who}: the high hand is told before the hand is off the table`);
+      }
+
+      clear(rig, table);
+
+      await quigs.waitForSelector('.toast:visible');
+      assert.equal(await text(quigs, '.toast'), 'You have 🏆 the high hand with pair of aces');
+
+      for (const [who, page] of pages) {
+        await page.waitForSelector('.feed li:has-text("Quigs takes the high hand with pair of aces")', { state: 'attached' });
+        await page.waitForSelector('.plate .high-hand');
+        assert.deepEqual(await markedOn(page), ['Quigs'], who);
+        assert.equal(await page.getAttribute('.plate .high-hand', 'title'), 'Holds the high hand: Pair of aces', who);
+      }
+
+      assertOnScreen(await boxes(quigs, '.toast, .plate .high-hand'), 'smallPhone', 'the toast and the trophy');
+      assert.deepEqual(await squeezed(quigs, '.plate .high-hand'), [], 'the trophy is cut off');
+      await shot(quigs, 'high-hand-taken-smallPhone');
+      await shot(kibitz, 'high-hand-taken-desktop');
+
+      for (const [who, page] of [['Stu', stu], ['a watcher', kibitz]] as const) {
+        assert.equal(await toastShown(page), 0, `${who} is shown a toast for Quigs's high hand`);
+      }
+
+      // Stu's pair of kings is not as good, and the three kings after it are better
+      toShowdown(table, { 0: '8s 4h', 1: 'Ks Kh', 2: 'Qs Qh' });
+      clear(rig, table);
+      table.act('Kibitz', { type: 'chat', text: 'kings no good' });
+      await kibitz.waitForSelector('.feed li:has-text("kings no good")', { state: 'attached' });
+      assert.deepEqual(await markedOn(kibitz), ['Quigs'], 'a worse hand took the high hand');
+
+      toShowdown(table, { 0: '8s 4h', 1: 'Ks Kh', 2: 'Qs Qh' }, 'Kd 7d 9h Jc 3s');
+      clear(rig, table);
+      await stu.waitForSelector('.toast:has-text("You have 🏆 the high hand with three kings")');
+
+      for (const [, page] of pages) {
+        await page.waitForSelector('.feed li:has-text("Stu takes the high hand with three kings")', { state: 'attached' });
+        await page.waitForFunction(`[...document.querySelectorAll('.plate:has(.high-hand) .name > span:first-child')].map((name) => name.textContent).join() === 'Stu'`);
+      }
+
+      await shot(stu, 'high-hand-taken-again-phone');
+
+      for (const [, page] of pages) {
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'the host pays the high hand from the menu between hands once shown who pays what, the night pays the one shown since when it ends, and Tonight, its copied text and the ledger agree, on the smallest phone and the desktop, in chips and in cents',
+    async (rig) => {
+      for (const kind of HIGH_HAND_TABLES) {
+        for (const screen of ['smallPhone', 'desktop'] as const) {
+          const table = highHandTable(rig, kind.config, kind.stack);
+          const stacks = () => ['Quigs', 'Stu', 'Pam'].map((name) => table.view('Quigs').seats.find((seat) => seat?.name === name)!.stack);
+          const bonus = kind.config.highHandBonus!;
+          const what = `${kind.name} on ${screen}`;
+
+          toShowdown(table, { 0: 'As Ah', 1: 'Ks Kh', 2: '8c 4d' }, HIGH_HAND_BOARD, true);
+          clear(rig, table);
+
+          const host = await table.open('Quigs', screen);
+          const watcher = await table.open('Kibitz', screen);
+          const press = pressOn(host, screen);
+
+          // During a hand the menu says it has to wait, and the dialog why
+          table.dealNext({ holes: { 0: 'Qs Qh', 1: 'Ks Kh', 2: '8c 4d' }, board: HIGH_HAND_BOARD });
+          table.act('Quigs', { type: 'pause' });
+          await host.waitForSelector('.seat.me .card', { state: 'attached' });
+          await press('[data-action="menu"]');
+          assert.equal(await text(host, '.menu [data-action="highHand"] small'), 'Between hands only', what);
+          await press('.menu [data-action="highHand"]');
+          await host.waitForSelector('.dialog[aria-label="Pay the high hand?"]');
+          assert.deepEqual(await texts(host, '.dialog-body p'), ['Quigs holds the high hand with pair of aces.', "It moves everyone's chips, so it is paid between hands. Pause the game, and once this hand is over it can be paid here."], what);
+          assert.equal(await host.locator('[data-action="pay-high-hand"]').count(), 0, `${what}: it can be paid during a hand`);
+          await shot(host, `high-hand-pay-during-a-hand-${kind.name}-${screen}`);
+          await press('.dialog .buttons .btn');
+          await host.waitForSelector('.dialog', { state: 'detached' });
+
+          // Stu's kings are not as good, so once the hand is over Quigs's aces are still the high hand
+          table.play(passive, (view) => view.hand!.stage === 'done');
+          clear(rig, table);
+          await host.waitForFunction(`!document.querySelector('.seat.me .card')`);
+
+          await press('[data-action="menu"]');
+          assert.equal(await text(host, '.menu [data-action="highHand"] small'), `Quigs: ${kind.bonus} from everyone else`, what);
+          await press('.menu [data-action="highHand"]');
+          await host.waitForSelector('[data-action="pay-high-hand"]');
+          assert.deepEqual(
+            await texts(host, '.dialog-body p'),
+            ['Quigs holds the high hand with pair of aces.', `Everyone else seated pays ${kind.bonus}, or what they have if that is less: ${kind.total} in all.`, 'Once it is paid, the next high hand starts from nothing. The high hand of the night stays in Tonight.'],
+            what,
+          );
+          assert.equal(await text(host, '[data-action="pay-high-hand"]'), `Pay ${kind.total}`);
+          assertOnScreen(await boxes(host, '.dialog, .dialog .buttons .btn'), screen, 'the dialog to pay the high hand');
+          assert.deepEqual(await squeezed(host, '.dialog :is(h2, p, button)'), [], `${what}: part of the dialog is cut off`);
+          await shot(host, `high-hand-pay-${kind.name}-${screen}`);
+
+          const before = stacks();
+          await press('[data-action="pay-high-hand"]');
+          await host.waitForSelector('.dialog', { state: 'detached' });
+
+          const paidEarly = `The host paid out the high hand. Quigs collects the high-hand bonus: ${kind.bonus} from everyone else seated, ${kind.total} in all`;
+          for (const page of [host, watcher]) {
+            await page.waitForSelector(`.feed li:has-text(${JSON.stringify(paidEarly)})`, { state: 'attached' });
+            await page.waitForFunction(`!document.querySelector('.plate .high-hand')`);
+          }
+
+          assert.deepEqual(stacks(), [before[0]! + 2 * bonus, before[1]! - bonus, before[2]! - bonus], what);
+          await press('[data-action="menu"]');
+          assert.equal(await host.locator('.menu [data-action="highHand"]').count(), 0, `${what}: the menu offers to pay a high hand that was paid`);
+          await host.keyboard.press('Escape');
+          await host.waitForSelector('.dialog', { state: 'detached' });
+          await shot(host, `high-hand-paid-${kind.name}-${screen}`);
+
+          // Stu's kings, shown since, are the high hand the bonus is paid for next
+          toShowdown(table, { 0: '8s 4h', 1: 'Ks Kh', 2: 'Qs Qh' });
+          clear(rig, table);
+          await host.waitForSelector('.feed li:has-text("Stu takes the high hand with pair of kings")', { state: 'attached' });
+          await openTonight(host, screen);
+          assert.deepEqual(await texts(host, '.tonight-leaders div:has-text("High hand")'), [
+            `High hand\nQuigs Pair of aces A♠ A♥ J♣ 9♥ 7♦\nBonus paid: ${kind.total} to Quigs`,
+            `High hand since\nStu Pair of kings K♠ K♥ J♣ 9♥ 7♦\nBonus: ${kind.bonus} from everyone else seated when the night ends`,
+          ]);
+          await assertTonightFits(host, screen);
+          await shot(host, `high-hand-tonight-${kind.name}-${screen}`);
+          await press('.dialog [data-action="close"]');
+
+          // The night ends and pays Stu, and the recap says what the bonus paid, to the host and to a watcher
+          const beforeEnd = stacks();
+          table.act('Quigs', { type: 'endNight' });
+          assert.deepEqual(stacks(), [beforeEnd[0]! - bonus, beforeEnd[1]! + 2 * bonus, beforeEnd[2]! - bonus], what);
+
+          for (const [who, page] of [['host', host], ['watcher', watcher]] as const) {
+            await page.waitForSelector(RECAP);
+            assert.deepEqual(await texts(page, '.tonight-leaders div:has-text("High hand")'), [`High hand\nQuigs Pair of aces A♠ A♥ J♣ 9♥ 7♦\nBonus paid: ${kind.total} to Quigs`], `${what}, ${who}`);
+          }
+
+          await host.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+          await press('[data-action="copy-tonight"]');
+          await host.waitForSelector('[data-action="copy-tonight"]:has-text("Copied")');
+          const copied = ((await host.evaluate('navigator.clipboard.readText()')) as string).split('\n');
+          assert.deepEqual(copied.filter((line) => line.startsWith('High hand')), [`High hand: Quigs, Pair of aces (A♠ A♥ J♣ 9♥ 7♦). Bonus paid: ${kind.total} to Quigs`], what);
+
+          // The nets in Tonight are the ledger's, bonuses and all
+          const night = await tonightNets(host);
+          await closeRecap(host);
+          await host.waitForSelector(`.feed li:has-text(${JSON.stringify(`Stu collects the high-hand bonus: ${kind.bonus} from everyone else seated, ${kind.total} in all`)})`, { state: 'attached' });
+          await shot(host, `high-hand-paid-at-nights-end-${kind.name}-${screen}`);
+          await openLedger(host, screen);
+          assert.deepEqual(night, await ledgerNets(host), `${what}: the night and the ledger disagree`);
+
+          await host.context().close();
+          await watcher.context().close();
+        }
+      }
+    },
+  ],
+  [
+    'the table settings take the high-hand bonus in chips and in cents, and the table is told what it is',
+    async (rig) => {
+      const screen = 'smallPhone';
+
+      for (const kind of HIGH_HAND_TABLES) {
+        const table = highHandTable(rig, { ...kind.config, highHandBonus: 0 }, kind.stack);
+        const page = await table.open('Quigs', screen);
+        const press = pressOn(page, screen);
+
+        await press('[data-action="menu"]');
+        await press('.menu [data-action="settings"]');
+        await page.waitForSelector('#table-high-hand-bonus');
+        assert.equal(await page.inputValue('#table-high-hand-bonus'), kind.zero);
+        await page.locator('#table-high-hand-bonus').scrollIntoViewIfNeeded();
+        assert.deepEqual(await squeezed(page, '.dialog .field input, .dialog .field small'), [], 'part of the settings is cut off');
+        await shot(page, `high-hand-setting-${kind.name}-${screen}`);
+
+        await page.fill('#table-high-hand-bonus', kind.bonus);
+        await press('[data-action="save-settings"]');
+        await page.waitForSelector('.dialog', { state: 'detached' });
+        assert.equal(table.view('Quigs').config.highHandBonus, kind.config.highHandBonus);
+        await page.waitForSelector(`.feed li:has-text(${JSON.stringify(`The high-hand bonus is ${kind.bonus} from everyone else seated`)})`, { state: 'attached' });
+
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'while an all-in hand’s last card lies face down nothing says who took the high hand, to a player or a watcher, in a trophy, a line, a toast or Tonight; it comes once the hand is off the table',
+    async (rig) => {
+      const { screen } = MOTION_LAYOUTS[0]!;
+      const table = feltingHand(rig);
+      table.play(() => null, (view) => view.hand!.boards[0]!.length === 4);
+
+      const open = async (name: string) => {
+        const page = await table.open(name, screen, MOTION, { moving: true });
+        await page.evaluate('window.holdAt = 0');
+
+        return page;
+      };
+      const [quigs, stu, kibitz] = [await open('Quigs'), await open('Stu'), await open('Kibitz')];
+      const reading = [['a player', stu], ['a watcher', kibitz]] as const;
+
+      for (const [, page] of reading) {
+        await openTonight(page, screen);
+      }
+
+      const nothingTold = async (when: string) => {
+        assert.equal(await toastShown(quigs), 0, `${when}: the toast came`);
+
+        for (const [who, page] of [...reading, ['the taker', quigs]] as const) {
+          assert.equal(await page.locator('.feed li:has-text("high hand")').count(), 0, `${who}, ${when}: the line came`);
+          assert.equal(await page.locator('.plate .high-hand').count(), 0, `${who}, ${when}: the trophy is drawn`);
+          assert.equal(await page.locator('.tonight-leaders div:has-text("High hand")').count(), 0, `${who}, ${when}: Tonight names the high hand`);
+        }
+      };
+
+      clear(rig, table);
+      for (const page of [quigs, stu, kibitz]) {
+        await page.waitForSelector('.board-card.stand-in', { state: 'attached' });
+      }
+
+      await nothingTold('the river face down');
+
+      for (const [, page] of reading) {
+        await page.evaluate('window.holdAt = null; window.land()');
+        await page.waitForFunction(`/^Up the most\\s+Quigs\\b/.test(document.querySelector('.tonight-leaders div')?.innerText)`);
+      }
+
+      await nothingTold('the hand still on the table');
+
+      clear(rig, table);
+      await quigs.waitForSelector('.toast:visible');
+      assert.equal(await text(quigs, '.toast'), FELTED_TOAST);
+
+      for (const [who, page] of reading) {
+        await page.waitForSelector('.tonight-leaders div:has-text("High hand")');
+        assert.equal(await text(page, '.tonight-leaders div:has-text("High hand") dd b'), 'Quigs', who);
+        await page.waitForSelector('.plate .high-hand', { state: 'attached' });
+        assert.equal(await toastShown(page), 0, `${who} is shown a toast for Quigs's high hand`);
+      }
+
+      for (const page of [quigs, stu, kibitz]) {
+        await page.context().close();
       }
     },
   ],

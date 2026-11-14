@@ -1,5 +1,5 @@
 import { formatAmount } from '../../../engine/amounts.ts';
-import { listed } from '../../../engine/handNames.ts';
+import { listed, midSentence } from '../../../engine/handNames.ts';
 import type { TableView } from '../../../engine/view.ts';
 import { h } from '../../ui.ts';
 import { hostOrCohost } from '../roles.ts';
@@ -42,7 +42,7 @@ function payHighHand(view: TableView, handlers: DialogHandlers): HTMLElement {
   return frame(
     'Pay the high hand?',
     handlers,
-    next ? h('p', null, h('b', null, namesOf(view, next.playerIds)), ` ${next.playerIds.length > 1 ? 'share' : 'holds'} the high hand with ${next.name}.`) : null,
+    next ? h('p', null, h('b', null, namesOf(view, next.playerIds)), ` ${next.playerIds.length > 1 ? 'share' : 'holds'} the high hand with ${midSentence(next.name)}.`) : null,
     why ? h('p', null, why) : null,
     !why && gone.length > 0 && collectors.length > 0 ? h('p', null, `${namesOf(view, gone)} ${gone.length > 1 ? 'have' : 'has'} left, so ${namesOf(view, collectors)} ${collectors.length > 1 ? 'collect' : 'collects'} it, with the best hand of anyone seated.`) : null,
     why

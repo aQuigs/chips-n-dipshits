@@ -431,7 +431,9 @@ function leakingError(state: TableState, rng: Rng): Error {
   }
 }
 
-test('over random games, whatever a handler throws at whatever point, no row holds a token, a hole card or an undealt card', () => {
+test('over random games, whatever a handler throws at whatever point, no row holds a token, a hole card or an undealt card', (context) => {
+  // Apps Script's own log is told each failure in full, as it should be, which here is only noise
+  context.mock.method(console, 'error', () => undefined);
   let thrown = 0;
   const types = Object.keys(HANDLERS) as CommandType[];
 

@@ -28,4 +28,5 @@ test('six players get through seating, two hands, a run-it-twice and a rebuy in 
 
 test('served the way Apps Script serves it, the page keeps a seat through failed requests and never repeats a move', { skip, timeout: 300_000 }, (t) => runScript('scripts/hostedRun.ts', t.signal));
 
-test('the screens hold up on small phones, with long chat, the largest stacks and under the keyboard', { skip, timeout: 300_000 }, (t) => runScript('scripts/screenChecks.ts', t.signal));
+// Every check has a limit of its own (scripts/checkRunner.ts); this one is for the whole list, which grows with every feature
+test('the screens hold up on small phones, with long chat, the largest stacks and under the keyboard', { skip, timeout: 600_000 }, (t) => runScript('scripts/screenChecks.ts', t.signal));

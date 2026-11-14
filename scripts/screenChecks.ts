@@ -3564,8 +3564,8 @@ const CHECKS: Check[] = [
         assertOnScreen(await boxes(page, '.turn .btn, #raise-amount, .presets button'), screen, 'the bet controls');
         await shot(page, `cents-my-turn-${screen}`);
 
-        await press(raiseButton);
-        await page.waitForSelector('.turn', { state: 'detached' });
+        // The buttons go at the tap, so it is the server's answer that says the table has the raise
+        await answeredAfter(page, () => press(raiseButton));
 
         const quigs = table.view('Quigs');
         assert.equal(quigs.seats[0]!.bet, 150);
@@ -5827,7 +5827,7 @@ const CHECKS: Check[] = [
           await shot(deciding, `last-hands-deciding-${kind.name}-${screen}`);
 
           // Once their move is made, they see the count too
-          await pressOn(deciding, screen)('.turn [data-action="call"]');
+          await answeredAfter(deciding, () => pressOn(deciding, screen)('.turn [data-action="call"]'));
           await deciding.waitForFunction(`document.querySelector('.controls .next-hand')?.textContent === ${JSON.stringify(`1 more hand after this one${nextIsBombPot(kind.amount)}`)}`);
 
           // Made the last hand, nothing is said of a bomb pot that will never be dealt

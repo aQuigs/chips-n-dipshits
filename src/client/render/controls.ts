@@ -2,6 +2,7 @@ import { editableAmount, formatAmount, hasDecimals, parseAmount, shortAmount } f
 import type { Denominated } from '../../engine/amounts.ts';
 import type { Command } from '../../engine/types.ts';
 import type { HandView, SeatView, TableView } from '../../engine/view.ts';
+import { HOTKEYS } from '../hotkeys.ts';
 import { h, holdWhile } from '../ui.ts';
 
 export interface ControlHandlers {
@@ -51,7 +52,7 @@ function turnPanel(table: Denominated, hand: HandView, stack: number, handlers: 
   const opening = hand.currentBet === 0;
   const turn = hand.turn;
 
-  const raiseButton = h('button.btn.raise', { type: 'button', 'data-action': 'raise' });
+  const raiseButton = h('button.btn.raise', { type: 'button', 'data-action': 'raise', 'data-hotkey': HOTKEYS.raise });
   const slider = h('input', { type: 'range', id: 'raise-slider', min: minRaiseTo, max: maxRaiseTo, step: 1, 'aria-label': 'Bet size' });
   const amount = h('input', { type: 'text', id: 'raise-amount', inputmode: hasDecimals(table) ? 'decimal' : 'numeric', autocomplete: 'off', 'aria-label': 'Bet size' });
 
@@ -117,11 +118,12 @@ function turnPanel(table: Denominated, hand: HandView, stack: number, handlers: 
     return h('button.chip-btn', { type: 'button', onclick: () => choose(target) }, preset.label);
   });
   presetButtons.push(h('button.chip-btn', { type: 'button', onclick: () => choose(maxRaiseTo) }, 'All in'));
+  HOTKEYS.sizes.forEach((key, index) => presetButtons[index]?.setAttribute('data-hotkey', key));
 
   const callLabel = callAmount >= stack ? 'Call all in' : 'Call';
   const passButton = options.canCheck
-    ? h('button.btn.call', { type: 'button', 'data-action': 'check', onclick: () => void handlers.send({ type: 'check', turn }) }, 'Check')
-    : h('button.btn.call', { type: 'button', 'data-action': 'call', onclick: () => void handlers.send({ type: 'call', turn }) }, moveLabel(callLabel, callCost, table));
+    ? h('button.btn.call', { type: 'button', 'data-action': 'check', 'data-hotkey': HOTKEYS.pass, onclick: () => void handlers.send({ type: 'check', turn }) }, 'Check')
+    : h('button.btn.call', { type: 'button', 'data-action': 'call', 'data-hotkey': HOTKEYS.pass, onclick: () => void handlers.send({ type: 'call', turn }) }, moveLabel(callLabel, callCost, table));
 
   return h(
     'div.turn',
@@ -130,7 +132,7 @@ function turnPanel(table: Denominated, hand: HandView, stack: number, handlers: 
     h(
       'div.buttons',
       null,
-      h('button.btn.fold', { type: 'button', 'data-action': 'fold', onclick: () => void handlers.send({ type: 'fold', turn }) }, 'Fold'),
+      h('button.btn.fold', { type: 'button', 'data-action': 'fold', 'data-hotkey': HOTKEYS.fold, onclick: () => void handlers.send({ type: 'fold', turn }) }, 'Fold'),
       passButton,
       options.canRaise ? raiseButton : null,
     ),
@@ -184,8 +186,8 @@ function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandle
       h(
         'div.buttons',
         null,
-        h('button.btn.fold', { type: 'button', 'data-action': 'rit-no', onclick: () => void handlers.send({ type: 'ritVote', agree: false }) }, 'Once'),
-        h('button.btn.raise', { type: 'button', 'data-action': 'rit-yes', onclick: () => void handlers.send({ type: 'ritVote', agree: true }) }, 'Twice'),
+        h('button.btn.fold', { type: 'button', 'data-action': 'rit-no', 'data-hotkey': HOTKEYS.once, onclick: () => void handlers.send({ type: 'ritVote', agree: false }) }, 'Once'),
+        h('button.btn.raise', { type: 'button', 'data-action': 'rit-yes', 'data-hotkey': HOTKEYS.twice, onclick: () => void handlers.send({ type: 'ritVote', agree: true }) }, 'Twice'),
       ),
     );
   } else {

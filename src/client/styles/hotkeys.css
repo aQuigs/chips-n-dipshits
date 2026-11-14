@@ -1,0 +1,36 @@
+/* ---- Keyboard shortcuts: each button's key in its corner, where there is a keyboard and the player wants them ---- */
+
+/* The same device test the keys themselves make (KEYBOARD_QUERY in hotkeys.ts) */
+@media (hover: hover) and (pointer: fine) {
+  [data-hotkeys='on'] .turn [data-hotkey] {
+    position: relative;
+  }
+
+  /* Out of the flow, so the buttons keep the size and layout they have without it */
+  [data-hotkeys='on'] .turn [data-hotkey]::after {
+    content: attr(data-hotkey);
+    /* The second is the same with no text for a screen reader, which already has the button's name; a browser that can't read it keeps the first */
+    content: attr(data-hotkey) / '';
+    position: absolute;
+    top: 3px;
+    right: 4px;
+    min-width: 1.5em;
+    padding: 0 3px;
+    border: 1px solid currentColor;
+    border-radius: calc(var(--radius) / 2);
+    font: 600 10px/1.3 var(--font-ui);
+    text-align: center;
+    opacity: 0.6;
+    pointer-events: none;
+  }
+
+  /* A size button is too small to hold its key beside its label, so the key sits on its edge */
+  [data-hotkeys='on'] .turn .chip-btn[data-hotkey]::after {
+    top: -7px;
+    right: -6px;
+    border-color: var(--line);
+    background: var(--bg-raised);
+    color: var(--muted);
+    opacity: 1;
+  }
+}

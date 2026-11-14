@@ -5,6 +5,7 @@ import type { ApiError, ApiRequest, ApiResponse, Auth } from '../server/api.ts';
 import { ask, isRefusal, nextRetry, ServerClock, sleep, TableConnection } from './connection.ts';
 import type { SendOutcome, Session } from './connection.ts';
 import { TableEffects } from './effects.ts';
+import { HotkeyPresser } from './hotkeyPresser.ts';
 import { tableChange } from './tableChange.ts';
 import { Modal } from './modal.ts';
 import type { Platform } from './platform.ts';
@@ -68,6 +69,7 @@ export class App {
   private readonly toastEl = h('div.toast', { role: 'status', hidden: true });
 
   private readonly clock = new ServerClock();
+  private readonly hotkeys: HotkeyPresser;
 
   /** The table this page is at, from sitting down at its screen until that screen is left. */
   private table: TableConnection | null = null;
@@ -97,6 +99,7 @@ export class App {
     this.prefs = new Preferences(PREFERENCES, platform.memory, root);
     this.prefs.watch('theme', (id) => this.applyTheme(id));
     this.prefs.watch('deck', (deck) => this.screen?.feed.showDeck(deck));
+    this.hotkeys = new HotkeyPresser(this.prefs, { root, controls: () => this.screen?.controls.element ?? null, dialogOpen: () => this.dialog !== null });
 
     root.classList.add('cnd');
   }
@@ -138,11 +141,13 @@ export class App {
         this.closeDialog();
       }
     });
+    document.addEventListener('keydown', (event) => this.hotkeys.handle(event));
 
     // A phone that was asleep comes back with a request that may never be answered
     document.addEventListener('visibilitychange', () => {
       if (!document.hidden) {
         this.table?.refresh();
+        this.hotkeys.shown();
       }
     });
 
@@ -470,12 +475,16 @@ export class App {
   }
 
   private drawControls(screen: TableScreen, view: TableView): void {
-    screen.controls.draw(controlsSignature(view), () =>
+    const redrawn = screen.controls.draw(controlsSignature(view), () =>
       controlsEl(view, {
         send: (command) => this.send(command),
         openRebuy: () => this.openDialog({ kind: 'rebuy' }),
       }),
     );
+
+    if (redrawn) {
+      this.hotkeys.shown();
+    }
 
     // Freshly built buttons are free; a move still on its way keeps them locked
     lockTurn(screen.controls.element, this.turnLocked());
@@ -603,8 +612,14 @@ export class App {
     }
 
     const dialog = this.dialog;
+    const covered = dialog !== null && view !== null;
 
-    screen.overlay.element.hidden = !dialog || !view;
+    // The buttons the dialog covered are new to the player again
+    if (!covered && !screen.overlay.element.hidden) {
+      this.hotkeys.shown();
+    }
+
+    screen.overlay.element.hidden = !covered;
 
     if (!dialog || !view) {
       screen.overlay.draw(null, () => null);

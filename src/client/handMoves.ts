@@ -1,8 +1,9 @@
+import { boardsDealt } from '../engine/bombPots.ts';
 import { replayHand } from '../engine/events.ts';
 import type { HandEvent, ReplayPosition, ReplaySeat } from '../engine/events.ts';
 import { clockwiseAfter } from '../engine/seats.ts';
 import type { TableView } from '../engine/view.ts';
-import { MOVE_MS } from './motion.ts';
+import { soundsPlaced } from './handSounds.ts';
 import type { Move, Place, TableMotion } from './motion.ts';
 import { SOUND_GAP_MS } from './sound.ts';
 import type { TableChange } from './tableChange.ts';
@@ -12,15 +13,16 @@ export const MOST_MOVE_MS = 300;
 
 /**
  * The longest everything one view sets moving may take, from the view being shown to the last piece
- * landing. A view that brings more than fits is shown by how it ended: its earliest steps are left
- * out, which leaves what they would have moved where the table already draws it.
+ * landing. A view moves on the beats of its sounds and never has more than a few (`soundsPlaced`), so
+ * one that brings a burst is seen as it is heard, by how it ended: whatever came before its last
+ * sounds jumps to the first beat, each thing once. `tests/motion.test.ts` holds the beats to this.
  */
 export const MOST_VIEW_MS = 900;
 
 /**
- * What a view brings plays a step at a time, each starting this long after the one before, whether or
- * not that one has landed. It is the gap the sounds of a view are played at, so the first thing seen
- * starts with the first thing heard, and the next with the next.
+ * What a view brings plays a beat at a time, each starting this long after the one before, whether or
+ * not that one has landed. It is the gap the sounds of a view are played at, and a step starts on the
+ * beat of its sound, so each thing is seen in the frame it is heard.
  */
 export const STEP_GAP_MS = SOUND_GAP_MS;
 
@@ -33,11 +35,15 @@ const DEAL_GAP_MS = 60;
 // How long after one card of a flop the next lands
 const BOARD_GAP_MS = 60;
 
-/** What happens together, give or take a spread: the `after` of its moves counts from the step's own start. */
+/** What an event sets moving together, give or take a spread: the `after` of its moves counts from the step's own start. */
 interface Step {
-  /** Events that follow one another and make steps of one kind are one step. */
-  kind: 'dealt' | 'acted' | 'shown' | 'gathered' | 'street' | 'won' | 'bounty';
   moves: Move[];
+  /**
+   * Left out of a step seen as its own event is heard. `gathered` is the bets going to the pot, seen with
+   * whatever ended the betting, which is the event before the one that says so. A view has one sound for
+   * all its `street` steps and one for all its `won`, heard with the last, and they are seen together then.
+   */
+  kind?: 'gathered' | 'street' | 'won';
 }
 
 const seatOf = (seat: number): Place => ({ at: 'seat', seat });
@@ -93,20 +99,20 @@ function stepsOf(event: HandEvent, before: ReplayPosition, after: ReplayPosition
 
       // A blind sits in front of the player like any bet. An ante or a bomb pot's chips go straight to the pot,
       // from every seat at once, so each is a bare chip and the pot says what they came to
-      return [{ kind: 'dealt', moves: [as ? chips(seatOf(seat), POT) : betSlide(seat)] }];
+      return [{ moves: [as ? chips(seatOf(seat), POT) : betSlide(seat)] }];
     }
 
     case 'deal':
-      return [{ kind: 'dealt', moves: deal(before) }];
+      return [{ moves: deal(before) }];
 
     case 'fold':
       // The viewer's own folded cards stay in front of them to look at
-      return event[1] === viewer ? [] : [{ kind: 'acted', moves: [{ name: 'muck', from: cardsOf(event[1]), to: DECK, after: 0 }] }];
+      return event[1] === viewer ? [] : [{ moves: [{ name: 'muck', from: cardsOf(event[1]), to: DECK, after: 0 }] }];
 
     case 'call':
     case 'bet':
     case 'raise':
-      return [{ kind: 'acted', moves: [betSlide(event[1])] }];
+      return [{ moves: [betSlide(event[1])] }];
 
     case 'return': {
       const [, seat, amount] = event;
@@ -115,14 +121,14 @@ function stepsOf(event: HandEvent, before: ReplayPosition, after: ReplayPosition
       const fromBet = Math.min(amount, before.seats.find((player) => player.seat === seat)?.bet ?? 0);
       const moves = [fromBet > 0 ? chips(betOf(seat), seatOf(seat), fromBet) : null, amount > fromBet ? chips(POT, seatOf(seat), amount - fromBet) : null];
 
-      return [{ kind: 'acted', moves: moves.filter((move) => move !== null) }];
+      return [{ moves: moves.filter((move) => move !== null) }];
     }
 
     case 'street': {
       const [, board, cards] = event;
       const first = after.boards[board]!.length - cards.length;
 
-      // Two boards dealt a street together get their cards together, so two take no longer than one
+      // Boards dealt a street together make one sound for it, so their cards come together and two take no longer than one
       return [...gather(before.seats), { kind: 'street', moves: cards.map((_card, nth) => ({ name: 'board', to: { at: 'board', board, card: first + nth }, after: nth * BOARD_GAP_MS })) }];
     }
 
@@ -131,14 +137,14 @@ function stepsOf(event: HandEvent, before: ReplayPosition, after: ReplayPosition
 
     case 'show':
       // The viewer has been looking at their own cards all along
-      return event[1] === viewer ? [] : [{ kind: 'shown', moves: [{ name: 'show', to: cardsOf(event[1]), after: 0 }] }];
+      return event[1] === viewer ? [] : [{ moves: [{ name: 'show', to: cardsOf(event[1]), after: 0 }] }];
 
     // One pile to each winner, with all they won: the shares of a split pot, of side pots and of two boards leave together
     case 'win':
       return [...gather(before.seats), { kind: 'won', moves: [chips(POT, seatOf(event[1]), event[2])] }];
 
     case 'bounty':
-      return [{ kind: 'bounty', moves: event[2].map(([payer, amount]) => chips(seatOf(payer), seatOf(event[1]), amount)) }];
+      return [{ moves: event[2].map(([payer, amount]) => chips(seatOf(payer), seatOf(event[1]), amount)) }];
 
     // A check is heard, not seen, and a mucked hand stays face down where it is until the next deal
     case 'start':
@@ -157,18 +163,16 @@ function stepsOf(event: HandEvent, before: ReplayPosition, after: ReplayPosition
 
 const sameWay = (a: Move, b: Move) => a.name === b.name && JSON.stringify([a.from, a.to]) === JSON.stringify([b.from, b.to]);
 
-/** Adds a move to a step. One that goes the way another already does joins it: a second bet from a seat is one slide, and two shares of a pot one pile. */
-function add(step: Step, move: Move): void {
-  const twin = step.moves.find((other) => sameWay(other, move));
+/** Adds a move to those of a beat. One that goes the way another already does joins it: a second bet from a seat is one slide, and two shares of a pot one pile. */
+function add(moves: Move[], move: Move): void {
+  const twin = moves.find((other) => sameWay(other, move));
 
   if (!twin) {
-    step.moves.push(move);
+    moves.push(move);
   } else if (twin.amount !== undefined && move.amount !== undefined) {
     twin.amount += move.amount;
   }
 }
-
-const lengthOf = (step: Step) => Math.max(...step.moves.map((move) => move.after + MOVE_MS[move.name]));
 
 /**
  * What the hand's new events move on the table of the viewer at `viewer`, each move with how long
@@ -185,29 +189,17 @@ export function movesSeen({ before: shown, view, events }: TableChange, viewer: 
   const had = all.length - events.length;
   // The table before the first of the new events, between each and the next, and after the last
   const tables = Array.from({ length: events.length + 1 }, (_, nth) => replayHand(all, had + nth));
-  let steps: Step[] = [];
-
-  const take = (made: Step[]): void => {
-    for (const { kind, moves } of made) {
-      const last = steps.at(-1);
-      const step = last?.kind === kind ? last : { kind, moves: [] };
-
-      if (step !== last) {
-        steps.push(step);
-      }
-
-      moves.forEach((move) => add(step, move));
-    }
-  };
+  // Each step with the event it came of, counted from the first of the new ones
+  const steps: (Step & { event: number })[] = [];
 
   events.forEach((event, nth) => {
     const [before, after] = [tables[nth], tables[nth + 1]];
 
-    take(before && after ? stepsOf(event, before, after, viewer) : []);
+    steps.push(...(before && after ? stepsOf(event, before, after, viewer) : []).map((step) => ({ ...step, event: nth })));
   });
 
   // Bets this view stopped drawing are gathered now, though no event has said it yet
-  take(gather(gatheredUnsaid(tables.at(-1), view)));
+  steps.push(...gather(gatheredUnsaid(tables.at(-1), view)).map((step) => ({ ...step, event: events.length })));
 
   // What the table draws has the last word on its bets. One it stopped drawing before this view was seen
   // going to the pot then. And a bet slides only where this view puts one: one that went to the pot in the
@@ -219,14 +211,21 @@ export function movesSeen({ before: shown, view, events }: TableChange, viewer: 
   const slides = (move: Move, nth: number) => nth > gathered && betAt(view, move.to) > 0 && (gathered >= 0 || betAt(view, move.to) !== betAt(shown, move.to));
   const leavesGoneBet = (move: Move) => move.from?.at === 'bet' && gone.includes(move.from.seat);
 
-  steps = steps.map((step, nth) => ({ ...step, moves: step.moves.filter((move) => (move.name === 'bet' ? slides(move, nth) : !leavesGoneBet(move))) })).filter((step) => step.moves.length > 0);
+  // The sounds of a view play a beat apart, the first at once. An event is seen on the beat of its own
+  // sound, and one that makes none on the beat of the last sound before it
+  const heard = soundsPlaced(events, viewer, boardsDealt(view.hand?.bombPot ?? null)).map((sound) => sound.event);
+  const beatOf = (event: number) => Math.max(0, heard.filter((at) => at <= event).length - 1);
+  const lastOf = (kind: Step['kind']) => steps.filter((step) => step.kind === kind).at(-1)!.event;
+  const seenWith = ({ kind, event }: (typeof steps)[number]) => (kind === 'gathered' ? event - 1 : kind ? lastOf(kind) : event);
+  const beats: Move[][] = Array.from({ length: Math.max(1, heard.length) }, () => []);
 
-  // Over budget, the view is shown by how it ended
-  while (steps.some((step, nth) => nth * STEP_GAP_MS + lengthOf(step) > MOST_VIEW_MS)) {
-    steps.shift();
-  }
+  steps.forEach((step, nth) => {
+    const moves = step.moves.filter((move) => (move.name === 'bet' ? slides(move, nth) : !leavesGoneBet(move)));
 
-  return steps.flatMap((step, nth) => step.moves.map((move) => ({ ...move, after: nth * STEP_GAP_MS + move.after })));
+    moves.forEach((move) => add(beats[beatOf(seenWith(step))]!, move));
+  });
+
+  return beats.flatMap((moves, beat) => moves.map((move) => ({ ...move, after: beat * STEP_GAP_MS + move.after })));
 }
 
 /** Shows on the table what a view brought to the viewer at `viewer`: what the hand-moves effect does with a change. */

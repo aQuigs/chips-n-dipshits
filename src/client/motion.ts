@@ -46,8 +46,8 @@ export const MOVE_MS: Record<MoveName, number> = { deal: 260, board: 240, show: 
  * truly is: nothing here changes what is on the table, where it rests or what can be tapped, and when
  * a move ends or is cancelled the page is exactly as if it had never played.
  *
- * An effect reaches it as `context.motion`. The hand's own moves come from `handMoves`, held to its
- * budgets; anything else may play its own:
+ * An effect reaches it as `context.motion`. The hand's own moves come from `handMoves`, each started
+ * as its sound is and all held to its budgets; anything else may play its own:
  *
  * - A bet drawn before the hand's events bring it, as when a player's own move is shown before the
  *   server has answered, gets the slide a confirmed one gets by playing `betSlide(seat)`

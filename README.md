@@ -178,7 +178,7 @@ A row never holds a card, a player's personal link or anything else that lets so
 
 Limits, so that a stranger can't bury the server's rows and a broken Sheet can't fill the tab: only someone at a table can send a page's failure, a page sends three at most each time it is loaded, and the server takes three a minute from one player, ten from one table and thirty from all of them. At most twenty rows are written a minute, and pages may take only five of them; a failure on the server past that is held as a count and written with the next one. The tab keeps the newest 500 rows; past that the oldest fifty go at once. Anyone can make a table, so someone set on it could still add five page rows a minute. The counts behind these live in the script's cache for a few hours: repeats still being counted when nothing else fails for that long are lost, two failures at the same moment may be counted a little off, and while the cache is down every failure is written, three a request at most.
 
-Apps Script's own log (Executions, in the script's editor) has every failure too, in full, including any the Errors tab could not take because the Sheet or the cache was what broke.
+Apps Script's own log (Executions, in the script's editor) has every failure too, in full, including any the Errors tab could not take because the Sheet was what broke.
 
 To see that it works on the live game, sit at a table, open the browser's developer console on the game's page, pick the frame called `userCodeAppPanel` in the console's list of frames, and run `setTimeout(() => { throw new Error('Testing the Errors tab') })`. A `page` row with that message appears within a few seconds, and the game carries on as before.
 

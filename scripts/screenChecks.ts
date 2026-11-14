@@ -6046,6 +6046,13 @@ const CHECKS: Check[] = [
 
           // Stu straddled, so the bar has nothing to tell him
           await page.waitForSelector('.controls .straddle-note', { state: 'detached' });
+
+          // One kind again, and not the one every table starts with: the switch says which it is, and is on for him as he left it
+          table.act('Quigs', { type: 'updateConfig', config: { allowStraddle: false, allowDoubleStraddle: false, allowMississippiStraddle: false } });
+          await page.waitForSelector('.controls [data-action="straddle"][aria-checked="true"]');
+          assert.deepEqual(await texts(page, '.controls .extras button'), ['Sit out next hand', 'Button straddle', 'Add chips']);
+          assert.deepEqual(table.view('Stu').seats[4]!.straddles, ['button straddle']);
+          await assertOwedBarFits(page, screen);
           await page.context().close();
         }
       }

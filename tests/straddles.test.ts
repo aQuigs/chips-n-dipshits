@@ -106,7 +106,7 @@ const CASES: Case[] = [
   { name: 'Mississippi: the button first, then the players to its right in turn', players: 6, on: 'M', want: { 0: 'M', 5: 'M', 4: 'M', 3: 'M' }, line: ['0 Mississippi straddle 40'], passed: ['5 right 0', '4 right 0', '3 right 0'], acts: '1 2 3 4 5 0' },
   { name: 'Mississippi: the nearest to the button’s right of those who asked', players: 6, on: 'M', want: { 3: 'M', 4: 'M' }, line: ['4 Mississippi straddle 40'], passed: ['3 right 4'], acts: '5 0 1 2 3 4' },
   { name: 'Mississippi: a player too short is passed and the next to the right has it', players: 6, on: 'M', want: { 0: 'M', 5: 'M', 4: 'M' }, stacks: { 0: 30, 5: 39 }, line: ['4 Mississippi straddle 40'], passed: ['0 short 40', '5 short 40'], acts: '5 0 1 2 3 4' },
-  { name: 'Mississippi: never from a blind', players: 6, on: 'M', want: { 1: 'M', 2: 'M' }, line: [], acts: '3 4 5 0 1 2' },
+  { name: 'Mississippi: never from a blind', players: 6, on: 'M', want: { 1: 'M', 2: 'M' }, line: [], passed: ['2 blind', '1 blind'], acts: '3 4 5 0 1 2' },
   { name: 'Mississippi from the cutoff has the right before a straddle under the gun', players: 6, on: 'UDM', want: { 3: 'U', 4: 'D', 5: 'M' }, line: ['5 Mississippi straddle 40'], passed: ['3 right 5'], acts: '0 1 2 3 4 5' },
   { name: 'a seat two kinds are posted from posts the one listed first: under the gun', players: 6, on: 'UM', want: { 3: 'UM' }, line: ['3 straddle 40'], acts: '4 5 0 1 2 3' },
   { name: 'a seat two kinds are posted from posts the one listed first: the button', players: 6, on: 'BM', want: { 0: 'BM' }, line: ['0 button straddle 40'], acts: '1 2 3 4 5 0' },
@@ -134,7 +134,7 @@ const CASES: Case[] = [
   // Three players: the button is under the gun
   { name: 'three players: the button straddles under the gun', players: 3, on: 'U', want: { 0: 'U' }, line: ['0 straddle 40'], acts: '1 2 0' },
   { name: 'three players: where only the button straddle is allowed, that is what it posts, for the same betting', players: 3, on: 'B', want: { 0: 'B' }, line: ['0 button straddle 40'], acts: '1 2 0' },
-  { name: 'three players: the one seat every first straddle is posted from posts the first listed', players: 3, on: EVERY_KIND, want: { 0: EVERY_KIND, 1: EVERY_KIND, 2: EVERY_KIND }, line: ['0 straddle 40'], passed: ['1 blind'], acts: '1 2 0' },
+  { name: 'three players: the one seat every first straddle is posted from posts the first listed', players: 3, on: EVERY_KIND, want: { 0: EVERY_KIND, 1: EVERY_KIND, 2: EVERY_KIND }, line: ['0 straddle 40'], passed: ['2 blind', '1 blind'], acts: '1 2 0' },
   { name: 'three players: the next player is the small blind, who does not double', players: 3, on: 'UD', want: { 0: 'U', 1: 'D' }, line: ['0 straddle 40'], passed: ['1 blind'], acts: '1 2 0' },
 
   { name: 'two players: nobody straddles', players: 2, on: EVERY_KIND, want: { 0: EVERY_KIND, 1: EVERY_KIND }, line: [], passed: ['1 two players', '0 two players'], acts: '0 1' },
@@ -547,7 +547,7 @@ test('a kind the host switches off is dropped from every player’s choice, the 
   assert.deepEqual(t.state.seats[1]!.straddles, []);
 });
 
-test('only the player passed over is told so, and why; nobody else’s view says who asked for what this hand', () => {
+test('only the player passed over is told so, and why', () => {
   const t = dealt({ name: 'told', players: 6, on: 'UDB', want: { 3: 'U', 4: 'D', 0: 'B' }, line: [], acts: '' });
 
   assert.deepEqual(t.view(3).hand!.passedOver, { seat: 3, why: 'right', ahead: 0 });
@@ -653,7 +653,7 @@ test('whatever the table: chips are conserved, a hand has one line of straddles,
         assert.ok(before.config[kind.setting], `${where}: a ${what} at a table that does not allow it`);
         assert.ok(was.straddles.includes(what), `${where}: seat ${seat} posts a ${what} it did not ask for`);
         assert.ok(!withABlind.has(seat), `${where}: seat ${seat} straddles on top of a blind`);
-        assert.equal(hand.players.find((player) => player.seat === seat)!.bet, amount, `${where}: a straddle posted short`);
+        assert.equal(posted.find((post) => post[1] === seat && post[2] === what)![3], amount, `${where}: a straddle posted short`);
       }
 
       assert.ok(hand.straddles.length <= STRADDLES_IN_A_ROW && (!hand.bombPot || hand.straddles.length === 0), where);

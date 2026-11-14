@@ -146,6 +146,7 @@ export function assertStraddlesHold(state: TableState): void {
 
   const straddlers = new Set(straddles.map((straddle) => straddle.seat));
   assert.ok(passedOver.every((passed) => dealtIn.includes(passed.seat) && !straddlers.has(passed.seat)), 'a player who straddles, or is not in the hand, is told they were passed over');
+  assert.equal(new Set(passedOver.map((passed) => passed.seat)).size, passedOver.length, 'a player is told twice that they were passed over');
 
   // A hand saved before hands kept their events has none to go by
   const posts = hand.events.flatMap((event) => (event[0] === 'post' ? [event] : []));

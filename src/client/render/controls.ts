@@ -332,7 +332,10 @@ function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandle
 
   // One kind is a switch, as it always was. Several would not fit under a phone's table, so they are chosen in a dialog
   if (only && straddles.length === 1) {
-    extras.push(toggle('Straddle', seat.straddles.includes(only.what), 'straddle', (on) => handlers.send({ type: 'setStraddle', kind: only.what, on })));
+    // The kind every table starts with is the one players know as the straddle; any other alone has to say which it is
+    const name = only.byDefault ? 'Straddle' : only.label;
+
+    extras.push(toggle(name, seat.straddles.includes(only.what), 'straddle', (on) => handlers.send({ type: 'setStraddle', kind: only.what, on })));
   } else if (only) {
     const on = seat.straddles.length;
 

@@ -91,7 +91,7 @@ export const STRADDLES: readonly StraddleKind[] = [
     subject: 'The Mississippi straddle',
     byDefault: false,
     says: 'Twice the big blind from any seat without a blind. The button has the first right to it, then the player on its right, and so on.',
-    seats: (at, line) => (line.length === 0 ? at.order.filter((seat) => seat !== at.sbSeat && seat !== at.bbSeat) : []),
+    seats: (at, line) => (line.length === 0 ? at.order : []),
     amount: firstStraddle,
   },
 ];

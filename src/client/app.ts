@@ -542,10 +542,9 @@ export class App {
   }
 
   /**
-   * Asks to see the cards a hand would have dealt. Asking twice shows nothing twice, so unlike a move,
-   * a request that got no answer is sent once more rather than only looked up: the hand is off the table
-   * a few seconds later. Only while the page still offers that hand's hunt, though: an answer that never
-   * came can take longer than the hand stays up, and a hunt that went through shows with the poll.
+   * Asks to see the cards a hand would have dealt. Unlike a move, a hunt that got no answer is sent once
+   * more, since asking twice shows nothing twice and the hand is off the table within seconds; but only
+   * while the page still offers it, as a hunt that went through shows with the next poll.
    */
   private async hunt(hand: number): Promise<void> {
     if ((await this.send({ type: 'huntRabbit', hand })) === 'unanswered' && this.offersHunt(hand)) {

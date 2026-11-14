@@ -625,18 +625,12 @@ try {
     await folder.click('.turn [data-action="fold"]');
 
     const hunter = folder === dealer ? other : dealer;
-    const hunts: string[] = [];
+    let hunts = 0;
     await hunter.route('**/api', async (route) => {
       const body = JSON.parse(route.request().postData() ?? '{}') as { op?: string; command?: { type?: string } };
 
-      if (body.op !== 'act' || body.command?.type !== 'huntRabbit') {
-        return route.fallback();
-      }
-
-      hunts.push(body.command.type);
-
       // The first is played by the table, and its answer never reaches the page
-      if (hunts.length === 1) {
+      if (body.op === 'act' && body.command?.type === 'huntRabbit' && ++hunts === 1) {
         await route.fetch();
         return route.abort('failed');
       }
@@ -648,7 +642,7 @@ try {
     await hunter.waitForSelector('.board .card.hunted:nth-child(5)');
     await folder.waitForSelector('.board .card.hunted:nth-child(5)');
 
-    assert.deepEqual(hunts, ['huntRabbit', 'huntRabbit'], 'the hunt with no answer was sent once more');
+    assert.equal(hunts, 2, 'the hunt with no answer was sent once more');
     assert.equal(await hunter.locator('.feed li:has-text("hunts the rabbit")').count(), 1, 'and the cards came out once');
 
     await dealer.context().close();

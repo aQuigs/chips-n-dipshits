@@ -8,7 +8,7 @@ import { test } from 'node:test';
 
 import { spotsOf } from '../src/client/tableChances.ts';
 import { addMember, dealTheRest, freshDeck, handFacts, rabbitToHunt, replayHand, seededRng, tick, TIMING, viewFor } from '../src/engine/index.ts';
-import type { Card, HandRecord, TableConfig, TableState, TableView } from '../src/engine/index.ts';
+import type { Card, HandRecord, TableConfig, TableView } from '../src/engine/index.ts';
 import { restoreState } from '../src/server/store.ts';
 import { handRecords, TestTable } from './helpers.ts';
 import { assertBoardsHold, assertEventsRetellTheHand, assertViewsKeepSecrets } from './invariants.ts';
@@ -81,26 +81,33 @@ function hunt(t: TestTable, player = dealtIn(t)): void {
   t.cmd(player, { type: 'huntRabbit', hand: t.state.hand!.number });
 }
 
-/** Each board with the cards hunted for it after its own. */
-const huntedOut = (state: TableState) => state.hand!.boards.map((board, index) => [...board, ...state.hand!.hunted![index]!]);
+/** Folds the hand out once the first board has `cards` on it and hunts it: each board and its hunted cards are the boards of the same hand checked down from there. */
+function assertHuntsTheCheckDown(t: TestTable, cards: number, where: string): void {
+  const played = copyOf(t);
+
+  foldOutAt(t, cards);
+  hunt(t);
+
+  while (played.state.hand!.boards[0]!.length < cards) {
+    passive(played);
+  }
+  checkDown(played);
+
+  const hand = t.state.hand!;
+  assert.deepEqual(
+    hand.boards.map((board, index) => [...board, ...hand.hunted![index]!]),
+    played.state.hand!.boards,
+    where,
+  );
+}
 
 test('the cards hunted are the ones the hand would have dealt, from every street a hand can end on', () => {
   for (let seed = 1; seed <= 30; seed++) {
     for (const cards of [0, 3, 4]) {
-      const folded = shuffledTable(seed);
-      const played = copyOf(folded);
+      const t = shuffledTable(seed);
 
-      foldOutAt(folded, cards);
-      hunt(folded);
-
-      // Played the same way up to the street it ended on, and then checked down to the river
-      while (played.state.hand!.boards[0]!.length < cards) {
-        passive(played);
-      }
-      checkDown(played);
-
-      assert.deepEqual(huntedOut(folded.state), played.state.hand!.boards, `seed ${seed}, folded with ${cards} cards out`);
-      assert.equal(folded.state.hand!.hunted![0]!.length, 5 - cards);
+      assertHuntsTheCheckDown(t, cards, `seed ${seed}, folded with ${cards} cards out`);
+      assert.equal(t.state.hand!.hunted![0]!.length, 5 - cards);
     }
   }
 });
@@ -115,17 +122,8 @@ test('a double-board bomb pot that ends on the flop or the turn hunts both board
       t.wait(TIMING.startDelayMs);
       assert.equal(t.state.hand!.runs, 2);
 
-      const played = copyOf(t);
-
-      foldOutAt(t, cards);
-      hunt(t);
-      while (played.state.hand!.boards[0]!.length < cards) {
-        passive(played);
-      }
-      checkDown(played);
-
+      assertHuntsTheCheckDown(t, cards, `seed ${seed}, ended with ${cards} cards on each board`);
       assert.equal(t.state.hand!.hunted!.length, 2);
-      assert.deepEqual(huntedOut(t.state), played.state.hand!.boards, `seed ${seed}, ended with ${cards} cards on each board`);
     }
   }
 });
@@ -261,8 +259,8 @@ test('only a player dealt in may hunt, folded or not; not a watcher, a player si
 });
 
 /** A member who joins the table and takes no seat: a watcher. Gives back what `cmd` names them by. */
-function watcherAt(t: TestTable, name = 'Watcher'): number {
-  return t.ids.push(addMember(t.state, name, t.ctx()).id) - 1;
+function watcherAt(t: TestTable): number {
+  return t.ids.push(addMember(t.state, 'Watcher', t.ctx()).id) - 1;
 }
 
 test('asking again shows nothing twice and changes nothing, so a request that got no answer can be sent again', () => {
@@ -306,37 +304,33 @@ test('the last hand of the night can be hunted like any other, and the night end
   assert.notEqual(t.state.nightEndedAt, null);
 });
 
-test('switched on during a hand, the setting lets that hand be hunted; switched off after it ended, the hunt is refused', () => {
-  const on = shuffledTable(7, { rabbitHunting: false });
-  on.cmd(0, { type: 'updateConfig', config: HUNTING });
-  assert.equal(on.feedText().at(-1), 'Rabbit hunting is on: after a hand ends early, anyone dealt in can see the cards that would have come');
-  foldOutAt(on, 3);
-  assert.equal(on.state.hand!.deadline, on.now + TIMING.uncontestedPauseMs + TIMING.rabbitOfferMs);
-  hunt(on);
-
-  const off = shuffledTable(7);
-  foldOutAt(off, 3);
-  off.cmd(0, { type: 'updateConfig', config: { rabbitHunting: false } });
-  assert.equal(off.feedText().at(-1), 'Rabbit hunting is off');
-  assert.throws(() => hunt(off), { name: 'GameError', message: /doesn't hunt/ });
+test('switched on during a hand, the setting lets that hand be hunted', () => {
+  const t = shuffledTable(7, { rabbitHunting: false });
+  t.cmd(0, { type: 'updateConfig', config: HUNTING });
+  assert.equal(t.feedText().at(-1), 'Rabbit hunting is on: after a hand ends early, anyone dealt in can see the cards that would have come');
+  foldOutAt(t, 3);
+  assert.equal(t.state.hand!.deadline, t.now + TIMING.uncontestedPauseMs + TIMING.rabbitOfferMs);
+  hunt(t);
 });
 
-test('switched while a hand with a rabbit is up, the setting gives that hand the pause it would have had: a table switched off waits no longer than one that never hunted', () => {
-  const off = shuffledTable(7);
-  foldOutAt(off, 3);
-  const ended = off.now;
+test('switched while a hand with a rabbit is up, the setting gives that hand the pause it would have had: switched off, the hunt is refused and the table waits no longer than one that never hunted', () => {
+  const t = shuffledTable(7);
+  foldOutAt(t, 3);
+  const ended = t.now;
 
-  off.now += 1000;
-  off.cmd(0, { type: 'updateConfig', config: { rabbitHunting: false } });
-  assert.equal(off.state.hand!.deadline, ended + TIMING.uncontestedPauseMs);
+  t.now += 1000;
+  t.cmd(0, { type: 'updateConfig', config: { rabbitHunting: false } });
+  assert.equal(t.feedText().at(-1), 'Rabbit hunting is off');
+  assert.equal(t.state.hand!.deadline, ended + TIMING.uncontestedPauseMs);
+  assert.throws(() => hunt(t), { name: 'GameError', message: /doesn't hunt/ });
 
-  off.cmd(0, { type: 'updateConfig', config: HUNTING });
-  assert.equal(off.state.hand!.deadline, ended + TIMING.uncontestedPauseMs + TIMING.rabbitOfferMs);
-  hunt(off);
+  t.cmd(0, { type: 'updateConfig', config: HUNTING });
+  assert.equal(t.state.hand!.deadline, ended + TIMING.uncontestedPauseMs + TIMING.rabbitOfferMs);
+  hunt(t);
 
-  const deadline = off.state.hand!.deadline;
-  off.cmd(0, { type: 'updateConfig', config: { rabbitHunting: false } });
-  assert.equal(off.state.hand!.deadline, deadline, 'a hunted hand keeps the time to see its cards');
+  const deadline = t.state.hand!.deadline;
+  t.cmd(0, { type: 'updateConfig', config: { rabbitHunting: false } });
+  assert.equal(t.state.hand!.deadline, deadline, 'a hunted hand keeps the time to see its cards');
 });
 
 test('the pause: unchanged at a table that does not hunt, longer by a fixed time after a hand that can be hunted, and one player holds the next hand up by no more than the time it takes to see the cards', () => {
@@ -359,7 +353,6 @@ test('the pause: unchanged at a table that does not hunt, longer by a fixed time
   late.now = deadline - 1;
   hunt(late);
   assert.equal(late.state.hand!.deadline, deadline - 1 + TIMING.rabbitShowMs);
-  assert.ok(late.state.hand!.deadline! - deadline < TIMING.rabbitShowMs);
 
   // A hand with nothing to hunt keeps its own pause at a table that hunts
   const shownDown = shuffledTable(8);
@@ -374,15 +367,12 @@ function apartFromTheHunt(view: TableView): unknown {
   return { ...view, version: null, hand, feed: null };
 }
 
-const HUNT_LINE = 'hunts the rabbit';
-
-/** The play-by-play with the hunt taken out matches the one without it, as far back as the chat keeps both. */
+/** The play-by-play tells the hunt, and with that line taken out matches the one without it, as far back as the chat keeps both. */
 function assertSameStory(hunted: readonly string[], left: readonly string[], where: string): void {
-  const hunts = (feed: readonly string[]) => feed.filter((line) => line.includes(HUNT_LINE)).length;
-  const at = hunted.map((line) => line.includes(HUNT_LINE)).lastIndexOf(true);
+  const at = hunted.map((line) => line.includes('hunts the rabbit')).lastIndexOf(true);
   const told = hunted.filter((_line, index) => index !== at);
 
-  assert.equal(hunts(hunted) - hunts(left.slice(-told.length)), 1, `${where}: the hunt is told once`);
+  assert.ok(at >= 0, `${where}: the hunt is not told`);
   assert.deepEqual(told, left.slice(-told.length), `${where}: the play-by-play`);
 }
 

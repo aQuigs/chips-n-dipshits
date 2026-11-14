@@ -93,7 +93,7 @@ export function dealStreet(hand: Boards & Pick<Hand, 'deck'>): StreetDealt[] {
  * come off the hand's deck, which is left without them, and the boards themselves are left as they are.
  */
 export function dealTheRest(hand: Boards & Pick<Hand, 'deck'>): Card[][] {
-  const copy = { boards: hand.boards.map((board) => [...board]), runs: hand.runs, runIndex: hand.runIndex, sharedBoardLength: hand.sharedBoardLength, deck: hand.deck };
+  const copy = { ...hand, boards: hand.boards.map((board) => [...board]) };
 
   while (!boardsComplete(copy)) {
     dealStreet(copy);

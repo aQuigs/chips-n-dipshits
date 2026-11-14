@@ -1649,15 +1649,13 @@ function foldedTo(table: RigTable, cards: number): void {
     table.act('Quigs', { type: 'call' });
     table.act('Stu', { type: 'call' });
     table.act('Pam', { type: 'check' });
-  }
 
-  for (let out = 3; out < cards; out++) {
-    for (const name of ['Stu', 'Pam', 'Quigs']) {
-      table.act(name, { type: 'check' });
+    for (let out = 3; out < cards; out++) {
+      for (const name of ['Stu', 'Pam', 'Quigs']) {
+        table.act(name, { type: 'check' });
+      }
     }
-  }
 
-  if (cards > 0) {
     table.act('Stu', { type: 'check' });
     table.act('Pam', { type: 'check' });
   }

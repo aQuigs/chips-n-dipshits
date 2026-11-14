@@ -971,8 +971,8 @@ function wonBySomebody(result: HandResult): boolean {
 
 /**
  * Whether the hand on the table has a rabbit to hunt: the table hunts, the hand is over with a board
- * still short of its cards, and nobody has hunted it yet. Only a hand somebody won has one, so the
- * cards to come of a hand nobody won, as one the blinds chopped, stay in the deck.
+ * still short of its cards, and nobody has hunted it yet. A hand nobody won, such as one the blinds
+ * chopped, has none.
  */
 export function rabbitToHunt(state: TableState, hand: Hand): boolean {
   return state.config.rabbitHunting && rabbitLeft(hand);
@@ -991,19 +991,22 @@ export function retimeRabbitOffer(state: TableState, now: number): void {
   }
 }
 
-/** Whether the player in a seat may hunt the hand's rabbit: one dealt into it, folded or not, who has not left. */
+/** Who in a seat may hunt a hand's rabbit: the player dealt into it, folded or not, unless they have left the table. */
+function hunterAt(state: TableState, hand: Hand, seatIndex: number): HandPlayer | undefined {
+  return state.seats[seatIndex]?.leaving ? undefined : playerAt(hand, seatIndex);
+}
+
 export function mayHunt(state: TableState, seatIndex: number): boolean {
   const hand = state.hand;
 
-  return hand !== null && playerAt(hand, seatIndex) !== undefined && !state.seats[seatIndex]!.leaving && rabbitToHunt(state, hand);
+  return hand !== null && hunterAt(state, hand, seatIndex) !== undefined && rabbitToHunt(state, hand);
 }
 
 /**
- * Lays out the cards hand number `number` would have dealt next on each board, for everyone to see,
- * at the asking of the player in `seatIndex`. They are the deck's next cards, dealt by the hand's own
- * rules, so they are the ones that would have come; they go nowhere near the boards, and count for
- * nothing. The first to ask shows everyone and asking again does nothing, so a request that got no
- * answer can simply be sent again. The table stays on the hand long enough for them to be seen.
+ * Lays out for everyone, at the asking of the player in `seatIndex`, the cards hand number `number`
+ * would have dealt next on each board: the deck's next cards, dealt by the hand's own rules. They go
+ * nowhere near the boards and count for nothing. Asking again does nothing, so a request that got no
+ * answer can be sent again.
  */
 export function huntRabbit(state: TableState, ctx: Ctx, seatIndex: number, number: number): void {
   const hand = state.hand;
@@ -1012,15 +1015,14 @@ export function huntRabbit(state: TableState, ctx: Ctx, seatIndex: number, numbe
     throw new GameError('That hand is over, so its rabbit is gone');
   }
 
-  const player = playerAt(hand, seatIndex);
-  const dealtIn = player !== undefined && !state.seats[seatIndex]!.leaving;
+  const player = hunterAt(state, hand, seatIndex);
 
-  if (dealtIn && hand.hunted !== null) {
+  if (player && hand.hunted !== null) {
     return;
   }
 
-  if (!dealtIn || !rabbitToHunt(state, hand)) {
-    throw new GameError(huntRefusal(state, hand, dealtIn));
+  if (!player || !rabbitToHunt(state, hand)) {
+    throw new GameError(huntRefusal(state, hand, player !== undefined));
   }
 
   hand.hunted = dealTheRest(hand);
@@ -1047,13 +1049,11 @@ function huntRefusal(state: TableState, hand: Hand, dealtIn: boolean): string {
 
 /** The hunted cards as the play-by-play says them, a board at a time when there are more. */
 function huntedText(hunted: readonly Card[][]): string {
-  const dealt = hunted.flatMap((cards, board) => (cards.length === 0 ? [] : [{ board, cards }]));
-
   if (hunted.length === 1) {
-    return prettyCards(dealt[0]!.cards);
+    return prettyCards(hunted[0]!);
   }
 
-  return dealt.map(({ board, cards }) => `${midSentence(BOARD_NAMES[board]!)} ${prettyCards(cards)}`).join(', ');
+  return hunted.flatMap((cards, board) => (cards.length === 0 ? [] : [`${midSentence(BOARD_NAMES[board]!)} ${prettyCards(cards)}`])).join(', ');
 }
 
 /** After a hand is over, anyone who was dealt in may turn their cards face up. */

@@ -1,7 +1,7 @@
 import { asNumber, upgradeRecord } from '../engine/index.ts';
 import type { Denominated, Effect, HandRecord, TableState, Unit } from '../engine/index.ts';
 import { NOWHERE } from '../server/errorLog.ts';
-import type { ErrorLog } from '../server/errorLog.ts';
+import type { ErrorLog, Failure } from '../server/errorLog.ts';
 import { dueToLookAt, lastWordsOf, PUT_AWAY_AT_ONCE } from '../server/putAway.ts';
 import type { LastWords } from '../server/putAway.ts';
 import { peekOf, restoreState, StoreBusyError } from '../server/store.ts';
@@ -189,13 +189,16 @@ function heldCells(held: Held[], noted: Noted = () => undefined): string[] {
   for (let kept = held; ; ) {
     const cells = toCells(kept.length > 0 ? JSON.stringify(kept) : '', HELD_CHUNKS);
     if (cells) {
+      if (kept.length < held.length) {
+        noted('store hold records', `No room left in the row to hold ${held.length - kept.length} records until they are copied out, so they were dropped`);
+      }
+
       return cells;
     }
 
     const oldestHand = kept.findIndex((item) => item.record.type === 'hand');
     const dropped = Math.max(oldestHand, 0);
 
-    noted('store hold records', `No room left in the row to hold a ${kept[dropped]!.record.type} record until it is copied out, so it was dropped`);
     kept = kept.filter((_item, index) => index !== dropped);
   }
 }
@@ -362,6 +365,8 @@ function headBlankColumns(sheet: SheetLike, headers: string[]): void {
 export class SheetStore implements TableStore {
   private readonly deps: SheetStoreDeps;
   private readonly errors: ErrorLog;
+  /** Failures noted while holding the lock, reported once it is let go so that reporting never keeps anyone waiting for it. */
+  private noted: Failure[] = [];
   private readonly sheets = new Map<SheetKey, SheetLike>();
 
   constructor(deps: SheetStoreDeps) {
@@ -436,7 +441,7 @@ export class SheetStore implements TableStore {
 
   putAwayOld(now: number, lastWords: LastWords): void {
     try {
-      underLock(this.deps.lock, BUSY, () => this.sweep(now, lastWords), PUT_AWAY_LOCK_WAIT_MS);
+      this.reportingAfter(() => underLock(this.deps.lock, BUSY, () => this.sweep(now, lastWords), PUT_AWAY_LOCK_WAIT_MS));
     } catch (error) {
       // Whatever was not put away is still in the Tables tab, where the next new table finds it. Giving up on a lock
       // that was taken is what a sweep is meant to do, and no failure
@@ -458,10 +463,24 @@ export class SheetStore implements TableStore {
     return this.locked(() => !this.locate(tableId) && this.rememberGone(tableId));
   }
 
-  /** Tells Apps Script's log and the error log of something that went wrong here and was carried on through. */
+  /** Tells Apps Script's log of something that went wrong here and was carried on through, and the error log once the lock is let go. */
   private failed(where: string, error: unknown, tableId: string | null = null): void {
     console.error(where, error);
-    this.errors.report({ where, error, tableId });
+    this.noted.push({ where, error, tableId });
+  }
+
+  /** Does `work`, which may take the lock, and then reports what it noted, whether it finished or not. */
+  private reportingAfter<T>(work: () => T): T {
+    try {
+      return work();
+    } finally {
+      const noted = this.noted;
+      this.noted = [];
+
+      for (const failure of noted) {
+        this.errors.report(failure);
+      }
+    }
   }
 
   /** What notes a failure at one table. */
@@ -470,7 +489,7 @@ export class SheetStore implements TableStore {
   }
 
   private locked<T>(work: () => T): T {
-    return underLock(this.deps.lock, BUSY, work);
+    return this.reportingAfter(() => underLock(this.deps.lock, BUSY, work));
   }
 
   /** Reads a table from the sheet into the cache. Under the lock, so a write can't slip in between the two. */

@@ -45,6 +45,19 @@ test('cards go, alone or run together as a deck is, and words that start like on
   assert.equal(scrub('The Thing Ash Ascending', 200), 'The Thing Ash Ascending');
 });
 
+test("an apostrophe inside a word quotes nothing, so the rest of the message stays", () => {
+  assert.equal(scrub("Hand 12's record was too long for its cell, so it was saved without its events", 200), "Hand 12's record was too long for its cell, so it was saved without its events");
+  assert.equal(scrub("The table isn't there any more, so this can't go on", 200), "The table isn't there any more, so this can't go on");
+  assert.equal(
+    scrub("Failed to execute 'appendChild' on 'Node': The new child element contains the parent.", 200),
+    "Failed to execute 'appendChild' on 'Node': The new child element contains the parent.",
+  );
+});
+
+test('cards as the page writes them go too', () => {
+  assert.equal(scrub('showed A♠ 10♥ on K♦', 200), 'showed ·· ·· on ··');
+});
+
 test('a dump of JSON and a long quoted span go, short quotes stay', () => {
   assert.equal(scrub('Unexpected token \'x\', "{"id":"ABC234","members":[{"token":"S"}]" is not valid JSON', 200), "Unexpected token 'x', \"…");
   assert.equal(scrub('state [{"cards":["As"]}]', 200), 'state …');
@@ -136,29 +149,61 @@ test('a failure that comes back after its window gets its count written, then a 
   );
 });
 
-test('a page is held to three reports a minute from one member, ten from one table and thirty from all of them; the next minute starts afresh', () => {
+test('a page is held to three reports a minute from one member and ten from one table; the next minute starts afresh', () => {
   const { clock } = log();
-  const distinct = new MemoryErrorLog(clock);
+
+  const member = new MemoryErrorLog(clock);
   for (const word of ['one', 'two', 'three', 'four']) {
-    distinct.report(fromPage('AAAA2222', 'ABC234', word));
+    member.report(fromPage('AAAA2222', 'ABC234', word));
   }
-  assert.deepEqual(distinct.rows.map((row) => row.message), ['one', 'two', 'three']);
-
-  const tables = new MemoryErrorLog(clock);
-  for (let member = 0; member < 12; member++) {
-    tables.report(fromPage(`MEMBER${member}`, 'ABC234', `word ${'abcdefghijklmnop'[member]}`));
-  }
-  assert.equal(tables.rows.length, ERROR_LIMITS.fromTable);
-
-  const overall = new MemoryErrorLog(clock);
-  for (let table = 0; table < 40; table++) {
-    overall.report({ ...fromPage('AAAA2222', `TBL${String(table).padStart(3, '0')}`, `failure ${'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN'[table]}`) });
-  }
-  assert.equal(overall.rows.length, ERROR_LIMITS.rowsPerMinute, 'past twenty rows a minute nothing more is written, from anywhere');
+  assert.deepEqual(member.rows.map((row) => row.message), ['one', 'two', 'three']);
 
   clock.time += 60_000;
-  distinct.report(fromPage('AAAA2222', 'ABC234', 'five'));
-  assert.deepEqual(distinct.rows.at(-1)!.message, 'five');
+  member.report(fromPage('AAAA2222', 'ABC234', 'five'));
+  assert.deepEqual(member.rows.at(-1)!.message, 'five');
+
+  // One failure from twelve players at one table: the first is a row, and the count once the window is over is of the ten let in
+  const table = new MemoryErrorLog(clock);
+  for (let n = 0; n < 12; n++) {
+    table.report(fromPage(`MEMBER${'ABCDEFGHJKLM'[n]}`, 'ABC234', 'Same'));
+  }
+  clock.time += ERROR_LIMITS.repeatWindowMs;
+  table.report({ where: 'server', error: 'Something else' });
+  assert.deepEqual(
+    table.rows.map((row) => [row.message, row.times]),
+    [
+      ['Same', 1],
+      ['Same', ERROR_LIMITS.fromTable - 1],
+      ['Something else', 1],
+    ],
+  );
+});
+
+test("pages take five of the twenty rows a minute at most, so a stranger who makes a table can't crowd out the server's own", () => {
+  const { clock, errors } = log();
+  const letters = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+
+  for (let n = 0; n < 20; n++) {
+    errors.report(fromPage(`MEMBER${letters[n % 3]}`, `TABLE${letters[n]}`, `page failure ${letters[n]}`));
+  }
+  assert.equal(errors.rows.length, ERROR_LIMITS.pageRowsPerMinute);
+
+  for (let n = 0; n < 20; n++) {
+    errors.report({ where: 'server act', error: `server failure ${letters[n]}` });
+  }
+  assert.equal(errors.rows.length, ERROR_LIMITS.rowsPerMinute, 'the server had the rest of the minute');
+
+  // Past twenty rows a minute, the server's failures are held as counts and written when there is room again
+  const held = errors.rows.length;
+  clock.time += 60_000;
+  errors.report({ where: 'server poll', error: 'next minute' });
+  assert.deepEqual(
+    errors.rows.slice(held).map((row) => [row.message, row.times, row.trace.startsWith('Held back')]),
+    [
+      ['server failure R', 1, true],
+      ['next minute', 1, false],
+    ],
+  );
 });
 
 test('reports from pages are cut at thirty a minute in all, even when the rows would have room', () => {

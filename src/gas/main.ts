@@ -145,9 +145,13 @@ export function api(body: string): string {
 
     return JSON.stringify(service().handle(request));
   } catch (error) {
-    // What the service caught and reported already is left out by the log
+    // What the service caught and reported already is left out by the log, which may itself be what failed to start
     console.error(error);
-    errors().report(failureOf(request, error));
+    try {
+      errors().report(failureOf(request, error));
+    } catch (unreported) {
+      console.error(unreported);
+    }
 
     const failure: ApiError & Built = { ok: false, code: 'internal', error: 'Something went wrong on the server, try again', build: BUILD_ID };
 

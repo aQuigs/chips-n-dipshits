@@ -2009,6 +2009,11 @@ test('every call of a report failed in turn: nothing is thrown, the lock is neve
     assert.doesNotThrow(() => context.run().report({ where: 'server act', error: 'first' }), step);
     assert.deepEqual(context.lock.waits, [], step);
 
+    // The counts are in the cache, but the row does not hang on them
+    if (steps[failing - 1]!.startsWith('cache.')) {
+      assert.equal(context.tab()?.shown(2, 4), 'first', `${step}: the row was not written`);
+    }
+
     context.clock.time += ERROR_LIMITS.repeatWindowMs;
     context.run().report({ where: 'server act', error: 'second' });
     assert.equal(context.tab()?.shown(context.tab()!.getLastRow(), 4), 'second', step);
@@ -2087,4 +2092,28 @@ test("failing each of a request's own Sheet, cache and flush calls in turn gets 
   }
 
   assert.ok(reported >= 5, `only ${reported} of the failed calls were reported`);
+});
+
+test('what the store notes while holding the lock is reported once the lock is let go, to an Errors tab in the same Sheet', () => {
+  const lock = new FakeLock();
+  const spreadsheet = new FakeSpreadsheet(lock, {}, null, [ERRORS_TAB]);
+  const cache = new FakeCache();
+  const log = new SheetErrorLog({ spreadsheet: () => spreadsheet, cache, clock: { now: () => NOW }, build: 'thisbuild123' });
+  const reported: { where: string; lockHeld: boolean }[] = [];
+  const errors = {
+    report: (failure: Parameters<SheetErrorLog['report']>[0]) => {
+      reported.push({ where: failure.where, lockHeld: lock.held });
+      log.report(failure);
+    },
+  };
+  const store = new SheetStore({ spreadsheet: () => spreadsheet, cache, lock, flush: () => undefined, errors });
+
+  save(store, table('ABC234'));
+  lock.waitLock(0);
+  spreadsheet.insertSheet('Ledger').refuseWritesAfter(0);
+  lock.releaseLock();
+  save(store, table('ABC234', 2), [buyIn(500)]);
+
+  assert.deepEqual(reported, [{ where: 'store copy to Ledger', lockHeld: false }]);
+  assert.deepEqual([2, 5].map((column) => spreadsheet.getSheetByName(ERRORS_TAB)!.shown(2, column)), ['store copy to Ledger', 'ABC234']);
 });

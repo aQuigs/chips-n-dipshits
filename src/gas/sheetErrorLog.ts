@@ -24,9 +24,10 @@ export const REPORTS_PER_RUN = 3;
 // Past the cap the oldest rows go down to this many below it, so trimming is one call every so many rows
 const TRIM_TO = ERROR_LIMITS.rowsKept - 50;
 
-// A tab someone made by hand may not be formatted as text: there a leading apostrophe keeps a cell from being read as a formula
-const FORMULA_START = /^[=+\-@]/;
-const asText = (value: string) => (FORMULA_START.test(value) ? `'${value}` : value);
+// A row past the ones formatted when the tab was made, or in a tab made by hand, may not be formatted as text: there a
+// leading apostrophe keeps a cell from being read as a formula, or a table's code such as 234E56 as a number
+const READ_AS_SOMETHING_ELSE = /^[=+\-@\d.]/;
+const asText = (value: string) => (READ_AS_SOMETHING_ELSE.test(value) ? `'${value}` : value);
 
 function cellsOf(row: ErrorRow): unknown[] {
   return [new Date(row.at), asText(row.where), row.times, asText(row.message), asText(row.tableId), asText(row.build), asText(row.browser), asText(row.trace)];
@@ -52,8 +53,10 @@ export class SheetErrorLog implements ErrorLog, ErrorShelf {
   }
 
   report(failure: Failure): void {
-    // A script run serves one request, so this is what one request may spend on reporting
-    if (this.reports >= REPORTS_PER_RUN) {
+    const again = typeof failure.error === 'object' && failure.error !== null && this.seen.has(failure.error);
+
+    // A script run serves one request, so this is what one request may spend on reporting. An error reported already costs nothing
+    if (again || this.reports >= REPORTS_PER_RUN) {
       return;
     }
 

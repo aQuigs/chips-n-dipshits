@@ -90,12 +90,18 @@ export interface FailureSource {
   addEventListener(type: 'error' | 'unhandledrejection', listener: (event: { error?: unknown; message?: unknown; reason?: unknown }) => void): void;
 }
 
+/** Where the page's failures go: `ready` says whether there is anyone to send them as, and a failure while not is let go uncounted. */
+export interface FailureSink {
+  ready(): boolean;
+  send(failure: PageFailure): void;
+}
+
 /**
  * Listens on `target` for what the page throws and leaves uncaught, and hands what is worth reporting
- * to `send`. Whatever happens while doing that, `send` included, is swallowed, so a report can never
+ * to `sink`. Whatever happens while doing that, `send` included, is swallowed, so a report can never
  * bring about another.
  */
-export function watchForErrors(target: FailureSource, send: (failure: PageFailure) => void): void {
+export function watchForErrors(target: FailureSource, sink: FailureSink): void {
   const errors = new PageErrors();
   let busy = false;
 
@@ -107,10 +113,10 @@ export function watchForErrors(target: FailureSource, send: (failure: PageFailur
     busy = true;
 
     try {
-      const failure = errors.take(thrown);
+      const failure = sink.ready() ? errors.take(thrown) : null;
 
       if (failure) {
-        send(failure);
+        sink.send(failure);
       }
     } catch {
       // Reporting is what failed, which is the one thing never reported

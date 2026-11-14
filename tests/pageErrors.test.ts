@@ -73,7 +73,7 @@ class Page extends EventTarget {
 test('what the page throws and what it leaves to reject are both reported, through the one sender', () => {
   const page = new Page();
   const sent: PageFailure[] = [];
-  watchForErrors(page as unknown as FailureSource, (failure) => sent.push(failure));
+  watchForErrors(page as unknown as FailureSource, { ready: () => true, send: (failure) => sent.push(failure) });
 
   const again = new Error('thrown');
   page.fail(again);
@@ -86,16 +86,40 @@ test('what the page throws and what it leaves to reject are both reported, throu
   );
 });
 
+test('a failure while the page is at no table is let go without counting, so it neither uses up the reports nor stops the same failure being reported later', () => {
+  const page = new Page();
+  const sent: PageFailure[] = [];
+  let atTable = false;
+  watchForErrors(page as unknown as FailureSource, { ready: () => atTable, send: (failure) => sent.push(failure) });
+
+  const again = new Error('in the lobby and at the table');
+  for (const word of ['a', 'b', 'c', 'd']) {
+    page.fail(new Error(word));
+  }
+  page.fail(again);
+  assert.equal(sent.length, 0);
+
+  atTable = true;
+  page.fail(again);
+  assert.deepEqual(
+    sent.map((failure) => failure.message),
+    ['in the lobby and at the table'],
+  );
+});
+
 test('a report that fails, or that makes the page throw again, is never reported and stops nothing', () => {
   const page = new Page();
   let calls = 0;
 
-  watchForErrors(page as unknown as FailureSource, () => {
-    calls += 1;
+  watchForErrors(page as unknown as FailureSource, {
+    ready: () => true,
+    send: () => {
+      calls += 1;
 
-    // As though sending it threw, which the browser would tell as one more failure
-    page.fail(new Error('the report itself broke'));
-    throw new Error('the report itself broke');
+      // As though sending it threw, which the browser would tell as one more failure
+      page.fail(new Error('the report itself broke'));
+      throw new Error('the report itself broke');
+    },
   });
 
   assert.doesNotThrow(() => page.fail(new Error('first')));
@@ -109,7 +133,7 @@ test('a report that fails, or that makes the page throw again, is never reported
 async function connectionThat(answer: (request: ApiRequest) => Promise<ApiResponse & Built>): Promise<PageFailure[]> {
   const page = new Page();
   const sent: PageFailure[] = [];
-  watchForErrors(page as unknown as FailureSource, (failure) => sent.push(failure));
+  watchForErrors(page as unknown as FailureSource, { ready: () => true, send: (failure) => sent.push(failure) });
 
   const unhandled = (reason: unknown) => page.reject(reason);
   process.on('unhandledRejection', unhandled);

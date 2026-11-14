@@ -1,7 +1,7 @@
 /*
  * Failures the game carries on through, written down for the Sheet's owner. Every part of the server
  * reports through one interface, `ErrorLog`, whose two versions keep the rules here: what a row holds,
- * how repeats become a count, and the limits that keep a stranger or a broken Sheet from filling it.
+ * how repeats become a count, and the limits that keep a stranger from burying the server's rows.
  *
  * The owner sits at these tables, so a row is built from a fixed set of fields and never from a table's
  * state or a request's body. What came from an error or a page passes `scrub` on its way in: an address
@@ -58,6 +58,8 @@ export const ERROR_LIMITS = {
   repeatWindowMs: 10 * 60_000,
   /** Rows written in one minute, from everywhere. */
   rowsPerMinute: 20,
+  /** Of those, the most that pages' reports may take, so the server's own always have room. */
+  pageRowsPerMinute: 5,
   /** A page's reports in one minute, from one member, from one table, and from all of them. */
   fromMember: 3,
   fromTable: 10,
@@ -79,20 +81,24 @@ const TRACE_FRAMES = 6;
 // More than any message worth reading, and few enough that scrubbing it is quick
 const READ_LENGTH = 20_000;
 
+const PAGE = 'page';
 const TABLE_ID = /^[A-Z0-9]{6}$/;
 const BUILD = /^[A-Za-z0-9_-]{1,40}$/;
 const BROWSER_NAMES = new Set(['Chrome', 'Safari', 'Firefox', 'Edge', 'Samsung', 'Opera', 'Other']);
 const DEVICES = new Set(['phone', 'tablet', 'desktop']);
 
-const ADDRESS = /\b[a-z][a-z0-9+.-]*:\/\/[^\s"'`<>()]*/gi;
+const ADDRESS = /\b[a-z][a-z0-9+.-]{0,20}:\/\/[^\s"'`<>()]*/gi;
 const QUERY = /\?[^\s"'`<>()]*=[^\s"'`<>()]*/g;
 const JSON_START = /[{[]\s*["{[][\s\S]*/;
-const LONG_QUOTE = /(["'`])(?:(?!\1)[^\n]){21,}(?:\1|$)/g;
+// Only a quote that opens and closes: an apostrophe in "isn't" opens nothing
+const LONG_QUOTE = /(?<![A-Za-z0-9])(["'`])(?:(?!\1)[^\n]){21,}\1/g;
 // A seat's token is 24 capitals and digits, so even a piece of one cut off by a cap is longer than this
 const TOKEN = /[A-Z0-9]{10,}/g;
 const BLOB = /[A-Za-z0-9+/_=-]{24,}/g;
 // A card, or cards run together as a deck is when joined, but not the start of a word: "As" goes, "The" stays
 const CARDS = /(?<![A-Za-z0-9])(?:[2-9TJQKA][cdhs])+(?![a-z0-9])/g;
+// The same as the page writes them, A♠ or 10♥
+const PRETTY_CARDS = /(?:10|[2-9JQKA])[♠♥♦♣]/g;
 const FRAME = /^\s*at\s|@/;
 
 /**
@@ -107,9 +113,10 @@ export function scrub(text: string, length: number): string {
     .replace(QUERY, '?…')
     .replace(JSON_START, '…')
     .replace(LONG_QUOTE, (_quoted, mark: string) => `${mark}…${mark}`)
-    .replace(TOKEN, '…')
     .replace(BLOB, (blob) => (/\d/.test(blob) ? '…' : blob))
+    .replace(TOKEN, '…')
     .replace(CARDS, '··')
+    .replace(PRETTY_CARDS, '··')
     .replace(/\s+/g, ' ')
     .trim();
 
@@ -176,26 +183,41 @@ interface Kind {
   first: number;
   last: number;
   more: number;
+  /** Its first row was held back by the rows a minute allows, so its count includes the first. */
+  held?: true;
   row: Omit<ErrorRow, 'at' | 'times' | 'trace'>;
 }
 
 interface Tally {
   minute: number;
   rows: number;
+  /** Rows written for pages this minute. */
+  pageRows: number;
   pages: number;
   members: Record<string, number>;
   tables: Record<string, number>;
   kinds: Kind[];
 }
 
-const freshTally = (minute: number): Tally => ({ minute, rows: 0, pages: 0, members: {}, tables: {}, kinds: [] });
+const freshTally = (minute: number): Tally => ({ minute, rows: 0, pageRows: 0, pages: 0, members: {}, tables: {}, kinds: [] });
 
+const isCount = (value: unknown) => typeof value === 'number' && Number.isFinite(value);
+const isCounts = (value: unknown) => typeof value === 'object' && value !== null && Object.values(value).every(isCount);
+
+function isKind(value: unknown): value is Kind {
+  const kind = (value ?? {}) as Partial<Kind>;
+
+  return typeof kind.signature === 'string' && [kind.until, kind.first, kind.last, kind.more].every(isCount) && typeof kind.row === 'object' && kind.row !== null;
+}
+
+/** The counts as they were kept, or none when what was kept is not counts this code wrote, as after a deploy that changed them. */
 function tallyOf(kept: string | null, minute: number): Tally {
   let tally: Tally | null = null;
 
   try {
-    const parsed = kept ? (JSON.parse(kept) as Tally) : null;
-    tally = parsed && Array.isArray(parsed.kinds) ? parsed : null;
+    const parsed = (kept ? JSON.parse(kept) : null) as Partial<Tally> | null;
+    const readable = parsed && [parsed.minute, parsed.rows, parsed.pageRows, parsed.pages].every(isCount) && isCounts(parsed.members) && isCounts(parsed.tables) && Array.isArray(parsed.kinds) && parsed.kinds.every(isKind);
+    tally = readable ? (parsed as Tally) : null;
   } catch {
     // Counts that can't be read are started again
   }
@@ -212,7 +234,10 @@ export const signatureOf = (row: Pick<ErrorRow, 'where' | 'message'>) => `${row.
 
 /** The row that says how many more times a failure happened after its first row. */
 function repeatsRow(kind: Kind): ErrorRow {
-  return { ...kind.row, at: kind.last, times: kind.more, trace: `Repeats after a first row at ${new Date(kind.first).toISOString()}` };
+  const first = new Date(kind.first).toISOString().replace('T', ' ').slice(0, 19);
+  const trace = kind.held ? `Held back by the limit of rows a minute; the first at ${first} UTC` : `Repeats after a first row at ${first} UTC`;
+
+  return { ...kind.row, at: kind.last, times: kind.more, trace };
 }
 
 /** Whether a page's report is within the limits, counting it. */
@@ -233,18 +258,22 @@ function pageAllowed(tally: Tally, tableId: string, memberId: string): boolean {
  * The rows a failure comes to, given the counts kept so far, and the counts to keep. The first of a
  * failure is written and opens a window in which its repeats are only counted; once the window is over,
  * the count is written as a row of its own by the next report of anything. A page's report over its
- * limits, and any row past the rows a minute allows, is dropped.
+ * limits is dropped. Past the rows a minute allows, a page's row is dropped and the server's is held
+ * as a count. Pages may take only a few of those rows, so the server's own always have room.
  */
 export function folded(row: ErrorRow, pageMember: string | null, kept: string | null): { rows: ErrorRow[]; kept: string } {
   const tally = tallyOf(kept, Math.floor(row.at / 60_000));
   const rows: ErrorRow[] = [];
   const write = (written: ErrorRow, room: number = ERROR_LIMITS.rowsPerReport): boolean => {
-    if (rows.length >= room || tally.rows >= ERROR_LIMITS.rowsPerMinute) {
+    const page = written.where === PAGE;
+
+    if (rows.length >= room || tally.rows >= ERROR_LIMITS.rowsPerMinute || (page && tally.pageRows >= ERROR_LIMITS.pageRowsPerMinute)) {
       return false;
     }
 
     rows.push(written);
     tally.rows += 1;
+    tally.pageRows += page ? 1 : 0;
 
     return true;
   };
@@ -269,6 +298,7 @@ export function folded(row: ErrorRow, pageMember: string | null, kept: string | 
 
   const signature = signatureOf(row);
   const same = tally.kinds.find((kind) => kind.signature === signature);
+  const { where, message, tableId, build, browser } = row;
 
   // A count whose window is over but could not be written yet goes on counting
   if (same) {
@@ -279,8 +309,10 @@ export function folded(row: ErrorRow, pageMember: string | null, kept: string | 
       same.row.tableId = '';
     }
   } else if (write(row)) {
-    const { where, message, tableId, build, browser } = row;
     tally.kinds.push({ signature, until: row.at + ERROR_LIMITS.repeatWindowMs, first: row.at, last: row.at, more: 0, row: { where, message, tableId, build, browser } });
+  } else if (where !== PAGE) {
+    // The server's own failure is never simply dropped: past the rows a minute allows it is held as a count, written by the next report that has room
+    tally.kinds.push({ signature, until: row.at, first: row.at, last: row.at, more: 1, held: true, row: { where, message, tableId, build, browser } });
   }
 
   // Too many being counted at once: the oldest goes, its count written if there is room and lost if not
@@ -312,12 +344,25 @@ export function reportOn(shelf: ErrorShelf, seen: WeakSet<object>, failure: Fail
     }
 
     const row = rowOf(failure, at, build);
-    const { rows, kept } = folded(row, failure.page ? failure.page.memberId : null, shelf.recall());
+    let kept: string | null = null;
 
-    shelf.keep(kept);
+    // Without the counts, from a cache that is down, the row is still written: a run reports a few failures at most
+    try {
+      kept = shelf.recall();
+    } catch (error) {
+      console.error('The error log could not read its counts', error);
+    }
 
-    if (rows.length > 0) {
-      shelf.append(rows);
+    const folding = folded(row, failure.page ? failure.page.memberId : null, kept);
+
+    try {
+      shelf.keep(folding.kept);
+    } catch (error) {
+      console.error('The error log could not keep its counts', error);
+    }
+
+    if (folding.rows.length > 0) {
+      shelf.append(folding.rows);
     }
   } catch (error) {
     console.error('A failure could not be written to the error log', error);

@@ -177,6 +177,11 @@ export class App {
     }
   }
 
+  /** Whether the page is at a table, as a member who could tell the server of a failure. */
+  get atTable(): boolean {
+    return this.table !== null;
+  }
+
   /**
    * Tells the server's error log of a failure the page saw, as the member of the table it is at. Before
    * the page is at a table there is nobody to send it as, and it is dropped. Like a reaction it is sent

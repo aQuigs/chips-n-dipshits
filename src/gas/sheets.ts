@@ -72,7 +72,7 @@ export function dataRows(sheet: SheetLike, columns: number): unknown[][] {
 
 /**
  * A tab by its name. One that isn't there is made, with its headers, only when `create` says so,
- * which must be under the lock; otherwise it is null. A Sheet made before a tab was thought of gets it
+ * which must be under the lock but for the Errors tab; otherwise it is null. A Sheet made before a tab was thought of gets it
  * the first time something is written to it. With `formats`, one for each header, every row the new
  * tab has is formatted by them, for rows that are appended rather than formatted as they are written.
  */

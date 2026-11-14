@@ -223,6 +223,24 @@ export function assertNightHolds(state: TableState): void {
   }
 }
 
+/**
+ * The night's numbers count only hands that have ended, only members, and for each of them nothing
+ * they could not have done in the hands they played. Members are the bound on how many are kept.
+ */
+export function assertNumbersHold(state: TableState): void {
+  const { tonight } = state;
+  const members = new Set(state.members.map((member) => member.id));
+
+  assert.ok(tonight.hands <= state.handCount - (state.hand ? 1 : 0), 'the night counts a hand that has not ended');
+
+  for (const [id, numbers] of Object.entries(tonight.players)) {
+    assert.ok(members.has(id), 'the night keeps numbers for someone who is not a member');
+    assert.ok(numbers.hands <= tonight.hands && numbers.won <= numbers.hands, 'a player has more hands than the night, or more pots than hands');
+    assert.equal(numbers.biggest > 0, numbers.won > 0, 'a biggest pot without a pot won, or a pot won of nothing');
+    assert.ok(numbers.best === null || numbers.best.length === 5, 'a best hand that is not five cards');
+  }
+}
+
 /** The table comes back from being saved exactly as it was. */
 export function assertSurvivesSaving(state: TableState): void {
   const json = JSON.stringify(state);
@@ -360,6 +378,7 @@ export function assertInvariants(state: TableState, now: number): void {
   assertBombPotsHold(state);
   assertBoardsHold(state);
   assertNightHolds(state);
+  assertNumbersHold(state);
   assertSurvivesSaving(state);
   assertViewsKeepSecrets(state, now);
   assertFitsTheStore(state);

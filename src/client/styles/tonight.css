@@ -1,0 +1,149 @@
+/* ---- Tonight: the night in numbers, and its dipshit ---- */
+
+.tonight-crown {
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--panel-raised);
+  text-align: center;
+}
+
+.tonight-crown h3 {
+  color: var(--accent);
+}
+
+/* Any name wraps rather than run out of the box: two long ones can share a crown */
+.tonight-crown strong {
+  font: var(--display-weight) calc(26px * var(--display-scale)) / 1.15 var(--font-display);
+  letter-spacing: var(--display-spacing);
+  text-transform: var(--display-case);
+  overflow-wrap: anywhere;
+}
+
+.tonight-leaders,
+.tonight-players dl {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+/* Who leads sits beside what they lead in while both fit on a line, and under it when a long name needs the room */
+.tonight-leaders div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0 12px;
+}
+
+.tonight-leaders dt,
+.tonight-players dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.tonight-leaders dd,
+.tonight-players dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.tonight-cards {
+  white-space: nowrap;
+}
+
+.tonight-players {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tonight-players li {
+  border-bottom: 1px solid var(--line);
+}
+
+/* The name gets what the money leaves it, and wraps there; what the player did runs under both */
+.tonight-players summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: baseline;
+  gap: 2px 10px;
+  padding: 10px 0;
+  cursor: pointer;
+  list-style: none;
+}
+
+.tonight-players summary::-webkit-details-marker {
+  display: none;
+}
+
+.tonight-players .who {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.tonight-players .dipshit .who {
+  color: var(--accent);
+}
+
+.tonight-players .me .who::after {
+  content: ' (you)';
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.tonight-players .who small,
+.tonight-players .counts {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.tonight-players .net {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.tonight-players .up {
+  color: var(--good);
+}
+
+.tonight-players .down {
+  color: var(--bad);
+}
+
+.tonight-players .fold {
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1;
+}
+
+.tonight-players details[open] .fold {
+  transform: rotate(180deg);
+}
+
+.tonight-players .counts {
+  grid-column: 1 / -1;
+}
+
+.tonight-players dl {
+  padding-bottom: 12px;
+}
+
+.tonight-copy {
+  display: grid;
+  gap: 8px;
+}
+
+.tonight-copy textarea {
+  width: 100%;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+  color: inherit;
+  font: inherit;
+  resize: vertical;
+}

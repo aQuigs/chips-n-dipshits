@@ -16,6 +16,7 @@ import { shuffleSeats } from './shuffle.ts';
 import { sitDialog } from './sit.ts';
 import { straddlesDialog } from './straddles.ts';
 import { themeDialog } from './theme.ts';
+import { tonightDialog } from './tonight.ts';
 import { transferDialog } from './transfer.ts';
 
 export type { DialogHandlers } from './dialog.ts';
@@ -28,6 +29,7 @@ export type { DialogHandlers } from './dialog.ts';
 const REGISTERED = [
   inviteDialog,
   ledgerDialog,
+  tonightDialog,
   historyDialog,
   playersDialog,
   shuffleSeats,

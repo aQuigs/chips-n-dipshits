@@ -101,6 +101,9 @@ export class App {
   private dialog: Dialog | null = null;
   private dialogOpens = 0;
 
+  /** A dialog the page means to open by itself, waiting for the viewer to be free for it. */
+  private offered: { dialog: Dialog; still(view: TableView): boolean } | null = null;
+
   /**
    * A member the address names whom this browser hasn't taken up as its own. The address may be the
    * only place that seat is kept, so until it is confirmed, declined or refused, nothing else is put there.
@@ -410,7 +413,7 @@ export class App {
       modal: new Modal(overlay.element),
       feed,
       motion,
-      effects: new TableEffects(this.prefs, stage.element, this.sounds, this.attention, motion),
+      effects: new TableEffects(this.prefs, stage.element, this.sounds, this.attention, motion, { offer: (dialog, still) => this.offerDialog(dialog, still) }),
       news: new TableNews(),
       suspense: new Suspense(motion, (later) => this.showHeld(later)),
       seatMoves: new SeatMoves(stage.element, {
@@ -453,6 +456,7 @@ export class App {
     this.screen = null;
     this.view = null;
     this.dialog = null;
+    this.offered = null;
   }
 
   private mount(content: HTMLElement): void {
@@ -523,6 +527,9 @@ export class App {
       screen.effects.run(change);
       screen.suspense.played();
     }
+
+    // Whoever was typing when a dialog was offered may have sent it with this view
+    this.showOffered();
   }
 
   /** The cards of a runout are up: the table is drawn whole, and what was held back is told. */
@@ -717,6 +724,34 @@ export class App {
   private closeDialog(): void {
     this.dialog = null;
     this.drawDialog();
+    this.showOffered();
+  }
+
+  private offerDialog(dialog: Dialog, still: (view: TableView) => boolean): void {
+    this.offered = { dialog, still };
+    this.showOffered();
+  }
+
+  /**
+   * Opens the dialog that is waiting, unless that would take something from the viewer: the dialog
+   * they have open, the seat they are picking for someone, or the keyboard from under what they are
+   * typing. It is tried again when a dialog closes and with every view, so it waits about as long as
+   * they are busy.
+   */
+  private showOffered(): void {
+    const offered = this.offered;
+    const field = document.activeElement;
+    const typing = field instanceof HTMLInputElement && field.type === 'text' && field.value !== '';
+
+    if (!offered || !this.view || this.dialog || typing || this.screen?.seatMoves.active || this.server.outdated) {
+      return;
+    }
+
+    this.offered = null;
+
+    if (offered.still(this.view)) {
+      this.openDialog(offered.dialog);
+    }
   }
 
   private drawDialog(): void {

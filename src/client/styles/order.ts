@@ -36,4 +36,5 @@ export const STYLESHEETS = [
   'missed-blinds.css',
   'celebrations.css',
   'straddles.css',
+  'tonight.css',
 ];

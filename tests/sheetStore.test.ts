@@ -893,14 +893,14 @@ test('the largest preset the game can make fits its cell with room to spare, and
   assert.equal(tab().getLastRow(), 2);
 });
 
-test('after the longest night a full table still fits its row and the cache: ten seated, thirty who came and went, the longest names, every number at its largest and a full chat', () => {
+test('after the longest night the fullest table still fits its row and the cache: ten seated and fifty who came and went, which is every member a table takes, with the longest names, every number at its largest and a full chat', () => {
   const { store, cache, anotherRun } = setup();
 
   // Sixteen characters of three bytes each, no two names alike
   const name = (index: number) => '好'.repeat(LIMITS.nameLength - 1) + String.fromCodePoint(0x4e00 + index);
   const t = new TestTable({ stacks: Array.from({ length: 10 }, () => LIMITS.chips), names: Array.from({ length: 10 }, (_name, seat) => name(seat)), config: { maxBuyIn: LIMITS.chips } });
 
-  for (let gone = 10; gone < 40; gone++) {
+  for (let gone = 10; gone < LIMITS.members; gone++) {
     const member = addMember(t.state, name(gone), t.ctx());
 
     member.buyIn = LIMITS.chips;
@@ -921,7 +921,7 @@ test('after the longest night a full table still fits its row and the cache: ten
   t.state.feed = fullestChat();
 
   const numbers = JSON.stringify(t.state.tonight).length;
-  assert.ok(numbers <= 40 * 110, `the night's numbers for forty players take ${numbers} characters`);
+  assert.ok(numbers <= LIMITS.members * 110, `the night's numbers for ${LIMITS.members} players take ${numbers} characters`);
 
   save(store, t.state);
 

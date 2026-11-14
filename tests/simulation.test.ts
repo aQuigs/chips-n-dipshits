@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
+import { HANDLERS } from '../src/engine/commands/index.ts';
 import { eligibleSeats, handFacts, isStraddle, nightIsOver, REACTIONS_LIVE, SEAT_COUNT } from '../src/engine/index.ts';
-import type { Straddle } from '../src/engine/index.ts';
+import type { CommandType } from '../src/engine/commands/handler.ts';
+import type { Command, Rng, Straddle, TableConfig } from '../src/engine/index.ts';
 import { handRecords, ledgerEntries, seededRng, TestTable } from './helpers.ts';
 import { assertChipsConserved, assertHandRecordsHold, chopAnswers, assertInvariants, assertLedgerAgrees } from './invariants.ts';
 import { fixedSettings, randomConfig } from './randomConfig.ts';
@@ -14,6 +16,44 @@ const STEPS_PER_TABLE = 600;
 
 // Building every player's view and saving the table are the slow parts, so they are checked on a sample of steps
 const SLOW_CHECK_PERCENT = 10;
+
+// Commands random play does not send yet, each a gap to close in FUZZ_COMMANDS one day rather than a rule
+const NOT_SENT_AT_RANDOM = new Set<CommandType>(['cancelRequest', 'chat', 'pause']);
+
+/** A test table that writes down the kind of every command sent to it, those it sends itself as it is set up included. */
+class Recording extends TestTable {
+  // Kept outside the table, since TestTable's constructor sends commands before a field of this class would exist
+  private static readonly kinds = new WeakMap<Recording, Set<CommandType>>();
+
+  get sent(): Set<CommandType> {
+    const sent = Recording.kinds.get(this) ?? new Set<CommandType>();
+    Recording.kinds.set(this, sent);
+
+    return sent;
+  }
+
+  override cmd(seat: number, command: Command): void {
+    this.sent.add(command.type);
+    super.cmd(seat, command);
+  }
+}
+
+/** Random table number `seed`, started, with the generator that plays it and the settings it was given. */
+function randomTable(seed: number): { t: Recording; rng: Rng; config: TableConfig } {
+  const rng = seededRng(seed * 7949);
+  const players = 2 + rng.int(SEAT_COUNT - 1);
+  const stacks = Array.from({ length: players }, () => (chance(rng, 15) ? 1 + rng.int(30) : 100 + rng.int(1900)));
+
+  const config = randomConfig(rng);
+
+  // Seated first and given its settings after, so the stacks are whatever they are, not what the buy-in limits allow.
+  // Only what can't be changed after has to be there from the start
+  const t = new Recording({ stacks, seed, config: fixedSettings(config) });
+  t.cmd(0, { type: 'updateConfig', config });
+  t.cmd(0, { type: 'start' });
+
+  return { t, rng, config };
+}
 
 test('random play never breaks the rules of chip accounting, secrecy or turn order', () => {
   let handsPlayed = 0;
@@ -36,18 +76,10 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
   const reactions = { shown: 0, thrown: 0, full: 0 };
   const straddles: Record<Straddle | 'passedOver' | 'overAnAnte' | 'shownDown', number> = { straddle: 0, 'double straddle': 0, 'button straddle': 0, 'Mississippi straddle': 0, passedOver: 0, overAnAnte: 0, shownDown: 0 };
 
+  const sent = new Set<CommandType>();
+
   for (let seed = 1; seed <= TABLES; seed++) {
-    const rng = seededRng(seed * 7949);
-    const players = 2 + rng.int(SEAT_COUNT - 1);
-    const stacks = Array.from({ length: players }, () => (chance(rng, 15) ? 1 + rng.int(30) : 100 + rng.int(1900)));
-
-    const config = randomConfig(rng);
-
-    // Seated first and given its settings after, so the stacks are whatever they are, not what the buy-in limits allow.
-    // Only what can't be changed after has to be there from the start
-    const t = new TestTable({ stacks, seed, config: fixedSettings(config) });
-    t.cmd(0, { type: 'updateConfig', config });
-    t.cmd(0, { type: 'start' });
+    const { t, rng, config } = randomTable(seed);
     tablesPlaying[config.unit] += 1;
 
     for (let step = 0; step < STEPS_PER_TABLE; step++) {
@@ -144,6 +176,8 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
         shortAntes += record.events.some((event) => event[0] === 'post' && event[5] !== undefined && event[3] < dealt[6]!) ? 1 : 0;
       }
     }
+
+    t.sent.forEach((type) => sent.add(type));
   }
 
   // The run only proves something if it actually reached the interesting parts of the game
@@ -196,4 +230,28 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
   assert.ok(doubleBoards.shownDown >= TABLES && doubleBoards.wonUncontested >= TABLES / 4, doubles);
   // A side pot in a double-board bomb pot comes about once in a dozen random tables, which is tested by the hundred in tests/doubleBoard.test.ts
   assert.ok(doubleBoards.ranOut >= TABLES / 4 && doubleBoards.withSidePots >= TABLES / 20, doubles);
+
+  // Every command the table takes is sent, as part of the game or beside it, but those named as not yet
+  const unsent = Object.keys(HANDLERS).filter((type) => !sent.has(type as CommandType) && !NOT_SENT_AT_RANDOM.has(type as CommandType));
+  assert.deepEqual(unsent, [], 'commands random play never sends: add each to FUZZ_COMMANDS, or ASIDE_COMMANDS if it touches nothing of the game');
+  assert.deepEqual([...NOT_SENT_AT_RANDOM].filter((type) => sent.has(type)), [], 'a command named as not sent at random now is: take it off the list');
+});
+
+test('the commands sent beside the game leave it as it was: the same tables played with them and without make the same game, step for step', () => {
+  const without = ({ reactions, ...game }: Recording['state']) => game;
+
+  for (let seed = 1; seed <= TABLES / 3; seed++) {
+    const asides = randomTable(seed);
+    const none = randomTable(seed);
+
+    for (let step = 0; step < STEPS_PER_TABLE; step++) {
+      randomStep(asides.t, asides.rng);
+      randomStep(none.t, none.rng, false);
+
+      assert.equal(asides.t.now, none.t.now);
+      assert.deepEqual(without(asides.t.state), without(none.t.state), `table ${seed} went another way at step ${step}`);
+    }
+
+    assert.ok(asides.t.sent.has('react') && !none.t.sent.has('react'), `table ${seed} sent no reaction`);
+  }
 });

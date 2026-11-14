@@ -174,9 +174,11 @@ export const FUZZ_COMMANDS: ((fuzz: Fuzz) => void)[] = [
 ];
 
 /**
- * Commands that touch nothing of the game, sent beside it at random. They draw on a generator of their
- * own, so a game played with them is the game played without them, move for move: adding one leaves
- * every random game, and so every count the simulation makes of them, as it was.
+ * Commands that touch nothing of the game, sent beside it at random: only one that changes no hand, turn,
+ * clock, stack or record, and draws nothing from the table's rng, belongs here. They draw on a generator
+ * of their own, so a game played with them is the game played without them, move for move, which
+ * `tests/simulation.test.ts` holds them to. A command that plays the game goes in `FUZZ_COMMANDS`, even
+ * when that moves a coverage floor: this list is not a way around one.
  */
 export const ASIDE_COMMANDS: ((fuzz: Fuzz) => void)[] = [
   ({ t, rng }) => {
@@ -241,9 +243,11 @@ function playRandomAction(t: TestTable, rng: Rng): void {
   }
 }
 
-/** One random thing happens at the table: a legal move by whoever it is on, a clock running out, or something on the side. */
-export function randomStep(t: TestTable, rng: Rng): void {
-  randomAside(t);
+/** One random thing happens at the table: a legal move by whoever it is on, a clock running out, or something on the side. With `asides`, now and then one of `ASIDE_COMMANDS` too. */
+export function randomStep(t: TestTable, rng: Rng, asides = true): void {
+  if (asides) {
+    randomAside(t);
+  }
 
   if (chance(rng, 6)) {
     randomSideEvent(t, rng);

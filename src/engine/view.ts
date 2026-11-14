@@ -208,7 +208,7 @@ export function viewFor(state: TableState, playerId: string, now: number): Table
       folded: player?.folded ?? false,
       allIn: player?.allIn ?? false,
       lastAction: player?.lastAction ?? null,
-      cards: player ? (index === mySeat ? player.cards : asSeen(player.cards, player.shown)) : null,
+      cards: player ? (index === mySeat ? [...player.cards] : asSeen(player.cards, player.shown)) : null,
       shown: player ? [...player.shown] : [],
       ritVote: player?.ritVote ?? null,
     };

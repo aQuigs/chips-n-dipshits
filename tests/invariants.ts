@@ -498,7 +498,7 @@ export function assertRecordBalances(record: HandRecord): void {
   assert.equal(awarded, pots, `hand ${record.number} did not award every pot in full`);
   assert.equal(won, pots);
   assert.ok(record.boards.every((board) => board.length === 0 || board.length >= 3));
-  assert.equal(new Set([...record.boards.flat(), ...record.players.flatMap((p) => p.cards)]).size >= record.boards[0]!.length, true);
+  assert.equal(new Set([...record.boards.flat(), ...record.players.flatMap((p) => p.cards.filter((card) => card !== null))]).size >= record.boards[0]!.length, true);
 }
 
 /**

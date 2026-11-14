@@ -8643,6 +8643,45 @@ const CHECKS: Check[] = [
       }
     },
   ],
+  [
+    'at a full table on the smallest phone, the high hand’s trophy beside the longest name and that seat’s chance all in share the seat: both whole, apart and inside it, the trophy growing nothing',
+    async (rig) => {
+      const screen = 'smallPhone';
+      const table = rig.table(LONG_NAMES.slice(0, 9).map((name) => ({ name, stack: 1000 })), { maxRuns: 1 });
+
+      // The widest name takes the high hand with aces, and then all nine go all in
+      table.deal({ button: 0, holes: { 1: 'As Ah', 2: 'Ks Kh' }, board: HIGH_HAND_BOARD });
+      table.act('Quigs', { type: 'pause' });
+      table.play((view, name) => (name === WIDEST || name === LONG_NAMES[2] ? passive(view) : { type: 'fold' }), (view) => view.hand!.stage === 'done');
+      clear(rig, table);
+      table.dealNext({ holes: NINE_HOLES });
+      table.play(allIn, (view) => view.hand!.stage === 'runout');
+
+      const page = await table.open('Quigs', screen);
+      await chancesOn(page, table, 'Quigs');
+      assert.deepEqual(await markedOn(page), [WIDEST]);
+
+      const holder = '.seat:has(.high-hand) .plate';
+      await assertChancesFit(page, 'the holder all in');
+      assert.deepEqual(await squeezed(page, `${holder} .high-hand, ${holder} .status.chance, ${holder} .stack`), [], 'the trophy, the chance or the stack is cut off');
+
+      const [plate] = await boxes(page, holder);
+      const [trophy] = await boxes(page, `${holder} .high-hand`);
+      // The name's own box, which ends where its ellipsis does: the text runs on, hidden, under the trophy
+      const [name] = await boxes(page, `${holder} .name > span:first-child`);
+      assert.ok(trophy!.left >= plate!.left && trophy!.right <= plate!.right && trophy!.top >= plate!.top && trophy!.bottom <= plate!.bottom, `the trophy at ${JSON.stringify(trophy)} runs out of its seat at ${JSON.stringify(plate)}`);
+      assert.ok(name!.right - name!.left > 0, 'the trophy pushed the name out of its seat');
+      assertApart([trophy!], [name!, ...(await textBoxes(page, `${holder} .status.chance`))], 'the trophy and the name or the chance');
+      await shot(page, `high-hand-all-in-${screen}`);
+
+      // Taken away, the seat is the same size: the trophy takes room from the name, never from the table
+      await page.evaluate(`document.querySelector('.plate .high-hand').remove()`);
+      const [without] = await boxes(page, '.seat:has(.status.chance) .plate:has(.name[title="WWWWWWWWWWWWWWWW"])');
+      assert.ok(sameBox(without!, plate!), `the seat is ${JSON.stringify(plate)} with the trophy and ${JSON.stringify(without)} without it`);
+
+      await page.context().close();
+    },
+  ],
 ];
 
 await mkdir(OUT, { recursive: true });

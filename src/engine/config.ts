@@ -1,4 +1,4 @@
-import { validAmount } from './amounts.ts';
+import { formatAmount, validAmount } from './amounts.ts';
 import type { Denominated } from './amounts.ts';
 import { GameError } from './types.ts';
 import type { TableConfig } from './types.ts';
@@ -27,6 +27,8 @@ interface SpecBase {
   atCreate?: boolean | 'only';
   /** A change leaves the hand in play as it is, which finishes on the value it was dealt under. */
   nextHand?: boolean;
+  /** Belongs to one table, so a preset doesn't keep it. Presets can be read by anyone with the game's address. */
+  inPresets?: false;
 }
 
 export interface TextSpec extends SpecBase {
@@ -160,6 +162,7 @@ export const CONFIG_SPECS: { [K in ConfigKey]-?: SpecFor<TableConfig[K]> } = {
     placeholder: 'https://meet.google.com/…',
     group: 'table',
     atCreate: true,
+    inPresets: false,
   },
   allowStraddle: { kind: 'toggle', label: 'Allow straddles', subject: 'Straddles', default: true, group: 'house' },
   allowRunItTwice: { kind: 'toggle', label: 'Offer run it twice when everyone is all in', subject: 'Run it twice', default: true, group: 'house' },
@@ -226,7 +229,8 @@ export const CONFIG_RULES: ConfigRule[] = [
 
 export const DEFAULT_CONFIG = Object.fromEntries(CONFIG_KEYS.map((key) => [key, CONFIG_SPECS[key].default])) as unknown as TableConfig;
 
-function fieldsOf(input: unknown): Record<string, unknown> {
+/** The fields of whatever was sent as settings, none when it is no object. */
+export function fieldsOf(input: unknown): Record<string, unknown> {
   return (typeof input === 'object' && input !== null ? input : {}) as Record<string, unknown>;
 }
 
@@ -249,6 +253,23 @@ export function startingConfig(chosen?: unknown): TableConfig {
   }
 
   return start as TableConfig;
+}
+
+/** A setting's value as a player reads it: "0.25", "on", "Dollars and cents". */
+export function settingText(key: ConfigKey, config: TableConfig): string {
+  const spec = CONFIG_SPECS[key];
+  const value = config[key];
+
+  switch (spec.kind) {
+    case 'chips':
+      return formatAmount(value as number, config);
+    case 'toggle':
+      return value ? 'on' : 'off';
+    case 'choice':
+      return spec.options.find((option) => option.value === value)?.label ?? String(value);
+    default:
+      return String(value);
+  }
 }
 
 /** One setting as its spec allows it, or a refusal that names it and writes amounts the way `table` does. */

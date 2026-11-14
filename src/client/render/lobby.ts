@@ -1,4 +1,7 @@
-import { startingConfig } from '../../engine/config.ts';
+import { CONFIG_SPECS, settingText, startingConfig } from '../../engine/config.ts';
+import type { ConfigKey } from '../../engine/config.ts';
+import { fromPreset, PRESET_KEYS } from '../../engine/presets.ts';
+import type { Preset } from '../../engine/presets.ts';
 import { stakesText } from '../../engine/stakes.ts';
 import type { TableConfig } from '../../engine/types.ts';
 import type { TableInfo } from '../../server/api.ts';
@@ -13,6 +16,12 @@ export interface LobbyHandlers {
   /** Resolves when the attempt is over, whichever way it went. */
   create(name: string, config: Partial<TableConfig>): Promise<void>;
   openTable(code: string): void;
+}
+
+export interface LobbyScreen {
+  element: HTMLElement;
+  /** Offers the group's presets in the form for a new table, once they have been heard from. */
+  offerPresets(presets: Preset[]): void;
 }
 
 export interface JoinHandlers {
@@ -63,24 +72,59 @@ async function whilePending(button: HTMLButtonElement, label: string, action: ()
 }
 
 /** The front door: start a table, or go to one with its code. */
-export function lobbyEl(rememberedName: string, themePicker: HTMLElement, handlers: LobbyHandlers): HTMLElement {
+export function lobbyEl(rememberedName: string, themePicker: HTMLElement, handlers: LobbyHandlers): LobbyScreen {
   const createButton = h('button.btn.primary', { type: 'submit', 'data-action': 'create-table' }, 'Create table');
 
   // The table's name starts out with the apostrophe the page's own title has
-  const settings = configForm({ ...startingConfig(), name: 'Chips n’ Dipshits' }, 'new-table-', true);
+  const usual: TableConfig = { ...startingConfig(), name: 'Chips n’ Dipshits' };
 
-  const create = h(
+  // A preset's settings that the form has no field for, which the table is created with all the same
+  let unseen: Partial<TableConfig> = {};
+  const presetPick = h('div.preset-pick', { hidden: true });
+  const notes = h('div.preset-notes', { 'aria-live': 'polite' });
+
+  const alsoSet = (table: TableConfig): HTMLElement[] => {
+    const start = startingConfig(table);
+    const differ = (Object.keys(unseen) as ConfigKey[]).filter((key) => table[key] !== start[key]);
+
+    return differ.length > 0 ? [h('p.note', null, `Also set, in the table settings: ${differ.map((key) => `${CONFIG_SPECS[key].label} ${settingText(key, table)}`).join(', ')}.`)] : [];
+  };
+
+  // An amount means something else once what the table plays with changes, so the preset's unseen ones start over too
+  const startedOver = (start: TableConfig): void => {
+    const amounts = (Object.keys(unseen) as ConfigKey[]).filter((key) => CONFIG_SPECS[key].kind === 'chips');
+
+    unseen = { ...unseen, ...Object.fromEntries(amounts.map((key) => [key, start[key]])) };
+    notes.replaceChildren(...alsoSet({ ...start, ...unseen }));
+  };
+
+  const settings = configForm(usual, 'new-table-', true, startedOver);
+
+  const pick = (chosen: Preset | null): void => {
+    const current = { ...usual, ...settings.read(create) };
+    const used = fromPreset(chosen ? chosen.settings : usual, current);
+    const changed = settings.fill(create, used.config);
+
+    unseen = Object.fromEntries(PRESET_KEYS.filter((key) => !settings.shown.includes(key)).map((key) => [key, used.config[key]]));
+
+    notes.replaceChildren(
+      h('p.note', null, changed.length > 0 ? `Changed here: ${changed.map((key) => CONFIG_SPECS[key].label).join(', ')}.` : 'The form already held these settings.'),
+      ...alsoSet(used.config),
+      ...used.notes.map((note) => h('p.note.warn', null, note)),
+    );
+  };
+
+  const create: HTMLFormElement = h(
     'form.card-panel',
     {
       onsubmit: (event: Event) => {
         event.preventDefault();
-        const form = event.target as HTMLFormElement;
-
-        void whilePending(createButton, 'Setting up…', () => handlers.create(inputOf(form, 'host-name').value, settings.read(form)));
+        void whilePending(createButton, 'Setting up…', () => handlers.create(inputOf(create, 'host-name').value, { ...unseen, ...settings.read(create) }));
       },
     },
     h('h2', null, 'Start a table'),
     nameField('host-name', rememberedName),
+    presetPick,
     settings.rows,
     h('p.note', null, 'You become the host. Clock, straddles, run it twice and the 7-2 bounty are in the table settings.'),
     createButton,
@@ -105,7 +149,25 @@ export function lobbyEl(rememberedName: string, themePicker: HTMLElement, handle
     h('button.btn', { type: 'submit' }, 'Find table'),
   );
 
-  return h('main.lobby', null, brand(), h('div.panels', null, create, join), themeSection(themePicker));
+  return {
+    element: h('main.lobby', null, brand(), h('div.panels', null, create, join), themeSection(themePicker)),
+
+    offerPresets(presets) {
+      if (presets.length === 0) {
+        return;
+      }
+
+      const select = h(
+        'select',
+        { id: 'new-table-preset', name: 'new-table-preset', onchange: () => pick(select.value === '' ? null : presets[Number(select.value)]!) },
+        h('option', { value: '' }, 'The usual settings'),
+        presets.map((preset, index) => h('option', { value: String(index) }, preset.name)),
+      );
+
+      presetPick.replaceChildren(h('label.field', { for: 'new-table-preset' }, h('span', null, 'Start from'), select), notes);
+      presetPick.hidden = false;
+    },
+  };
 }
 
 /** Shown to someone who opened a table link but has not picked a name there yet. */

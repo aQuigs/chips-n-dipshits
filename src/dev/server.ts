@@ -5,6 +5,7 @@ import type { AddressInfo } from 'node:net';
 
 import { BuildGate, UNSTAMPED_BUILD } from '../server/build.ts';
 import { ByteRng } from '../server/byteRng.ts';
+import { MemoryPresetStore } from '../server/memoryPresetStore.ts';
 import { MemoryStore } from '../server/memoryStore.ts';
 import { PokerService } from '../server/service.ts';
 
@@ -66,6 +67,7 @@ export async function startDevServer(options: DevServerOptions): Promise<DevServ
     options.service ??
     new PokerService({
       store: new MemoryStore(),
+      presets: new MemoryPresetStore(),
       clock: { now: () => Date.now() },
       rng: new ByteRng(() => [...randomBytes(RANDOM_BATCH_BYTES)]),
     });

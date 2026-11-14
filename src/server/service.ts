@@ -1,6 +1,7 @@
-import { addMember, applyCommand, createTable, GameError, randomId, tick, viewFor } from '../engine/index.ts';
-import type { Command, Ctx, Rng, TableState } from '../engine/index.ts';
+import { addMember, applyCommand, createTable, GameError, presetName, presetSettings, randomId, requireLevel, sharedPreset, tick, viewFor } from '../engine/index.ts';
+import type { Command, Ctx, Member, Preset, Rng, TableState } from '../engine/index.ts';
 import type { ApiResponse, Auth, ErrorCode } from './api.ts';
+import type { PresetStore } from './presetStore.ts';
 import { StoreBusyError } from './store.ts';
 import type { TableStore } from './store.ts';
 
@@ -10,6 +11,7 @@ export interface Clock {
 
 export interface ServiceDeps {
   store: TableStore;
+  presets: PresetStore;
   clock: Clock;
   rng: Rng;
 }
@@ -78,12 +80,19 @@ function authOf(request: Fields): Auth {
   return { id: auth.id, token: auth.token };
 }
 
-function authenticate(state: TableState, auth: Auth): void {
+function authenticate(state: TableState, auth: Auth): Member {
   const member = state.members.find((m) => m.id === auth.id);
 
   if (!member || member.token !== auth.token) {
     throw new ApiFailure('unauthorized', 'This browser is not a member of the table; join again from the link');
   }
+
+  return member;
+}
+
+/** Anyone with the game's address may list the presets, so they are handed out holding only what presets keep. */
+function presetsAnswer(presets: Preset[]): ApiResponse {
+  return { ok: true, kind: 'presets', presets: presets.map(sharedPreset) };
 }
 
 function noSuchTable(): ApiFailure {
@@ -97,11 +106,13 @@ function noSuchTable(): ApiFailure {
  */
 export class PokerService {
   private readonly store: TableStore;
+  private readonly presets: PresetStore;
   private readonly clock: Clock;
   private readonly rng: Rng;
 
   constructor(deps: ServiceDeps) {
     this.store = deps.store;
+    this.presets = deps.presets;
     this.clock = deps.clock;
     this.rng = deps.rng;
   }
@@ -180,6 +191,12 @@ export class PokerService {
         return this.act(tableIdOf(request), authOf(request), request.command as Command);
       case 'history':
         return this.history(tableIdOf(request), authOf(request));
+      case 'presets':
+        return this.listPresets();
+      case 'savePreset':
+        return this.savePreset(tableIdOf(request), authOf(request), request);
+      case 'deletePreset':
+        return this.deletePreset(tableIdOf(request), authOf(request), request.name);
       default:
         throw new ApiFailure('invalid', 'Unknown request');
     }
@@ -274,12 +291,7 @@ export class PokerService {
       this.advance(tableId);
     }
 
-    const state = this.store.read(tableId);
-    if (!state) {
-      throw noSuchTable();
-    }
-
-    authenticate(state, auth);
+    const { state } = this.memberOf(tableId, auth);
 
     if (state.version === since) {
       return { ok: true, kind: 'unchanged', now };
@@ -313,13 +325,42 @@ export class PokerService {
   }
 
   private history(tableId: string, auth: Auth): ApiResponse {
+    this.memberOf(tableId, auth);
+
+    return { ok: true, kind: 'history', hands: this.store.recentHands(tableId, HISTORY_LIMIT) };
+  }
+
+  private listPresets(): ApiResponse {
+    return presetsAnswer(this.presets.list());
+  }
+
+  private savePreset(tableId: string, auth: Auth, request: Fields): ApiResponse {
+    const member = this.hostOrCohost(tableId, auth);
+
+    return presetsAnswer(this.presets.save({ name: presetName(request.name), settings: presetSettings(request.settings), savedAt: this.clock.now(), savedBy: member.name }, request.replace === true));
+  }
+
+  private deletePreset(tableId: string, auth: Auth, name: unknown): ApiResponse {
+    this.hostOrCohost(tableId, auth);
+
+    return presetsAnswer(this.presets.delete(presetName(name)));
+  }
+
+  private memberOf(tableId: string, auth: Auth): { state: TableState; member: Member } {
     const state = this.store.read(tableId);
     if (!state) {
       throw noSuchTable();
     }
 
-    authenticate(state, auth);
+    return { state, member: authenticate(state, auth) };
+  }
 
-    return { ok: true, kind: 'history', hands: this.store.recentHands(tableId, HISTORY_LIMIT) };
+  /** Presets are the group's, so changing one is for whoever runs a table, as they would run its settings. */
+  private hostOrCohost(tableId: string, auth: Auth): Member {
+    const { state, member } = this.memberOf(tableId, auth);
+
+    requireLevel(state, member.id, 'host or cohost');
+
+    return member;
   }
 }

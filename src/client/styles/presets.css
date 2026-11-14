@@ -1,0 +1,45 @@
+/* ---- Presets: saved from the table settings, offered in the form for a new table ---- */
+
+.preset-pick,
+.preset-notes {
+  display: grid;
+  gap: 6px;
+}
+
+/* A field the preset just picked has changed, marked in the space beside it */
+.changed {
+  position: relative;
+}
+
+.changed::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -8px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+.note.warn {
+  color: var(--accent);
+}
+
+.preset-save {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+}
+
+.preset-question {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+}
+
+.preset-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}

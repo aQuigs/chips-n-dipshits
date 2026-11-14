@@ -12,6 +12,7 @@ import type { Browser, Page } from 'playwright';
 import { THEMES } from '../src/client/themes.ts';
 import { LIMITS } from '../src/engine/index.ts';
 import { startDevServer } from '../src/dev/server.ts';
+import { MemoryPresetStore } from '../src/server/memoryPresetStore.ts';
 import { MemoryStore } from '../src/server/memoryStore.ts';
 import { PokerService } from '../src/server/service.ts';
 import { seededRng } from '../tests/helpers.ts';
@@ -147,7 +148,7 @@ const html = await clientPage({});
  * dealing) go one at a time in a fixed order. With this seed the first hand has one winner and the
  * second busts players, which the rebuy pictures need.
  */
-const service = new PokerService({ store: new MemoryStore(), clock: { now: () => Date.now() }, rng: seededRng(1) });
+const service = new PokerService({ store: new MemoryStore(), presets: new MemoryPresetStore(), clock: { now: () => Date.now() }, rng: seededRng(1) });
 const server = await startDevServer({ port: 0, page: async () => html, service });
 const browser = await chromium.launch();
 const players: Player[] = [];

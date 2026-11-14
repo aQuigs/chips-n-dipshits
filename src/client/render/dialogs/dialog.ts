@@ -2,6 +2,7 @@ import type { Command, HandRecord } from '../../../engine/types.ts';
 import type { TableView } from '../../../engine/view.ts';
 import type { SendOutcome } from '../../connection.ts';
 import type { AppPreferences } from '../../prefs.ts';
+import type { PresetHandlers } from '../presets.ts';
 import { h, holdWhile } from '../../ui.ts';
 import type { Dialog } from './index.ts';
 
@@ -12,6 +13,7 @@ export interface DialogHandlers {
   close(): void;
   copy(text: string): Promise<boolean>;
   loadHistory(): Promise<HandRecord[]>;
+  presets: PresetHandlers;
   tableLink(): string;
   memberLink(): string;
   prefs: AppPreferences;

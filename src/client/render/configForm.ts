@@ -7,8 +7,12 @@ import { amountField, amountOf, checkField, inputOf, numberField, numberOf } fro
 export interface ConfigForm {
   /** One row per setting, or per two that share a row, to put inside a form. */
   rows: HTMLElement[];
+  /** The settings it has a field for. */
+  shown: ConfigKey[];
   /** What the rows hold now, for the settings the form lets be changed. */
   read(form: HTMLFormElement): Partial<TableConfig>;
+  /** Puts `values` in every field, marking each field it changed, and says which those were. */
+  fill(form: HTMLFormElement, values: TableConfig): ConfigKey[];
 }
 
 /** The field for one setting. `table` is the table its amounts are written for. */
@@ -83,8 +87,9 @@ function held(form: HTMLFormElement, id: string, spec: ConfigSpec, table: TableC
  * the one place a setting chosen for good is open; anywhere else it is shown, not offered. Picking a
  * choice there that suggests where other settings start, as what the table plays with does, starts the
  * amounts over from that, since a number typed for whole chips means something else in dollars and cents.
+ * `startedOver` is told where they start, for amounts kept outside the form.
  */
-export function configForm(values: TableConfig, idPrefix: string, creating: boolean): ConfigForm {
+export function configForm(values: TableConfig, idPrefix: string, creating: boolean, startedOver?: (start: TableConfig) => void): ConfigForm {
   const asked = CONFIG_KEYS.filter((key) => !creating || CONFIG_SPECS[key].atCreate);
   const shown = CONFIG_GROUPS.flatMap((group) => asked.filter((key) => CONFIG_SPECS[key].group === group));
   const idOf = (key: ConfigKey) => idPrefix + key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
@@ -101,15 +106,15 @@ export function configForm(values: TableConfig, idPrefix: string, creating: bool
     table = startingConfig(Object.fromEntries(choices.map((key) => [key, held(form, idOf(key), CONFIG_SPECS[key], table)])));
 
     for (const key of shown.filter((amount) => CONFIG_SPECS[amount].kind === 'chips')) {
-      const fresh = draw(key);
-
-      fields.get(key)!.replaceWith(fresh);
-      fields.set(key, fresh);
+      redraw(key);
     }
+
+    startedOver?.(table);
   };
 
   const draw = (key: ConfigKey): HTMLElement => {
-    const element = field(idOf(key), CONFIG_SPECS[key], table[key], table);
+    const spec = CONFIG_SPECS[key];
+    const element = field(idOf(key), spec, table[key], table);
 
     if (closed(key)) {
       for (const input of element.querySelectorAll('input')) {
@@ -117,7 +122,26 @@ export function configForm(values: TableConfig, idPrefix: string, creating: bool
       }
     }
 
+    if (creating && spec.kind === 'choice' && spec.options.some((option) => option.suggests)) {
+      element.addEventListener('change', startOver);
+    }
+
     return element;
+  };
+
+  const redraw = (key: ConfigKey): HTMLElement => {
+    const fresh = draw(key);
+
+    fields.get(key)!.replaceWith(fresh);
+    fields.set(key, fresh);
+
+    return fresh;
+  };
+
+  const read = (form: HTMLFormElement): Partial<TableConfig> => {
+    const open = shown.filter((key) => !closed(key));
+
+    return Object.fromEntries(open.map((key) => [key, held(form, idOf(key), CONFIG_SPECS[key], table)])) as Partial<TableConfig>;
   };
 
   const rows: HTMLElement[] = [];
@@ -128,10 +152,6 @@ export function configForm(values: TableConfig, idPrefix: string, creating: bool
     const element = draw(key);
 
     fields.set(key, element);
-
-    if (creating && spec.kind === 'choice' && spec.options.some((option) => option.suggests)) {
-      element.addEventListener('change', startOver);
-    }
 
     if (!spec.half) {
       rows.push(element);
@@ -147,11 +167,20 @@ export function configForm(values: TableConfig, idPrefix: string, creating: bool
 
   return {
     rows,
+    shown,
+    read,
 
-    read(form) {
-      const open = shown.filter((key) => !closed(key));
+    fill(form, values) {
+      const before = { ...table, ...read(form) };
+      const changed = shown.filter((key) => before[key] !== values[key]);
 
-      return Object.fromEntries(open.map((key) => [key, held(form, idOf(key), CONFIG_SPECS[key], table)])) as Partial<TableConfig>;
+      table = values;
+
+      for (const key of shown) {
+        redraw(key).classList.toggle('changed', changed.includes(key));
+      }
+
+      return changed;
     },
   };
 }

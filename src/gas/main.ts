@@ -2,6 +2,7 @@ import { BuildGate } from '../server/build.ts';
 import { ByteRng } from '../server/byteRng.ts';
 import { PokerService } from '../server/service.ts';
 import type { ApiError, Built } from '../server/api.ts';
+import { SheetPresetStore } from './sheetPresetStore.ts';
 import { SheetStore } from './sheetStore.ts';
 
 // Set by the build when the deployed address is known; otherwise the script asks Apps Script for it
@@ -39,14 +40,18 @@ function uuidBytes(): number[] {
 let serviceForThisRun: BuildGate | null = null;
 
 function service(): BuildGate {
-  serviceForThisRun ??= new BuildGate(
+  if (serviceForThisRun) {
+    return serviceForThisRun;
+  }
+
+  const spreadsheet = () => SpreadsheetApp.getActiveSpreadsheet();
+  const lock = LockService.getScriptLock();
+  const flush = () => SpreadsheetApp.flush();
+
+  serviceForThisRun = new BuildGate(
     new PokerService({
-      store: new SheetStore({
-        spreadsheet: () => SpreadsheetApp.getActiveSpreadsheet(),
-        cache: CacheService.getScriptCache(),
-        lock: LockService.getScriptLock(),
-        flush: () => SpreadsheetApp.flush(),
-      }),
+      store: new SheetStore({ spreadsheet, cache: CacheService.getScriptCache(), lock, flush }),
+      presets: new SheetPresetStore({ spreadsheet, lock, flush }),
       clock: { now: () => Date.now() },
       rng: new ByteRng(uuidBytes),
     }),

@@ -30,4 +30,5 @@ export const STYLESHEETS = [
   'hand-hint.css',
   'outdated.css',
   'bomb-pots.css',
+  'presets.css',
 ];

@@ -1,36 +1,9 @@
 import { asNumber, upgradeRecord } from '../engine/index.ts';
 import type { Denominated, Effect, HandRecord, TableState, Unit } from '../engine/index.ts';
-import { peekOf, restoreState, StoreBusyError } from '../server/store.ts';
+import { peekOf, restoreState } from '../server/store.ts';
 import type { TablePeek, TableStore, Txn } from '../server/store.ts';
-
-/** The parts of the Apps Script services this store uses, so it can be run against stand-ins in tests. */
-export interface RangeLike {
-  getValues(): unknown[][];
-  setValues(values: unknown[][]): unknown;
-  setNumberFormats(formats: string[][]): unknown;
-}
-
-export interface SheetLike {
-  getLastRow(): number;
-  getRange(row: number, column: number, numRows: number, numColumns: number): RangeLike;
-}
-
-export interface SpreadsheetLike {
-  getSheetByName(name: string): SheetLike | null;
-  insertSheet(name: string): SheetLike;
-}
-
-export interface CacheLike {
-  get(key: string): string | null;
-  put(key: string, value: string, expirationInSeconds: number): void;
-  putAll(values: Record<string, string>, expirationInSeconds: number): void;
-  remove(key: string): void;
-}
-
-export interface LockLike {
-  waitLock(timeoutInMillis: number): void;
-  releaseLock(): void;
-}
+import { FIRST_DATA_ROW, openTab, TEXT, TIMESTAMP, underLock, WHOLE_NUMBER } from './sheets.ts';
+import type { CacheLike, LockLike, SheetLike, SpreadsheetLike } from './sheets.ts';
 
 export interface SheetStoreDeps {
   /** Opened only when the cache can't answer, since opening the spreadsheet is the slow part of a request. */
@@ -72,10 +45,6 @@ const HEADERS: Record<SheetKey, string[]> = {
   hands: ['Time', 'Table', 'Hand', 'Summary', 'Record', 'Record ID'],
 };
 
-const TEXT = '@';
-const TIMESTAMP = 'yyyy-mm-dd hh:mm:ss';
-const WHOLE_NUMBER = '0';
-
 // An amount is written as its table writes it, 1.50 for 150 cents, and as a number so the column can be added up
 const AMOUNT: Record<Unit, string> = { chips: WHOLE_NUMBER, cents: '0.00' };
 
@@ -109,9 +78,6 @@ export const CACHE_VALUE_BYTES = 95_000;
 // How long to remember that a table doesn't exist, so a mistyped link doesn't hit the sheet on every poll
 const MISSING_SECONDS = 30;
 const MISSING = 'none';
-
-const LOCK_WAIT_MS = 20_000;
-const FIRST_DATA_ROW = 2;
 
 // History is read from the bottom of the Hands tab, a page at a time, and gives up this far back
 const HAND_SCAN_ROWS = 300;
@@ -348,17 +314,7 @@ export class SheetStore implements TableStore {
   }
 
   private locked<T>(work: () => T): T {
-    try {
-      this.deps.lock.waitLock(LOCK_WAIT_MS);
-    } catch {
-      throw new StoreBusyError('The table is busy, try again');
-    }
-
-    try {
-      return work();
-    } finally {
-      this.deps.lock.releaseLock();
-    }
+    return underLock(this.deps.lock, 'The table is busy, try again', work);
   }
 
   /** Reads a table from the sheet into the cache. Under the lock, so a write can't slip in between the two. */
@@ -391,13 +347,7 @@ export class SheetStore implements TableStore {
       return known;
     }
 
-    const spreadsheet = this.deps.spreadsheet();
-    let sheet = spreadsheet.getSheetByName(SHEET_NAMES[key]);
-
-    if (!sheet) {
-      sheet = spreadsheet.insertSheet(SHEET_NAMES[key]);
-      sheet.getRange(1, 1, 1, HEADERS[key].length).setValues([HEADERS[key]]);
-    }
+    const sheet = openTab(this.deps.spreadsheet(), SHEET_NAMES[key], HEADERS[key], true)!;
 
     this.sheets.set(key, sheet);
 

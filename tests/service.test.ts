@@ -6,6 +6,7 @@ import type { Command, Rng, TableView } from '../src/engine/index.ts';
 import { SheetStore } from '../src/gas/sheetStore.ts';
 import type { ApiResponse, Auth } from '../src/server/api.ts';
 import { ByteRng } from '../src/server/byteRng.ts';
+import { MemoryPresetStore } from '../src/server/memoryPresetStore.ts';
 import { MemoryStore } from '../src/server/memoryStore.ts';
 import { PokerService } from '../src/server/service.ts';
 import type { TableStore } from '../src/server/store.ts';
@@ -14,9 +15,10 @@ import { seededRng } from './helpers.ts';
 
 function setup(store: TableStore = new MemoryStore()) {
   const clock = { time: 1_000_000, now: () => clock.time };
-  const service = new PokerService({ store, clock, rng: seededRng(11) });
+  const presets = new MemoryPresetStore();
+  const service = new PokerService({ store, presets, clock, rng: seededRng(11) });
 
-  return { service, store, clock };
+  return { service, store, presets, clock };
 }
 
 type Joined = Extract<ApiResponse, { kind: 'joined' }>;

@@ -14,6 +14,7 @@ import type { Page } from 'playwright';
 import { KEYS_SETTLE_MS } from '../src/client/hotkeys.ts';
 import { RECIPES } from '../src/client/soundRecipes.ts';
 import { THEMES } from '../src/client/themes.ts';
+import { DEFAULT_CONFIG, presetSettings } from '../src/engine/index.ts';
 import type { Command, TableConfig, TableView } from '../src/engine/index.ts';
 import { boxes, overlap, Rig, SCREENS, setStageHeight, squeezed, textBoxes } from './rig.ts';
 import type { Box, RigPlayer, ScreenName } from './rig.ts';
@@ -392,6 +393,9 @@ async function choose(page: Page, prefs: Record<string, string>): Promise<void> 
 }
 
 type Check = [name: string, run: (rig: Rig) => Promise<void>];
+
+/** The presets are the whole rig's, and the lobby of every check after the one that saved them would offer them. */
+const forgetPresets = (rig: Rig) => rig.presets.list().forEach((preset) => rig.presets.delete(preset.name));
 
 const CHECKS: Check[] = [
   [
@@ -3108,6 +3112,219 @@ const CHECKS: Check[] = [
         assert.deepEqual({ unit, bombPotAmount, bombPotEvery }, { unit: 'cents', bombPotAmount: 500, bombPotEvery: 4 });
 
         await page.context().close();
+      }
+    },
+  ],
+  [
+    'a host saves the table settings as a preset, replaces one only after saying yes, and deletes one; a co-host can save, and a plain member is not offered it',
+    async (rig) => {
+      try {
+        for (const screen of PHONE_AND_DESKTOP) {
+          const table = rig.table(
+            [
+              { name: 'Quigs', stack: 1000 },
+              { name: 'Stu', stack: 1000 },
+              { name: 'Pam', stack: 1000 },
+            ],
+            { smallBlind: 25, bigBlind: 50, voiceLink: 'https://meet.google.com/abc-defg-hij' },
+          );
+          table.act('Quigs', { type: 'setCohost', playerId: table.auth('Stu').id, on: true });
+
+          const page = await table.open('Quigs', screen);
+          const press = pressOn(page, screen);
+          const listed = () => texts(page, '.preset-list .preset-name');
+
+          await press('[data-action="menu"]');
+          await press('.menu [data-action="settings"]');
+          await page.waitForSelector('.preset-list li.note:has-text("None yet")');
+          assert.equal(await page.locator('.preset-panel p.note:has-text("plays the preset"):visible').count(), 0);
+
+          await page.fill('#preset-name', 'Friday 25/50');
+          await press('[data-action="save-preset"]');
+          await page.waitForSelector('.preset-list .preset-name:has-text("Friday 25/50")');
+          assert.deepEqual(rig.presets.list(), [{ name: 'Friday 25/50', settings: presetSettings({ ...table.view('Quigs').config }) }]);
+          assert.equal('voiceLink' in rig.presets.list()[0]!.settings, false, 'the call went into a preset anyone can read');
+          assert.equal(await text(page, '.preset-panel p.note[aria-live]'), 'Saved Friday 25/50.');
+          assert.equal(await text(page, '.preset-panel p.note:not([hidden]):not([aria-live])'), 'This table plays the preset Friday 25/50.');
+
+          await page.locator('.preset-panel').scrollIntoViewIfNeeded();
+          assertOnScreen(await boxes(page, '.preset-panel, #preset-name, [data-action="save-preset"], .preset-list [data-action="delete-preset"]'), screen, 'the presets in the table settings');
+          assert.deepEqual(await squeezed(page, '.preset-panel .field span, .preset-panel button, .preset-list .preset-name'), [], 'part of the presets is cut off');
+          assertApart(await boxes(page, '#preset-name'), await boxes(page, '[data-action="save-preset"]'), 'the name of a preset and its Save');
+          await assertNoSidewaysScroll(page);
+          await shot(page, `presets-saved-${screen}`);
+
+          // What the form holds is what is saved, before the table itself is
+          // Read the way the server reads a name, so a stray space still finds the preset it would replace
+          await page.fill('#table-small-blind', '30');
+          await page.fill('#preset-name', ' friday  25/50');
+          await press('[data-action="save-preset"]');
+          await page.waitForSelector('.preset-question:not([hidden])');
+          assert.equal(await text(page, '.preset-question p'), 'There is already a preset called Friday 25/50. Replace it with these settings?');
+          assert.equal(rig.presets.list()[0]!.settings.smallBlind, 25, 'it was replaced before anyone said yes');
+          await page.locator('.preset-question').scrollIntoViewIfNeeded();
+          assertOnScreen(await boxes(page, '.preset-question, [data-action="replace-preset"], .preset-question [data-action="keep-preset"]'), screen, 'the question before a preset is replaced');
+          await shot(page, `presets-replace-${screen}`);
+
+          await press('.preset-question [data-action="keep-preset"]');
+          await page.waitForSelector('.preset-question', { state: 'hidden' });
+          assert.equal(rig.presets.list()[0]!.settings.smallBlind, 25);
+
+          await press('[data-action="save-preset"]');
+          await press('[data-action="replace-preset"]');
+          await page.waitForSelector('.preset-panel p.note[aria-live]:has-text("Saved Friday 25/50.")');
+          assert.deepEqual(await listed(), ['Friday 25/50'], 'the preset kept its name as it was first written');
+          assert.equal(rig.presets.list()[0]!.settings.smallBlind, 30);
+          assert.equal(table.view('Quigs').config.smallBlind, 25, 'saving a preset changed the table');
+          assert.equal(await page.locator('.preset-panel p.note:has-text("plays the preset"):visible').count(), 0, 'the table no longer plays it');
+
+          await page.fill('#preset-name', 'Tuesday');
+          await press('[data-action="save-preset"]');
+          await page.waitForSelector('.preset-list .preset-name:has-text("Tuesday")');
+
+          await press('[aria-label="Delete Tuesday"]');
+          assert.equal(await text(page, '.preset-list li.asking .preset-name'), 'Delete Tuesday for everyone?');
+          assert.deepEqual(await listed(), ['Friday 25/50', 'Delete Tuesday for everyone?']);
+          assertOnScreen(await boxes(page, '.preset-list li.asking button'), screen, 'the question before a preset is deleted');
+          await shot(page, `presets-delete-${screen}`);
+          await press('[data-action="confirm-delete-preset"]');
+          await page.waitForSelector('.preset-panel p.note[aria-live]:has-text("Deleted Tuesday.")');
+          assert.deepEqual(await listed(), ['Friday 25/50']);
+          assert.deepEqual(rig.presets.list().map((preset) => preset.name), ['Friday 25/50']);
+          await page.context().close();
+
+          // A co-host keeps a preset as the host would
+          const cohost = await table.open('Stu', screen);
+          await pressOn(cohost, screen)('[data-action="menu"]');
+          await pressOn(cohost, screen)('.menu [data-action="settings"]');
+          await cohost.waitForSelector('.preset-list .preset-name:has-text("Friday 25/50")');
+          await cohost.fill('#preset-name', 'Stu night');
+          await pressOn(cohost, screen)('[data-action="save-preset"]');
+          await cohost.waitForSelector('.preset-list .preset-name:has-text("Stu night")');
+          await cohost.context().close();
+
+          const member = await table.open('Pam', screen);
+          await pressOn(member, screen)('[data-action="menu"]');
+          await member.waitForSelector('.menu');
+          assert.equal(await member.locator('.menu [data-action="settings"], .preset-panel').count(), 0, 'a plain member is offered the presets');
+          await member.context().close();
+          forgetPresets(rig);
+        }
+      } finally {
+        forgetPresets(rig);
+      }
+    },
+  ],
+  [
+    'the form for a new table offers the presets there are, picking one fills the form and says what changed, and the table made from it plays its stakes',
+    async (rig) => {
+      try {
+        const keep = (name: string, config: Partial<TableConfig>, extra: Record<string, unknown> = {}) =>
+          rig.presets.save({ name, settings: { ...presetSettings({ ...DEFAULT_CONFIG, ...config }), ...extra }, savedAt: 0, savedBy: 'Quigs' }, false);
+        const stakes = (page: Page) => Promise.all(['unit input:checked', 'small-blind', 'big-blind', 'min-buy-in', 'max-buy-in'].map((field) => page.inputValue(`#new-table-${field}`)));
+
+        for (const screen of ['smallPhone', 'phone', 'desktop'] as const) {
+          const none = await rig.lobby(screen);
+          await none.waitForLoadState('networkidle');
+          assert.equal(await none.locator('#new-table-preset, .preset-pick:visible').count(), 0, 'a picker with nothing to pick');
+          await none.context().close();
+
+          keep('Friday 25/50', { smallBlind: 25, bigBlind: 50, minBuyIn: 1000, maxBuyIn: 5000 });
+          const one = await rig.lobby(screen);
+          await one.waitForSelector('#new-table-preset');
+          assert.deepEqual(await texts(one, '#new-table-preset option'), ['The usual settings', 'Friday 25/50']);
+          assert.equal(await one.inputValue('#new-table-preset'), '', 'a preset was picked for the host');
+          assert.deepEqual(await stakes(one), ['chips', '10', '20', '400', '2000']);
+          assert.equal(await one.locator('.preset-notes p, .changed').count(), 0, 'the form says something changed before anything was picked');
+          await one.context().close();
+
+          for (let index = 0; index < 13; index++) {
+            keep(`${'Wednesday Wild WWWWWWW'.slice(0, 22)} ${String(index).padStart(7, 'W')}`, { smallBlind: 5 + index, bigBlind: 10 + index });
+          }
+
+          keep('Tuesday cents', { unit: 'cents', smallBlind: 25, bigBlind: 50, ante: 10, minBuyIn: 2000, maxBuyIn: 10_000, actionSeconds: 20, allowStraddle: false, sevenDeuceBounty: 100 });
+          keep('From before', { smallBlind: 5, bigBlind: 10 }, { actionSeconds: 900, rabbitHunting: true });
+          keep('Bombs in chips', { bombPotAmount: 300, bombPotEvery: 5 });
+          keep('Bombs in cents', { unit: 'cents', smallBlind: 25, bigBlind: 50, minBuyIn: 2000, maxBuyIn: 10_000, bombPotAmount: 500 });
+
+          const page = await rig.lobby(screen);
+          const press = pressOn(page, screen);
+          await page.waitForSelector('#new-table-preset');
+          assert.equal(await page.locator('#new-table-preset option').count(), 19);
+
+          await page.fill('#host-name', 'Quigs');
+          await page.fill('#new-table-name', 'Friday nickels');
+          await page.fill('#new-table-voice-link', 'https://discord.gg/abc');
+          await page.selectOption('#new-table-preset', { label: 'Tuesday cents' });
+
+          assert.deepEqual(await stakes(page), ['cents', '0.25', '0.50', '20.00', '100.00']);
+          assert.equal(await page.inputValue('#new-table-ante'), '0.10');
+          assert.equal(await page.inputValue('#new-table-name'), "Chips n' Dipshits", 'the preset names the table');
+          assert.equal(await page.inputValue('#new-table-voice-link'), 'https://discord.gg/abc', 'the call typed in was thrown away');
+          assert.deepEqual(await texts(page, '.preset-notes p'), [
+            'Changed here: Table name, Play with, Small blind, Big blind, Ante, Minimum buy-in, Maximum buy-in.',
+            'Also set, in the table settings: Seconds to act 20, Allow straddles off, Seven-deuce bounty 1.00.',
+          ]);
+          assert.equal(await page.locator('.changed').count(), 7);
+          assert.equal(await page.locator('#new-table-unit.changed, label[for="new-table-small-blind"].changed').count(), 2);
+          assert.equal(await page.locator('label[for="new-table-voice-link"].changed, label[for="new-table-host-name"].changed').count(), 0);
+
+          await page.locator('#new-table-preset').scrollIntoViewIfNeeded();
+          assertOnScreen(await boxes(page, '#new-table-preset, .preset-notes p'), screen, 'the presets in the form for a new table');
+          assert.deepEqual(await squeezed(page, '.preset-pick .field span, .preset-notes p'), [], 'part of what the picker says is cut off');
+          await assertNoSidewaysScroll(page);
+          await shot(page, `presets-picked-${screen}`);
+
+          // A preset saved when the clock could be set higher, with a setting the game has since dropped
+          await page.selectOption('#new-table-preset', { label: 'From before' });
+          assert.deepEqual(await stakes(page), ['chips', '5', '10', '400', '2000']);
+          assert.deepEqual(await texts(page, '.preset-notes p.warn'), ['Seconds to act is back to 30: the preset’s is no longer allowed.']);
+          await shot(page, `presets-outdated-${screen}`);
+
+          await page.selectOption('#new-table-preset', { label: 'The usual settings' });
+          assert.deepEqual(await stakes(page), ['chips', '10', '20', '400', '2000']);
+          assert.equal(await page.inputValue('#new-table-name'), 'Chips n’ Dipshits');
+
+          // The bounty the form doesn't show is an amount too, and starts over with the others when what the table plays with changes
+          await page.selectOption('#new-table-preset', { label: 'Tuesday cents' });
+          await press('#new-table-unit label:has-text("Whole chips")');
+          assert.deepEqual(await stakes(page), ['chips', '10', '20', '400', '2000']);
+          assert.deepEqual(await texts(page, '.preset-notes p'), ['Also set, in the table settings: Seconds to act 20, Allow straddles off.']);
+          await press('#new-table-unit label:has-text("Dollars and cents")');
+
+          // Every amount starts over with what the table plays with, the bomb pot's as much as the blinds
+          await page.selectOption('#new-table-preset', { label: 'Bombs in chips' });
+          assert.equal(await page.inputValue('#new-table-bomb-pot-amount'), '300');
+          await press('#new-table-unit label:has-text("Dollars and cents")');
+          assert.equal(await page.inputValue('#new-table-bomb-pot-amount'), '2.50');
+          assert.equal(await page.inputValue('#new-table-bomb-pot-every'), '5', 'a count is no amount, and stays');
+
+          await page.selectOption('#new-table-preset', { label: 'Bombs in cents' });
+          assert.equal(await page.inputValue('#new-table-bomb-pot-amount'), '5.00');
+          await press('#new-table-unit label:has-text("Whole chips")');
+          assert.equal(await page.inputValue('#new-table-bomb-pot-amount'), '100');
+
+          // Edited after picking, before the table is made
+          await page.selectOption('#new-table-preset', { label: 'Tuesday cents' });
+          await page.fill('#new-table-small-blind', '0.10');
+          await page.fill('#new-table-name', 'Tuesday at Stu’s');
+          await press('[data-action="create-table"]');
+          await page.waitForSelector('#table-link');
+
+          const tableId = new URL(await page.inputValue('#table-link')).searchParams.get('table')!;
+          const config = rig.store.read(tableId)!.config;
+          assert.deepEqual(config, { ...DEFAULT_CONFIG, name: 'Tuesday at Stu’s', voiceLink: 'https://discord.gg/abc', unit: 'cents', smallBlind: 10, bigBlind: 50, ante: 10, minBuyIn: 2000, maxBuyIn: 10_000, actionSeconds: 20, allowStraddle: false, sevenDeuceBounty: 100 });
+
+          await press('[data-action="close"]');
+          assert.equal(await text(page, '.topbar .title span'), '0.10/0.50 · ante 0.10');
+
+          await press('[data-sit="0"]');
+          assert.equal(await text(page, '.dialog .field small'), 'From 20.00 to 100.00');
+          await page.context().close();
+          forgetPresets(rig);
+        }
+      } finally {
+        forgetPresets(rig);
       }
     },
   ],

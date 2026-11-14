@@ -1,4 +1,4 @@
-import type { Command, HandRecord, Stakes, TableConfig, TableView } from '../engine/index.ts';
+import type { Command, HandRecord, Preset, Stakes, TableConfig, TableView } from '../engine/index.ts';
 
 /**
  * Which build of the game a page or a server is. On the way between them every request carries the
@@ -28,7 +28,11 @@ export type ApiRequest =
       holdMs?: number;
     }
   | { op: 'act'; tableId: string; auth: Auth; command: Command }
-  | { op: 'history'; tableId: string; auth: Auth };
+  | { op: 'history'; tableId: string; auth: Auth }
+  | { op: 'presets' }
+  /** Presets belong to the group, but only a host or co-host of a table may save one, from that table. */
+  | { op: 'savePreset'; tableId: string; auth: Auth; name: string; settings: Partial<TableConfig>; replace: boolean }
+  | { op: 'deletePreset'; tableId: string; auth: Auth; name: string };
 
 /**
  * invalid: the request broke a rule; the message is for the player.
@@ -59,4 +63,5 @@ export type ApiResponse =
   | { ok: true; kind: 'info'; table: TableInfo }
   | { ok: true; kind: 'view'; view: TableView }
   | { ok: true; kind: 'unchanged'; now: number }
-  | { ok: true; kind: 'history'; hands: HandRecord[] };
+  | { ok: true; kind: 'history'; hands: HandRecord[] }
+  | { ok: true; kind: 'presets'; presets: Preset[] };

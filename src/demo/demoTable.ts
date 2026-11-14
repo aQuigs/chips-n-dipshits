@@ -2,6 +2,7 @@ import { freshDeck, TIMING } from '../engine/index.ts';
 import type { BettingOptions, Card, Command, HandView, TableView } from '../engine/index.ts';
 import type { ApiRequest, ApiResponse, Auth } from '../server/api.ts';
 import { ByteRng } from '../server/byteRng.ts';
+import { MemoryPresetStore } from '../server/memoryPresetStore.ts';
 import { MemoryStore } from '../server/memoryStore.ts';
 import { PokerService } from '../server/service.ts';
 
@@ -100,6 +101,7 @@ export function createDemoTable(options: DemoOptions = {}): DemoTable {
   const store = new MemoryStore();
   const service = new PokerService({
     store,
+    presets: new MemoryPresetStore(),
     clock: { now: () => realNow() + ahead },
     rng: new ByteRng(() => [...crypto.getRandomValues(new Uint8Array(RANDOM_BATCH_BYTES))]),
   });

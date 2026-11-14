@@ -10,6 +10,7 @@ import type { Browser, Page, Route } from 'playwright';
 
 import { KEYS_SETTLE_MS } from '../src/client/hotkeys.ts';
 import { startDevServer } from '../src/dev/server.ts';
+import { UNSTAMPED_BUILD } from '../src/server/build.ts';
 import { clientPage } from './bundle.ts';
 
 const STEP_TIMEOUT_MS = 20_000;
@@ -149,6 +150,37 @@ try {
     await page.reload();
     await page.waitForSelector('.stage .table');
     await page.context().close();
+  }
+
+  console.log('The lobby asks for the presets as it opens, and asks again when that fails');
+  {
+    const [id, token] = hostMember.split('.');
+    const presets = (request: object) => fetch(`${server.url}api`, { method: 'POST', body: JSON.stringify({ ...request, tableId, auth: { id, token }, build: UNSTAMPED_BUILD }) });
+    await presets({ op: 'savePreset', name: 'Friday 25/50', settings: { smallBlind: 25, bigBlind: 50 }, replace: false });
+
+    const page = await open(browser);
+    let asked = 0;
+
+    await page.route('**/api', (route) => {
+      if (JSON.parse(route.request().postData() ?? '{}').op !== 'presets') {
+        return route.continue();
+      }
+
+      asked += 1;
+
+      return asked === 1 ? route.abort('failed') : route.continue();
+    });
+
+    await page.goto(server.url);
+    await page.waitForSelector('#new-table-preset');
+    assert.equal(asked, 2, 'the presets were asked for once more after the request that failed, and no more');
+    assert.deepEqual(await page.locator('#new-table-preset option').allInnerTexts(), ['The usual settings', 'Friday 25/50']);
+
+    await page.selectOption('#new-table-preset', { label: 'Friday 25/50' });
+    assert.equal(await page.inputValue('#new-table-big-blind'), '50');
+    await page.context().close();
+
+    await presets({ op: 'deletePreset', name: 'Friday 25/50' });
   }
 
   console.log('While the table cannot be reached there is a way to the lobby, and the link still works afterwards');

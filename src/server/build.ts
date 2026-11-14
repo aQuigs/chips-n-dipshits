@@ -21,6 +21,9 @@ const OPEN_TO_ANOTHER_BUILD: Record<ApiRequest['op'], boolean> = {
   poll: true,
   info: true,
   history: true,
+  presets: true,
+  savePreset: false,
+  deletePreset: false,
 };
 
 const STALE: ApiError = { ok: false, code: 'stale', error: OUTDATED_MESSAGE };

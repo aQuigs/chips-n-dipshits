@@ -1,5 +1,6 @@
 import { formatAmount } from '../engine/amounts.ts';
 import { anteText, blindsText } from '../engine/stakes.ts';
+import type { Preset } from '../engine/presets.ts';
 import type { Command, HandRecord, TableConfig } from '../engine/types.ts';
 import type { TableView } from '../engine/view.ts';
 import type { ApiError, ApiRequest, ApiResponse, Auth } from '../server/api.ts';
@@ -19,6 +20,7 @@ import type { Dialog, DialogHandlers } from './render/dialogs/index.ts';
 import { createFeed } from './render/feed.ts';
 import type { Feed } from './render/feed.ts';
 import { joinScreen, lobbyEl, noticeEl, welcomeBackEl } from './render/lobby.ts';
+import type { LobbyScreen } from './render/lobby.ts';
 import { outdatedEl } from './render/outdated.ts';
 import { hostOrCohost } from './render/roles.ts';
 import { tableEl } from './render/table.ts';
@@ -188,12 +190,34 @@ export class App {
       this.pointAddress(null);
     }
 
-    this.mount(
-      lobbyEl(this.rememberedName(), this.themePicker(), {
-        create: (name, config) => this.createTable(name, config),
-        openTable: (code) => this.openTable(code.trim().toUpperCase()),
-      }),
-    );
+    const lobby = lobbyEl(this.rememberedName(), this.themePicker(), {
+      create: (name, config) => this.createTable(name, config),
+      openTable: (code) => this.openTable(code.trim().toUpperCase()),
+    });
+
+    this.mount(lobby.element);
+    void this.offerPresets(lobby);
+  }
+
+  /**
+   * Asks for the group's presets as soon as the lobby is up, so they are there by the time the host has
+   * typed their name. They are only a help: a failure is tried again quietly for as long as the lobby shows.
+   */
+  private async offerPresets(lobby: LobbyScreen): Promise<void> {
+    for (let retryIn = 0; this.root.contains(lobby.element); ) {
+      try {
+        const presets = await this.listPresets();
+
+        if (this.root.contains(lobby.element)) {
+          lobby.offerPresets(presets);
+        }
+
+        return;
+      } catch {
+        retryIn = nextRetry(retryIn);
+        await sleep(retryIn);
+      }
+    }
   }
 
   /** The compact theme picker for the screens before the table. */
@@ -696,6 +720,11 @@ export class App {
       close: () => this.closeDialog(),
       copy: (text) => this.copy(text),
       loadHistory: () => this.loadHistory(),
+      presets: {
+        list: () => this.listPresets(),
+        save: (name, settings, replace) => this.changePresets({ op: 'savePreset', tableId: session.tableId, auth: session.auth, name, settings, replace }),
+        remove: (name) => this.changePresets({ op: 'deletePreset', tableId: session.tableId, auth: session.auth, name }),
+      },
       tableLink: () => this.platform.links.tableLink(session.tableId),
       memberLink: () => this.platform.links.memberLink(session.tableId, session.auth),
       prefs: this.prefs,
@@ -716,6 +745,30 @@ export class App {
     }
 
     throw new Error('The hand history could not be loaded');
+  }
+
+  private async listPresets(): Promise<Preset[]> {
+    const response = await this.request({ op: 'presets' });
+
+    if (response?.ok && response.kind === 'presets') {
+      return response.presets;
+    }
+
+    throw new Error('The presets could not be loaded');
+  }
+
+  /** The presets after a change, or null when it was refused or got no answer, which the player is told. */
+  private async changePresets(request: ApiRequest): Promise<Preset[] | null> {
+    const response = await this.request(request);
+
+    if (response?.ok && response.kind === 'presets') {
+      return response.presets;
+    }
+
+    // A refusal here says nothing about the player's seat, so it never takes them from the table
+    this.toast(response && !response.ok ? response.error : 'No answer from the server. Checking the presets…');
+
+    return null;
   }
 
   // ---- Small things ----

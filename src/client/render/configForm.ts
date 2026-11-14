@@ -81,8 +81,8 @@ function held(form: HTMLFormElement, id: string, spec: ConfigSpec, table: TableC
  *
  * `creating` is the form a new table is made with. It has only the settings asked for then, and it is
  * the one place a setting chosen for good is open; anywhere else it is shown, not offered. Picking a
- * choice there starts the amounts over from what the choice suggests, since a number typed for whole
- * chips means something else in dollars and cents.
+ * choice there that suggests where other settings start, as what the table plays with does, starts the
+ * amounts over from that, since a number typed for whole chips means something else in dollars and cents.
  */
 export function configForm(values: TableConfig, idPrefix: string, creating: boolean): ConfigForm {
   const asked = CONFIG_KEYS.filter((key) => !creating || CONFIG_SPECS[key].atCreate);
@@ -129,7 +129,7 @@ export function configForm(values: TableConfig, idPrefix: string, creating: bool
 
     fields.set(key, element);
 
-    if (creating && spec.kind === 'choice') {
+    if (creating && spec.kind === 'choice' && spec.options.some((option) => option.suggests)) {
       element.addEventListener('change', startOver);
     }
 

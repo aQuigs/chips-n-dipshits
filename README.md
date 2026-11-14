@@ -6,6 +6,7 @@ No-limit hold'em for a group of friends, played in the browser. There is no serv
 
 - Cash game for up to 10 players: blinds, side pots, all-ins, showdown with show or muck, an action clock, sitting out, rebuys.
 - Straddles, run it twice and a seven-deuce bounty, each switched on or off per table.
+- An ante if the table wants one, paid by everyone or by the big blind for the whole table.
 - Stakes in whole chips or in dollars and cents, such as 0.25/0.50, chosen per table.
 - The host approves seats and rebuys, pauses the game, changes blinds and settings, adjusts stacks, removes players and can hand the table to someone else.
 - The host moves a player to an open seat (Move in the Players dialog, then tap the seat; on a desktop, dragging the seat works too) or shuffles everyone into random seats.
@@ -21,7 +22,10 @@ No-limit hold'em for a group of friends, played in the browser. There is no serv
 
 The choices the code makes where poker rooms differ:
 
-- A table plays whole chips or dollars and cents, chosen when it is created and fixed from then on. Nothing is smaller than a chip or a cent. There are no antes.
+- A table plays whole chips or dollars and cents, chosen when it is created and fixed from then on. Nothing is smaller than a chip or a cent.
+- An ante is any amount the host sets, with no tie to the blinds. It goes into the pot before any betting and is no part of a bet, so calling the big blind costs the same with or without one. A player with less than their ante puts in what they have and is all in.
+- When everyone antes, a player's ante counts as chips they put in when side pots are worked out: one whose whole stack went on the ante can win that much from each opponent and no more.
+- A big-blind ante is one ante the big blind posts for the whole table, heads-up too. It is dead money in the main pot, which every player in the hand can win whatever they put in themselves. A big blind who cannot cover both posts the blind first and puts what is left toward the ante.
 - The button moves to the next seat with a player in the hand. Heads-up, the button posts the small blind and acts first before the flop.
 - A player moved to another seat leaves the button where it was, on the seat. A shuffle gives everyone a random one of the seats already taken, and the next hand draws the button afresh, as a table's first hand does. A player dealt into the hand in play moves when it ends, and a shuffle waits for it too; a move whose seat is taken by then is dropped.
 - A big blind who is short still sets the full big blind as the price to call.
@@ -31,7 +35,7 @@ The choices the code makes where poker rooms differ:
 - When the betting is over with players all in and cards to come, hands are turned face up. Run it twice needs every player still in to agree within 12 seconds; one who leaves without answering has said no.
 - A straddle is twice the big blind from the player left of the big blind, who then acts last before the flop. It counts as a raise, so the smallest raise over it is to twice the straddle. There is none heads-up.
 - The seven-deuce bounty is paid by every other player dealt into the hand, up to their stack, when someone holding 7-2 wins the whole main pot or wins without a showdown. The hand is shown whenever a bounty is paid.
-- New blinds and a new bounty apply from the next hand; the hand in play finishes on the terms it was dealt under.
+- New blinds, a new ante and a new bounty apply from the next hand; the hand in play finishes on the terms it was dealt under.
 - A player who runs out of time checks if they can and folds if not, and sits out until they come back. A change to the clock applies to whoever is being waited for, counted from the change.
 - A player who stands up or is removed during a hand checks while checking is free and folds to any bet, the same as one who has timed out. Their seat is cashed out when the hand ends.
 - Chips added during a hand arrive when it ends, and only as far as the table maximum then allows, so winning the hand can make a rebuy smaller or cancel it.
@@ -91,6 +95,7 @@ Things worth knowing before changing it:
 - A table setting is one entry in the registry in `src/engine/config.ts`: its default, its limits and its field in the settings form all come from that entry. One marked `atCreate: 'only'` is chosen when the table is created and shown closed afterwards.
 - Every amount is a whole number of the table's smallest unit, a chip or a cent, so 1.50 is kept as 150 and the rules never see a fraction. `src/engine/amounts.ts` is the one place an amount is written out (`formatAmount`) and the one place a typed amount is read (`parseAmount`); both take the table it belongs to. The Ledger tab gets the amount as a number in dollars for a table that plays cents.
 - A command is a handler in `src/engine/commands/`, in the module for who may send it, which is where its permission check is declared: `by: 'host or cohost'` for running the game, `by: 'host alone'` for deciding who runs it.
+- What a hand makes players put in before the cards (the blinds, an ante, a straddle) is one list, worked out by `forcedBets` (`src/engine/forcedBets.ts`) before any chips move and posted in order by one piece of code. Each entry says who posts, how much, and whether the chips are a live bet, the player's own stake or dead money in the main pot; the betting starts from the biggest live one.
 - A hand keeps a list of events beside its narration (`src/engine/events.ts`): what was posted, bet, dealt, shown and won, in order, never a face-down card. `replayHand` plays a hand back from them alone.
 - A theme is a set of values for the design tokens in `src/client/styles/tokens.css`, plus an entry in `src/client/themes.ts`.
 - The page's styles are one file per part of the screen in `src/client/styles/`, joined in the order `order.ts` lists them; a new part adds its file and a line there.

@@ -748,3 +748,33 @@ test('seven-deuce is pointed out at a table that pays the bounty for it, and onl
   without.deal({ button: 0, holes: { 0: '7h 2h' } });
   assert.deepEqual(without.view(0).hand!.holding, { reads: [{ name: 'Seven-deuce suited', plays: [] }], bounty: false });
 });
+
+test('the chat says what the ante is and who pays it whenever that changes, and nothing while there is none', () => {
+  const t = new TestTable({ stacks: [1000, 1000] });
+  const said = () => t.feedText().filter((line) => line.includes('ante'));
+
+  t.cmd(0, { type: 'updateConfig', config: { anteFrom: 'bigBlind' } });
+  assert.deepEqual(said(), [], 'who would pay an ante is no news while there is none');
+
+  t.cmd(0, { type: 'updateConfig', config: { ante: 20 } });
+  t.cmd(0, { type: 'updateConfig', config: { anteFrom: 'everyone' } });
+  t.cmd(0, { type: 'updateConfig', config: { ante: 5 } });
+  t.cmd(0, { type: 'updateConfig', config: { ante: 5, bigBlind: 40 } });
+  t.cmd(0, { type: 'updateConfig', config: { ante: 0 } });
+
+  assert.deepEqual(said(), ['The ante is 20, paid by the big blind for the table', 'The ante is 20, paid by everyone', 'The ante is 5, paid by everyone', 'The ante is off']);
+});
+
+test('an ante is any amount the table can write, with no tie to the blinds, and who pays it is one of two', () => {
+  const t = new TestTable({ stacks: [1000, 1000] });
+
+  t.cmd(0, { type: 'updateConfig', config: { ante: 500, anteFrom: 'bigBlind' } });
+  assert.deepEqual([t.state.config.ante, t.state.config.anteFrom], [500, 'bigBlind']);
+
+  assert.throws(() => t.cmd(0, { type: 'updateConfig', config: { ante: -1 } }), { name: 'GameError', message: 'The ante must be a whole number from 0 to 1,000,000,000' });
+  assert.throws(() => t.cmd(0, { type: 'updateConfig', config: { ante: 2.5 } }), { message: 'The ante must be a whole number from 0 to 1,000,000,000' });
+  assert.throws(() => t.cmd(0, { type: 'updateConfig', config: { anteFrom: 'button' } as never }), { message: 'Who antes must be one of: Everyone dealt in, The big blind, once for the table' });
+
+  const cents = new TestTable({ stacks: [1000, 1000], config: { unit: 'cents' } });
+  assert.throws(() => cents.cmd(0, { type: 'updateConfig', config: { ante: 0.5 } }), { message: 'The ante must be an amount to the cent from 0.00 to 10,000,000.00' });
+});

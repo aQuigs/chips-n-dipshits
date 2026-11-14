@@ -3,7 +3,7 @@ import { test } from 'node:test';
 
 import { TIMING } from '../src/engine/index.ts';
 import { handRecords, TestTable } from './helpers.ts';
-import { assertChipsConserved } from './invariants.ts';
+import { assertChipsConserved, assertInvariants } from './invariants.ts';
 
 const BOARD = '2c 7d 9h Jc 3s';
 const ACES = 'As Ah';
@@ -1060,4 +1060,366 @@ test('dollars and cents: an uncalled bet, a short all-in and a seven-deuce bount
   assert.ok(text.includes('P0 won with seven-deuce and collects a bounty of 5.00'));
   assert.deepEqual(t.stacks(), [10_000 + 40 + 50 + 500, 0, 10_000 - 50 - 500]);
   assertChipsConserved(t.state);
+});
+
+const EVERYONE_ANTES = { ante: 5 } as const;
+const BIG_BLIND_ANTE = { ante: 20, anteFrom: 'bigBlind' } as const;
+
+/** What each player has in front of them, has staked in all, and has put in as dead money. */
+function chipsIn(t: TestTable): number[][] {
+  return t.state.hand!.players.map((p) => [p.bet, p.committed, p.dead]);
+}
+
+test('everyone antes: each player dealt in puts one in the pot before the blinds, and calling the big blind costs what it did', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 1000, 1000], config: EVERYONE_ANTES });
+  t.deal({ button: 0, holes: { 0: ACES, 2: KINGS }, board: BOARD });
+  const hand = t.state.hand!;
+
+  assert.deepEqual(t.stacks(), [995, 985, 975, 995]);
+  assert.deepEqual(chipsIn(t), [[0, 5, 0], [10, 15, 0], [20, 25, 0], [0, 5, 0]], 'an ante is staked, and no part of the bet in front of a player');
+  assert.equal(t.view(0).hand!.pot, 50);
+  assert.deepEqual(hand.log, ['Hand #1 · blinds 10/20 · ante 5 · P0 has the button', 'Everyone posts ante 5', 'P1 posts small blind 10', 'P2 posts big blind 20']);
+  assertChipsConserved(t.state);
+
+  assert.equal(t.toAct, 3);
+  assert.deepEqual({ call: options(t, 3).callAmount, raise: options(t, 3).minRaiseTo }, { call: 20, raise: 40 });
+  t.fold(3);
+  t.call(0);
+  assert.deepEqual(chipsIn(t)[0], [20, 25, 0]);
+  t.fold(1);
+  t.check(2);
+  checkAround(t, [2, 0], 3);
+
+  assert.deepEqual(hand.result!.pots.map((pot) => [pot.amount, pot.eligible]), [[70, [0, 2]]]);
+  assert.deepEqual(t.stacks(), [1045, 985, 975, 995]);
+  assertChipsConserved(t.state);
+});
+
+test('everyone antes heads-up: both ante, and the button still posts the small blind and acts first', () => {
+  const t = new TestTable({ stacks: [1000, 1000], config: EVERYONE_ANTES });
+  t.deal({ button: 0 });
+
+  assert.deepEqual(t.stacks(), [985, 975]);
+  assert.deepEqual(t.state.hand!.log.slice(1), ['Everyone posts ante 5', 'P0 posts small blind 10', 'P1 posts big blind 20']);
+  assert.equal(t.toAct, 0);
+  assert.equal(options(t, 0).callAmount, 10);
+
+  t.fold(0);
+  assert.ok(t.feedText().includes('Uncalled bet of 10 returned to P1'));
+  assert.deepEqual(t.state.hand!.result!.winnings, [{ seat: 1, amount: 30 }]);
+  assert.deepEqual(t.stacks(), [985, 1015]);
+});
+
+test('everyone antes: a player all in on the ante wins that much from each opponent, and the rest is a side pot for the others', () => {
+  const t = new TestTable({ stacks: [1000, 3, 1000, 1000], config: EVERYONE_ANTES });
+  t.deal({ button: 0, holes: { 1: ACES, 3: KINGS, 0: QUEENS }, board: BOARD });
+  const hand = t.state.hand!;
+
+  // The small blind's whole stack went on the ante, so there is nothing left to post the blind with
+  assert.deepEqual(hand.log.slice(1), ['P1 posts ante 3 and is all in', 'Everyone else posts ante 5', 'P2 posts big blind 20']);
+  assert.deepEqual(chipsIn(t), [[0, 5, 0], [0, 3, 0], [20, 25, 0], [0, 5, 0]]);
+  assert.equal(hand.players[1]!.allIn, true);
+  assert.equal(options(t, 3).callAmount, 20, 'the price to call is the big blind, whoever is all in');
+
+  t.raise(3, 60);
+  t.call(0);
+  t.fold(2);
+  checkAround(t, [3, 0], 3);
+
+  assert.deepEqual(hand.result!.pots.map((pot) => [pot.amount, pot.eligible]), [[12, [0, 1, 3]], [146, [0, 3]]]);
+  assert.deepEqual(hand.result!.winnings, [{ seat: 1, amount: 12 }, { seat: 3, amount: 146 }]);
+  assert.deepEqual(t.stacks(), [935, 12, 975, 1081]);
+  assertChipsConserved(t.state);
+});
+
+test('everyone antes: players short of the ante put in what they have, and the part of an ante nobody could match comes back', () => {
+  const short = new TestTable({ stacks: [1000, 5, 1000, 2], config: EVERYONE_ANTES });
+  short.deal({ button: 0 });
+
+  assert.deepEqual(short.state.hand!.log.slice(1), ['P1 posts ante 5 and is all in', 'P3 posts ante 2 and is all in', 'Everyone else posts ante 5', 'P2 posts big blind 20']);
+  assert.deepEqual(short.stacks(), [995, 0, 975, 0]);
+  assert.equal(short.toAct, 0, 'the action passes over the players who are all in');
+  assert.equal(options(short, 0).callAmount, 20);
+
+  // Heads-up, all that the short player can win from the other is their own 3: the rest of the ante and the whole blind go back
+  const t = new TestTable({ stacks: [3, 1000], config: EVERYONE_ANTES });
+  t.deal({ button: 0, holes: { 0: ACES, 1: KINGS }, board: BOARD });
+  const hand = t.state.hand!;
+
+  assert.deepEqual(hand.log.slice(1), [
+    'P0 posts ante 3 and is all in',
+    'P1 posts ante 5',
+    'P1 posts big blind 20',
+    '22 that nobody could match returned to P1',
+    'P0 shows A♠ A♥',
+    'P1 shows K♠ K♥',
+  ]);
+  assert.deepEqual(chipsIn(t), [[0, 3, 0], [0, 3, 0]]);
+  assert.equal(hand.stage, 'runout');
+  assertChipsConserved(t.state);
+
+  t.runToResult();
+  assert.deepEqual(t.stacks(), [6, 997]);
+});
+
+test('big-blind ante: the big blind posts one ante for the table as dead money, and nobody else pays', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 1000, 1000], config: BIG_BLIND_ANTE });
+  t.deal({ button: 0, holes: { 2: KINGS, 3: ACES }, board: BOARD });
+  const hand = t.state.hand!;
+
+  assert.deepEqual(t.stacks(), [1000, 990, 960, 1000]);
+  assert.deepEqual(chipsIn(t), [[0, 0, 0], [10, 10, 0], [20, 20, 20], [0, 0, 0]], 'the ante is neither bet nor staked');
+  assert.equal(t.view(0).hand!.pot, 50);
+  assert.deepEqual(hand.log, ['Hand #1 · blinds 10/20 · BB ante 20 · P0 has the button', 'P1 posts small blind 10', 'P2 posts big blind 20', 'P2 posts big blind ante 20']);
+  assertChipsConserved(t.state);
+
+  assert.equal(t.toAct, 3);
+  assert.deepEqual({ call: options(t, 3).callAmount, raise: options(t, 3).minRaiseTo }, { call: 20, raise: 40 });
+  t.call(3);
+  t.fold(0);
+  t.fold(1);
+  assert.deepEqual({ check: options(t, 2).canCheck, raise: options(t, 2).minRaiseTo }, { check: true, raise: 40 }, 'the ante is no part of what the big blind has bet');
+  t.check(2);
+  checkAround(t, [2, 3], 3);
+
+  assert.deepEqual(hand.result!.pots.map((pot) => [pot.amount, pot.eligible]), [[70, [2, 3]]]);
+  assert.deepEqual(t.stacks(), [1000, 990, 960, 1050]);
+  assertChipsConserved(t.state);
+});
+
+test('big-blind ante heads-up: it is still the big blind who pays', () => {
+  const t = new TestTable({ stacks: [1000, 1000], config: BIG_BLIND_ANTE });
+  t.deal({ button: 0 });
+
+  assert.deepEqual(t.state.hand!.log.slice(1), ['P0 posts small blind 10', 'P1 posts big blind 20', 'P1 posts big blind ante 20']);
+  assert.deepEqual(t.stacks(), [990, 960]);
+
+  t.fold(0);
+  assert.deepEqual(t.state.hand!.result!.winnings, [{ seat: 1, amount: 40 }]);
+  assert.deepEqual(t.stacks(), [990, 1010]);
+});
+
+test('big-blind ante: a big blind who cannot cover both posts the blind first and puts what is left toward the ante', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 25, 1000], config: BIG_BLIND_ANTE });
+  t.deal({ button: 0, holes: { 2: ACES, 3: KINGS }, board: BOARD });
+  const hand = t.state.hand!;
+
+  assert.deepEqual(hand.log.slice(1), ['P1 posts small blind 10', 'P2 posts big blind 20', 'P2 posts big blind ante 5 and is all in']);
+  assert.deepEqual(chipsIn(t)[2], [20, 20, 5]);
+
+  t.call(3);
+  t.fold(0);
+  t.fold(1);
+  assert.equal(hand.stage, 'runout');
+  t.runToResult();
+
+  assert.deepEqual(hand.result!.pots.map((pot) => [pot.amount, pot.eligible]), [[55, [2, 3]]]);
+  assert.deepEqual(t.stacks(), [1000, 990, 55, 980]);
+
+  // With just the blind, or less, nothing is left for the ante, and the full blind is still the price to call
+  for (const stack of [20, 15]) {
+    const broke = new TestTable({ stacks: [1000, 1000, stack, 1000], config: BIG_BLIND_ANTE });
+    broke.deal({ button: 0 });
+
+    assert.deepEqual(broke.state.hand!.log.slice(1), ['P1 posts small blind 10', `P2 posts big blind ${stack} and is all in`]);
+    assert.deepEqual(chipsIn(broke)[2], [stack, stack, 0]);
+    assert.equal(options(broke, 3).callAmount, 20);
+    assertChipsConserved(broke.state);
+  }
+});
+
+test('big-blind ante: the ante is in the main pot, where a player all in for less than anyone can win all of it', () => {
+  const t = new TestTable({ stacks: [1000, 5, 1000], config: BIG_BLIND_ANTE });
+  t.deal({ button: 0, holes: { 1: ACES, 0: KINGS, 2: QUEENS }, board: BOARD });
+
+  t.call(0);
+  t.check(2);
+  checkAround(t, [2, 0], 3);
+
+  const result = t.state.hand!.result!;
+  assert.deepEqual(result.pots.map((pot) => [pot.amount, pot.eligible]), [[35, [0, 1, 2]], [30, [0, 2]]]);
+  assert.deepEqual(result.winnings, [{ seat: 1, amount: 35 }, { seat: 0, amount: 30 }]);
+  assert.deepEqual(t.stacks(), [1010, 35, 960]);
+  assertChipsConserved(t.state);
+});
+
+test('with an ante, everyone folding to the big blind leaves them the antes and the small blind', () => {
+  const everyone = new TestTable({ stacks: [1000, 1000, 1000], config: EVERYONE_ANTES });
+  everyone.deal({ button: 0 });
+  everyone.fold(0);
+  everyone.fold(1);
+
+  assert.ok(everyone.feedText().includes('Uncalled bet of 10 returned to P2'));
+  assert.deepEqual(everyone.state.hand!.result!.winnings, [{ seat: 2, amount: 35 }]);
+  assert.deepEqual(everyone.stacks(), [995, 985, 1020]);
+
+  const bigBlind = new TestTable({ stacks: [1000, 1000, 1000], config: BIG_BLIND_ANTE });
+  bigBlind.deal({ button: 0 });
+  bigBlind.fold(0);
+  bigBlind.fold(1);
+
+  assert.ok(bigBlind.feedText().includes('Uncalled bet of 10 returned to P2'));
+  assert.deepEqual(bigBlind.state.hand!.result!.winnings, [{ seat: 2, amount: 40 }], 'their own ante comes back with the small blind');
+  assert.deepEqual(bigBlind.stacks(), [1000, 990, 1010]);
+  assertChipsConserved(bigBlind.state);
+});
+
+test('a hand is played with the ante it was dealt under, and a changed ante is posted from the next hand', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 1000, 1000], config: EVERYONE_ANTES });
+  t.deal({ button: 0 });
+  t.call(3);
+
+  const dealt = JSON.stringify(t.state.hand);
+  t.cmd(0, { type: 'updateConfig', config: BIG_BLIND_ANTE });
+  assert.equal(JSON.stringify(t.state.hand), dealt);
+  assert.ok(t.feedText().includes('The ante is 20, paid by the big blind for the table from the next hand'));
+
+  t.fold(0);
+  t.fold(1);
+  t.check(2);
+  t.fold(2);
+  assert.deepEqual(t.state.hand!.result!.winnings, [{ seat: 3, amount: 70 }], 'the antes everyone posted are still in the pot');
+  assert.deepEqual(t.stacks(), [995, 985, 975, 1045]);
+
+  t.finishHand();
+  t.deal({ button: 1 });
+  assert.deepEqual(t.state.hand!.log.slice(0, 4), ['Hand #2 · blinds 10/20 · BB ante 20 · P1 has the button', 'P2 posts small blind 10', 'P3 posts big blind 20', 'P3 posts big blind ante 20']);
+  assert.deepEqual(t.stacks(), [995, 985, 965, 1005]);
+
+  t.cmd(0, { type: 'updateConfig', config: { ante: 0 } });
+  assert.ok(t.feedText().includes('The ante is off from the next hand'));
+  t.fold(0);
+  t.fold(1);
+  t.fold(2);
+  t.finishHand();
+  t.deal({ button: 2 });
+  assert.deepEqual(t.state.hand!.log.slice(0, 3), ['Hand #3 · blinds 10/20 · P2 has the button', 'P3 posts small blind 10', 'P0 posts big blind 20']);
+});
+
+test('seven-deuce bounty with an ante: the antes are won with the pot, and the bounty is paid on top as ever', () => {
+  const everyone = new TestTable({ stacks: [1000, 1000, 1000], config: { ...EVERYONE_ANTES, sevenDeuceBounty: 50 } });
+  everyone.deal({ button: 0, holes: { 0: '7h 2c' } });
+  everyone.raise(0, 60);
+  everyone.fold(1);
+  everyone.fold(2);
+
+  assert.deepEqual(everyone.state.hand!.result!.winnings, [{ seat: 0, amount: 65 }]);
+  assert.deepEqual(everyone.state.hand!.result!.bounty!.payments, [{ seat: 1, amount: 50 }, { seat: 2, amount: 50 }]);
+  assert.deepEqual(everyone.stacks(), [1140, 935, 925]);
+  assertChipsConserved(everyone.state);
+
+  const bigBlind = new TestTable({ stacks: [1000, 1000, 1000], config: { ...BIG_BLIND_ANTE, sevenDeuceBounty: 50 } });
+  bigBlind.deal({ button: 0, holes: { 0: '7h 2c' } });
+  bigBlind.raise(0, 60);
+  bigBlind.fold(1);
+  bigBlind.fold(2);
+
+  assert.deepEqual(bigBlind.state.hand!.result!.winnings, [{ seat: 0, amount: 70 }]);
+  assert.deepEqual(bigBlind.stacks(), [1150, 940, 910]);
+  assertChipsConserved(bigBlind.state);
+});
+
+test('run it twice with a big-blind ante: the ante is split between the boards with the main pot it is in', () => {
+  const t = new TestTable({ stacks: [100, 500, 500], config: { ante: 25, anteFrom: 'bigBlind', allowRunItTwice: true } });
+  t.deal({ button: 0, holes: { 0: ACES, 1: KINGS, 2: QUEENS }, board: BOARD, secondBoard: 'Qd 4c 5h 8s Td' });
+
+  t.raise(0, 100);
+  t.raise(1, 500);
+  t.call(2);
+  assert.ok(t.feedText().includes('Uncalled bet of 25 returned to P1'), 'the big blind had 25 less to call with');
+
+  for (const voter of [0, 1, 2]) {
+    t.cmd(voter, { type: 'ritVote', agree: true });
+  }
+  t.runToResult();
+
+  // 300 staked and the ante of 25 make the main pot, and the first board gets its odd chip
+  assert.deepEqual(t.state.hand!.result!.pots, [
+    { amount: 325, eligible: [0, 1, 2], awards: [{ seat: 0, amount: 163, run: 0 }, { seat: 2, amount: 162, run: 1 }] },
+    { amount: 750, eligible: [1, 2], awards: [{ seat: 1, amount: 375, run: 0 }, { seat: 2, amount: 375, run: 1 }] },
+  ]);
+  assert.deepEqual(t.stacks(), [163, 400, 537]);
+  assertChipsConserved(t.state);
+});
+
+test('a straddle with an ante: the antes go in first, and the straddle is still the bet to call', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 1000, 1000], config: EVERYONE_ANTES });
+  t.cmd(3, { type: 'setStraddle', on: true });
+  t.deal({ button: 0 });
+  const hand = t.state.hand!;
+
+  assert.deepEqual(hand.log.slice(1), ['Everyone posts ante 5', 'P1 posts small blind 10', 'P2 posts big blind 20', 'P3 posts straddle 40']);
+  assert.equal(hand.straddleSeat, 3);
+  assert.deepEqual(t.stacks(), [995, 985, 975, 955]);
+  assert.equal(t.toAct, 0);
+  assert.deepEqual({ call: options(t, 0).callAmount, raise: options(t, 0).minRaiseTo }, { call: 40, raise: 80 });
+
+  t.call(0);
+  t.call(1);
+  t.call(2);
+  assert.equal(t.toAct, 3, 'the straddler acts last before the flop');
+  assert.equal(options(t, 3).canCheck, true);
+
+  const bigBlind = new TestTable({ stacks: [1000, 1000, 1000, 1000], config: BIG_BLIND_ANTE });
+  bigBlind.cmd(3, { type: 'setStraddle', on: true });
+  bigBlind.deal({ button: 0 });
+  assert.deepEqual(bigBlind.state.hand!.log.slice(1), ['P1 posts small blind 10', 'P2 posts big blind 20', 'P2 posts big blind ante 20', 'P3 posts straddle 40']);
+  assert.deepEqual(bigBlind.stacks(), [1000, 990, 960, 960]);
+
+  // 44 covers the straddle but not the straddle and the ante, and a straddle is posted whole or not at all
+  const short = new TestTable({ stacks: [1000, 1000, 1000, 44], config: EVERYONE_ANTES });
+  short.cmd(3, { type: 'setStraddle', on: true });
+  short.deal({ button: 0 });
+  assert.equal(short.state.hand!.straddleSeat, null);
+  assert.deepEqual(short.stacks(), [995, 985, 975, 39]);
+  assert.equal(short.toAct, 3);
+});
+
+test('an ante in the pot still counts as its player\'s chips in the ledger until the hand pays out', () => {
+  for (const config of [EVERYONE_ANTES, BIG_BLIND_ANTE]) {
+    const t = new TestTable({ stacks: [1000, 1000, 1000], config });
+    t.deal({ button: 0 });
+
+    assert.deepEqual(t.view(0).ledger.map((row) => [row.stack, row.net]), [[1000, 0], [1000, 0], [1000, 0]]);
+    assert.equal(t.effects.filter((effect) => effect.type === 'ledger').length, 3, 'an ante is play, not a buy-in: the ledger has only the three buy-ins');
+  }
+});
+
+test('dollars and cents: an ante reads in dollars in the play-by-play', () => {
+  const t = new TestTable({ stacks: [10_000, 10_000, 3], config: { unit: 'cents', smallBlind: 25, bigBlind: 50, ante: 5 } });
+  t.deal({ button: 0 });
+
+  assert.deepEqual(t.state.hand!.log, ['Hand #1 · blinds 0.25/0.50 · ante 0.05 · P0 has the button', 'P2 posts ante 0.03 and is all in', 'Everyone else posts ante 0.05', 'P1 posts small blind 0.25']);
+
+  const bigBlind = new TestTable({ stacks: [10_000, 10_000, 10_000], config: { unit: 'cents', smallBlind: 25, bigBlind: 50, ante: 50, anteFrom: 'bigBlind' } });
+  bigBlind.deal({ button: 0 });
+  assert.deepEqual(bigBlind.state.hand!.log, ['Hand #1 · blinds 0.25/0.50 · BB ante 0.50 · P0 has the button', 'P1 posts small blind 0.25', 'P2 posts big blind 0.50', 'P2 posts big blind ante 0.50']);
+});
+
+test('a move that waited for a hand to end is made before the next hand\'s forced bets are worked out', () => {
+  const posts = (t: TestTable) => t.state.hand!.events.flatMap((event) => (event[0] === 'post' ? [event.slice(1).join(' ')] : []));
+
+  for (const config of [EVERYONE_ANTES, BIG_BLIND_ANTE]) {
+    const t = new TestTable({ stacks: [1000, 1000, 1000], config });
+    t.deal({ button: 0 });
+    t.cmd(0, { type: 'moveSeat', playerId: t.ids[1]!, seat: 5 });
+
+    t.fold(0);
+    t.fold(1);
+    t.finishHand();
+    assert.equal(t.state.seats[5]!.playerId, t.ids[1]);
+
+    // The button passes to seat 2, so the blinds are the player now in seat 5 and the one in seat 0
+    const before = t.stacks();
+    t.deal();
+    assert.deepEqual(t.state.hand!.players.map((p) => p.seat), [0, 2, 5]);
+    assert.deepEqual(
+      posts(t),
+      config === EVERYONE_ANTES
+        ? ['5 ante 5 980 contribution', '0 ante 5 990 contribution', '2 ante 5 1015 contribution', '5 small blind 10 970', '0 big blind 20 970']
+        : ['5 small blind 10 980', '0 big blind 20 980', '0 big blind ante 20 960 dead'],
+    );
+    assert.equal(t.stacks().reduce((sum, stack) => sum + stack, 0) + t.view(0).hand!.pot, before.reduce((sum, stack) => sum + stack, 0));
+    assertInvariants(t.state, t.now);
+  }
 });

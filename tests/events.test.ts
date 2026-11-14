@@ -297,3 +297,88 @@ test('a hand that goes on past what is recorded keeps no events at all, and is p
   assertEventsRetellTheHand(record);
   assertInvariants(t.state, t.now);
 });
+
+test('each ante is an event that puts its chips straight in the pot, and the first event says what the ante was', () => {
+  const everyone = new TestTable({ stacks: [1000, 3, 1000, 1000], config: { ante: 5 } });
+  everyone.deal({ button: 0 });
+
+  const events = everyone.state.hand!.events;
+  assert.deepEqual(events, [
+    ['start', 1, 0, 10, 20, [[0, 'P0', 1000], [1, 'P1', 3], [2, 'P2', 1000], [3, 'P3', 1000]], 5, 'everyone'],
+    ['post', 1, 'ante', 3, 0, 'contribution'],
+    ['post', 2, 'ante', 5, 995, 'contribution'],
+    ['post', 3, 'ante', 5, 995, 'contribution'],
+    ['post', 0, 'ante', 5, 995, 'contribution'],
+    ['post', 2, 'big blind', 20, 975],
+    ['deal'],
+  ]);
+
+  const antesIn = replayHand(events, 5)!;
+  assert.equal(antesIn.pot, 18);
+  assert.deepEqual(antesIn.seats.map((seat) => [seat.stack, seat.bet]), [[995, 0], [0, 0], [995, 0], [995, 0]], 'an ante is never in front of its player');
+  assert.deepEqual(replayHand(events)!.seats.map((seat) => [seat.stack, seat.bet]), [[995, 0], [0, 0], [975, 20], [995, 0]]);
+
+  everyone.fold(3);
+  everyone.fold(0);
+  assertEventsRetellTheHand(recordOf(everyone));
+
+  const bigBlind = new TestTable({ stacks: [1000, 1000, 25], config: { ante: 20, anteFrom: 'bigBlind' } });
+  bigBlind.deal({ button: 0 });
+
+  assert.deepEqual(bigBlind.state.hand!.events, [
+    ['start', 1, 0, 10, 20, [[0, 'P0', 1000], [1, 'P1', 1000], [2, 'P2', 25]], 20, 'bigBlind'],
+    ['post', 1, 'small blind', 10, 990],
+    ['post', 2, 'big blind', 20, 5],
+    ['post', 2, 'big blind ante', 5, 0, 'dead'],
+    ['deal'],
+  ]);
+  assert.equal(replayHand(bigBlind.state.hand!.events)!.pot, 5);
+
+  bigBlind.call(0);
+  bigBlind.fold(1);
+  assertEventsRetellTheHand(recordOf(bigBlind));
+});
+
+test('a hand with antes replays to its final stacks, through side pots, two boards and an ante that came back unmatched', () => {
+  const twice = new TestTable({ stacks: [100, 500, 500], config: { ante: 25, anteFrom: 'bigBlind', allowRunItTwice: true } });
+  twice.deal({ button: 0, holes: { 0: 'As Ah', 1: 'Ks Kh', 2: 'Qs Qh' }, board: '2c 7d 9h Jc 3s', secondBoard: 'Qd 4c 5h 8s Td' });
+  twice.raise(0, 100);
+  twice.raise(1, 500);
+  twice.call(2);
+  for (const voter of [0, 1, 2]) {
+    twice.cmd(voter, { type: 'ritVote', agree: true });
+  }
+
+  const record = recordOf(twice);
+  assertRecordBalances(record);
+  assertEventsRetellTheHand(record);
+
+  // The player all in for 3 of the ante of 5 can win 3 from the other, whose other 2 and whole blind go back
+  const unmatched = new TestTable({ stacks: [3, 1000], config: { ante: 5 } });
+  unmatched.deal({ button: 0 });
+
+  const events = unmatched.state.hand!.events;
+  assert.deepEqual(events.slice(1, 5), [['post', 1, 'ante', 5, 995, 'contribution'], ['post', 0, 'ante', 3, 0, 'contribution'], ['post', 1, 'big blind', 20, 975], ['deal']]);
+  assert.deepEqual(events[5], ['return', 1, 22]);
+
+  for (let count = 1; count <= events.length; count++) {
+    const position = replayHand(events, count)!;
+
+    assert.ok(position.pot >= 0 && position.seats.every((seat) => seat.bet >= 0 && seat.stack >= 0), `after ${count} events the table holds less than nothing somewhere`);
+  }
+
+  const returned = replayHand(events, 6)!;
+  assert.equal(returned.pot, 6);
+  assert.deepEqual(returned.seats.map((seat) => [seat.stack, seat.bet]), [[0, 0], [997, 0]]);
+
+  const settled = recordOf(unmatched);
+  assertRecordBalances(settled);
+  assertEventsRetellTheHand(settled);
+});
+
+test('a hand without an ante starts with the same event as before there were antes', () => {
+  const t = new TestTable({ stacks: [1000, 1000], config: { ante: 0, anteFrom: 'bigBlind' } });
+  t.deal({ button: 0 });
+
+  assert.deepEqual(t.state.hand!.events.slice(0, 3), [['start', 1, 0, 10, 20, [[0, 'P0', 1000], [1, 'P1', 1000]]], ['post', 0, 'small blind', 10, 990], ['post', 1, 'big blind', 20, 980]]);
+});

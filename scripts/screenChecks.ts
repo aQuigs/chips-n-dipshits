@@ -13,7 +13,7 @@ import type { Page } from 'playwright';
 
 import { KEYS_SETTLE_MS } from '../src/client/hotkeys.ts';
 import { THEMES } from '../src/client/themes.ts';
-import type { Command, TableView } from '../src/engine/index.ts';
+import type { Command, TableConfig, TableView } from '../src/engine/index.ts';
 import { boxes, overlap, Rig, SCREENS, setStageHeight, squeezed, textBoxes } from './rig.ts';
 import type { Box, RigPlayer, ScreenName } from './rig.ts';
 
@@ -138,6 +138,48 @@ async function standOrLie(page: Page, screen: ScreenName): Promise<void> {
 const TO_THE_CENT = 'This table plays to the cent, so an amount has at most two decimals';
 
 const texts = (page: Page, selector: string) => page.locator(selector).allInnerTexts();
+
+/**
+ * A table of whole chips where everyone antes and one of dollars and cents where the big blind antes
+ * for the table, with what six players who each sat down with `stack` see when the first hand is dealt.
+ */
+const ANTE_TABLES = [
+  {
+    name: 'chips',
+    config: { ante: 5 } as Partial<TableConfig>,
+    stack: 1000,
+    blinds: '10/20',
+    stakes: '10/20 · ante 5',
+    pot: '60',
+    bets: ['10', '20'],
+    stacks: ['995', '985', '975', '995', '995', '995'],
+    lines: ['Hand #123 · blinds 10/20 · ante 5 · Quigs has the button', 'Everyone posts ante 5', 'WWWWWWWWWWWWWWWW posts small blind 10', 'Ünïcödé Ñandú Ø! posts big blind 20'],
+    noAnte: '0',
+    typed: '5',
+    shown: '5',
+    said: 'The ante is 5, paid by everyone',
+  },
+  {
+    name: 'cents',
+    config: { ...CENTS, ante: 50, anteFrom: 'bigBlind' } as Partial<TableConfig>,
+    stack: 10_000,
+    blinds: '0.25/0.50',
+    stakes: '0.25/0.50 · BB ante 0.50',
+    pot: '1.25',
+    bets: ['0.25', '0.50'],
+    stacks: ['100.00', '99.75', '99.00', '100.00', '100.00', '100.00'],
+    lines: [
+      'Hand #123 · blinds 0.25/0.50 · BB ante 0.50 · Quigs has the button',
+      'WWWWWWWWWWWWWWWW posts small blind 0.25',
+      'Ünïcödé Ñandú Ø! posts big blind 0.50',
+      'Ünïcödé Ñandú Ø! posts big blind ante 0.50',
+    ],
+    noAnte: '0.00',
+    typed: '.5',
+    shown: '0.50',
+    said: 'The ante is 0.50, paid by the big blind for the table',
+  },
+];
 
 const stacksBySeat = (page: Page, seats: number) => Promise.all(Array.from({ length: seats }, (_, seat) => text(page, `.seat[data-seat="${seat}"] .stack`)));
 
@@ -1485,7 +1527,9 @@ const CHECKS: Check[] = [
         await page.locator('#new-table-max-buy-in').scrollIntoViewIfNeeded();
         await shot(page, `cents-new-table-${screen}`);
         assert.deepEqual(await squeezed(page, '#new-table-unit .check span, #new-table-unit > span, #new-table-unit small, .card-panel .field input'), [], 'part of the form is cut off');
-        assertOnScreen(await boxes(page, '#new-table-unit, #new-table-unit .check, #new-table-small-blind, #new-table-max-buy-in'), screen, 'the form for a new table');
+        assertOnScreen(await boxes(page, '#new-table-max-buy-in'), screen, 'the end of the form for a new table');
+        await page.locator('#new-table-unit').scrollIntoViewIfNeeded();
+        assertOnScreen(await boxes(page, '#new-table-unit, #new-table-unit .check, #new-table-small-blind'), screen, 'the form for a new table');
         await assertNoSidewaysScroll(page);
         const [chips, cents] = await boxes(page, '#new-table-unit .check');
         assert.ok(chips && cents && !overlap(chips, cents), 'the two choices are drawn over each other');
@@ -2151,6 +2195,174 @@ const CHECKS: Check[] = [
         assert.equal(dragged.view('Quigs').seats[0]?.moveTo, 7);
         assert.deepEqual(await marking(page), marked, 'the marking was lost with the drag');
         await shot(page, `hint-move-dragged-desktop-${shape}`);
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'the start of a hand with antes shows them in the pot and in the stakes, with nothing squeezed',
+    async (rig) => {
+      for (const kind of ANTE_TABLES) {
+        for (const screen of ['smallPhone', 'desktop'] as const) {
+          const table = rig.table(
+            LONG_NAMES.slice(0, 6).map((name) => ({ name, stack: kind.stack })),
+            kind.config,
+          );
+          // A hand number of three digits leaves the stakes the least room they will have
+          table.alter((state) => {
+            state.handCount = 122;
+          });
+          table.deal({ button: 0 });
+
+          const page = await table.open('Quigs', screen);
+
+          // Where the stakes don't fit one line, which depends on the machine's fonts, the ante moves to the next
+          // line whole: it is never broken, so the stakes never take a third line
+          assert.equal(await text(page, '.topbar .title > span'), kind.stakes);
+          const [stakes] = await textBoxes(page, '.topbar .title > span');
+          const [ante] = await textBoxes(page, '.topbar .title .ante');
+          assert.ok(stakes && ante);
+          assert.equal(await page.locator('.topbar .title .ante').evaluate((el) => el.getClientRects().length), 1, 'the ante is broken over two lines');
+          const lines = Math.round((stakes.bottom - stakes.top) / (ante.bottom - ante.top));
+          assert.ok(lines <= (screen === 'desktop' ? 1 : 2), `the stakes take ${lines} lines`);
+          assert.deepEqual(await squeezed(page, '.topbar .title > span, .topbar .pill'), [], 'the stakes or the hand number are cut off');
+          assertApart([stakes], await boxes(page, '.topbar .pill, .topbar .menu-button, .topbar [data-action="invite"]'), 'the stakes and the rest of the top bar');
+          assertOnScreen([stakes, ...(await boxes(page, '.topbar .pill, .topbar [data-action="invite"]'))], screen, 'the top bar');
+
+          // An ante is in the pot from the start, and no bet in front of its player
+          assert.equal(await text(page, '.pot'), `Pot${kind.pot}`);
+          assert.deepEqual(await texts(page, '.bet'), kind.bets);
+          assert.deepEqual(await stacksBySeat(page, 6), kind.stacks);
+          assert.deepEqual(await squeezed(page, '.pot, .bet, .plate .stack'), [], 'an amount on the table is cut off');
+          assertOnScreen(await boxes(page, '.seat .plate, .bet, .pot'), screen, 'a seat, a bet or the pot');
+          await assertBetsApart(page);
+          await shot(page, `antes-start-${kind.name}-${screen}`);
+
+          // The play-by-play says what the ante is and who posted what
+          if (screen !== 'desktop') {
+            await page.tap('.feed-toggle');
+          }
+          assert.deepEqual((await texts(page, '.entries li')).slice(-kind.lines.length), kind.lines);
+          assert.deepEqual(await squeezed(page, '.entries li'), [], 'a line of the play-by-play is cut off');
+          await assertNoSidewaysScroll(page);
+          await shot(page, `antes-play-by-play-${kind.name}-${screen}`);
+
+          await page.context().close();
+        }
+      }
+    },
+  ],
+  [
+    'the table settings take an ante and who pays it, and the table says so from then on',
+    async (rig) => {
+      for (const kind of ANTE_TABLES) {
+        for (const screen of PHONE_AND_DESKTOP) {
+          const { ante: _ante, anteFrom: _anteFrom, ...withoutAnte } = kind.config;
+          const table = rig.table(
+            [
+              { name: 'Quigs', stack: kind.stack },
+              { name: 'Stu', stack: kind.stack },
+            ],
+            withoutAnte,
+          );
+          const page = await table.open('Quigs', screen);
+          const press = pressOn(page, screen);
+          const fromBigBlind = kind.config.anteFrom === 'bigBlind';
+
+          await press('[data-action="menu"]');
+          assert.equal(await text(page, '.menu [data-action="settings"] small'), `Blinds ${kind.blinds}`);
+          await press('.menu [data-action="settings"]');
+          await page.waitForSelector('#table-ante');
+
+          assert.equal(await page.inputValue('#table-ante'), kind.noAnte);
+          assert.equal(await text(page, 'label[for="table-ante"] small'), 'Goes into the pot before any betting. 0 for no ante');
+          assert.equal(await page.isChecked('#table-ante-from input[value="everyone"]'), true, 'everyone antes unless the host says otherwise');
+          assert.deepEqual(await texts(page, '#table-ante-from .check'), ['Everyone dealt in', 'The big blind, once for the table']);
+          assert.deepEqual(await page.evaluate(`[...document.querySelectorAll('#table-ante-from input')].map((input) => input.disabled)`), [false, false]);
+
+          await page.locator('#table-ante-from').scrollIntoViewIfNeeded();
+          assert.deepEqual(await squeezed(page, '#table-ante-from .check span, #table-ante-from > span, label[for="table-ante"] small, .dialog .field input'), [], 'part of the settings is cut off');
+          assertOnScreen(await boxes(page, '.dialog, #table-ante, #table-ante-from, #table-ante-from .check'), screen, 'the ante settings');
+          const [everyone, bigBlind] = await boxes(page, '#table-ante-from .check');
+          assert.ok(everyone && bigBlind && !overlap(everyone, bigBlind), 'the two choices are drawn over each other');
+          await assertNoSidewaysScroll(page);
+
+          await page.fill('#table-ante', kind.typed);
+          if (fromBigBlind) {
+            await press('#table-ante-from label:has-text("The big blind")');
+          }
+          await shot(page, `antes-settings-${kind.name}-${screen}`);
+          await press('[data-action="save-settings"]');
+          await page.waitForSelector('.dialog', { state: 'detached' });
+
+          const { ante, anteFrom, smallBlind, bigBlind: blind } = table.view('Quigs').config;
+          assert.deepEqual({ ante, anteFrom, smallBlind, blind }, { ante: kind.config.ante, anteFrom: kind.config.anteFrom ?? 'everyone', smallBlind: kind.config.smallBlind ?? 10, blind: kind.config.bigBlind ?? 20 });
+          assert.equal(await text(page, '.topbar .title span'), kind.stakes);
+          assert.equal(table.view('Stu').feed.at(-1)!.text, kind.said);
+
+          await press('[data-action="menu"]');
+          assert.equal(await text(page, '.menu [data-action="settings"] small'), `Blinds ${kind.stakes}`);
+          await press('.menu [data-action="settings"]');
+          assert.equal(await page.inputValue('#table-ante'), kind.shown);
+          assert.equal(await page.isChecked(`#table-ante-from input[value="${kind.config.anteFrom ?? 'everyone'}"]`), true);
+
+          await page.context().close();
+        }
+      }
+    },
+  ],
+  [
+    'the form for a new table takes an ante and who pays it, and someone following the link is told',
+    async (rig) => {
+      for (const screen of PHONE_AND_DESKTOP) {
+        const page = await rig.lobby(screen);
+        const press = pressOn(page, screen);
+
+        assert.equal(await page.inputValue('#new-table-ante'), '0');
+        assert.equal(await page.isChecked('#new-table-ante-from input[value="everyone"]'), true);
+
+        await page.fill('#host-name', 'Quigs');
+        await page.fill('#new-table-small-blind', '15');
+        await page.fill('#new-table-ante', '5');
+        await press('#new-table-ante-from label:has-text("The big blind")');
+        assert.deepEqual([await page.inputValue('#new-table-small-blind'), await page.inputValue('#new-table-ante')], ['15', '5'], 'picking who antes threw away the amounts that were typed');
+
+        // What the table plays with still starts the amounts over, the ante among them, and keeps who pays it
+        await press('#new-table-unit label:has-text("Dollars and cents")');
+        assert.deepEqual([await page.inputValue('#new-table-small-blind'), await page.inputValue('#new-table-ante')], ['0.25', '0.00']);
+        assert.equal(await page.isChecked('#new-table-ante-from input[value="bigBlind"]'), true);
+        assert.equal(await page.getAttribute('#new-table-ante', 'inputmode'), 'decimal');
+
+        await page.fill('#new-table-ante', '0.555');
+        assert.equal(await complaintOf(page, '#new-table-ante'), TO_THE_CENT);
+        await page.fill('#new-table-ante', '.5');
+
+        await page.locator('#new-table-ante-from').scrollIntoViewIfNeeded();
+        await shot(page, `antes-new-table-${screen}`);
+        assert.deepEqual(await squeezed(page, '#new-table-ante-from .check span, #new-table-ante-from > span, label[for="new-table-ante"] small, .card-panel .field input'), [], 'part of the form is cut off');
+        assertOnScreen(await boxes(page, '#new-table-ante, #new-table-ante-from, #new-table-ante-from .check'), screen, 'the ante in the form for a new table');
+        const [everyone, bigBlind] = await boxes(page, '#new-table-ante-from .check');
+        assert.ok(everyone && bigBlind && !overlap(everyone, bigBlind), 'the two choices are drawn over each other');
+        await assertNoSidewaysScroll(page);
+
+        await press('[data-action="create-table"]');
+        await page.waitForSelector('#table-link');
+
+        const link = await page.inputValue('#table-link');
+        const { unit, ante, anteFrom } = rig.store.read(new URL(link).searchParams.get('table')!)!.config;
+        assert.deepEqual({ unit, ante, anteFrom }, { unit: 'cents', ante: 50, anteFrom: 'bigBlind' });
+
+        await press('[data-action="close"]');
+        assert.equal(await text(page, '.topbar .title span'), '0.25/0.50 · BB ante 0.50');
+
+        const visitor = await rig.page(screen, 'a visitor');
+        await visitor.goto(link);
+        await visitor.waitForSelector('[data-action="join-table"]:enabled');
+        assert.deepEqual(await texts(visitor, '.about p:not(.note)'), ['Blinds 0.25/0.50 · BB ante 0.50']);
+        assert.deepEqual(await squeezed(visitor, '.about p'), []);
+        await shot(visitor, `antes-join-${screen}`);
+
+        await visitor.context().close();
         await page.context().close();
       }
     },

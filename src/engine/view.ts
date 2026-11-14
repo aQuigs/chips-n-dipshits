@@ -176,7 +176,7 @@ export function viewFor(state: TableState, playerId: string, now: number): Table
       bbSeat: hand.bbSeat,
       straddleSeat: hand.straddleSeat,
       bigBlind: hand.bigBlind,
-      pot: hand.players.reduce((sum, p) => sum + p.committed, 0),
+      pot: hand.players.reduce((sum, p) => sum + p.committed + p.dead, 0),
       pots: buildPots(hand.players),
       currentBet: hand.currentBet,
       toAct: hand.toAct,
@@ -231,7 +231,8 @@ export function ledgerOf(state: TableState): LedgerRow[] {
 
   for (const member of state.members) {
     const seat = state.seats.find((s) => s?.playerId === member.id);
-    const inPot = unsettled.find((p) => p.playerId === member.id)?.committed ?? 0;
+    const mine = unsettled.find((p) => p.playerId === member.id);
+    const inPot = mine ? mine.committed + mine.dead : 0;
     const stack = seat ? seat.stack + inPot : 0;
 
     if (member.buyIn === 0 && member.cashOut === 0 && stack === 0) {

@@ -53,6 +53,10 @@
   font-size: 12px;
 }
 
+.topbar .title .ante {
+  white-space: nowrap;
+}
+
 .pill {
   padding: 3px 10px;
   border: 1px solid var(--line);

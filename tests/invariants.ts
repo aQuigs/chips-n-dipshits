@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict';
 
 import { evaluateHand, FEED_LIMIT, LIMITS, PLAYING_THE_BOARD, reaches, replayHand, roleOf, viewFor } from '../src/engine/index.ts';
-import type { Effect, FeedEntry, HandRecord, TableState } from '../src/engine/index.ts';
+import type { Effect, FeedEntry, HandPlayer, HandRecord, TableState } from '../src/engine/index.ts';
 import { CACHE_VALUE_BYTES, utf8Bytes } from '../src/gas/sheetStore.ts';
 import { restoreState } from '../src/server/store.ts';
 import { handRecords } from './helpers.ts';
@@ -17,12 +17,14 @@ import { handRecords } from './helpers.ts';
  */
 export const CHIP_PLACES: { where: string; count(state: TableState): number }[] = [
   { where: 'in stacks', count: (state) => state.seats.reduce((sum, seat) => sum + (seat ? seat.stack : 0), 0) },
-  {
-    // Once the hand is done its bets have been paid out to the stacks
-    where: 'bet in the hand',
-    count: (state) => (state.hand && state.hand.stage !== 'done' ? state.hand.players.reduce((sum, p) => sum + p.committed, 0) : 0),
-  },
+  { where: 'bet in the hand', count: (state) => stillInThePot(state).reduce((sum, p) => sum + p.committed, 0) },
+  { where: 'dead money in the hand', count: (state) => stillInThePot(state).reduce((sum, p) => sum + p.dead, 0) },
 ];
+
+/** The players whose chips are still in the middle: once the hand is done, the pots have been paid out to the stacks. */
+function stillInThePot(state: TableState): HandPlayer[] {
+  return state.hand && state.hand.stage !== 'done' ? state.hand.players : [];
+}
 
 /** No chip is created or lost: the chips on the table are the chips the ledger says were bought, less those cashed out. */
 export function assertChipsConserved(state: TableState): void {
@@ -41,6 +43,7 @@ export function assertChipsConserved(state: TableState): void {
 
   for (const player of state.hand?.players ?? []) {
     assert.ok(player.bet >= 0 && player.committed >= player.bet, 'a bet is out of range');
+    assert.ok(Number.isInteger(player.dead) && player.dead >= 0, 'dead money is out of range');
   }
 }
 

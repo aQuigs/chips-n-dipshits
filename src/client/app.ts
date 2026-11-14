@@ -1,4 +1,5 @@
 import { formatAmount } from '../engine/amounts.ts';
+import { anteText, blindsText } from '../engine/stakes.ts';
 import type { Command, HandRecord, TableConfig } from '../engine/types.ts';
 import type { TableView } from '../engine/view.ts';
 import type { ApiError, ApiRequest, ApiResponse, Auth } from '../server/api.ts';
@@ -518,11 +519,14 @@ export class App {
       state = view.handCount === 0 ? 'Not started' : 'Paused';
     }
 
-    const stakes = `${formatAmount(view.config.smallBlind, view.config)}/${formatAmount(view.config.bigBlind, view.config)} hold’em`;
+    const blinds = blindsText(view.config);
+    const ante = anteText(view.config);
 
-    screen.topbar.draw([waiting, state, view.config.name, stakes, view.config.voiceLink], () => [
+    screen.topbar.draw([waiting, state, view.config.name, blinds, ante, view.config.voiceLink], () => [
       h('button.icon.menu-button', { type: 'button', 'aria-label': 'Menu', 'data-action': 'menu', onclick: () => this.openDialog({ kind: 'menu' }) }, '☰', waiting > 0 ? h('span.dot', null, String(waiting)) : null),
-      h('div.title', null, h('b', null, view.config.name), h('span', null, stakes)),
+      // The ante takes the place of the word: a small phone has no room for both beside the hand's number.
+      // It is a piece of its own, so where there is no room for it either it moves to the next line whole
+      h('div.title', null, h('b', null, view.config.name), ante ? h('span', null, `${blinds} `, h('span.ante', null, `· ${ante}`)) : h('span', null, `${blinds} hold’em`)),
       state ? h('span.pill', null, state) : null,
       voiceLinkEl(view.config.voiceLink),
       h('button.btn.small', { type: 'button', 'data-action': 'invite', onclick: () => this.openDialog({ kind: 'invite' }) }, 'Invite'),

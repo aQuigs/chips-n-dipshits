@@ -9,7 +9,7 @@
 import { badgesIn } from './badges.ts';
 import type { EarnedBadge } from './badges.ts';
 import type { Card } from './cards.ts';
-import { somebodyWon, wonAPot } from './handFacts.ts';
+import { somebodyWon, wonAPot, wonTheHand } from './handFacts.ts';
 import type { HandFacts } from './handFacts.ts';
 import { madeHandName } from './handNames.ts';
 import { evaluateHand } from './handRank.ts';
@@ -50,7 +50,7 @@ const rankOfBest = (best: Card[] | null): number => (best ? evaluateHand(best).s
  * the biggest pot is the most they took from the pots of one hand, so their share of a split pot, and both boards added up;
  * the best hand is the best one they turned up at a showdown, on either board, won or lost. The first to be shown stays when a later one ties it;
  * a bust is a hand that left them with no chips;
- * the streak is the hands they won in a row, of every hand somebody won: losing one, folding or sitting it out ends it, and a hand nobody won leaves it as it was.
+ * the streak is the hands they won in a row (`wonTheHand`), of every hand somebody won: losing one, folding or sitting it out ends it, and a hand nobody won leaves it as it was.
  * Gives back what the hand did to the numbers of each player in it, by member id.
  */
 export function countHand(tonight: Tonight, facts: HandFacts): Map<string, Counted> {
@@ -75,7 +75,7 @@ export function countHand(tonight: Tonight, facts: HandFacts): Map<string, Count
     numbers.busts += player.busted ? 1 : 0;
 
     if (won) {
-      numbers.streak = wonAPot(player) ? numbers.streak + 1 : 0;
+      numbers.streak = wonTheHand(player) ? numbers.streak + 1 : 0;
     }
 
     if (wonAPot(player)) {

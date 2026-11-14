@@ -56,20 +56,24 @@ const isRoyal = (hand: HandShown): boolean => rankOf(hand.cards[0]!) === ACE;
 /** Four of a kind, a straight flush or a royal flush of their own that they turned up. */
 const monsters = (player: PlayerFacts): HandShown[] => [...ownShown(player, FOUR_OF_A_KIND), ...ownShown(player, STRAIGHT_FLUSH)];
 
-const wonOn = (player: PlayerFacts, board: number): boolean => player.wins.some((win) => win.board === board);
+/** Whether they won a pot on that board against somebody: a side pot nobody else was in for is no win at a showdown. */
+const wonOn = (player: PlayerFacts, board: number): boolean => player.wins.some((win) => win.board === board && win.contested);
 
 const named = (hands: HandShown[]): string => midSentence(hands[0]!.name);
 
 /**
  * Whether the player won the hand outright, as the seven-deuce bounty counts it: everyone else folded,
- * or at a showdown their hand beat every other one turned up, on every board.
+ * or at a showdown their hand beat every other one turned up, on every board the main pot paid out on.
  */
 function wonOutright(hand: HandFacts, player: PlayerFacts): boolean {
   if (hand.ended === 'folds') {
     return !player.folded;
   }
 
-  return Array.from({ length: hand.boards }, (_board, board) => board).every((board) => {
+  // A main pot too small to split leaves a board with nothing of it, and the bounty does not ask who won there
+  const played = Array.from({ length: hand.boards }, (_board, board) => board).filter((board) => hand.players.some((other) => other.wins.some((win) => win.pot === 0 && win.board === board)));
+
+  return played.every((board) => {
     const mine = player.shown.find((shown) => shown.board === board);
     const others = hand.players.filter((other) => other !== player).flatMap((other) => other.shown.filter((shown) => shown.board === board));
 

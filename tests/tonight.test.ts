@@ -371,7 +371,9 @@ class Recount {
   private count(record: HandRecord): void {
     const { result } = record;
     const took = (seat: number) => result.pots.flatMap((pot) => pot.awards).reduce((sum, award) => sum + (award.seat === seat ? award.amount : 0), 0);
-    const somebodyTook = record.players.some((player) => took(player.seat) > 0);
+    // Winning a hand is taking chips from its pots or collecting the bounty, which a big blind folded to can do from an empty pot
+    const wonIt = (seat: number) => took(seat) > 0 || result.bounty?.seat === seat;
+    const somebodyTook = record.players.some((player) => wonIt(player.seat));
 
     this.tonight.hands += 1;
 
@@ -391,7 +393,7 @@ class Recount {
       numbers.won += took(player.seat) > 0 ? 1 : 0;
       numbers.biggest = Math.max(numbers.biggest, took(player.seat));
       numbers.busts += player.endStack === 0 ? 1 : 0;
-      numbers.streak = !somebodyTook ? streak : took(player.seat) > 0 ? streak + 1 : 0;
+      numbers.streak = !somebodyTook ? streak : wonIt(player.seat) ? streak + 1 : 0;
 
       for (const shown of result.hands.filter((hand) => hand.seat === player.seat)) {
         if (numbers.best === null || evaluateHand(shown.cards).score > evaluateHand(numbers.best).score) {
@@ -422,7 +424,8 @@ function badgesEarned(record: HandRecord, player: HandRecord['players'][number],
   const hole = player.cards ?? [];
   const awards = result.pots.flatMap((pot) => pot.awards.filter((award) => award.amount > 0));
   const took = awards.filter((award) => award.seat === seat).reduce((sum, award) => sum + award.amount, 0);
-  const wonOn = (run: number) => awards.some((award) => award.seat === seat && award.run === run);
+  // Won at the showdown: paid from a pot on that run that somebody else was in for too
+  const wonOn = (run: number) => result.pots.some((pot) => pot.eligible.length > 1 && pot.awards.some((award) => award.seat === seat && award.run === run && award.amount > 0));
   const ranks = (shown: Card[]) => shown.map((card) => card[0]);
 
   const shown = result.hands.filter((hand) => hand.seat === seat).map((hand) => ({ ...hand, value: evaluateHand(hand.cards) }));
@@ -444,7 +447,12 @@ function badgesEarned(record: HandRecord, player: HandRecord['players'][number],
   };
   const felted = record.players.some((other) => other !== player && other.endStack === 0 && feltedBy(other).size === 1 && feltedBy(other).has(seat));
 
+  // Runs the main pot paid nothing on, being too small to split, are not asked about
   const beatEveryone = record.boards.every((_board, run) => {
+    if (!result.pots[0]?.awards.some((award) => award.run === run && award.amount > 0)) {
+      return true;
+    }
+
     const mine = shown.find((hand) => hand.run === run);
     const theirs = result.hands.filter((hand) => hand.seat !== seat && hand.run === run);
 

@@ -586,6 +586,12 @@ test('badges are earned once the hand is cleared, so none is drawn or told while
   withBadge.moves.land();
   await settle();
   assert.deepEqual(withBadge.told[1]!.earned, [fake]);
+
+  // A hold that ends untold, on a view that came late, still tells the badges it held: they were told nowhere else
+  const cutShort = holdingPage();
+  cutShort.show({ ...result, earned: [fake] });
+  cutShort.show({ ...result, current: false, events: [], feed: [], earned: [] });
+  assert.deepEqual(cutShort.told.map((change) => change.earned), [[], [fake]]);
 });
 
 test('the badges of a hand are told by the view that clears it, which ends any hold first, to the page that saw the card turned and to one still waiting on it', async () => {

@@ -512,3 +512,48 @@ test('a badge saved by a later version that this code does not know is kept and 
 
   assert.deepEqual(t.view(0).tonight.players.find((row) => row.playerId === t.ids[0])!.badges, [{ id: 'quads', times: 1 }]);
 });
+
+/**
+ * Seat 0 is all in for 100 on the button, called by both blinds. Seat 1 bets the flop, seat 2 calls; seat 1 bets
+ * the turn and seat 2 folds, which leaves a side pot of seat 2's chips that only seat 1 is in for.
+ */
+function sidePotNobodyContested(holes: Record<number, string>, board: string): TestTable {
+  const t = new TestTable({ stacks: [100, 1000, 1000] });
+  t.deal({ button: 0, holes, board });
+  t.raise(0, 100);
+  t.call(1);
+  t.call(2);
+  t.raise(1, 50);
+  t.call(2);
+  t.raise(1, 50);
+  t.fold(2);
+  t.finishHand();
+
+  return t;
+}
+
+test('a side pot nobody else was in for is no win at a showdown: ace high that lost the main pot is no Nothing Burger, and quads that lost it are a Cooler', () => {
+  const air = sidePotNobodyContested({ 0: '8s 8h', 1: 'As Kd', 2: 'Qs Qh' }, '2c 7d 9h Jc 3s');
+  assert.ok(air.state.tonight.players[air.ids[1]!]!.won > 0, 'the side pot was not paid');
+  assert.ok(!('airBall' in badgesOf(air, 1)), JSON.stringify(badgesOf(air, 1)));
+
+  const quads = sidePotNobodyContested({ 0: 'Qd 2c', 1: KINGS, 2: '3c 4c' }, 'Kd Kc 9d Td Jd');
+  assert.deepEqual(badgesOf(quads, 1), { quads: 1, cooler: 1 });
+});
+
+test('a big blind folded to with seven-deuce and nothing in the pot wins the hand on the bounty alone: it earns the badge and counts toward a run', () => {
+  // As in tests/missedBlinds.test.ts: seat 2, due the small blind, sits out, so the big blind is posted alone and comes back
+  const t = new TestTable({ stacks: [1000, 1000, 1000, 1000], config: { sevenDeuceBounty: 50 } });
+  t.deal({ button: 0 });
+  t.foldOut();
+
+  t.cmd(2, { type: 'sitOut' });
+  t.deal({ holes: { 3: '7s 2h' } });
+  t.fold(0);
+  t.fold(1);
+  t.finishHand();
+
+  assert.equal(handRecords(t.effects).at(-1)!.result.bounty?.seat, 3);
+  assert.deepEqual(badgesOf(t, 3), { sevenDeuce: 1 });
+  assert.equal(t.state.tonight.players[t.ids[3]!]!.streak, 1);
+});

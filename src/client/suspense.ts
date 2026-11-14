@@ -61,20 +61,27 @@ export class Suspense {
   }
 
   /** What of `change` is told now. Call for every view put on screen, before it is drawn. */
-  see(change: TableChange): TableChange {
-    const { before, view, events, feed, earned } = change;
+  see(seen: TableChange): TableChange {
     const hold = this.hold;
+    let change = seen;
 
-    this.view = view;
+    this.view = seen.view;
 
-    if (hold && (events.length > 0 || !change.current || view.hand?.number !== hold.hand)) {
+    if (hold && (seen.events.length > 0 || !seen.current || seen.view.hand?.number !== hold.hand)) {
       this.hold = null;
 
       // More of the same hand: what was held is what came between, so it goes before what is new
-      if (change.current && view.hand?.number === hold.hand) {
-        return { ...change, events: [...hold.later.events, ...events], feed: [...hold.later.feed, ...feed], earned: [...hold.later.earned, ...earned] };
+      if (seen.current && seen.view.hand?.number === hold.hand) {
+        return { ...seen, events: [...hold.later.events, ...seen.events], feed: [...hold.later.feed, ...seen.feed], earned: [...hold.later.earned, ...seen.earned] };
+      }
+
+      // Badges are told once and were counted as told when they came, so whatever ends the hold tells them rather than lose them
+      if (hold.later.earned.length > 0) {
+        change = { ...seen, earned: [...hold.later.earned, ...seen.earned] };
       }
     }
+
+    const { before, view, events, feed, earned } = change;
 
     const sweat = this.motion.seen() ? sweatOf(change) : null;
     if (!sweat) {

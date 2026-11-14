@@ -1580,6 +1580,7 @@ const CHECKS: Check[] = [
         const page = await table.open('Quigs', screen);
         const press = pressOn(page, screen);
         const drawn = await page.innerHTML('.stage');
+        const shape = (await page.getAttribute('.stage .table', 'class'))!.includes('tall') ? 'tall' : 'wide';
 
         for (const way of ['button', 'Escape'] as const) {
           if (way === 'Escape' && screen === 'phone') {
@@ -1597,7 +1598,9 @@ const CHECKS: Check[] = [
             await page.keyboard.press('Escape');
           }
 
+          // The prompt took height from the table, which may have lain down for it and stands up again once it goes
           await page.waitForSelector('.banner.move-prompt', { state: 'detached' });
+          await page.waitForSelector(`.stage .table.${shape}`);
           assert.equal(await page.innerHTML('.stage'), drawn, `the table is not drawn as it was after cancelling with the ${way}`);
           assert.equal(JSON.stringify(table.view('Quigs').seats), before);
         }

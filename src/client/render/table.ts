@@ -89,6 +89,8 @@ function betPlace(shape: Shape, slot: number): Record<string, string> {
   return { left: `${x}%`, top: `calc(50% ${y < 50 ? '-' : '+'} ${fromTheMiddle})` };
 }
 
+const moveNote = (seat: number) => `Moves to seat ${seat + 1} after this hand`;
+
 function sum(amounts: number[]): number {
   return amounts.reduce((total, amount) => total + amount, 0);
 }
@@ -199,6 +201,8 @@ function seatEl(view: TableView, seat: SeatView, slot: number, shape: Shape, clo
     won > 0 ? h('div.status.won', null, `+${shortAmount(won + bounty, view.config)}`) : status ? h('div.status', { 'data-status': status }, status) : null,
     // The seconds left, for everyone: the bar under the name alone is easy to miss until the time is gone
     timer ? h('div.status.clock', { 'data-countdown': hand!.deadline }, '') : null,
+    // In the plate, in short: a line under the seat would run onto the next one down the side of a phone's table
+    seat.moveTo !== null ? h('div.move-note', { title: moveNote(seat.moveTo), 'aria-label': moveNote(seat.moveTo) }, `→ Seat ${seat.moveTo + 1}`) : null,
     timer,
   );
 
@@ -210,7 +214,6 @@ function seatEl(view: TableView, seat: SeatView, slot: number, shape: Shape, clo
     hand?.button === seat.seat ? h('div.dealer-button', { title: 'Dealer button' }, 'D') : null,
     vote,
     label ? h('div.tag', null, label) : null,
-    seat.moveTo !== null ? h('div.tag.move-note', null, `Moves to seat ${seat.moveTo + 1} after this hand`) : null,
   );
 
   const nodes = [seatNode];

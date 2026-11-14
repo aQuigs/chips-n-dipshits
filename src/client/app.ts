@@ -101,7 +101,7 @@ export class App {
     this.prefs = new Preferences(PREFERENCES, platform.memory, root);
     this.prefs.watch('theme', (id) => this.applyTheme(id));
     this.prefs.watch('deck', (deck) => this.screen?.feed.showDeck(deck));
-    this.hotkeys = new HotkeyPresser(this.prefs, { root, controls: () => this.screen?.controls.element ?? null, dialogOpen: () => this.dialog !== null });
+    this.hotkeys = new HotkeyPresser(this.prefs, { root, controls: () => this.screen?.controls.element ?? null, dialogOpen: () => this.dialog !== null || (this.screen?.seatMoves.active ?? false) });
 
     root.classList.add('cnd');
   }
@@ -145,8 +145,11 @@ export class App {
 
       if (this.dialog) {
         this.closeDialog();
-      } else {
-        this.screen?.seatMoves.cancel();
+      } else if (this.screen?.seatMoves.active) {
+        this.screen.seatMoves.cancel();
+
+        // Spent on backing out of the move, so the keys of the turn don't also act on it
+        event.stopImmediatePropagation();
       }
     });
     document.addEventListener('keydown', (event) => this.hotkeys.handle(event));

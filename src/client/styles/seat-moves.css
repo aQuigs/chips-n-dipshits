@@ -32,8 +32,13 @@
   border-style: solid;
 }
 
-.tag.move-note {
+.plate .move-note {
+  overflow: hidden;
   color: var(--accent);
+  font-size: 0.82em;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .dialog .move-note {

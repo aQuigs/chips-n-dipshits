@@ -119,6 +119,18 @@ const PHONE_AND_DESKTOP = ['phone', 'desktop'] as const;
 // The least height at which a phone's table stands up: its width over WIDE_ASPECT in src/client/app.ts
 const JUST_STANDING = Math.ceil(SCREENS.phone.width / 1.15) + 1;
 
+/**
+ * Pins the table's shape for a check about what sits on its seats: a phone's standing up at the least
+ * height it does so, where its seats come closest, and a desktop's lying down.
+ */
+async function standOrLie(page: Page, screen: ScreenName): Promise<void> {
+  if (screen !== 'desktop') {
+    await setStageHeight(page, JUST_STANDING);
+  }
+
+  await page.waitForSelector(screen === 'desktop' ? '.table.wide' : '.table.tall');
+}
+
 const TO_THE_CENT = 'This table plays to the cent, so an amount has at most two decimals';
 
 const texts = (page: Page, selector: string) => page.locator(selector).allInnerTexts();
@@ -1515,16 +1527,13 @@ const CHECKS: Check[] = [
   [
     'the host moves a player by picking an open seat, on a phone and a desktop, and everyone sees them there',
     async (rig) => {
-      for (const screen of ['phone', 'desktop'] as const) {
-        const table = rig.table([
-          { name: 'Quigs', stack: 1000 },
-          { name: 'Stu', stack: 1000 },
-          { name: 'Pam', stack: 1000 },
-        ]);
+      for (const screen of PHONE_AND_DESKTOP) {
+        const table = rig.table(['Quigs', 'Stu', 'Pam', 'Big Al', 'Zed', 'WWWWWWWWWWWWWWWW'].map((name) => ({ name, stack: 1000 })));
 
         const host = await table.open('Quigs', screen);
         const watcher = await table.open('Pam', 'phone');
         const press = pressOn(host, screen);
+        await standOrLie(host, screen);
 
         await press('[data-action="menu"]');
         await press('.menu [data-action="players"]');
@@ -1534,7 +1543,8 @@ const CHECKS: Check[] = [
         assert.equal(await text(host, '.banner.move-prompt span'), 'Pick an open seat for Stu');
         assertOnScreen(await boxes(host, '.banner.move-prompt, [data-action="cancel-move"]'), screen, 'the prompt to pick a seat');
         assertOnScreen(await boxes(host, '[data-move-to]'), screen, 'an open seat to move to');
-        assert.equal(await host.locator('[data-move-to]').count(), 7, 'every open seat is offered');
+        assert.equal(await host.locator('[data-move-to]').count(), 4, 'every open seat is offered');
+        assertApart(await boxes(host, '[data-move-to]'), await boxes(host, '.seat[data-seat] .plate, .seat[data-seat] .card'), 'an open seat to move to and a seated player');
         assert.equal(await host.locator('[data-sit]').count(), 0);
         assert.equal(await host.locator('.seat.moving[data-seat="1"]').count(), 1, 'the player being moved is not picked out');
         assert.deepEqual(await squeezed(host, '[data-move-to]'), []);
@@ -1604,36 +1614,45 @@ const CHECKS: Check[] = [
   [
     'a move that waits for the hand shows on the seat, whole, beside a long name, and happens when the hand ends',
     async (rig) => {
-      for (const screen of ['phone', 'desktop'] as const) {
+      for (const screen of PHONE_AND_DESKTOP) {
         const table = rig.table([
           { name: 'Quigs', stack: 1000 },
           { name: 'Marge Simpson-Jr', stack: 1000 },
           { name: 'WWWWWWWWWWWWWWWW', stack: 1000 },
           { name: 'Stu', stack: 1000 },
           { name: 'Pam', stack: 1000 },
+          { name: 'Big Al', stack: 1000 },
         ]);
         table.deal({ button: 0 });
 
         const host = await table.open('Quigs', screen);
         const watcher = await table.open('Stu', screen);
         const press = pressOn(host, screen);
+        await standOrLie(host, screen);
+        await standOrLie(watcher, screen);
 
         await press('[data-action="menu"]');
         await press('.menu [data-action="players"]');
         await press('.dialog li:has-text("WWWWWWWWWWWWWWWW") [data-action="move"]');
         assert.equal(await text(host, '.banner.move-prompt span'), 'Pick an open seat for WWWWWWWWWWWWWWWW. They move when this hand ends.');
         await press('[data-move-to="7"]');
+        await host.waitForSelector('.seat[data-seat="2"] .move-note');
+        await shot(host, `move-waiting-${screen}`);
 
         for (const page of [host, watcher]) {
-          const note = '.seat[data-seat="2"] .tag.move-note';
+          const note = '.seat[data-seat="2"] .move-note';
           await page.waitForSelector(note);
-          assert.equal(await text(page, note), 'Moves to seat 8 after this hand');
+          assert.equal(await text(page, note), '→ Seat 8');
+          assert.equal(await page.getAttribute(note, 'aria-label'), 'Moves to seat 8 after this hand');
           assertOnScreen(await boxes(page, note), screen, 'the note of a move that waits');
           assert.deepEqual(await squeezed(page, `${note}, .seat[data-seat="2"] .plate .stack`), [], 'the note or the stack beside it is cut off');
-          assertApart(await boxes(page, note), await boxes(page, '.seat:not([data-seat="2"]) .plate, .seat:not([data-seat="2"]) .card, .board .card, .bet'), 'the note of a move and the table around it');
+          // Inside its own plate, it takes no room the plate does not already have, down the side of a crowded table as anywhere
+          const [box] = await boxes(page, note);
+          const [plate] = await boxes(page, '.seat[data-seat="2"] .plate');
+          assert.ok(box!.left >= plate!.left && box!.right <= plate!.right && box!.top >= plate!.top && box!.bottom <= plate!.bottom, 'the note of a move sticks out of its seat');
+          assertApart(await boxes(page, '.seat[data-seat="2"] .plate'), await boxes(page, '.seat:not([data-seat="2"]) .plate, .board .card, .bet, .pot'), 'the seat with a move waiting and the table around it');
         }
 
-        await shot(host, `move-waiting-${screen}`);
         assert.equal(table.view('Quigs').seats[2]?.moveTo, 7);
 
         await press('[data-action="menu"]');
@@ -1644,7 +1663,7 @@ const CHECKS: Check[] = [
 
         table.play(() => ({ type: 'fold' }), (view) => view.hand === null || view.hand.number > 1);
         await watcher.waitForSelector('.seat[data-seat="7"] .name:has-text("WWWWWWWWWWWWWWWW")');
-        assert.equal(await watcher.locator('.tag.move-note').count(), 0);
+        assert.equal(await watcher.locator('.seat .move-note').count(), 0);
         assert.equal(table.view('Quigs').seats[7]?.name, 'WWWWWWWWWWWWWWWW');
 
         await host.context().close();
@@ -1695,7 +1714,61 @@ const CHECKS: Check[] = [
     },
   ],
   [
-    'on the desktop the host drags a player onto an open seat, even while the table is redrawn under the mouse',
+    'on the desktop the host drags a player onto an open seat, lying down and standing up, even while the table is redrawn under the mouse',
+    async (rig) => {
+      for (const shape of ['wide', 'tall'] as const) {
+        const table = rig.table(['Quigs', 'Stu', 'Pam', 'Big Al', 'Zed', 'Pocket Pam'].map((name) => ({ name, stack: 1000 })));
+
+        const page = await table.open('Quigs', 'desktop');
+        if (shape === 'tall') {
+          // A desktop window taller than it is wide, which stands the table up
+          await setStageHeight(page, 900);
+        }
+        await page.waitForSelector(`.table.${shape}`);
+
+        const center = async (selector: string) => {
+          const [box] = await boxes(page, selector);
+          assert.ok(box, `${selector} is not on the screen`);
+
+          return { x: (box.left + box.right) / 2, y: (box.top + box.bottom) / 2 };
+        };
+
+        // Let go over the felt, and nothing moves
+        const from = await center('.seat[data-seat="1"] .plate');
+        const felt = await center('.felt');
+        await page.mouse.move(from.x, from.y);
+        await page.mouse.down();
+        await page.mouse.move(felt.x, felt.y, { steps: 8 });
+        await page.mouse.up();
+        assert.equal(table.view('Quigs').seats[1]?.name, 'Stu');
+        assert.equal(await page.locator('.seat.dragging, .seat.drop').count(), 0);
+
+        const to = await center('[data-open-seat="7"] .plate');
+        await page.mouse.move(from.x, from.y);
+        await page.mouse.down();
+        await page.mouse.move((from.x + to.x) / 2, (from.y + to.y) / 2, { steps: 8 });
+        assert.equal(await page.locator('.seat.dragging[data-seat="1"]').count(), 1, 'the seat does not follow the mouse');
+
+        // A change at the table draws it again while the seat is in the air
+        table.act('Pam', { type: 'sitOut' });
+        await page.waitForSelector('.seat[data-seat="2"] .status:has-text("Sitting out")');
+        assert.equal(await page.locator('.seat.dragging[data-seat="1"]').count(), 1, 'the drag was lost when the table was drawn again');
+
+        await page.mouse.move(to.x, to.y, { steps: 8 });
+        assert.equal(await page.locator('.seat.drop[data-open-seat="7"]').count(), 1, 'the open seat under the mouse is not picked out');
+        await shot(page, `move-drag-desktop-${shape}`);
+        await page.mouse.up();
+
+        await page.waitForSelector('.seat[data-seat="7"] .name:has-text("Stu")');
+        assert.equal(table.view('Quigs').seats[7]?.name, 'Stu');
+        assert.equal(table.view('Quigs').seats[1], null);
+        assert.equal(await page.locator('.seat.dragging, .seat.drop').count(), 0);
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'the keys of a turn do nothing while the host picks a seat, and Escape backs out of the pick and nothing else',
     async (rig) => {
       const table = rig.table([
         { name: 'Quigs', stack: 1000 },
@@ -1703,44 +1776,46 @@ const CHECKS: Check[] = [
         { name: 'Pam', stack: 1000 },
       ]);
 
+      // Three-handed the button acts first, so the deal puts the action on the host's own page
+      table.deal({ button: 0 });
       const page = await table.open('Quigs', 'desktop');
-      const center = async (selector: string) => {
-        const [box] = await boxes(page, selector);
-        assert.ok(box, `${selector} is not on the screen`);
+      const sent = movesSent(page);
 
-        return { x: (box.left + box.right) / 2, y: (box.top + box.bottom) / 2 };
-      };
+      await page.waitForSelector('.turn [data-action="call"]:enabled');
+      await page.click('[data-action="menu"]');
+      await page.click('.menu [data-action="players"]');
+      await page.click('.dialog li:has-text("Stu") [data-action="move"]');
+      await page.waitForSelector('[data-move-to]');
+      await settle(page);
 
-      // Let go over the felt, and nothing moves
-      const from = await center('.seat[data-seat="1"] .plate');
-      const felt = await center('.felt');
-      await page.mouse.move(from.x, from.y);
-      await page.mouse.down();
-      await page.mouse.move(felt.x, felt.y, { steps: 8 });
-      await page.mouse.up();
+      const amount = await page.inputValue('#raise-amount');
+      await page.evaluate('document.activeElement.blur()');
+      for (const key of ['f', 'c', 'r', '1', '2', '3', '4']) {
+        await page.keyboard.press(key);
+      }
+
+      // In the bet box Enter is the raise key
+      await page.focus('#raise-amount');
+      await page.keyboard.press('Enter');
+      await page.waitForTimeout(300);
+
+      assert.deepEqual(sent, [], 'a key played a move while the host was picking a seat');
+      assert.equal(table.view('Quigs').hand!.toAct, 0);
+      assert.equal(await page.inputValue('#raise-amount'), amount, 'a key changed the bet size while the host was picking a seat');
+      assert.equal(await page.locator('[data-move-to]').count(), 7, 'a key ended the pick');
+
+      // With the bet box in use, Escape backs out of the pick and leaves the box as it was
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('.banner.move-prompt', { state: 'detached' });
+      assert.equal(await page.evaluate('document.activeElement?.id'), 'raise-amount', 'Escape also left the bet box');
       assert.equal(table.view('Quigs').seats[1]?.name, 'Stu');
-      assert.equal(await page.locator('.seat.dragging, .seat.drop').count(), 0);
 
-      const to = await center('[data-open-seat="5"] .plate');
-      await page.mouse.move(from.x, from.y);
-      await page.mouse.down();
-      await page.mouse.move((from.x + to.x) / 2, (from.y + to.y) / 2, { steps: 8 });
-      assert.equal(await page.locator('.seat.dragging[data-seat="1"]').count(), 1, 'the seat does not follow the mouse');
-
-      // A change at the table draws it again while the seat is in the air
-      table.act('Pam', { type: 'sitOut' });
-      await page.waitForSelector('.seat[data-seat="2"] .status:has-text("Sitting out")');
-      assert.equal(await page.locator('.seat.dragging[data-seat="1"]').count(), 1, 'the drag was lost when the table was drawn again');
-
-      await page.mouse.move(to.x, to.y, { steps: 8 });
-      assert.equal(await page.locator('.seat.drop[data-open-seat="5"]').count(), 1, 'the open seat under the mouse is not picked out');
-      await shot(page, 'move-drag-desktop');
-      await page.mouse.up();
-
-      await page.waitForSelector('.seat[data-seat="5"] .name:has-text("Stu")');
-      assert.equal(table.view('Quigs').seats[5]?.name, 'Stu');
-      assert.equal(table.view('Quigs').seats[1], null);
-      assert.equal(await page.locator('.seat.dragging, .seat.drop').count(), 0);
+      // Back from the pick, the keys are the turn's again
+      await page.evaluate('document.activeElement.blur()');
+      await settle(page);
+      await page.keyboard.press('f');
+      await page.waitForTimeout(300);
+      assert.deepEqual(sent, ['fold']);
       await page.context().close();
     },
   ],

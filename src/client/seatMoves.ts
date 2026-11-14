@@ -46,6 +46,11 @@ export class SeatMoves {
     stage.addEventListener('pointerdown', (event) => this.dragStart(event));
   }
 
+  /** A seat is being picked or dragged, which the keys of the turn must leave alone. */
+  get active(): boolean {
+    return this.picking !== null || this.drag !== null;
+  }
+
   pick(playerId: string): void {
     this.picking = playerId;
     this.host.changed();

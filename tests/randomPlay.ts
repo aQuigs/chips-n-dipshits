@@ -238,7 +238,8 @@ export function randomStep(t: TestTable, rng: Rng): void {
 
   if (hand?.stage === 'ritVote' && chance(rng, 70)) {
     const voter = hand.players.find((p) => !p.folded && p.ritVote === null)!;
-    const cap = t.state.config.maxRuns;
+    // The hand's own, which a change to the setting since the deal leaves alone
+    const cap = hand.maxRuns;
     const roll = rng.int(100);
 
     // The most the table allows more often than not, since running it that many times takes everyone picking it

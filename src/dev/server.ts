@@ -116,7 +116,7 @@ export async function startDevServer(options: DevServerOptions): Promise<DevServ
       console.error(error);
 
       if (!response.headersSent) {
-        respond(response, 500, 'application/json', JSON.stringify({ ok: false, code: 'internal', error: 'Something went wrong on the server, try again' }));
+        respond(response, 500, 'application/json', JSON.stringify({ ok: false, code: 'internal', error: 'Something went wrong on the server, try again', build: service.build }));
       }
     });
   });

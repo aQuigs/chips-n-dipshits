@@ -23,6 +23,10 @@ const OPEN_TO_ANOTHER_BUILD: Record<ApiRequest['op'], boolean> = {
   history: true,
 };
 
+function fieldsOf(request: unknown): { op?: unknown; build?: unknown } {
+  return typeof request === 'object' && request !== null ? request : {};
+}
+
 /**
  * The game as one build of it answers pages. Every answer says which build the server is, so a page
  * can tell that it was loaded from another one, and such a page gets nothing changed at a table: what
@@ -43,9 +47,13 @@ export class BuildGate {
     return { ...(refusal ?? this.service.handle(request)), build: this.build };
   }
 
-  /** As the service's, except that a request about to be turned away is never kept waiting for it. */
+  /**
+   * As the service's, for a page of this build. A page of any other is answered at once: its poll is
+   * turned away or it stops at the build on the answer, so waiting would only keep that from it, and
+   * hold one of the few requests a host serves at a time.
+   */
   waitFor(request: unknown): PollWait | null {
-    return this.turnsAway(request) ? null : this.service.waitFor(request);
+    return fieldsOf(request).build === this.build ? this.service.waitFor(request) : null;
   }
 
   hasNews(tableId: string, since: number): boolean {
@@ -53,15 +61,15 @@ export class BuildGate {
   }
 
   private turnsAway(request: unknown): boolean {
-    const { op, build } = (typeof request === 'object' && request !== null ? request : {}) as { op?: unknown; build?: unknown };
+    const { op, build } = fieldsOf(request);
 
     if (build === this.build) {
       return false;
     }
 
     // A page from before pages named their build can't tell from an answer that it is out of date, and
-    // would go on drawing whatever table it was sent. All it is still told is what a table is called,
-    // which its join screen asks again and again until it hears
+    // would go on drawing whatever table it was sent. All it is still told is what its join screen
+    // shows of a table before joining, which that screen asks again and again until it hears
     if (typeof build !== 'string') {
       return op !== 'info';
     }

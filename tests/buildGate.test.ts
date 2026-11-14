@@ -100,8 +100,8 @@ test('a page of another build is still shown the table, and learns from the answ
   assert.ok(history.ok && history.kind === 'history');
   assert.equal(history.build, THIS_BUILD);
 
-  // It may wait for news like any other member's
-  assert.deepEqual(gate.waitFor({ op: 'poll', tableId, auth, since: 1, holdMs: 20_000, build: OLDER_BUILD }), { tableId, since: 1, ms: 20_000 });
+  // And at once: kept waiting for news, it would only learn later that it has to be reloaded
+  assert.equal(gate.waitFor({ op: 'poll', tableId, auth, since: poll.view.version, holdMs: 20_000, build: OLDER_BUILD }), null);
   assert.equal(saved(), before);
 });
 

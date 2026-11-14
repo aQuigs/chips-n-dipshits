@@ -38,6 +38,8 @@ export interface TableChange {
   nightEnded: boolean;
   /** The badges the viewer has earned that this is the first `current` view to show, in the order of the list. */
   earned: EarnedBadge[];
+  /** The viewer has come to hold the high hand, and this is the first `current` view to show it. */
+  tookHighHand: boolean;
 }
 
 /** What is told once, even past a late view: by the first view on time that shows it, and never by a page that opened after it. */
@@ -45,13 +47,26 @@ interface Told {
   nightEndedAt: number | null;
   /** How many times the viewer has earned each badge, by its id. */
   badges: Map<string, number>;
+  /** The number of the hand the high hand the viewer holds was shown in, or null when they hold none. */
+  highHand: number | null;
 }
 
 const badgesOf = (view: TableView): EarnedBadge[] => view.tonight.players.find((row) => row.playerId === view.you.id)?.badges ?? [];
 
+/** The hand the high hand the viewer holds was shown in: the next to be paid, which is the night's own until that is paid. */
+function heldHighHand(view: TableView): number | null {
+  const next = view.tonight.highHand.next;
+
+  return next?.playerIds.includes(view.you.id) ? next.hand : null;
+}
+
 /** What a view has to tell of these, all of it. */
 function toldIn(view: TableView | null): Told {
-  return { nightEndedAt: view?.nightEndedAt ?? null, badges: new Map(view ? badgesOf(view).map((badge) => [badge.id, badge.times]) : []) };
+  return {
+    nightEndedAt: view?.nightEndedAt ?? null,
+    badges: new Map(view ? badgesOf(view).map((badge) => [badge.id, badge.times]) : []),
+    highHand: view && heldHighHand(view),
+  };
 }
 
 const newBadges = (view: TableView, told: Told): EarnedBadge[] => badgesOf(view).filter((badge) => badge.times > (told.badges.get(badge.id) ?? 0));
@@ -63,12 +78,12 @@ const newBadges = (view: TableView, told: Told): EarnedBadge[] => badgesOf(view)
  *
  * `now` is the server's time as the page reckons it, which is well past the view's own when the view
  * was slow to arrive. `wentBack` says the table itself returned to an earlier state, so nothing in
- * the view is news. `told` is the end of the night and the badges already told, which `TableNews`
+ * the view is news. `told` is the end of the night, the badges and the high hand already told, which `TableNews`
  * remembers past a view that came late.
  */
 export function tableChange(before: TableView | null, view: TableView, now: number, wentBack = false, told = toldIn(before)): TableChange {
   if (!before || wentBack) {
-    return { before, view, feed: [], events: [], current: false, wentBack, nightEnded: false, earned: [], now };
+    return { before, view, feed: [], events: [], current: false, wentBack, nightEnded: false, earned: [], tookHighHand: false, now };
   }
 
   // A line is known by its number and its time together: a table put back to an earlier state numbers its next lines like ones it had
@@ -83,12 +98,15 @@ export function tableChange(before: TableView | null, view: TableView, now: numb
   // Compared by time, so a night started again and ended again between two views is still news
   const nightEnded = current && view.nightEndedAt !== null && view.nightEndedAt !== told.nightEndedAt;
 
-  return { before, view, feed, events: current ? newEvents(before, view) : [], current, wentBack, nightEnded, earned: current ? newBadges(view, told) : [], now };
+  const held = heldHighHand(view);
+  const tookHighHand = current && held !== null && held !== told.highHand;
+
+  return { before, view, feed, events: current ? newEvents(before, view) : [], current, wentBack, nightEnded, earned: current ? newBadges(view, told) : [], tookHighHand, now };
 }
 
 /**
- * The changes of one table screen, one view after another. The end of the night and the badges
- * earned are told by the first view on time that shows them, so one that came late passes them on
+ * The changes of one table screen, one view after another. The end of the night, the badges earned
+ * and the high hand taken are told by the first view on time that shows them, so one that came late passes them on
  * rather than losing them; what the page found already there when it opened, or after the table
  * went back, is never told.
  */

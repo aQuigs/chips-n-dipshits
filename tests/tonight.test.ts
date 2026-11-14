@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { addMember, evaluateHand, handFacts, HIGH_CARD, isSevenDeuce, isStraddle, ledgerOf, newTonight, nightIsOver, SEAT_COUNT, STRADDLES, STRADDLES_IN_A_ROW, STRAIGHT_FLUSH, straddlesAllowed, tonightView } from '../src/engine/index.ts';
+import { addMember, evaluateHand, handFacts, HIGH_CARD, isSevenDeuce, isStraddle, ledgerOf, newTonight, nextHighHand, nightIsOver, SEAT_COUNT, STRADDLES, STRADDLES_IN_A_ROW, STRAIGHT_FLUSH, straddlesAllowed, tonightView } from '../src/engine/index.ts';
 import type { Card, Effect, HandRecord, PlayerTonight, Straddle, TableState, Tonight, TonightView } from '../src/engine/index.ts';
 import { restoreState } from '../src/server/store.ts';
-import { ACES, BOARD, cards, checkAround, handRecords, KINGS, QUEENS, seededRng, TestTable } from './helpers.ts';
+import { ACES, BOARD, cards, checkAround, handRecords, KINGS, ledgerEntries, QUEENS, seededRng, TestTable } from './helpers.ts';
 import { assertInvariants } from './invariants.ts';
 import { fixedSettings, randomConfig } from './randomConfig.ts';
 import { chance, randomStep } from './randomPlay.ts';
@@ -47,7 +47,7 @@ function acesBeatKings(t: TestTable): void {
 
 test('a hand played is one a player was dealt, folded at once or not; a pot won is one they took chips from; the best hand is the best they showed, won or lost', () => {
   const t = new TestTable({ stacks: [1000, 1000, 1000] });
-  assert.deepEqual(t.state.tonight, { hands: 0, players: {} });
+  assert.deepEqual(t.state.tonight, newTonight());
 
   acesBeatKings(t);
 
@@ -220,15 +220,16 @@ for (const unit of ['chips', 'cents'] as const) {
   });
 }
 
-test('who leads in what: up the most, the most pots, the biggest pot and the best hand, shared when level and nobody when there is none', () => {
+test('who leads in what: up the most, the most pots and the biggest pot, shared when level and nobody when there is none, and the high hand, which the first to show it keeps', () => {
   const t = new TestTable({ stacks: [1000, 1000, 1000] });
+  const highHand = (view: TonightView) => view.highHand.best?.playerIds ?? [];
 
-  assert.deepEqual([tonight(t).upMost, tonight(t).mostPots, tonight(t).biggestPot, tonight(t).bestHand], [[], [], [], []]);
+  assert.deepEqual([tonight(t).upMost, tonight(t).mostPots, tonight(t).biggestPot, highHand(tonight(t))], [[], [], [], []]);
 
   acesBeatKings(t);
 
   const after = tonight(t);
-  assert.deepEqual([after.upMost, after.mostPots, after.biggestPot, after.bestHand].map((ids) => names(t, ids)), [['P0'], ['P0'], ['P0'], ['P0']]);
+  assert.deepEqual([after.upMost, after.mostPots, after.biggestPot, highHand(after)].map((ids) => names(t, ids)), [['P0'], ['P0'], ['P0'], ['P0']]);
 
   // Seat 2 wins the same pot back from seat 0, with the same aces
   t.deal({ button: 0, holes: { 0: KINGS, 1: QUEENS, 2: 'Ad Ac' }, board: BOARD });
@@ -239,7 +240,7 @@ test('who leads in what: up the most, the most pots, the biggest pot and the bes
   finish(t);
 
   const level = tonight(t);
-  assert.deepEqual([level.upMost, level.mostPots, level.biggestPot, level.bestHand].map((ids) => names(t, ids).sort()), [['P0', 'P2'], ['P0', 'P2'], ['P0', 'P2'], ['P0', 'P2']]);
+  assert.deepEqual([level.upMost, level.mostPots, level.biggestPot, highHand(level)].map((ids) => names(t, ids).sort()), [['P0', 'P2'], ['P0', 'P2'], ['P0', 'P2'], ['P0']]);
 });
 
 /** The night's standings for players given by what they are up or down, how often they rebought and how many pots they won. */
@@ -332,7 +333,7 @@ test('a table saved before the numbers were kept starts counting from now, and s
   old.deal({ button: 0 });
 
   const t = TestTable.adopt(savedBefore(old));
-  assert.deepEqual(t.state.tonight, { hands: 0, players: {} });
+  assert.deepEqual(t.state.tonight, newTonight());
   assert.deepEqual([tonight(t).hands, tonight(t).missed], [0, 2], 'two finished hands were never counted; the one on the table still will be');
   assert.deepEqual(tonight(t).players.map((row) => [row.net, row.hands]), [[60, 0], [-20, 0], [-40, 0]], 'the money is the ledger\'s, and is all there');
 
@@ -365,6 +366,8 @@ class Recount {
     for (const effect of fresh) {
       if (effect.type === 'hand') {
         this.count(effect.record);
+      } else if (effect.type === 'ledger' && effect.entry.kind === 'high hand') {
+        this.bonusPaid(effect.entry.playerId, effect.entry.amount);
       } else if (effect.type === 'ledger' && effect.entry.kind === 'buy-in') {
         if (this.bought.has(effect.entry.playerId)) {
           this.of(effect.entry.playerId).rebuys += 1;
@@ -415,6 +418,10 @@ class Recount {
       }
 
       if (somebodyTook) {
+        this.showedDown(record, player);
+      }
+
+      if (somebodyTook) {
         for (const id of badgesEarned(record, player, { busts, streak }, numbers)) {
           numbers.badges[id] = (numbers.badges[id] ?? 0) + 1;
           this.earned.push({ hand: record.number, seat: player.seat, id });
@@ -425,6 +432,46 @@ class Recount {
 
   /** Each badge earned, by the hand and the seat that earned it. */
   readonly earned: { hand: number; seat: number; id: string }[] = [];
+
+  /**
+   * A player's best hand turned up in a hand somebody won, for the high hand: better than the night's
+   * takes it, as good in an earlier seat of the same hand shares it, and since the bonus was last paid
+   * it is that player's own best when it beats what they had shown since.
+   */
+  private showedDown(record: HandRecord, player: HandRecord['players'][number]): void {
+    const score = (cards: Card[]) => evaluateHand(cards).score;
+    const mine = record.result.hands.filter((hand) => hand.seat === player.seat).sort((a, b) => score(b.cards) - score(a.cards) || a.run - b.run)[0];
+    if (!mine) {
+      return;
+    }
+
+    const { highHand } = this.tonight;
+    const since = highHand.sincePaid[player.playerId];
+
+    if (!since || score(mine.cards) > score(since.cards)) {
+      highHand.sincePaid[player.playerId] = { cards: mine.cards, hand: record.number };
+    }
+
+    const best = highHand.best;
+    if (best?.hand === record.number && score(mine.cards) === score(best.cards)) {
+      best.playerIds.push(player.playerId);
+    } else if (!best || score(mine.cards) > score(best.cards)) {
+      highHand.best = { playerIds: [player.playerId], cards: mine.cards, hand: record.number };
+    }
+  }
+
+  /**
+   * A line of the bonus paid: a payer's, below zero, or a collector's. A bonus is paid only for hands
+   * shown down since the last one, so a collector's line closes them.
+   */
+  private bonusPaid(playerId: string, amount: number): void {
+    const { highHand } = this.tonight;
+
+    if (amount > 0) {
+      highHand.sincePaid = {};
+      highHand.paid[playerId] = (highHand.paid[playerId] ?? 0) + amount;
+    }
+  }
 }
 
 /**
@@ -579,13 +626,13 @@ const TABLES = Number(process.env.SIM_TABLES ?? 40);
 const STEPS_PER_TABLE = 600;
 
 test('over random games the numbers are at every step exactly what the hand records and the ledger make them, and no fact holds a card nobody was shown', () => {
-  const reached = { hands: 0, showdowns: 0, runTwice: 0, runThrice: 0, bombPots: 0, doubleBoards: 0, antes: 0, transfers: 0, rebuys: 0, left: 0, nightsEnded: 0, playedOn: 0, crowned: 0, busts: 0, splits: 0, bestHands: 0, chops: 0 };
+  const reached = { hands: 0, showdowns: 0, runTwice: 0, runThrice: 0, bombPots: 0, doubleBoards: 0, antes: 0, transfers: 0, rebuys: 0, left: 0, nightsEnded: 0, playedOn: 0, crowned: 0, busts: 0, splits: 0, bestHands: 0, chops: 0, highHandsShared: 0, bonusesPaid: 0, bonusAtNightsEnd: 0, bonusToRunnerUp: 0 };
   // Hands with each kind of straddle posted
   const straddled: Record<Straddle, number> = { straddle: 0, 'double straddle': 0, 'button straddle': 0, 'Mississippi straddle': 0 };
   const badges: Record<string, number> = {};
 
   for (let seed = 1; seed <= TABLES; seed++) {
-    const rng = seededRng(seed * 104_729);
+    const rng = seededRng(seed * 104_723);
     const players = 2 + rng.int(SEAT_COUNT - 1);
     const stacks = Array.from({ length: players }, () => (chance(rng, 15) ? 1 + rng.int(30) : 100 + rng.int(1900)));
     // A chop needs three players or more and nothing but the blinds in, which random settings and play give
@@ -605,6 +652,8 @@ test('over random games the numbers are at every step exactly what the hand reco
       const done = t.state.hand?.stage === 'done' ? t.state.hand : null;
       const faceDown = done ? [...done.deck, ...done.players.filter((p) => !p.shown).flatMap((p) => p.cards)] : [];
       const over = nightIsOver(t.state);
+      const effectsBefore = t.effects.length;
+      const holdersBefore = nextHighHand(t.state.tonight.highHand)?.playerIds ?? [];
 
       const hand = t.state.hand;
       const nobodyIn = hand?.stage === 'betting' && hand.street === 'preflop' && hand.lastAggressor === null && hand.toAct !== hand.sbSeat && hand.toAct !== hand.bbSeat;
@@ -656,6 +705,12 @@ test('over random games the numbers are at every step exactly what the hand reco
 
       assert.deepEqual(t.state.tonight, recount.tonight, `table ${seed}, step ${step}: the numbers saved with the table are not what its records come to`);
 
+      const collectors = ledgerEntries(t.effects.slice(effectsBefore)).filter((entry) => entry.kind === 'high hand' && entry.amount > 0);
+      reached.bonusesPaid += collectors.length > 0 ? 1 : 0;
+      reached.bonusAtNightsEnd += collectors.length > 0 && !over && nightIsOver(t.state) ? 1 : 0;
+      reached.bonusToRunnerUp += collectors.some((entry) => !holdersBefore.includes(entry.playerId)) ? 1 : 0;
+      reached.highHandsShared += (t.state.tonight.highHand.best?.playerIds.length ?? 0) > 1 ? 1 : 0;
+
       if (over !== nightIsOver(t.state)) {
         reached[over ? 'playedOn' : 'nightsEnded'] += 1;
       }
@@ -698,6 +753,8 @@ test('over random games the numbers are at every step exactly what the hand reco
   assert.ok(reached.transfers >= TABLES / 2 && reached.rebuys >= TABLES && reached.left >= TABLES, said);
   assert.ok(reached.nightsEnded >= TABLES / 2 && reached.playedOn >= TABLES / 2 && reached.crowned >= TABLES / 2, said);
   assert.ok(reached.busts >= TABLES && reached.splits >= TABLES / 4 && reached.bestHands >= TABLES * 2, said);
+  // A high hand two players share needs them to show the same five cards' worth in one hand, as two playing the board do
+  assert.ok(reached.bonusesPaid >= TABLES && reached.bonusAtNightsEnd >= TABLES / 4 && reached.bonusToRunnerUp >= TABLES / 20 && reached.highHandsShared >= 1, said);
   // The rarest hands, a straight flush and better, are left to the tests of each badge
   assert.ok(['felted', 'heater', 'bigPot', 'scoop'].every((id) => badges[id]! >= TABLES), said);
   // Ace high has to win a pot somebody called at a showdown

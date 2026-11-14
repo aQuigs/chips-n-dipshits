@@ -18,8 +18,11 @@ const FILES = readdirSync(FOLDER)
 // Saved by the last code of schema 3, with everything added to a table while that schema lasted
 const LAST_OF_SCHEMA_3 = 'schema3-with-straddle-and-missed-blinds.json';
 
-// The rest of schema 3 were saved as it began, before any of it was added
-const OLDEST = FILES.filter((file) => /^schema[23]-/.test(file) && file !== LAST_OF_SCHEMA_3);
+// Saved while schema 3 lasted, before the night's numbers were kept
+const SCHEMA_3 = FILES.filter((file) => /^schema[23]-/.test(file));
+
+// The rest of those were saved as schema 3 began, before any of it was added
+const OLDEST = SCHEMA_3.filter((file) => file !== LAST_OF_SCHEMA_3);
 
 const HANDS_TO_PLAY = 4;
 const STEP_LIMIT = 3000;
@@ -232,7 +235,7 @@ test('a bomb pot saved in the middle by the code before there were two boards go
 });
 
 test('a table saved when a hand had one straddle, kept as its seat, has it as a line of one, and every player who asked to straddle still posts under the gun', () => {
-  for (const file of FILES.filter((name) => /^schema[23]-/.test(name))) {
+  for (const file of SCHEMA_3) {
     const state = load(file);
     const before = JSON.parse(readFileSync(new URL(file, FOLDER), 'utf8')) as { seats: ({ straddle: boolean } | null)[]; hand: { straddleSeat: number | null } | null };
 
@@ -290,11 +293,11 @@ test('a table saved when a hand had one straddle, kept as its seat, has it as a 
 });
 
 test('a table saved before the night’s numbers were kept loads with nothing counted and says how many hands it missed, and a hand it was saved in the middle of is the first one counted', () => {
-  for (const file of FILES) {
+  for (const file of SCHEMA_3) {
     const state = load(file);
     const { tonight, ledger } = TestTable.adopt(state).view(0);
 
-    assert.deepEqual(state.tonight, { hands: 0, players: {} }, file);
+    assert.deepEqual(state.tonight, { hands: 0, players: {}, highHand: { best: null, sincePaid: {}, paid: {} } }, file);
     assert.deepEqual([tonight.hands, tonight.missed], [0, state.handCount - (state.hand ? 1 : 0)], file);
     assert.deepEqual(tonight.players.map((row) => [row.playerId, row.net, row.hands]).sort(), ledger.map((row) => [row.playerId, row.net, 0]).sort(), file);
   }
@@ -376,4 +379,30 @@ test('a hand record saved when a pick was a yes or no to twice reads each as the
   assert.deepEqual(asOnceSaved.events.filter((event) => event[0] === 'vote'), [['vote', 0, true], ['vote', 1, false]]);
 
   assert.deepEqual(upgradeRecord(asOnceSaved), record);
+});
+
+test('a table saved before the high hand was kept has it from the best hands shown, shared by two as good since which came first is not known, and pays it when the night ends', () => {
+  const t = TestTable.adopt(load('schema4-best-hands-shown.json'));
+  const idOf = (name: string) => t.state.members.find((member) => member.name === name)!.id;
+  const flush = ['Ah', 'Jh', '9h', '7h', '2h'];
+
+  assert.deepEqual(t.state.tonight.highHand, {
+    best: { playerIds: [idOf('P0'), idOf('P2')], cards: flush, hand: 0 },
+    sincePaid: { [idOf('P0')]: { cards: flush, hand: 0 }, [idOf('P2')]: { cards: flush, hand: 0 } },
+    paid: {},
+  });
+  assert.deepEqual(t.view(1).tonight.highHand.next, { playerIds: [idOf('P0'), idOf('P2')], name: 'Flush, ace high', cards: flush, hand: 0 });
+  assertInvariants(t.state, t.now);
+
+  // The one who has shown nothing pays both, the odd chip to seat 2 on the button's left
+  t.cmd(0, { type: 'updateConfig', config: { highHandBonus: 5 } });
+  const before = t.state.seats.slice(0, 3).map((seat) => seat!.stack);
+  t.cmd(0, { type: 'endNight' });
+
+  assert.deepEqual(
+    t.state.seats.slice(0, 3).map((seat, index) => seat!.stack - before[index]!),
+    [2, -5, 3],
+  );
+  assert.deepEqual(t.state.tonight.highHand.paid, { [idOf('P2')]: 3, [idOf('P0')]: 2 });
+  assertInvariants(t.state, t.now);
 });

@@ -5,7 +5,7 @@ import { HANDLERS } from '../src/engine/commands/index.ts';
 import type { CommandOf, CommandType } from '../src/engine/commands/handler.ts';
 import { addMember, reaches, roleOf } from '../src/engine/index.ts';
 import type { Command, HostLevel, Role } from '../src/engine/index.ts';
-import { TestTable } from './helpers.ts';
+import { ACES, BOARD, checkAround, KINGS, QUEENS, TestTable } from './helpers.ts';
 
 /** A table with the host and one other player seated, and a third member who is only watching. */
 function tableWithWatcher(): { t: TestTable; watcher: number } {
@@ -72,6 +72,17 @@ function tableWithCohost(): TestTable {
   return t;
 }
 
+/** A bonus on the high hand, and a first hand checked down to a showdown, so there is a high hand to pay. */
+function showDownWithBonus(t: TestTable): void {
+  t.cmd(HOST, { type: 'updateConfig', config: { highHandBonus: 5 } });
+  t.deal({ button: 0, holes: { 0: ACES, 1: KINGS, 2: QUEENS }, board: BOARD });
+  t.call(0);
+  t.call(1);
+  t.check(2);
+  checkAround(t, [1, 2, 0], 3);
+  t.finishHand();
+}
+
 /**
  * Who may send each command, stated again here on purpose: a command added to the table fails this
  * test until it is listed, so whoever adds one decides who may send it and shows that it holds. A
@@ -110,6 +121,7 @@ const DECLARED: { [T in CommandType]: { by: 'member' | 'seat' } | { by: HostLeve
   setLastHands: { by: 'host or cohost', sample: () => ({ type: 'setLastHands', hands: 3 }) },
   endNight: { by: 'host or cohost', sample: () => ({ type: 'endNight' }) },
   playOn: { by: 'host or cohost', sample: () => ({ type: 'playOn' }), setup: (t) => t.cmd(HOST, { type: 'endNight' }) },
+  payHighHand: { by: 'host or cohost', sample: (ids) => ({ type: 'payHighHand', hand: 1, to: [ids[HOST]!] }), setup: showDownWithBonus },
   forgiveBlinds: { by: 'host or cohost', sample: (ids) => ({ type: 'forgiveBlinds', playerId: ids[TARGET]! }) },
   updateConfig: { by: 'host or cohost', sample: () => ({ type: 'updateConfig', config: { bigBlind: 40 } }) },
   transferHost: { by: 'host alone', sample: (ids) => ({ type: 'transferHost', playerId: ids[TARGET]! }) },

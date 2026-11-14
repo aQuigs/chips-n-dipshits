@@ -5,6 +5,7 @@ import { stopChoppingUnasked } from '../chop.ts';
 import { validatedConfig } from '../config.ts';
 import { restartActionClock } from '../hand.ts';
 import { forgive, forgiveEveryone, owes } from '../handPlan.ts';
+import { payHighHandNow } from '../highHand.ts';
 import { actorName, dropCohost, requireMayRemove } from '../hosts.ts';
 import { callLastHands, endNight, nightIsOver, onLastHand, restartNight } from '../night.ts';
 import { movePlayer, shuffleEveryone } from '../reseating.ts';
@@ -14,7 +15,7 @@ import { dropStraddlesNotAllowed, STRADDLES, straddlesAllowed } from '../straddl
 import { transfer } from '../transfers.ts';
 import { GameError, SEAT_COUNT } from '../types.ts';
 import type { TableConfig } from '../types.ts';
-import { wholeNumber, yesOrNo } from '../validate.ts';
+import { idList, wholeNumber, yesOrNo } from '../validate.ts';
 import type { Handler } from './handler.ts';
 
 /** Refused once the night is over, so that a Resume pressed on a page that had not yet heard does not start it again. */
@@ -167,6 +168,12 @@ export const playOn: Handler<'playOn'> = {
   run: ({ state, ctx, member }) => restartNight(state, ctx, actorName(state, member)),
 };
 
+/** Not tied to the night: a bonus set once the night is over can still be paid. */
+export const payHighHand: Handler<'payHighHand'> = {
+  by: 'host or cohost',
+  run: ({ state, ctx, member, command }) => payHighHandNow(state, ctx, actorName(state, member), wholeNumber(command.hand, 'The hand', 0, state.handCount), idList(command.to, 'Who collects', SEAT_COUNT)),
+};
+
 export const forgiveBlinds: Handler<'forgiveBlinds'> = {
   by: 'host or cohost',
   run: ({ state, ctx, member, command }) => {
@@ -215,6 +222,11 @@ export const updateConfig: Handler<'updateConfig'> = {
     if (state.config.sevenDeuceBounty !== before.sevenDeuceBounty) {
       const bounty = state.config.sevenDeuceBounty;
       addFeed(state, ctx.now, 'system', null, bounty > 0 ? `The seven-deuce bounty is ${formatAmount(bounty, state.config)}${when}` : `The seven-deuce bounty is off${when}`);
+    }
+
+    if (state.config.highHandBonus !== before.highHandBonus) {
+      const bonus = state.config.highHandBonus;
+      addFeed(state, ctx.now, 'system', null, bonus > 0 ? `The high-hand bonus is ${formatAmount(bonus, state.config)} from everyone else seated` : 'The high-hand bonus is off: the high hand is for the honor alone');
     }
 
     if (BOMB_POT_SETTINGS.some((key) => state.config[key] !== before[key])) {

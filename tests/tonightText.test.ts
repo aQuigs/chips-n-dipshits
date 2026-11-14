@@ -44,7 +44,7 @@ test('the night as text names the table, how far the night is, who leads in what
       'Up the most: P0, +30',
       'Most pots won: P0, 1',
       'Biggest pot: P0, 50',
-      'Best hand: P0, Pair of aces (A♠ A♥ J♣ 9♥ 7♦)',
+      'High hand: P0, Pair of aces (A♠ A♥ J♣ 9♥ 7♦)',
       '',
       'P0 +30 · 1 hand · 1 pot won',
       'P1 -10 · 1 hand · 0 pots won · 1 rebuy',
@@ -73,7 +73,7 @@ test('at a table that plays dollars and cents every amount in the text is writte
       'Up the most: P0, +0.30',
       'Most pots won: P0, 1',
       'Biggest pot: P0, 0.50',
-      'Best hand: P0, Pair of aces (A♠ A♥ J♣ 9♥ 7♦)',
+      'High hand: P0, Pair of aces (A♠ A♥ J♣ 9♥ 7♦)',
       '',
       'P0 +0.30 · 1 hand · 1 pot won',
       'P1 -0.10 · 1 hand · 0 pots won',
@@ -96,17 +96,18 @@ test('the crown says what settled it: the money alone, a tie on it broken by reb
 
 test('players level in something are named together while they are few, and counted when they are many', () => {
   const view = oneHandIn().view(0);
-  const led = (ids: string[]) => leadersOf({ ...view, tonight: { ...view.tonight, upMost: [], biggestPot: [], bestHand: ids, mostPots: ids } });
+  const { highHand } = view.tonight;
+  const led = (ids: string[]) => leadersOf({ ...view, tonight: { ...view.tonight, upMost: [], biggestPot: [], mostPots: ids, highHand: { ...highHand, best: { ...highHand.best!, playerIds: ids }, next: { ...highHand.next!, playerIds: ids } } } });
   const everyone = view.tonight.players.map((row) => row.playerId);
 
   assert.deepEqual(led(everyone.slice(0, 2)), [
-    { label: 'Most pots won', who: 'P0 and P1', what: '1 each', cards: null },
-    { label: 'Best hand', who: 'P0 and P1', what: 'Pair of aces each', cards: null },
+    { label: 'Most pots won', who: 'P0 and P1', what: '1 each', cards: null, note: null },
+    { label: 'High hand', who: 'P0 and P1', what: 'Pair of aces', cards: null, note: null },
   ]);
   assert.equal(led(everyone)[0]!.who, 'P0, P1 and P2');
 
   const four = new TestTable({ stacks: [1000, 1000, 1000, 1000] }).view(0);
-  assert.deepEqual(leadersOf({ ...four, tonight: { ...four.tonight, mostPots: four.tonight.players.map((row) => row.playerId) } }), [{ label: 'Most pots won', who: '4 players', what: '0 each', cards: null }]);
+  assert.deepEqual(leadersOf({ ...four, tonight: { ...four.tonight, mostPots: four.tonight.players.map((row) => row.playerId) } }), [{ label: 'Most pots won', who: '4 players', what: '0 each', cards: null, note: null }]);
   assert.deepEqual(leadersOf(four), [], 'nothing is led before anything has happened');
 });
 
@@ -127,4 +128,30 @@ test('the night as text gives each player\'s badges after what they did, in the 
 
   assert.ok(lines.includes('P0 +30 · 1 hand · 1 pot won · 🍀 Quads · 💀 Felted ×2'), lines.join('\n'));
   assert.ok(lines.includes('P2 -20 · 1 hand · 0 pots won'), 'a player with no badges gets no more');
+});
+
+test('the high hand says what its bonus comes to, or came to and to whom, and once paid the one shown since is named too', () => {
+  const t = oneHandIn({ highHandBonus: 5 });
+  const text = () => tonightText(t.view(1)).split('\n').filter((line) => line.startsWith('High hand'));
+
+  assert.deepEqual(text(), ['High hand: P0, Pair of aces (A♠ A♥ J♣ 9♥ 7♦). Bonus: 5 from everyone else seated when the night ends']);
+
+  t.cmd(0, { type: 'payHighHand', hand: 1, to: [t.ids[0]!] });
+  assert.deepEqual(text(), ['High hand: P0, Pair of aces (A♠ A♥ J♣ 9♥ 7♦). Bonus paid: 10 to P0']);
+
+  // P2's kings, shown since, are the next to be paid
+  t.deal({ button: 0, holes: { 0: '4h 5h', 2: KINGS }, board: BOARD });
+  t.call(0);
+  t.fold(1);
+  t.check(2);
+  checkAround(t, [2, 0], 3);
+  t.runToResult();
+  t.finishHand();
+  assert.deepEqual(text(), [
+    'High hand: P0, Pair of aces (A♠ A♥ J♣ 9♥ 7♦). Bonus paid: 10 to P0',
+    'High hand since: P2, Pair of kings (K♠ K♥ J♣ 9♥ 7♦). Bonus: 5 from everyone else seated when the night ends',
+  ]);
+
+  t.cmd(0, { type: 'endNight' });
+  assert.deepEqual(text(), ['High hand: P0, Pair of aces (A♠ A♥ J♣ 9♥ 7♦). Bonus paid: 10 to P0, 10 to P2']);
 });

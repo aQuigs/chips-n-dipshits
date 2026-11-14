@@ -31,7 +31,9 @@ function leadersEl(view: TableView, handlers: DialogHandlers): HTMLElement | nul
   return h(
     'dl.tonight-leaders',
     null,
-    leaders.map((leader) => h('div', null, h('dt', null, leader.label), h('dd', null, h('b', null, leader.who), ` ${leader.what}`, leader.cards ? [' ', cardsEl(leader.cards, handlers)] : null))),
+    leaders.map((leader) =>
+      h('div', null, h('dt', null, leader.label), h('dd', null, h('b', null, leader.who), ` ${leader.what}`, leader.cards ? [' ', cardsEl(leader.cards, handlers)] : null, leader.note ? h('small.note', null, leader.note) : null)),
+    ),
   );
 }
 

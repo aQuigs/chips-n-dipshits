@@ -1,9 +1,9 @@
 import type { TableView } from '../engine/view.ts';
 import type { Attention } from './attention.ts';
-import { badgeToasts } from './effects/badgeToasts.ts';
 import { celebrations } from './effects/celebrations.ts';
 import { handMoves } from './effects/handMoves.ts';
 import { handSounds } from './effects/handSounds.ts';
+import { honorToasts } from './effects/honorToasts.ts';
 import { nightRecap } from './effects/nightRecap.ts';
 import { yourTurn } from './effects/yourTurn.ts';
 import type { TableMotion } from './motion.ts';
@@ -62,7 +62,7 @@ const TABLE_EFFECTS: (() => TableEffect)[] = [
   celebrations,
   yourTurn,
   nightRecap,
-  badgeToasts,
+  honorToasts,
 ];
 
 /** The effects of one table screen. */

@@ -1,7 +1,7 @@
 import { formatAmount } from './amounts.ts';
 import { countRebuy } from './tonight.ts';
 import { GameError, SEAT_COUNT } from './types.ts';
-import type { Ctx, FeedKind, LedgerDetail, Member, MoneyKind, Seat, TableState } from './types.ts';
+import type { Ctx, FeedKind, LedgerDetail, Member, MoneyKind, MovedKind, Seat, TableState } from './types.ts';
 
 export const FEED_LIMIT = 60;
 
@@ -105,13 +105,19 @@ export function recordLedger(state: TableState, ctx: Ctx, member: Member, kind: 
   book(state, ctx, member, { kind, amount });
 }
 
-/** Chips moved from one stack to another, booked for both players at once so the two lines always come as a pair. */
-export function recordTransfer(state: TableState, ctx: Ctx, from: Member, to: Member, amount: number): void {
-  from.transferred -= amount;
-  to.transferred += amount;
+/**
+ * Chips moved from one stack to another outside a hand, booked for both players at once so the two
+ * lines always come as a pair. A transfer is counted in what each member had moved to them; the
+ * high-hand bonus is winnings, and like a pot shows only in the stacks.
+ */
+export function recordMove(state: TableState, ctx: Ctx, kind: MovedKind, from: Member, to: Member, amount: number): void {
+  if (kind === 'transfer') {
+    from.transferred -= amount;
+    to.transferred += amount;
+  }
 
-  book(state, ctx, from, { kind: 'transfer', amount: -amount, otherId: to.id, otherName: to.name });
-  book(state, ctx, to, { kind: 'transfer', amount, otherId: from.id, otherName: from.name });
+  book(state, ctx, from, { kind, amount: -amount, otherId: to.id, otherName: to.name });
+  book(state, ctx, to, { kind, amount, otherId: from.id, otherName: from.name });
 }
 
 /**

@@ -139,6 +139,15 @@ export const FUZZ_COMMANDS: ((fuzz: Fuzz) => void)[] = [
   },
   ({ t, rng }) => attempt(t, someoneRunningTheGame(t, rng), { type: chance(rng, 80) ? 'playOn' : 'start' }),
 
+  // The high hand paid out early, mostly the one the sender sees and now and then one that has since changed
+  ({ t, rng }) => {
+    const shown = viewFor(t.state, t.ids[0]!, t.now).tonight.highHand.due;
+    const due = 'refused' in shown ? { hand: 0, playerIds: [] } : shown;
+    const to = chance(rng, 90) ? due.playerIds : [t.ids[rng.int(t.ids.length)]!];
+
+    attempt(t, chance(rng, 85) ? someoneRunningTheGame(t, rng) : rng.int(t.ids.length), { type: 'payHighHand', hand: chance(rng, 90) ? due.hand : due.hand + 1, to });
+  },
+
   ({ t, rng }) => {
     // Mostly a change the host could make. Now and then one that also asks for what was fixed at creation, which is refused whole
     const config = randomConfig(rng, chance(rng, 90) ? t.state.config : undefined);
@@ -238,7 +247,8 @@ export function randomStep(t: TestTable, rng: Rng): void {
 
   if (hand?.stage === 'ritVote' && chance(rng, 70)) {
     const voter = hand.players.find((p) => !p.folded && p.ritVote === null)!;
-    const cap = t.state.config.maxRuns;
+    // The hand's own, which a change to the setting since the deal leaves alone
+    const cap = hand.maxRuns;
     const roll = rng.int(100);
 
     // The most the table allows more often than not, since running it that many times takes everyone picking it

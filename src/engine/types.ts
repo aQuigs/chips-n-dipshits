@@ -45,6 +45,8 @@ export interface TableConfig {
   maxRuns: 1 | 2 | 3;
   /** Paid by every other player dealt in to whoever wins with seven-deuce; 0 turns it off. */
   sevenDeuceBounty: number;
+  /** Paid by everyone else seated to whoever holds the high hand, when the night ends or the host pays it out; 0 for the honor alone. */
+  highHandBonus: number;
   /** What everyone dealt into a bomb pot puts in. */
   bombPotAmount: number;
   /** One hand in this many is a bomb pot without being called; 0 for only when one is called. */
@@ -306,15 +308,38 @@ export interface PlayerTonight {
   badges: Record<string, number>;
 }
 
+/** A hand turned up at a showdown, as the high hand keeps it: its five cards, and the number of the hand it was shown in (0 when shown before the high hand was kept). */
+export interface ShownDown {
+  cards: Card[];
+  hand: number;
+}
+
+/** The best hand turned up at a showdown over some stretch of the night, and who showed it. */
+export interface HighHand extends ShownDown {
+  /** Who showed it, by member id: more than one when they showed as good in the same hand. `cards` are the first one's. */
+  playerIds: string[];
+}
+
+/** The high hand of the night. Only `highHand.ts` changes it. */
+export interface HighHands {
+  /** The best hand shown down tonight: when a later one is as good, the first stays. Null until a hand has been. */
+  best: HighHand | null;
+  /** The best hand each player has shown down since the bonus was last paid, by member id. The best of them is what the bonus is paid for next. */
+  sincePaid: Record<string, ShownDown>;
+  /** What each player has collected of the bonus tonight, by member id: only those who have collected some. */
+  paid: Record<string, number>;
+}
+
 /**
  * The night's running numbers. Finished hands leave the table for their own tab, so what the night
- * comes to is counted here as each hand ends. Only `tonight.ts` changes it.
+ * comes to is counted here as each hand ends. Only `tonight.ts` changes it, and `highHand.ts` its high hand.
  */
 export interface Tonight {
   /** Finished hands counted. Fewer than the table has played when its first hands were dealt before the count was kept. */
   hands: number;
   /** By member id. A member is in it once they are dealt a hand or buy chips again. */
   players: Record<string, PlayerTonight>;
+  highHand: HighHands;
 }
 
 export interface TableState {
@@ -367,11 +392,17 @@ export interface TableState {
 export type MoneyKind = 'buy-in' | 'cash-out' | 'adjustment';
 
 /**
- * What a ledger line records. `amount` is chips onto the player's stack, positive, or off it, negative.
- * A transfer is chips the host moved from one stack to another, with no money paid to or by the bank:
- * it is booked as two lines made together, off the giver's stack and onto the receiver's, each naming the other player.
+ * Chips moved from one player's stack to another's outside a hand, with no money paid to or by the bank:
+ * a transfer the host made, or the high-hand bonus paid to its holder.
  */
-export type LedgerDetail = { kind: MoneyKind; amount: number } | { kind: 'transfer'; amount: number; otherId: string; otherName: string };
+export type MovedKind = 'transfer' | 'high hand';
+
+/**
+ * What a ledger line records. `amount` is chips onto the player's stack, positive, or off it, negative.
+ * Chips moved between players are booked as two lines made together, off the giver's stack and onto
+ * the receiver's, each naming the other player.
+ */
+export type LedgerDetail = { kind: MoneyKind; amount: number } | { kind: MovedKind; amount: number; otherId: string; otherName: string };
 
 export type LedgerEntry = { at: number; tableId: string; playerId: string; name: string } & LedgerDetail;
 
@@ -461,6 +492,8 @@ export type Command =
   | { type: 'endNight' }
   /** Starts dealing again after the night ended. */
   | { type: 'playOn' }
+  /** Pays the high-hand bonus now. `hand` and `to` are the hand number and the collectors the host was shown, so a payment that has since changed is refused rather than made. */
+  | { type: 'payHighHand'; hand: number; to: string[] }
   | { type: 'forgiveBlinds'; playerId: string }
   | { type: 'updateConfig'; config: Partial<TableConfig> }
   | { type: 'transferHost'; playerId: string }

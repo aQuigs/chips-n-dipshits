@@ -25,6 +25,7 @@ test('the default settings are the registry\'s defaults, and the table accepts t
     maxRuns: 3,
     allowChop: false,
     sevenDeuceBounty: 0,
+    highHandBonus: 0,
     bombPotAmount: 100,
     bombPotEvery: 0,
     bombPotBoards: 'one',

@@ -5,7 +5,7 @@
  */
 import { formatAmount, validAmount } from './amounts.ts';
 import { isDealtIn } from './seating.ts';
-import { addFeed, recordTransfer, seatedMember } from './seats.ts';
+import { addFeed, recordMove, seatedMember } from './seats.ts';
 import { GameError } from './types.ts';
 import type { Ctx, TableState } from './types.ts';
 
@@ -47,7 +47,7 @@ export function transfer(state: TableState, ctx: Ctx, actor: string, fromId: str
 
   from.seat.stack -= chips;
   to.seat.stack += chips;
-  recordTransfer(state, ctx, from.member, to.member, chips);
+  recordMove(state, ctx, 'transfer', from.member, to.member, chips);
 
   addFeed(state, ctx.now, 'system', null, `${actor} moved ${formatAmount(chips, state.config)} from ${from.member.name} to ${to.member.name}`);
 }

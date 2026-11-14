@@ -15,6 +15,7 @@ export * from './handFacts.ts';
 export * from './handNames.ts';
 export * from './handPlan.ts';
 export * from './handRank.ts';
+export * from './highHand.ts';
 export * from './hosts.ts';
 export * from './night.ts';
 export * from './pots.ts';

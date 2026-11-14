@@ -447,3 +447,47 @@ test('a hand the blinds chop at once tells no badge, though the small blind is a
   cleared();
   assert.deepEqual(told.flatMap((change) => change.earned), [{ id: 'heater', times: 1 }], 'the run of three was not told');
 });
+
+/** Heads-up, a hand checked down to a showdown with the cards given, the page seeing each step on time but the last, which arrives `late` ms late. */
+function checkedDown(table: TestTable, page: Page, holes: Record<number, string>, board: string, late = 0): TableChange {
+  table.deal({ button: 0, holes, board });
+  table.call(0);
+  table.check(1);
+
+  for (let street = 0; street < 3; street++) {
+    table.check(1);
+    table.check(0);
+    page.arrive(table);
+  }
+
+  while (table.state.hand!.stage !== 'done') {
+    table.wait(table.state.hand!.deadline! - table.now);
+    page.arrive(table);
+  }
+
+  table.wait(table.state.hand!.deadline! - table.now);
+
+  return page.arrive(table, false, late);
+}
+
+test('taking the high hand is told once, to whoever took it, by the first view on time that shows it; a page opened later is told nothing', () => {
+  const table = new TestTable({ stacks: [1000, 1000] });
+  const page = new Page();
+  page.arrive(table);
+
+  assert.equal(checkedDown(table, page, { 0: 'As Ah', 1: 'Ks Kh' }, '2c 7d 9h Jc 3s').tookHighHand, true);
+  table.cmd(1, { type: 'chat', text: 'nice' });
+  assert.equal(page.arrive(table).tookHighHand, false, 'told again');
+
+  // Seat 1 takes it with three kings, which is no news to seat 0's page
+  assert.equal(checkedDown(table, page, { 0: 'Qs Qh', 1: 'Ks Kh' }, 'Kd 7d 9h Jc 3s').tookHighHand, false);
+
+  // Seat 0 takes it back with four nines, in a view that comes late: the next on time tells it
+  assert.equal(checkedDown(table, page, { 0: '9s 9c', 1: '4s 5c' }, '9d 9h 2c Jc Ks', 30_000).tookHighHand, false);
+  assert.equal(page.arrive(table).tookHighHand, true);
+
+  const opened = new Page();
+  assert.equal(opened.arrive(table).tookHighHand, false);
+  table.cmd(1, { type: 'chat', text: 'still here' });
+  assert.equal(opened.arrive(table).tookHighHand, false, 'the next view on time');
+});

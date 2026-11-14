@@ -41,4 +41,5 @@ export const STYLESHEETS = [
   'chop.css',
   'badges.css',
   'chances.css',
+  'high-hand.css',
 ];

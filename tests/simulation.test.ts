@@ -26,6 +26,8 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
   const handsWithAnteIn = { chips: 0, cents: 0 };
   let shortAntes = 0;
   const transfersIn = { chips: 0, cents: 0 };
+  // Tables where a high-hand bonus was paid, and by which of the two ways
+  const bonuses = { chips: 0, cents: 0, early: 0, atNightsEnd: 0 };
   const bombPots = { chips: 0, cents: 0, called: 0, byCount: 0, overAnAnte: 0, short: 0, allInWhenDealt: 0 };
   const doubleBoards = { chips: 0, cents: 0, shownDown: 0, ranOut: 0, withSidePots: 0, wonUncontested: 0 };
   const nights = { afterLastHand: 0, endedOutright: 0, startedAgain: 0, signals: 0 };
@@ -34,7 +36,7 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
   const straddles: Record<Straddle | 'passedOver' | 'overAnAnte' | 'shownDown', number> = { straddle: 0, 'double straddle': 0, 'button straddle': 0, 'Mississippi straddle': 0, passedOver: 0, overAnAnte: 0, shownDown: 0 };
 
   for (let seed = 1; seed <= TABLES; seed++) {
-    const rng = seededRng(seed * 7877);
+    const rng = seededRng(seed * 7949);
     const players = 2 + rng.int(SEAT_COUNT - 1);
     const stacks = Array.from({ length: players }, () => (chance(rng, 15) ? 1 + rng.int(30) : 100 + rng.int(1900)));
 
@@ -53,8 +55,12 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
         assertInvariants(t.state, t.now);
       }
 
-      const before = { hands: t.state.handCount, called: t.state.bombPotCalled, inHand: t.state.hand !== null, over: nightIsOver(t.state) };
+      const before = { hands: t.state.handCount, called: t.state.bombPotCalled, inHand: t.state.hand !== null, over: nightIsOver(t.state), effects: t.effects.length };
       randomStep(t, rng);
+
+      if (t.effects.slice(before.effects).some((effect) => effect.type === 'ledger' && effect.entry.kind === 'high hand')) {
+        bonuses[before.over === nightIsOver(t.state) ? 'early' : 'atNightsEnd'] += 1;
+      }
 
       if (before.over !== nightIsOver(t.state)) {
         nights[before.over ? 'startedAgain' : before.inHand ? 'afterLastHand' : 'endedOutright'] += 1;
@@ -86,6 +92,7 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
     handsPlayed += assertHandRecordsHold(t.effects);
     nights.signals += t.effects.filter((effect) => effect.type === 'nightEnded').length;
     transfersIn[config.unit] += ledgerEntries(t.effects).filter((entry) => entry.kind === 'transfer' && entry.amount > 0).length;
+    bonuses[config.unit] += ledgerEntries(t.effects).some((entry) => entry.kind === 'high hand') ? 1 : 0;
 
     for (const record of handRecords(t.effects)) {
       showdowns += record.result.uncontested ? 0 : 1;
@@ -145,6 +152,9 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
   assert.ok(shortAntes >= TABLES / 4, antes);
 
   assert.ok(transfersIn.chips >= TABLES && transfersIn.cents >= TABLES, `${transfersIn.chips} transfers at whole-chip tables and ${transfersIn.cents} at tables of dollars and cents`);
+
+  const paid = `high-hand bonuses: ${JSON.stringify(bonuses)}`;
+  assert.ok(bonuses.chips >= TABLES / 4 && bonuses.cents >= TABLES / 4 && bonuses.early >= TABLES / 4 && bonuses.atNightsEnd >= TABLES / 4, paid);
 
   const ended = `nights: ${JSON.stringify(nights)}`;
   assert.ok(nights.afterLastHand >= TABLES / 2 && nights.endedOutright >= TABLES / 4 && nights.startedAgain >= TABLES, ended);

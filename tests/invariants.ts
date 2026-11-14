@@ -4,8 +4,8 @@
  */
 import assert from 'node:assert/strict';
 
-import { badgeOf, blindsOnly, BOARD_SIZE, boardsDealt, evaluateHand, FEED_LIMIT, FLOP_SIZE, handFacts, isStraddle, LIMITS, MOST_RUNS, nightIsOver, owes, PLAYING_THE_BOARD, reaches, replayHand, roleOf, STRADDLES, STRADDLES_IN_A_ROW, straddlesAllowed, viewFor, wonAPot } from '../src/engine/index.ts';
-import type { Effect, FeedEntry, HandPlayer, HandRecord, TableState } from '../src/engine/index.ts';
+import { badgeOf, blindsOnly, BOARD_SIZE, boardsDealt, evaluateHand, FEED_LIMIT, FLOP_SIZE, handFacts, isStraddle, LIMITS, MOST_RUNS, nextHighHand, nightIsOver, owes, PLAYING_THE_BOARD, reaches, replayHand, roleOf, STRADDLES, STRADDLES_IN_A_ROW, straddlesAllowed, viewFor, wonAPot } from '../src/engine/index.ts';
+import type { Card, Effect, FeedEntry, HandPlayer, HandRecord, TableState } from '../src/engine/index.ts';
 import { CACHE_VALUE_BYTES, utf8Bytes } from '../src/gas/sheetStore.ts';
 import { restoreState } from '../src/server/store.ts';
 import { handRecords, ledgerEntries } from './helpers.ts';
@@ -279,6 +279,36 @@ export function assertNumbersHold(state: TableState): void {
     assert.ok(numbers.best === null || numbers.best.length === 5, 'a best hand that is not five cards');
     assert.ok(numbers.busts <= numbers.hands && numbers.streak <= numbers.won, 'more busts than hands, or a streak longer than the pots won');
     assert.ok(Object.entries(numbers.badges).every(([badge, times]) => badgeOf(badge) && Number.isInteger(times) && times >= 1 && times <= numbers.hands), 'a badge this code does not know, or earned more times than hands played');
+  }
+
+  assertHighHandHolds(state);
+}
+
+/**
+ * The high hand is the best hand the night's numbers have anyone showing, and each of its holders
+ * has it as their own best. The one the bonus is paid for next is the night's own until that is paid,
+ * and never better than it.
+ */
+export function assertHighHandHolds(state: TableState): void {
+  const { players, highHand } = state.tonight;
+  const { best, sincePaid } = highHand;
+  const rank = (cards: Card[] | null) => (cards ? evaluateHand(cards).score : -1);
+  const bestShown = Math.max(-1, ...Object.values(players).map((numbers) => rank(numbers.best)));
+
+  assert.equal(best ? rank(best.cards) : -1, bestShown, 'the high hand is not the best hand the night has anyone showing');
+  if (!best) {
+    assert.deepEqual(sincePaid, {}, 'a hand shown down since the bonus was paid, and no high hand');
+    return;
+  }
+
+  assert.ok(best.playerIds.length > 0 && best.playerIds.every((id) => rank(players[id]?.best ?? null) === bestShown), 'a holder of the high hand whose own best hand is another');
+  assert.ok(Object.entries(highHand.paid).every(([id, amount]) => amount > 0 && players[id]), 'a bonus paid of nothing, or to someone the night has no numbers for');
+  assert.ok(Object.entries(sincePaid).every(([id, shown]) => players[id] && rank(shown.cards) <= rank(players[id]!.best) && shown.hand <= state.handCount), 'a hand shown since the bonus was paid that is better than the player ever showed');
+
+  const next = nextHighHand(highHand);
+  assert.ok(!next || rank(next.hand.cards) <= bestShown, 'the high hand paid for next is better than the night\'s');
+  if (Object.keys(highHand.paid).length === 0) {
+    assert.ok(next && next.hand.hand === best.hand && rank(next.hand.cards) === bestShown && [...next.playerIds].sort().join() === [...best.playerIds].sort().join(), 'nothing has been paid, and the high hand is not the one the bonus is paid for next');
   }
 }
 
@@ -646,27 +676,33 @@ export function assertHandRecordsHold(effects: Effect[]): number {
 
 /**
  * The ledger's entries add up, member by member, to what the table says each bought and cashed out and
- * had moved to them, and a transfer's two lines always come as a pair that gives and takes the same chips.
+ * had transferred to them. Chips moved between players, a transfer or the high-hand bonus, always come
+ * as a pair of lines of one kind that gives and takes the same chips, so they leave the chips bought alone.
  */
 export function assertLedgerAgrees(state: TableState, effects: Effect[]): void {
   const entries = ledgerEntries(effects);
 
   for (const member of state.members) {
-    const totals = { paid: 0, moved: 0 };
+    const totals = { paid: 0, transfer: 0, 'high hand': 0, collected: 0 };
     for (const entry of entries.filter((e) => e.playerId === member.id)) {
-      totals[entry.kind === 'transfer' ? 'moved' : 'paid'] += entry.amount;
+      totals['otherId' in entry ? entry.kind : 'paid'] += entry.amount;
+      totals.collected += entry.kind === 'high hand' && entry.amount > 0 ? entry.amount : 0;
     }
 
     assert.equal(totals.paid, member.buyIn - member.cashOut, `the ledger entries and ${member.name}'s chips bought and cashed out disagree`);
-    assert.equal(totals.moved, member.transferred, `the ledger entries and the chips moved to ${member.name} disagree`);
+    assert.equal(totals.transfer, member.transferred, `the ledger entries and the chips moved to ${member.name} disagree`);
+    assert.equal(totals.collected, state.tonight.highHand.paid[member.id] ?? 0, `the ledger entries and the bonus ${member.name} collected disagree`);
   }
 
   entries.forEach((entry, index) => {
-    if (entry.kind !== 'transfer') {
+    if (!('otherId' in entry)) {
       return;
     }
 
     const pair = entry.amount < 0 ? entries[index + 1] : entries[index - 1];
-    assert.ok(pair?.kind === 'transfer' && pair.amount === -entry.amount && pair.playerId === entry.otherId && pair.otherId === entry.playerId, 'a transfer is booked without its other half');
+    assert.ok(
+      pair?.kind === entry.kind && pair.amount === -entry.amount && entry.amount !== 0 && pair.playerId === entry.otherId && pair.otherId === entry.playerId,
+      `chips moved as ${entry.kind} are booked without their other half`,
+    );
   });
 }

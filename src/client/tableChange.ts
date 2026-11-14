@@ -26,6 +26,8 @@ export interface TableChange {
    * something they missed.
    */
   current: boolean;
+  /** The table itself returned to an earlier state, as after the Sheet was restored. */
+  wentBack: boolean;
 }
 
 /**
@@ -39,7 +41,7 @@ export interface TableChange {
  */
 export function tableChange(before: TableView | null, view: TableView, now: number, wentBack = false): TableChange {
   if (!before || wentBack) {
-    return { before, view, feed: [], events: [], current: false };
+    return { before, view, feed: [], events: [], current: false, wentBack };
   }
 
   // A line is known by its number and its time together: a table put back to an earlier state numbers its next lines like ones it had
@@ -51,7 +53,7 @@ export function tableChange(before: TableView | null, view: TableView, now: numb
   // holds things the viewer missed, and its events cannot be told apart from those
   const current = feed.length === lines.length && now - view.now <= FRESH_MS;
 
-  return { before, view, feed, events: current ? newEvents(before, view) : [], current };
+  return { before, view, feed, events: current ? newEvents(before, view) : [], current, wentBack };
 }
 
 function newEvents(before: TableView, view: TableView): HandEvent[] {

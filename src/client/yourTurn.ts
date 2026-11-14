@@ -12,26 +12,31 @@ function turnOf(view: TableView | null, seat: number | null): number | null {
 /**
  * Gets the viewer's attention when the action reaches them, and lets it go when they act or the turn
  * passes. A turn is known by its decision's number, so two views of one turn call once, and the action
- * leaving and coming back on one street calls again.
+ * leaving and coming back on one street calls again. A turn first shown by a view that arrived late is
+ * called by the next view that is on time and still shows it, since that is often the one slow answer.
  */
 export class YourTurn {
   private readonly attention: Attention;
   private standing: { turn: number; call: Call } | null = null;
+  /** The turn already called, or already the viewer's when the page opened or the table went back. */
+  private settled: number | null = null;
 
   constructor(attention: Attention) {
     this.attention = attention;
   }
 
   /** Called with every view put on screen. */
-  see({ before, view, current }: TableChange): void {
+  see({ before, view, current, wentBack }: TableChange): void {
     const turn = turnOf(view, view.you.seat);
 
     if (this.standing && this.standing.turn !== turn) {
       this.end();
     }
 
-    // A turn the viewer already had when the page opened, or that began while they were away, is no news
-    if (turn !== null && current && turn !== turnOf(before, before?.you.seat ?? null)) {
+    if (!before || wentBack) {
+      this.settled = turn;
+    } else if (turn !== null && current && turn !== this.settled) {
+      this.settled = turn;
       this.standing = { turn, call: { why: 'turn', table: { id: view.id, name: view.config.name } } };
       this.attention.call(this.standing.call);
     }

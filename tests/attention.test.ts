@@ -107,16 +107,36 @@ test('nothing is asked for a turn the viewer already had when the page opened', 
   assert.deepEqual(page.calls(), []);
 });
 
-test('nothing is asked for a view that is old when it arrives, nor once the old view is followed by another of the same turn', () => {
+test('a view that is late when it arrives asks nothing, and the first one on time that still shows the turn asks once', () => {
   const table = headsUp();
   const page = new Page(table, 0);
 
   page.arrive();
   table.deal({ button: 0 });
   page.arrive({ late: 60_000 });
+  assert.deepEqual(page.calls(), [], 'the late view');
+
+  table.cmd(1, { type: 'chat', text: 'your go' });
+  page.arrive();
+  assert.equal(page.calls().length, 1, 'the view on time');
+
+  table.cmd(1, { type: 'chat', text: 'still your go' });
+  page.arrive();
+  assert.equal(page.calls().length, 1, 'a second view on time');
+});
+
+test('a turn shown only by a late view, and gone by the next, is never asked for', () => {
+  const table = headsUp();
+  const page = new Page(table, 0);
+
+  page.arrive();
+  table.deal({ button: 0 });
+  page.arrive({ late: 60_000 });
+  table.call(0);
   page.arrive();
 
   assert.deepEqual(page.calls(), []);
+  assert.deepEqual(page.ends(), []);
 });
 
 test('nothing is asked when the table went back to a turn of the viewer', () => {

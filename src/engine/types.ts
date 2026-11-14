@@ -176,12 +176,13 @@ export interface Hand {
   bombPot: BombPot | null;
   /** Undealt cards; the next card comes off the end. */
   deck: Card[];
-  /** One board, or two when the hand is run twice. */
+  /** The boards on the table. They and the three fields after them are kept by `boards.ts`, and written nowhere else. */
   boards: Card[][];
+  /** How many boards the hand is played on. More than are on the table while a hand run twice has its second still to come. */
   runs: number;
-  /** Board being dealt during a runout. */
+  /** The first board still being dealt; any before it have all their cards. */
   runIndex: number;
-  /** Community cards already out when everyone got all in; both boards share them. */
+  /** How many community cards the hand's boards have in common: those that were out when it was put on more than one. */
   sharedBoardLength: number;
   street: Street;
   stage: HandStage;

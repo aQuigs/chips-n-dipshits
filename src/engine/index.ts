@@ -1,5 +1,6 @@
 export * from './amounts.ts';
 export * from './betting.ts';
+export * from './boards.ts';
 export * from './bombPots.ts';
 export * from './cards.ts';
 export * from './config.ts';

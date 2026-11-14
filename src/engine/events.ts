@@ -1,3 +1,4 @@
+import { addStreet, newBoards, runOut } from './boards.ts';
 import type { Card } from './cards.ts';
 import type { AnteFrom, BombPot, Post } from './types.ts';
 
@@ -80,6 +81,7 @@ export function replayHand(events: readonly HandEvent[], count = events.length):
   }
 
   const [, number, button, smallBlind, bigBlind, players, , , bombPot = null] = first;
+  const table = newBoards();
   const position: ReplayPosition = {
     number,
     button,
@@ -88,14 +90,11 @@ export function replayHand(events: readonly HandEvent[], count = events.length):
     bombPot,
     seats: players.map(([seat, name, stack]) => ({ seat, name, stack, bet: 0, folded: false, cards: null })),
     pot: 0,
-    boards: [[]],
+    boards: table.boards,
     awards: [],
   };
 
   const at = (seat: number) => position.seats.find((s) => s.seat === seat)!;
-
-  // Cards that were out before an all-in, which a second board starts from
-  let shared = 0;
 
   const collectBets = () => {
     for (const seat of position.seats) {
@@ -152,18 +151,14 @@ export function replayHand(events: readonly HandEvent[], count = events.length):
         break;
       }
 
-      case 'street': {
-        const [, board, cards] = event;
-
+      case 'street':
         collectBets();
-        position.boards[board] ??= position.boards[0]!.slice(0, shared);
-        position.boards[board].push(...cards);
+        addStreet(table, event[1], event[2]);
         break;
-      }
 
       case 'runs':
         collectBets();
-        shared = position.boards[0]!.length;
+        runOut(table, event[1]);
         break;
 
       case 'show':

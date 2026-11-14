@@ -325,6 +325,41 @@ try {
     assert.equal(await first.locator('.turn [data-action="fold"]:enabled').count(), 1);
   }
 
+  console.log('Muting the other player hides their chat and leaves the seat where the page keeps it, in the address and the browser; an @ offers their name');
+  {
+    const other = second === friend ? 'Danny' : 'Quigs';
+    const row = `.dialog li:has(b:text-is("${other}"))`;
+    const member = inAddress(first, 'me');
+    const kept = await remembered(first, tableId);
+
+    await first.click('[data-action="menu"]');
+    await first.click('.menu [data-action="mute"]');
+    await first.click(`${row} [data-action="mute"]`);
+    await first.waitForSelector(`${row} [data-action="unmute"]`);
+    await first.click('.dialog [data-action="close"]');
+
+    // The other player's line reaches this page with this player's own, which says it has come
+    await say(second, 'not for your ears');
+    await say(first, 'did you say something');
+    assert.equal(await first.locator('.feed li:has-text("not for your ears")').count(), 0, 'the muted player’s line shows');
+    assert.equal(inAddress(first, 'me'), member, 'muting took the seat out of the address');
+    assert.equal(await remembered(first, tableId), kept, 'muting changed what the browser remembers of the seat');
+    assert.equal(await first.evaluate(`localStorage.getItem('cnd.mute.${tableId}')`), JSON.stringify([inAddress(second, 'me')!.split('.')[0]]));
+
+    await first.click('[data-action="menu"]');
+    await first.click('.menu [data-action="mute"]');
+    await first.click(`${row} [data-action="unmute"]`);
+    await first.click('.dialog [data-action="close"]');
+    await first.waitForSelector('.feed li:has-text("not for your ears")', { state: 'attached' });
+
+    await first.click('#chat-input');
+    await first.keyboard.type('@');
+    assert.ok((await first.locator('#mention-list li').allInnerTexts()).includes(other), 'the other player is offered');
+    await first.keyboard.press('Escape');
+    await first.fill('#chat-input', '');
+    assert.equal(await first.inputValue('#raise-amount'), '137', 'the bet being sized is as it was');
+  }
+
   console.log('A move shows the moment it is made, and no key or line of chat makes a second one while its answer is on its way');
   {
     const sent = movesSent(first);

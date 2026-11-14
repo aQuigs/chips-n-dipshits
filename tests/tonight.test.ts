@@ -632,7 +632,7 @@ test('over random games the numbers are at every step exactly what the hand reco
   const badges: Record<string, number> = {};
 
   for (let seed = 1; seed <= TABLES; seed++) {
-    const rng = seededRng(seed * 104_723);
+    const rng = seededRng(seed * 104_729);
     const players = 2 + rng.int(SEAT_COUNT - 1);
     const stacks = Array.from({ length: players }, () => (chance(rng, 15) ? 1 + rng.int(30) : 100 + rng.int(1900)));
     // A chop needs three players or more and nothing but the blinds in, which random settings and play give

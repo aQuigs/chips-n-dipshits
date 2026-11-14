@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
+import { MUTED_MARK } from '../src/client/mutes.ts';
 import { PICKER_MARK } from '../src/client/reactions.ts';
 import { addMember, BADGES, badgeOf, countHand, earnBadges, handFacts, REACTIONS } from '../src/engine/index.ts';
 import type { HandFacts, TableState } from '../src/engine/index.ts';
@@ -428,11 +429,11 @@ test('every badge has an id of its own, a name, a mark and a description', () =>
  * a blank box in its place, and beside a name the mark is all there is, so a new badge's mark joins this
  * list only once it is checked to be as old.
  */
-const OLD_MARKS = new Set(['💎', '🚽', '🍀', '💰', '🔥', '💀', '🍦', '💩', '🍔', '❄️', '🏧', '😂', '😭', '😡', '😱', '🙏', '👏', '🍅', '🐟', '🐔', '🍺', '🌹', '😃']);
+const OLD_MARKS = new Set(['💎', '🚽', '🍀', '💰', '🔥', '💀', '🍦', '💩', '🍔', '❄️', '🏧', '😂', '😭', '😡', '😱', '🙏', '👏', '🍅', '🐟', '🐔', '🍺', '🌹', '😃', '🔇']);
 
-test('every mark is one emoji that every phone has: each badge’s, each reaction’s and the reactions button’s', () => {
+test('every mark is one emoji that every phone has: each badge’s, each reaction’s, the reactions button’s and the muted mark', () => {
   const graphemes = new Intl.Segmenter('en', { granularity: 'grapheme' });
-  const marks = [...BADGES, ...REACTIONS, { id: 'the reactions button', mark: PICKER_MARK }];
+  const marks = [...BADGES, ...REACTIONS, { id: 'the reactions button', mark: PICKER_MARK }, { id: 'the muted mark', mark: MUTED_MARK }];
 
   for (const { id, mark } of marks) {
     assert.equal([...graphemes.segment(mark)].length, 1, `${id}: ${mark} is more than one mark`);

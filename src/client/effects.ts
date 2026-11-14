@@ -5,9 +5,11 @@ import { handMoves } from './effects/handMoves.ts';
 import { handSounds } from './effects/handSounds.ts';
 import { honorToasts } from './effects/honorToasts.ts';
 import { nightRecap } from './effects/nightRecap.ts';
+import { chatNudges } from './effects/nudges.ts';
 import { reactions } from './effects/reactions.ts';
 import { yourTurn } from './effects/yourTurn.ts';
 import type { TableMotion } from './motion.ts';
+import type { MuteList } from './mutes.ts';
 import type { AppPreferences } from './prefs.ts';
 import type { SeatMarks } from './reactions.ts';
 import type { Dialog } from './render/dialogs/index.ts';
@@ -27,6 +29,8 @@ export interface DialogOffers {
 
 export interface EffectContext {
   prefs: AppPreferences;
+  /** The members the viewer has muted at this table, whose chat, nudges and reactions this page hides (`sendersShown`). */
+  mutes: MuteList;
   /** Where the viewer sits, or null while they are only watching. */
   seat: number | null;
   /** The element the table is drawn in, for an effect that moves something on it or draws over it. */
@@ -68,6 +72,7 @@ const TABLE_EFFECTS: (() => TableEffect)[] = [
   nightRecap,
   honorToasts,
   reactions,
+  chatNudges,
 ];
 
 /** The effects of one table screen. */

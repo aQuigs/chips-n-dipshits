@@ -12,6 +12,7 @@ import type { ShownChances } from '../tableChances.ts';
 import { cardEl, h } from '../ui.ts';
 import { nightOver } from './night.ts';
 import { highHandMark } from './highHand.ts';
+import { MUTED_MARK } from '../mutes.ts';
 import { hostOrCohost, roleMark } from './roles.ts';
 
 /** Whether the table is drawn lying down (desktop, landscape) or standing up (a phone held upright). */
@@ -83,6 +84,8 @@ export interface TableHandlers {
   onHunt(hand: number): void;
   /** While the host picks a new seat for a player: who, and where a pick goes. */
   moving?: { playerId: string; to(seat: number): void };
+  /** The members the viewer has muted, whose seats say so on this page alone. */
+  muted?: ReadonlySet<string>;
 }
 
 function seatPlace(shape: Shape, slot: number): { class: string; style: Record<string, string> } {
@@ -239,7 +242,7 @@ function chanceEl(figures: (ChanceFigure | null)[], runs: number): HTMLElement {
   );
 }
 
-function seatEl(view: TableView, seat: SeatView, slot: number, shape: Shape, clockOffset: number, moving: string | null, chances: ShownChances | null): HTMLElement[] {
+function seatEl(view: TableView, seat: SeatView, slot: number, shape: Shape, clockOffset: number, moving: string | null, chances: ShownChances | null, muted: boolean): HTMLElement[] {
   const hand = view.hand;
   const isMe = view.you.seat === seat.seat;
   const acting = hand !== null && onTheClock(hand) === seat.seat;
@@ -290,7 +293,7 @@ function seatEl(view: TableView, seat: SeatView, slot: number, shape: Shape, clo
   const plate = h(
     'div.plate',
     null,
-    h('div.name', { title: seat.name }, h('span', null, seat.name), roleMark(view, seat.playerId), highHandMark(view, seat.playerId)),
+    h('div.name', { title: seat.name }, h('span', null, seat.name), roleMark(view, seat.playerId), highHandMark(view, seat.playerId), muted ? h('span.muted-mark', { role: 'img', title: 'Muted by you', 'aria-label': 'Muted by you' }, MUTED_MARK) : null),
     h('div.stack', { title: formatAmount(seat.stack, view.config) }, shortAmount(seat.stack, view.config), seat.pendingAdd > 0 ? h('span.pending', null, ` +${shortAmount(seat.pendingAdd, view.config)}`) : null),
     // The seat has one line. While hands are face up with cards to come it is the hand's chance, as at the result it is
     // what the hand won: that its player is all in, away or leaving is back on it once the hand is over
@@ -585,7 +588,7 @@ export function tableEl(view: TableView, shape: Shape, clockOffset: number, hand
     const slot = (index - hero + seatCount) % seatCount;
 
     if (seat) {
-      nodes.push(...seatEl(view, seat, slot, shape, clockOffset, handlers.moving?.playerId ?? null, chances));
+      nodes.push(...seatEl(view, seat, slot, shape, clockOffset, handlers.moving?.playerId ?? null, chances, handlers.muted?.has(seat.playerId) ?? false));
     } else {
       nodes.push(openSeatEl(view, index, slot, shape, handlers));
     }

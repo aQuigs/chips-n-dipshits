@@ -56,6 +56,9 @@
   --display-scale: 1;
   --radius: 10px;
   --plate-radius: 10px;
+  /* The largest a GIF in the chat is drawn, whatever its own size, so no picture pushes the table around */
+  --gif-height: 120px;
+  --gif-width: 220px;
 
   color-scheme: dark;
 }

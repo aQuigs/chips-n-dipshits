@@ -519,3 +519,50 @@ test('the flash marks the app with the reason until the call ends, and the chime
   ways.flash.end(FRIDAY);
   assert.equal(browser.root.dataset.attention, undefined);
 });
+
+const NAMED: Call = { why: 'mention', table: { id: 'TEST01', name: 'Friday Night' } };
+
+test('being named chimes its own sound, buzzes, and says so away from the page, but never lights up the table', () => {
+  const browser = new Browser();
+  const ways = waysFor(browser.parts({ handheld: true }));
+  browser.touched = true;
+
+  for (const way of [ways.sound, ways.buzz, ways.flash]) {
+    way.call(NAMED);
+  }
+  assert.deepEqual(browser.played, ['nudge']);
+  assert.deepEqual(browser.buzzes, [BUZZ_PATTERN]);
+  assert.equal(browser.root.dataset.attention, undefined, 'with motion turned down a flash would stay on, and nothing ends a mention');
+
+  browser.hidden = true;
+  const computer = waysFor(browser.parts());
+  computer.notify.call(NAMED);
+  computer.tabTitle.call(NAMED);
+  assert.deepEqual(browser.shown.map(({ title, open }) => ({ title, open })), [{ title: 'Someone named you at Friday Night', open: true }]);
+  assert.equal(browser.tab.title, '● Someone named you at Friday Night');
+
+  browser.comeBack();
+  assert.equal(browser.shown[0]!.open, false, 'coming back takes it away, as nothing else ends it');
+});
+
+test('being named never takes the place of a turn’s notification or title, and a turn takes the place of being named', () => {
+  const browser = new Browser();
+  const ways = waysFor(browser.parts());
+  browser.hidden = true;
+
+  ways.notify.call(FRIDAY);
+  ways.tabTitle.call(FRIDAY);
+  ways.notify.call(NAMED);
+  ways.tabTitle.call(NAMED);
+  assert.deepEqual(browser.shown.map(({ title, open }) => ({ title, open })), [{ title: 'Your turn at Friday Night', open: true }]);
+  assert.equal(browser.tab.title, '● Your turn at Friday Night');
+
+  ways.notify.end(FRIDAY);
+  ways.tabTitle.end(FRIDAY);
+  ways.notify.call(NAMED);
+  ways.notify.call(FRIDAY);
+  assert.deepEqual(browser.shown.slice(1).map(({ title, open }) => ({ title, open })), [
+    { title: 'Someone named you at Friday Night', open: false },
+    { title: 'Your turn at Friday Night', open: true },
+  ]);
+});

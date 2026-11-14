@@ -557,12 +557,12 @@ const BUZZ = `(() => {
 const middle = (box: Box) => ({ x: (box.left + box.right) / 2, y: (box.top + box.bottom) / 2 });
 
 /**
- * Run in a page: every emoji of the reactions and the rabbit hunt drawn half as wide again as their own
+ * Run in a page: every emoji of the reactions, the rabbit hunt and the muted mark drawn half as wide again as their own
  * size, as no font here draws them but some phones' fonts come near. A check run with it shows no layout
  * of theirs depends on how wide this machine's emoji are. The rabbit's sits in a line of words, where only
  * a box of its own takes an indent.
  */
-const WIDE_EMOJI = '.seat-reaction, .thrown, .react-choice, .react-toggle, .rabbit-mark { letter-spacing: 0.25em; text-indent: 0.25em; } .rabbit-mark { display: inline-block; }';
+const WIDE_EMOJI = '.seat-reaction, .thrown, .react-choice, .react-toggle, .rabbit-mark, .muted-mark { letter-spacing: 0.25em; text-indent: 0.25em; } .rabbit-mark { display: inline-block; }';
 
 /** That every box in `found` is inside `frame`. */
 function within(found: Box[], [frame]: Box[], what: string): void {
@@ -1704,6 +1704,19 @@ async function assertRabbitFits(page: Page, screen: ScreenName, what: string): P
 
   await assertNoSidewaysScroll(page);
 }
+// Run in the page: the chat box as the player has it, with the name picked in the list marked
+const CHAT_BOX = `(() => {
+  const input = document.querySelector('#chat-input');
+  const list = document.querySelector('#mention-list');
+
+  return {
+    value: input.value,
+    caret: input.selectionStart,
+    focused: document.activeElement === input,
+    open: !list.hidden,
+    names: list.hidden ? [] : [...list.querySelectorAll('li')].map((option) => option.textContent + (option.getAttribute('aria-selected') === 'true' ? ' (picked)' : '')),
+  };
+})()`;
 
 const CHECKS: Check[] = [
   [
@@ -9415,6 +9428,263 @@ const CHECKS: Check[] = [
 
         await page.context().close();
       }
+    },
+  ],
+
+  [
+    'an @ in the chat box offers everyone at the table, seated or watching, and is completed by keyboard and by tap on a 360 phone and the desktop; an update from the server in the middle leaves the text, the list and the caret as they were',
+    async (rig) => {
+      const table = rig.table(['Quigs', 'Al', 'Al Smith', 'Ann'].map((name) => ({ name, stack: 1000 })));
+      table.join('Wanda');
+
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        const page = await table.open('Quigs', screen);
+        const press = pressOn(page, screen);
+
+        if (screen !== 'desktop') {
+          await page.tap('.feed-toggle');
+        }
+
+        await press('#chat-input');
+        await page.keyboard.type('nice @');
+        assert.deepEqual(await texts(page, '#mention-list li'), ['Al', 'Al Smith', 'Ann', 'Wanda'], 'everyone but the viewer');
+        await page.keyboard.type('a');
+        assert.deepEqual(await texts(page, '#mention-list li'), ['Al', 'Al Smith', 'Ann']);
+        await page.keyboard.press('ArrowDown');
+
+        assertOnScreen(await boxes(page, '#mention-list'), screen, 'the names offered');
+        assertApart(await boxes(page, '#mention-list'), await boxes(page, '.say input, .say button'), 'the names offered and the chat box');
+        assert.deepEqual(await squeezed(page, '#mention-list li'), [], 'a name offered is cut off');
+        await shot(page, `mention-list-${screen}`);
+
+        // Word from the server arrives mid-completion: everything in the box is as it was
+        table.act('Ann', { type: 'chat', text: `meanwhile on the ${screen}` });
+        await page.waitForSelector(`.entries li:has-text("meanwhile on the ${screen}")`, { state: 'attached' });
+        assert.deepEqual(await page.evaluate(CHAT_BOX), { value: 'nice @a', caret: 7, focused: true, open: true, names: ['Al', 'Al Smith (picked)', 'Ann'] });
+
+        await page.keyboard.press('Enter');
+        assert.deepEqual(await page.evaluate(CHAT_BOX), { value: 'nice @Al Smith ', caret: 15, focused: true, open: false, names: [] }, 'Enter picks the name and sends nothing');
+
+        await page.keyboard.type('and @an');
+        await press('#mention-list li:has-text("Ann")');
+        assert.deepEqual(await page.evaluate(CHAT_BOX), { value: 'nice @Al Smith and @Ann ', caret: 24, focused: true, open: false, names: [] }, 'a tap picks the name and leaves the keyboard in the box');
+
+        await page.keyboard.press('Enter');
+        await page.waitForSelector('.entries li:last-child:has(.mention:has-text("@Ann"))', { state: 'attached' });
+        const said = table.view('Quigs').feed.at(-1)!;
+        assert.deepEqual(said.mentions?.map(([id]) => id), [table.auth('Al Smith').id, table.auth('Ann').id], 'the table names the two picked');
+        assert.deepEqual(await texts(page, '.entries li:last-child .mention'), ['@Al Smith', '@Ann']);
+
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'a line that names the viewer is marked more strongly for them than one naming someone else, and says so in words; the bar under the table shows the newest line in words alone',
+    async (rig) => {
+      const table = rig.table(['Quigs', 'Pam', 'Sam'].map((name) => ({ name, stack: 1000 })));
+      table.act('Pam', { type: 'chat', text: '@Sam nice hand' });
+      table.act('Pam', { type: 'chat', text: 'deal @quigs, it is on you' });
+
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        const page = await table.open('Quigs', screen);
+
+        if (screen !== 'desktop') {
+          assert.equal(await text(page, '.feed-toggle .latest'), 'Pam: deal @quigs, it is on you');
+          assert.equal(await page.locator('.feed-toggle .latest *').count(), 0, 'the bar shows words and nothing else');
+          await page.tap('.feed-toggle');
+        }
+
+        const yours = page.locator('.entries li[data-names-you]');
+        assert.equal(await yours.count(), 1);
+        assert.deepEqual(await texts(page, '.entries li[data-names-you] .mention[data-you]'), ['@quigs']);
+        assert.equal(await yours.locator('.unseen').textContent(), 'Names you. ');
+        assert.deepEqual(await texts(page, '.entries li:not([data-names-you]) .mention'), ['@Sam']);
+
+        const background = (selector: string) => page.evaluate(`getComputedStyle(document.querySelector('${selector}')).backgroundColor`) as Promise<string>;
+        assert.equal(await background('.entries li:not([data-names-you]) .mention'), TRANSPARENT, 'someone else’s name is marked by its letters alone');
+        assert.notEqual(await background('.mention[data-you]'), TRANSPARENT, 'the viewer’s own name stands out');
+        assert.notEqual(await background('.entries li[data-names-you]'), TRANSPARENT, 'the line that names the viewer stands out');
+        assert.deepEqual(await squeezed(page, '.entries li'), [], 'a line is cut off');
+        await shot(page, `mentions-marked-${screen}`);
+
+        await page.context().close();
+      }
+
+      const sam = await table.open('Sam', 'smallPhone');
+      await sam.tap('.feed-toggle');
+      assert.deepEqual(await texts(sam, '.entries li[data-names-you] .mention[data-you]'), ['@Sam'], 'the same line is marked for whoever it names');
+    },
+  ],
+  [
+    'muting a player from the menu hides their chat lines and reactions on that page alone, marks their seat in words, lasts through a reload, and unmuting brings it all back',
+    async (rig) => {
+      const table = rig.table(NINE_REACTING);
+      table.act('Pam', { type: 'chat', text: 'said before the mute' });
+
+      const page = await table.open('Quigs', 'smallPhone');
+      await page.tap('[data-action="menu"]');
+      assert.match(await text(page, '.menu [data-action="mute"]'), /Mute players/);
+      await page.tap('.menu [data-action="mute"]');
+      assert.deepEqual(await texts(page, '.dialog li b'), ['Al', 'Bo', 'Dot', 'Kai', 'Lu', 'Pam', 'Sam', 'Stu']);
+
+      const pamRow = '.dialog li:has(b:text-is("Pam"))';
+      await page.tap(`${pamRow} [data-action="mute"]`);
+      await page.waitForSelector(`${pamRow} [data-action="unmute"][aria-pressed="true"][aria-label="Unmute Pam"]`);
+      assert.match(await text(page, `${pamRow} .mute-note`), /Muted/);
+      assertOnScreen(await boxes(page, '.dialog li [data-action]'), 'smallPhone', 'a mute button');
+      await shot(page, 'mute-dialog-smallPhone');
+      await page.tap('.dialog [data-action="close"]');
+
+      const pamMark = '.seat[data-seat="2"] .muted-mark';
+      assert.equal(await page.getAttribute(pamMark, 'aria-label'), 'Muted by you');
+      assert.equal(await page.locator('.muted-mark').count(), 1, 'only the muted player is marked');
+      assert.ok(!(await texts(page, '.entries li')).some((line) => line.includes('said before the mute')), 'a line said before the mute is hidden too');
+
+      // Pam's reaction and line never show; Sam's do, and the line after them says they have all arrived
+      table.act('Pam', { type: 'react', kind: 'laugh' });
+      table.act('Pam', { type: 'chat', text: '@Quigs hidden' });
+      table.act('Sam', { type: 'react', kind: 'clap' });
+      table.act('Sam', { type: 'chat', text: 'after them all' });
+      await page.waitForSelector('.seat-reaction[data-reaction="clap"]');
+      await page.waitForSelector('.entries li:has-text("after them all")', { state: 'attached' });
+      assert.equal(await page.locator('.seat-reaction[data-reaction="laugh"]').count(), 0, 'the muted player’s reaction showed');
+      assert.ok(!(await texts(page, '.entries li')).some((line) => line.includes('hidden')), 'the muted player’s line showed');
+      assert.equal(await text(page, '.feed-toggle .latest'), 'Sam: after them all');
+      await shot(page, 'muted-seat-smallPhone');
+
+      // Nobody else is told: Sam's page shows Pam as ever
+      const sam = await table.open('Sam', 'smallPhone');
+      await sam.waitForSelector('.entries li:has-text("@Quigs hidden")', { state: 'attached' });
+      assert.equal(await sam.locator('.muted-mark').count(), 0);
+      await sam.context().close();
+
+      await page.reload();
+      await page.waitForSelector('.stage .table');
+      assert.equal(await page.locator(pamMark).count(), 1, 'the mute lasts through a reload');
+      assert.ok(!(await texts(page, '.entries li')).some((line) => line.includes('hidden')));
+
+      await page.tap('[data-action="menu"]');
+      assert.match(await text(page, '.menu [data-action="mute"]'), /1 muted on this screen/);
+      await page.tap('.menu [data-action="mute"]');
+      await page.tap(`${pamRow} [data-action="unmute"]`);
+      await page.waitForSelector(`${pamRow} [data-action="mute"][aria-pressed="false"]`);
+      await page.tap('.dialog [data-action="close"]');
+
+      assert.equal(await page.locator('.muted-mark').count(), 0);
+      const lines = await texts(page, '.entries li');
+      assert.ok(lines.some((line) => line.includes('said before the mute')) && lines.some((line) => line.includes('@Quigs hidden')), 'unmuted, every line of theirs is back');
+    },
+  ],
+  [
+    'the muted mark beside the longest name on the smallest phone, standing and lying, with this machine’s emoji and with emoji drawn far wider: inside its seat, the name still there, the seat no bigger',
+    async (rig) => {
+      const table = rig.table(tenPlayers().slice(0, 9));
+      const width = SCREENS.smallPhone.width;
+      const page = await table.open('Quigs', 'smallPhone');
+      await page.evaluate(`localStorage.setItem('cnd.mute.${table.id}', JSON.stringify(['${table.auth(WIDEST).id}']))`);
+      await page.reload();
+      await page.waitForSelector('.stage .table');
+
+      for (const glyph of ['own-emoji', 'wide-emoji']) {
+        if (glyph === 'wide-emoji') {
+          await page.addStyleTag({ content: WIDE_EMOJI });
+        }
+
+        for (const [height, shape] of [
+          [Math.ceil(width / WIDE_ASPECT) + 1, 'tall'],
+          [Math.floor(width / WIDE_ASPECT) - 1, 'wide'],
+        ] as const) {
+          await setStageHeight(page, height);
+          await page.waitForSelector(`.table.${shape} .muted-mark`);
+
+          const holder = `.seat:has(.muted-mark) .plate`;
+          const [plate] = await boxes(page, holder);
+          const [mark] = await boxes(page, `${holder} .muted-mark`);
+          const [name] = await boxes(page, `${holder} .name > span:first-child`);
+          within([mark!], [plate!], `the muted mark (${glyph}, ${shape})`);
+          assert.ok(name!.right - name!.left > 0, `the mark pushed the name out of its seat (${glyph}, ${shape})`);
+          assertApart([mark!], [name!], 'the mark and the name');
+          assert.deepEqual(await squeezed(page, `${holder} .muted-mark, ${holder} .stack`), [], 'the mark or the stack is cut off');
+          await shot(page, `muted-mark-${glyph}-${shape}-smallPhone`);
+
+          // Taken away, the seat is the same size: the mark takes room from the name, never from the table
+          await page.evaluate(`document.querySelector('.plate .muted-mark').style.display = 'none'`);
+          assert.ok(sameBox((await boxes(page, holder.replace(':has(.muted-mark)', `:has(.name[title="${WIDEST}"])`)))[0]!, plate), 'the mark made the seat bigger');
+          await page.evaluate(`document.querySelector('.plate .muted-mark').style.display = ''`);
+        }
+      }
+    },
+  ],
+  [
+    'a GIF link shows its picture in the open chat, held to its box however tall, and is fetched only then, telling the host nothing of the page; one that fails is its link again; the bar under the table shows words alone',
+    async (rig) => {
+      const table = rig.table(['Quigs', 'Pam', 'Lu'].map((name) => ({ name, stack: 1000 })));
+      const giphy = 'https://media.giphy.com/media/abc123/giphy.gif';
+      table.act('Pam', { type: 'chat', text: giphy });
+      table.act('Pam', { type: 'chat', text: 'https://i.imgur.com/tall.gif' });
+      table.act('Pam', { type: 'chat', text: 'https://media.tenor.com/xyz/missing.gif' });
+      table.act('Lu', { type: 'chat', text: 'https://i.imgur.com/fromLu.gif' });
+
+      const page = await table.open('Quigs', 'smallPhone');
+      await page.evaluate(`localStorage.setItem('cnd.mute.${table.id}', JSON.stringify(['${table.auth('Lu').id}']))`);
+      await page.reload();
+      await page.waitForSelector('.stage .table');
+      await page.waitForTimeout(500);
+      assert.equal(rig.gifs.length, 0, 'a picture was fetched for a closed chat');
+      assert.equal(await text(page, '.feed-toggle .latest'), 'Pam: https://media.tenor.com/xyz/missing.gif');
+      assert.equal(await page.locator('.feed-toggle img').count(), 0, 'the bar shows a picture');
+
+      await page.tap('.feed-toggle');
+      await page.waitForSelector('.entries li[data-gif="failed"]');
+      await page.waitForSelector('.entries li[data-gif="shown"] >> nth=1');
+      assert.deepEqual(rig.gifs.map((asked) => asked.url).sort(), [giphy, 'https://i.imgur.com/tall.gif', 'https://media.tenor.com/xyz/missing.gif'].sort(), 'the muted player’s GIF was fetched, or one twice');
+      assert.ok(rig.gifs.every((asked) => asked.referer === null), `a host was told the page: ${JSON.stringify(rig.gifs)}`);
+
+      const [list] = await boxes(page, '.entries');
+      for (const picture of await boxes(page, '.entries img.gif')) {
+        assert.ok(picture.bottom - picture.top <= 120.5 && picture.right - picture.left <= 220.5, `a picture outgrew its box: ${JSON.stringify(picture)}`);
+        assert.ok(picture.left >= list!.left && picture.right <= list!.right, `a picture runs out of the chat: ${JSON.stringify(picture)}`);
+      }
+      const [tall] = await boxes(page, '.entries img.gif[src*="tall"]');
+      assert.ok(tall!.bottom - tall!.top >= 119.5, 'the tall picture is held to the height of its box');
+      assert.equal(await text(page, '.entries li[data-gif="failed"] .gif-link'), 'https://media.tenor.com/xyz/missing.gif');
+      assert.equal(await page.locator('.entries li[data-gif="failed"] img').count(), 0);
+      assert.equal(await page.getAttribute('.entries img.gif >> nth=0', 'alt'), 'A GIF from Pam');
+      await assertNoSidewaysScroll(page);
+      await page.locator('.entries').evaluate((list) => (list.scrollTop = 0));
+      await shot(page, 'gifs-open-chat-smallPhone');
+    },
+  ],
+  [
+    'with GIFs switched off in Preferences a GIF line stays its link and nothing is fetched, on the desktop where the chat is always open',
+    async (rig) => {
+      const table = rig.table(['Quigs', 'Pam'].map((name) => ({ name, stack: 1000 })));
+      const page = await table.open('Quigs', 'desktop');
+
+      await page.click('[data-action="menu"]');
+      await page.click('.menu [data-action="preferences"]');
+      await page.click('[data-pref="gifs"]');
+      assert.equal(await page.getAttribute('[data-pref="gifs"]', 'aria-checked'), 'false');
+      await shot(page, 'gifs-preference-desktop');
+      await page.click('.dialog [data-action="close"]');
+
+      table.act('Pam', { type: 'chat', text: 'https://giphy.com/gifs/funny-cat-abc123' });
+      table.act('Pam', { type: 'chat', text: 'after the GIF' });
+      await page.waitForSelector('.entries li:has-text("after the GIF")');
+      await page.waitForTimeout(500);
+      assert.equal(rig.gifs.length, 0, 'a picture was fetched with GIFs switched off');
+      assert.equal(await page.locator('.entries img').count(), 0);
+      assert.ok((await texts(page, '.entries li')).includes('Pam: https://giphy.com/gifs/funny-cat-abc123'));
+
+      // Switched on again, the line shows the picture its page points to
+      await page.click('[data-action="menu"]');
+      await page.click('.menu [data-action="preferences"]');
+      await page.click('[data-pref="gifs"]');
+      await page.click('.dialog [data-action="close"]');
+      await page.waitForSelector('.entries li[data-gif="shown"] img.gif');
+      assert.deepEqual(rig.gifs.map((asked) => asked.url), ['https://media.giphy.com/media/abc123/giphy.gif']);
+      await shot(page, 'gifs-desktop');
     },
   ],
 ];

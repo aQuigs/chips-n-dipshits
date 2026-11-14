@@ -1,7 +1,7 @@
 import { formatAmount } from './amounts.ts';
 import { countRebuy } from './tonight.ts';
 import { GameError, SEAT_COUNT } from './types.ts';
-import type { Ctx, FeedKind, LedgerDetail, Member, MoneyKind, MovedKind, Seat, TableState } from './types.ts';
+import type { Ctx, FeedEntry, FeedKind, LedgerDetail, Member, MoneyKind, MovedKind, Seat, TableState } from './types.ts';
 
 export const FEED_LIMIT = 60;
 
@@ -74,9 +74,10 @@ export function seatedMember(state: TableState, playerId: string): { member: Mem
   return { member, index, seat };
 }
 
-export function addFeed(state: TableState, now: number, kind: FeedKind, from: string | null, text: string): void {
+/** `more` is what a chat line keeps beside its words: who said it and whom it names. */
+export function addFeed(state: TableState, now: number, kind: FeedKind, from: string | null, text: string, more: Pick<FeedEntry, 'by' | 'mentions'> = {}): void {
   state.feedSeq += 1;
-  state.feed.push({ seq: state.feedSeq, at: now, kind, from, text });
+  state.feed.push({ seq: state.feedSeq, at: now, kind, from, text, ...more });
 
   if (state.feed.length > FEED_LIMIT) {
     state.feed.splice(0, state.feed.length - FEED_LIMIT);

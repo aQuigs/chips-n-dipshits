@@ -61,6 +61,11 @@ export const RECIPES: Record<SoundName, Voice[]> = {
     { noise: 1800, width: 1, at: 0, length: 0.05, level: 0.35 },
     { tone: 240, wave: 'triangle', slideTo: 170, at: 0, length: 0.06, level: 0.25 },
   ],
+  // Being named in the chat: one soft high note and its echo, falling, so it is never taken for the turn's rising two
+  nudge: [
+    { tone: 988, at: 0, length: 0.1, level: 0.22 },
+    { tone: 740, at: 0.1, length: 0.16, level: 0.16 },
+  ],
   // Two short rising notes when the action reaches the viewer
   turn: [
     { tone: 660, at: 0, length: 0.12, level: 0.32 },

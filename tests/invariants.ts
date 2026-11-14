@@ -4,8 +4,8 @@
  */
 import assert from 'node:assert/strict';
 
-import { badgeOf, blindsOnly, BOARD_SIZE, boardsDealt, evaluateHand, FEED_LIMIT, FLOP_SIZE, handFacts, isStraddle, LIMITS, MOST_RUNS, nextHighHand, nightIsOver, owes, PLAYING_THE_BOARD, REACTION_GAP_MS, reactionKind, reaches, REACTIONS_LIVE, replayHand, roleOf, STRADDLES, STRADDLES_IN_A_ROW, straddlesAllowed, viewFor, wonAPot } from '../src/engine/index.ts';
-import type { Card, Effect, FeedEntry, HandPlayer, HandRecord, TableState } from '../src/engine/index.ts';
+import { badgeOf, blindsOnly, BOARD_SIZE, boardsDealt, evaluateHand, FEED_LIMIT, FLOP_SIZE, handFacts, isStraddle, LIMITS, MENTIONS_PER_LINE, MOST_RUNS, nextHighHand, nightIsOver, owes, PLAYING_THE_BOARD, REACTION_GAP_MS, reactionKind, reaches, REACTIONS_LIVE, replayHand, roleOf, STRADDLES, STRADDLES_IN_A_ROW, straddlesAllowed, viewFor, wonAPot } from '../src/engine/index.ts';
+import type { Card, Effect, FeedEntry, HandPlayer, Mention, HandRecord, TableState } from '../src/engine/index.ts';
 import { CACHE_VALUE_BYTES, utf8Bytes } from '../src/gas/sheetStore.ts';
 import { restoreState } from '../src/server/store.ts';
 import { handRecords, ledgerEntries } from './helpers.ts';
@@ -435,9 +435,10 @@ export function assertViewsKeepSecrets(state: TableState, now: number): void {
   }
 }
 
-/** The chat when every line is as long as it may be, in characters that take three bytes each. */
+/** The chat when every line is as long as it may be, in characters that take three bytes each, and names as many people as a line can, each quiet. */
 export function fullestChat(): FeedEntry[] {
   const line = (length: number) => '好'.repeat(length);
+  const id = 'x'.repeat(8);
 
   return Array.from({ length: FEED_LIMIT }, (_entry, index) => ({
     seq: 1_000_000 + index,
@@ -445,6 +446,8 @@ export function fullestChat(): FeedEntry[] {
     kind: 'chat',
     from: line(LIMITS.nameLength),
     text: line(LIMITS.chatLength),
+    by: id,
+    mentions: Array.from({ length: MENTIONS_PER_LINE }, (_mention, at): Mention => [id, LIMITS.chatLength - 1 - at, LIMITS.nameLength + 1, true]),
   }));
 }
 

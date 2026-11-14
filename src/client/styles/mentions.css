@@ -1,0 +1,72 @@
+/* ---- Naming someone in the chat ---- */
+
+.entries .mention {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+/* The viewer's own name stands out from anyone else's */
+.entries .mention[data-you] {
+  padding: 0 0.2em;
+  border-radius: var(--radius);
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+/* A line that names the viewer is lit along its edge */
+.entries li[data-names-you] {
+  position: relative;
+  padding-left: 8px;
+  box-shadow: inset 3px 0 0 var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+/* Words for a screen reader alone */
+.unseen {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* The names offered after an @, over the bottom of the chat, just above the box */
+.say {
+  position: relative;
+}
+
+.mention-list {
+  position: absolute;
+  bottom: 100%;
+  left: 12px;
+  z-index: 3;
+  width: min(260px, calc(100% - 24px));
+  margin: 0 0 4px;
+  padding: 4px 0;
+  overflow: hidden;
+  list-style: none;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-raised);
+  box-shadow: 0 8px 30px rgb(0 0 0 / 40%);
+}
+
+.mention-list[hidden] {
+  display: none;
+}
+
+.mention-list li {
+  min-height: 36px;
+  padding: 8px 12px;
+  overflow: hidden;
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.mention-list li[aria-selected='true'] {
+  background: var(--accent);
+  color: var(--accent-ink);
+}

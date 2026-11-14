@@ -44,4 +44,7 @@ export const STYLESHEETS = [
   'high-hand.css',
   'reactions.css',
   'rabbit.css',
+  'mentions.css',
+  'mutes.css',
+  'gifs.css',
 ];

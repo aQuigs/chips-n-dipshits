@@ -18,7 +18,7 @@ const STEPS_PER_TABLE = 600;
 const SLOW_CHECK_PERCENT = 10;
 
 // Commands random play does not send yet, each a gap to close in FUZZ_COMMANDS one day rather than a rule
-const NOT_SENT_AT_RANDOM = new Set<CommandType>(['cancelRequest', 'chat', 'pause']);
+const NOT_SENT_AT_RANDOM = new Set<CommandType>(['cancelRequest', 'pause']);
 
 /** A test table that writes down the kind of every command sent to it, those it sends itself as it is set up included. */
 class Recording extends TestTable {

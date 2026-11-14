@@ -1,0 +1,15 @@
+/* ---- A GIF in the chat ---- */
+
+/*
+ * Always as tall as the box the tokens give it, from before it has loaded, so a line doesn't jump when
+ * the picture comes and a picture of any size, however tall or wide, stays inside it.
+ */
+.entries img.gif {
+  display: block;
+  height: var(--gif-height);
+  max-width: min(100%, var(--gif-width));
+  margin-top: 4px;
+  border-radius: var(--radius);
+  background: var(--panel);
+  object-fit: contain;
+}

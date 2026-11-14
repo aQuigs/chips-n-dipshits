@@ -10,6 +10,8 @@ import type { SendOutcome, Session } from './connection.ts';
 import { TableEffects } from './effects.ts';
 import { HotkeyPresser } from './hotkeyPresser.ts';
 import { Modal } from './modal.ts';
+import { Mutes } from './mutes.ts';
+import { sendersShown } from './senders.ts';
 import { Motion, motionAbility } from './motion.ts';
 import { pageMotion, pageWatching } from './pageMotion.ts';
 import { pagePace } from './pagePace.ts';
@@ -63,6 +65,9 @@ interface TableScreen {
   overlay: Slot;
   modal: Modal;
   feed: Feed;
+  /** Who the viewer has muted at this table, and the way to stop following it. */
+  mutes: Mutes;
+  stopMutes: () => void;
   motion: Motion;
   /** Reactions over the seats, and the picker for them, on a layer over the table that drawing the table leaves alone. */
   marks: ReactionMarks;
@@ -136,7 +141,8 @@ export class App {
     this.themeHost = themeHost;
     this.prefs = new Preferences(PREFERENCES, platform.memory, root);
     this.prefs.watch('theme', (id) => this.applyTheme(id));
-    this.prefs.watch('deck', (deck) => this.screen?.feed.showDeck(deck));
+    this.prefs.watch('deck', () => this.screen?.feed.showDeck());
+    this.prefs.watch('gifs', () => this.screen?.feed.redraw());
     this.sounds = new Sounds(pageSounds(), this.prefs, { inView: this.watching.inView });
     this.attention = new Attention(this.prefs, pageWays({ sounds: this.sounds, touch: pageTouch(), root, ownsTab: platform.ownsTab }));
     this.abilities = { of: (key) => (key === 'motion' ? motionAbility(this.watching) : this.attention.of(key)), ask: (key) => this.attention.ask(key) };
@@ -445,7 +451,12 @@ export class App {
     this.table = table;
 
     const picker = new ReactionPicker({ react: (kind, to) => this.react(kind, to), refusal: (view) => this.reactionRefusal(view) });
-    const feed = createFeed((text) => void this.send({ type: 'chat', text }), this.prefs.get('deck'), picker.toggleElement);
+    const mutes = new Mutes(this.platform.memory, session.tableId);
+    const feed = createFeed(
+      (text) => void this.send({ type: 'chat', text }),
+      () => ({ deck: this.prefs.get('deck'), pictures: this.prefs.get('gifs'), shown: sendersShown(this.prefs, mutes, table.session.auth.id, 'chat') }),
+      picker.toggleElement,
+    );
     const stage = new Slot(h('div.stage'));
     const overlay = new Slot(h('div.overlay', { hidden: true }));
     const motion = new Motion(pageMotion(stage.element), this.prefs, this.watching);
@@ -454,6 +465,7 @@ export class App {
     above.append(picker.panelElement);
     const effects = new TableEffects({
       prefs: this.prefs,
+      mutes,
       stage: stage.element,
       sounds: this.sounds,
       attention: this.attention,
@@ -470,6 +482,11 @@ export class App {
       overlay,
       modal: new Modal(overlay.element),
       feed,
+      mutes,
+      stopMutes: mutes.watch(() => {
+        feed.redraw();
+        this.drawTable();
+      }),
       motion,
       marks,
       picker,
@@ -519,6 +536,7 @@ export class App {
     this.screen?.marks.dispose();
     this.screen?.picker.dispose();
     this.screen?.seatMoves.dispose();
+    this.screen?.stopMutes();
     this.screen = null;
     this.dialog = null;
     this.offered = null;
@@ -663,7 +681,7 @@ export class App {
     screen.picker.draw(view);
     this.drawControls(screen, view);
 
-    screen.feed.update(view.feed);
+    screen.feed.update(view);
 
     this.drawDialog();
   }
@@ -766,7 +784,8 @@ export class App {
     const picking = screen.seatMoves.picking;
     const turning = screen.shown.turning;
     const chances = screen.shown.chances;
-    const shows = [screen.shape, view.you, view.hostId, view.cohostIds, view.running, view.nextHandAt, view.nightEndedAt, view.config.actionSeconds, view.seats, handDrawn(view.hand), view.tonight.highHand.next, myRequest, picking, turning, chances];
+    const muted = screen.mutes.ids();
+    const shows = [screen.shape, view.you, view.hostId, view.cohostIds, view.running, view.nextHandAt, view.nightEndedAt, view.config.actionSeconds, view.seats, handDrawn(view.hand), view.tonight.highHand.next, myRequest, picking, turning, chances, muted];
 
     screen.stage.draw(shows, () => {
       return tableEl(
@@ -779,6 +798,7 @@ export class App {
           onPlayOn: () => void this.send({ type: 'playOn' }),
           onHunt: (hand) => void this.hunt(hand),
           moving: screen.seatMoves.tableHandlers(),
+          muted: new Set(muted),
         },
         turning,
         chances,
@@ -947,6 +967,7 @@ export class App {
       tableLink: () => this.platform.links.tableLink(session.tableId),
       memberLink: () => this.platform.links.memberLink(session.tableId, session.auth),
       prefs: this.prefs,
+      mutes: this.screen!.mutes,
       abilities: this.abilities,
       toLobby: () => this.showLobby(true),
       pickSeat: (playerId) => {

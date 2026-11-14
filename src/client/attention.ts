@@ -1,7 +1,7 @@
 import type { Abilities, Ability, AppPreferences } from './prefs.ts';
 
-/** Why the page wants a player: it is their turn. Another reason, such as being named in the chat, is another value here. */
-export type Why = 'turn';
+/** Why the page wants a player: it is their turn, or someone named them in the chat. Another reason is another value here. */
+export type Why = 'turn' | 'mention';
 
 /**
  * What the page asks for a player's attention for: which table, and why. It never carries cards or

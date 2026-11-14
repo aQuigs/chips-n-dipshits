@@ -294,7 +294,19 @@ export interface FeedEntry {
   /** Who said it, for chat. */
   from: string | null;
   text: string;
+  /** The member who said it, for chat: what muting a player goes by. Missing from lines said before it was kept. */
+  by?: string;
+  /** Who a chat line names with an @, as the table settled it when it took the line. Left out when it names nobody. */
+  mentions?: Mention[];
 }
+
+/**
+ * One `@name` in a chat line: whom it names, where its @ is in the text and how long it is with its @,
+ * both in UTF-16 code units as JavaScript counts them, and `true` last when it is quiet: named too soon
+ * after the sender last nudged them, so marked without a nudge. A list, as hand events are, since a full
+ * chat keeps three in each of its lines.
+ */
+export type Mention = [id: string, at: number, length: number, quiet?: true];
 
 /** One player's running numbers for the night. What each counts is said where it is counted, in `tonight.ts`. */
 export interface PlayerTonight {

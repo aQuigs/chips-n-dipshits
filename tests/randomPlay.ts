@@ -168,6 +168,17 @@ export const FUZZ_COMMANDS: ((fuzz: Fuzz) => void)[] = [
     }
   },
 
+  // A line of the chat, which is saved with the table: now and then naming people, someone gone or the sender among them
+  ({ t, rng, who }) => {
+    const names = [...t.state.members.map((member) => member.name), 'Nobody'];
+    const said = Array.from({ length: rng.int(4) }, () => `@${pick(rng, names)}`).join(' ');
+
+    // Now and then as long as a line may be
+    const long = chance(rng, 10) ? 'x'.repeat(LIMITS.chatLength - said.length - 1) : 'nice hand';
+
+    attempt(t, who, { type: 'chat', text: `${said} ${long}` });
+  },
+
   ({ t }) => {
     if (t.ids.length < 14) {
       allowRefusal(() => t.ids.push(addMember(t.state, `N${t.ids.length}`, t.ctx()).id));

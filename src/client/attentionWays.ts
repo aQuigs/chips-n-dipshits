@@ -3,10 +3,17 @@ import type { Ability } from './prefs.ts';
 import type { SoundName, Sounds } from './sound.ts';
 import type { Touch } from './touch.ts';
 
-const SOUND_FOR: Record<Why, SoundName> = { turn: 'turn' };
+const SOUND_FOR: Record<Why, SoundName> = { turn: 'turn', mention: 'nudge' };
 
-/** What a notification or the tab's title says, which is all a lock screen shows: no cards, no amounts. */
-const WORDS_FOR: Record<Why, (table: string) => string> = { turn: (table) => `Your turn at ${table}` };
+/** What a notification or the tab's title says, which is all a lock screen shows: no cards, no amounts, no chat. */
+const WORDS_FOR: Record<Why, (table: string) => string> = { turn: (table) => `Your turn at ${table}`, mention: (table) => `Someone named you at ${table}` };
+
+/**
+ * Whether a call stands until it is ended, as a turn does until the player acts, or passes, as being
+ * named does. Only a standing call lights up the table, since with motion turned down the light stays on
+ * until the call ends; and a passing call never takes the place of a standing one's notification or title.
+ */
+const STANDS: Record<Why, boolean> = { turn: true, mention: false };
 
 // Two short pulses: one is easy to take for the phone settling on the table
 export const BUZZ_PATTERN = [120, 80, 120];
@@ -70,6 +77,10 @@ function flashWay(host: FlashHost): AttentionWay {
   return {
     ability: () => 'yes',
     call: (call) => {
+      if (!STANDS[call.why]) {
+        return;
+      }
+
       delete host.dataset.attention;
       void host.offsetWidth;
       host.dataset.attention = call.why;
@@ -109,7 +120,7 @@ function whileAway(sight: Sight, show: (call: Call) => () => void): Pick<Attenti
 
   return {
     call: (call) => {
-      if (sight.away()) {
+      if (sight.away() && !(shown && STANDS[shown.call.why] && !STANDS[call.why])) {
         takeBack();
         shown = { call, takeBack: show(call) };
       }

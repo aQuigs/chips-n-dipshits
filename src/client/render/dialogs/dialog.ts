@@ -1,6 +1,7 @@
 import type { Command, HandRecord } from '../../../engine/types.ts';
 import type { TableView } from '../../../engine/view.ts';
 import type { SendOutcome } from '../../connection.ts';
+import type { MuteList } from '../../mutes.ts';
 import type { Abilities, AppPreferences } from '../../prefs.ts';
 import type { PresetHandlers } from '../presets.ts';
 import { h, holdWhile } from '../../ui.ts';
@@ -17,6 +18,8 @@ export interface DialogHandlers {
   tableLink(): string;
   memberLink(): string;
   prefs: AppPreferences;
+  /** Who the viewer has muted at this table. */
+  mutes: MuteList;
   /** What this device can do of what the preferences switch on. */
   abilities: Abilities;
   toLobby(): void;

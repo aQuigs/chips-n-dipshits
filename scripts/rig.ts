@@ -9,6 +9,7 @@ import { chromium } from 'playwright';
 import type { APIResponse, Browser, BrowserContext, BrowserContextOptions, Page, Route } from 'playwright';
 
 import { FLEETING, MOVES } from '../src/client/connection.ts';
+import { GIF_HOSTS } from '../src/client/gifs.ts';
 import { startDevServer } from '../src/dev/server.ts';
 import type { DevServer } from '../src/dev/server.ts';
 import { onTheClock } from '../src/engine/index.ts';
@@ -57,6 +58,36 @@ async function answerFont(route: Route): Promise<void> {
   } catch {
     // The answer never came, or the page has gone: left to the browser, as if nobody had stepped in
     await route.continue().catch(() => undefined);
+  }
+}
+
+/**
+ * The GIF hosts, answered here so no check depends on the network or on what a host serves today. Every
+ * picture is a small one, but for one whose file name says `tall` (far taller than it is wide) and one
+ * whose name says `missing`, which is not found. Each request is written down with the page it came from
+ * and whether it told the host that page, so a check can say when nothing was fetched.
+ */
+export interface GifRequest {
+  url: string;
+  referer: string | null;
+}
+
+const isGifHost = (url: URL) => url.protocol === 'https:' && GIF_HOSTS.has(url.hostname);
+
+function gifPicture(width: number, height: number): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="100%" height="100%" fill="#7a3ce0"/><text x="50%" y="50%" fill="#fff" font-size="${Math.min(width, height) / 3}" text-anchor="middle" dominant-baseline="middle">GIF</text></svg>`;
+}
+
+async function answerGif(route: Route, asked: GifRequest[]): Promise<void> {
+  const request = route.request();
+  const name = new URL(request.url()).pathname;
+
+  asked.push({ url: request.url(), referer: (await request.allHeaders()).referer ?? null });
+
+  if (name.includes('missing')) {
+    await route.fulfill({ status: 404, contentType: 'text/plain', body: 'Not found' });
+  } else {
+    await route.fulfill({ status: 200, contentType: 'image/svg+xml', body: name.includes('tall') ? gifPicture(40, 2000) : gifPicture(240, 180) });
   }
 }
 
@@ -237,6 +268,8 @@ export class Rig {
   readonly presets: MemoryPresetStore;
   /** What the pages of this rig threw, each with whose page it was. */
   readonly pageErrors: string[] = [];
+  /** Every picture the pages of this rig asked a GIF host for, in order. */
+  readonly gifs: GifRequest[] = [];
   private readonly browser: Browser;
   private readonly service: PokerService;
   private readonly server: DevServer;
@@ -347,6 +380,7 @@ export class Rig {
     const context = await this.browser.newContext(options);
     this.contexts.push(context);
     await context.route(FONTS, answerFont);
+    await context.route(isGifHost, (route) => answerGif(route, this.gifs));
 
     // A check stopped for running out of time may still be going, and what it opens now nobody would close
     if (this.closing) {

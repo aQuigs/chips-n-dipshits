@@ -7,7 +7,7 @@ export function reactions(): TableEffect {
   return {
     run: (change, context) => {
       context.marks.follow();
-      showReactions(reactionsShown(change, sendersShown(context.prefs, change.view.you.id)), context);
+      showReactions(reactionsShown(change, sendersShown(context.prefs, context.mutes, change.view.you.id, 'reactions')), context);
     },
   };
 }

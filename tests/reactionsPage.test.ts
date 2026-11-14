@@ -8,6 +8,7 @@ import { MOVE_MS } from '../src/client/motion.ts';
 import { PREFERENCES, Preferences } from '../src/client/prefs.ts';
 import { reactionsShown, showReactions } from '../src/client/reactions.ts';
 import type { ReactionShown, SeatMark, SeatMarks } from '../src/client/reactions.ts';
+import { Mutes } from '../src/client/mutes.ts';
 import { sendersShown } from '../src/client/senders.ts';
 import { ShownTable } from '../src/client/shownTable.ts';
 import { Sounds } from '../src/client/sound.ts';
@@ -140,6 +141,7 @@ class Stage {
   readonly moved: Move[] = [];
   readonly heard: SoundName[] = [];
   readonly prefs = new Preferences(PREFERENCES, mapMemory());
+  readonly mutes = new Mutes(mapMemory(), 'TEST01');
   moving = false;
 
   readonly seatMarks: SeatMarks = { show: (mark, after) => void this.marks.push({ mark, after }), follow: () => undefined };
@@ -148,7 +150,7 @@ class Stage {
   readonly sounds = new Sounds({ now: () => (this.soundClock += 60), play: (sound) => void this.heard.push(sound) }, this.prefs, { inView: () => true });
 
   show(change: TableChange): void {
-    showReactions(reactionsShown(change, sendersShown(this.prefs, change.view.you.id)), { marks: this.seatMarks, motion: this.motion, sounds: this.sounds });
+    showReactions(reactionsShown(change, sendersShown(this.prefs, this.mutes, change.view.you.id, 'reactions')), { marks: this.seatMarks, motion: this.motion, sounds: this.sounds });
   }
 }
 

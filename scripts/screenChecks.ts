@@ -25,6 +25,7 @@ import type { Box, RigPlayer, RigTable, ScreenName } from './rig.ts';
 import { complaints, MOTION, NOTICES, SPOTS, TITLES } from './pageSpies.ts';
 import type { Flight, Spots } from './pageSpies.ts';
 import { STAND_IN_HOST } from './standInHost.ts';
+import { runChecks } from './checkRunner.ts';
 
 const OUT = fileURLToPath(new URL('../screenshots/', import.meta.url));
 
@@ -385,6 +386,23 @@ const hintShown = async (page: Page, selector: string) => (await style(page, sel
 /** Lets the buttons just drawn settle, so a key pressed next is taken. */
 const settle = (page: Page) => page.waitForTimeout(KEYS_SETTLE_MS + 100);
 
+/**
+ * Has the page press a key itself the moment `selector` first matches, for a key that must come before
+ * the buttons have settled: pressed from here it arrives when the machine gets to it, which on a busy
+ * one is too late. `window.pressedEarly` says when it has been pressed.
+ */
+const pressAsSoonAs = (page: Page, key: string, selector: string) =>
+  page.evaluate(`(() => {
+    window.pressedEarly = false;
+    new MutationObserver((changes, watch) => {
+      if (document.querySelector(${JSON.stringify(selector)})) {
+        watch.disconnect();
+        document.body.dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(key)}, bubbles: true, cancelable: true }));
+        window.pressedEarly = true;
+      }
+    }).observe(document.body, { childList: true, subtree: true, attributes: true });
+  })()`);
+
 /** The moves a page sends, in order, as the server receives them. */
 function movesSent(page: Page): string[] {
   const sent: string[] = [];
@@ -721,7 +739,7 @@ const flightsOf = (seen: Seen, what: Flight['what'], standIn: boolean) => seen.f
 
 type Check = [name: string, run: (rig: Rig) => Promise<void>];
 
-/** The presets are the whole rig's, and the lobby of every check after the one that saved them would offer them. */
+/** For a check that looks at the presets more than once, as in a round for each screen: the lobby of the next round would offer the ones the last saved. */
 const forgetPresets = (rig: Rig) => rig.presets.list().forEach((preset) => rig.presets.delete(preset.name));
 
 const CHECKS: Check[] = [
@@ -893,6 +911,7 @@ const CHECKS: Check[] = [
       // Showing the hand they are leaving on is the one thing still theirs to do
       table.play(passive, (view) => view.hand!.stage === 'done');
       await page.tap('.controls [data-action="show"]');
+      await page.waitForSelector('.controls [data-action="show"]', { state: 'detached' });
       await page.waitForSelector('.seat.me .hole .card[data-card]');
       assert.equal(table.view('Quigs').seats.find((seat) => seat?.name === 'Pam')!.shown, true);
     },
@@ -1348,13 +1367,13 @@ const CHECKS: Check[] = [
       for (const key of ['f', 'c', '3']) {
         await page.keyboard.press(key);
       }
-      await page.keyboard.press('Escape');
-      await page.waitForSelector('.dialog', { state: 'detached' });
-      assert.equal(await page.inputValue('#raise-amount'), '40', 'a key with the menu open changed the bet size');
 
       // The buttons were behind the menu, so a key the moment it closes was not pressed looking at them
-      await page.keyboard.press('c');
+      await pressAsSoonAs(page, 'c', 'body:not(:has(.dialog))');
+      await page.keyboard.press('Escape');
+      await page.waitForFunction('window.pressedEarly');
       await nothingSent('a key with the menu open, or just after it closed');
+      assert.equal(await page.inputValue('#raise-amount'), '40', 'a key with the menu open changed the bet size');
 
       await page.click('[data-action="menu"]');
       await page.click('.menu [data-action="preferences"]');
@@ -1405,9 +1424,9 @@ const CHECKS: Check[] = [
       assert.equal(table.view('Quigs').hand!.street, 'turn', 'C did not check the flop through');
 
       // On the turn a bet arrives: the C meant for the check that is no longer there is not taken as a call
+      await pressAsSoonAs(page, 'c', '.turn [data-action="call"]:enabled');
       table.act('Stu', { type: 'raise', to: 60 });
-      await page.waitForSelector('.turn [data-action="call"]:enabled');
-      await page.keyboard.press('c');
+      await page.waitForFunction('window.pressedEarly');
       await page.waitForTimeout(150);
       assert.deepEqual(sent, ['call', 'check'], 'a key pressed as the buttons changed was taken');
       await settle(page);
@@ -1601,11 +1620,11 @@ const CHECKS: Check[] = [
         await press(`${row('Marge Simpson-Jr')} [data-action="make-cohost"]`);
         assert.equal(await text(page, '.dialog h2'), 'Make Marge Simpson-Jr a co-host?');
         await press('[data-action="confirm"]');
-        assert.deepEqual(table.view('Quigs').cohostIds, [table.auth('Marge Simpson-Jr').id]);
 
         await press('[data-action="menu"]');
         await press('.menu [data-action="players"]');
         await page.waitForSelector(`${row('Marge Simpson-Jr')} .cohost`);
+        assert.deepEqual(table.view('Quigs').cohostIds, [table.auth('Marge Simpson-Jr').id]);
         assert.equal(await page.locator('.seat[data-seat="1"] .plate .cohost').count(), 1, 'the seat does not show the co-host mark');
         await shot(page, `players-cohost-named-${screen}`);
 
@@ -2645,7 +2664,7 @@ const CHECKS: Check[] = [
       await page.evaluate('document.activeElement.blur()');
       await settle(page);
       await page.keyboard.press('f');
-      await page.waitForTimeout(300);
+      await page.waitForSelector('.turn', { state: 'detached' });
       assert.deepEqual(sent, ['fold']);
       await page.context().close();
     },
@@ -3216,10 +3235,10 @@ const CHECKS: Check[] = [
 
           await press('.menu [data-action="bomb-pot"]');
           await host.waitForSelector('.dialog', { state: 'detached' });
-          assert.equal(table.view('Stu').feed.at(-1)!.text, 'The host called a bomb pot for the next hand');
 
           // A seated player's bar keeps its height, so the word costs their table nothing
           await player.waitForSelector('.controls .next-hand');
+          assert.equal(table.view('Stu').feed.at(-1)!.text, 'The host called a bomb pot for the next hand');
           assert.deepEqual(await boxes(player, '.stage'), [roomBefore], 'word of the bomb pot took room from a seated player\'s table');
 
           for (const [who, page] of Object.entries(everyone)) {
@@ -3244,6 +3263,7 @@ const CHECKS: Check[] = [
           assert.equal(await host.locator('.menu [data-action="bomb-pot"]').count(), 0, 'a bomb pot that is called already is offered again');
           await press('.menu [data-action="bomb-pot-off"]');
           await host.waitForSelector('.dialog', { state: 'detached' });
+          await host.waitForSelector('.controls .next-hand', { state: 'detached' });
           assert.equal(table.view('Stu').feed.at(-1)!.text, 'The host called off the bomb pot');
 
           for (const page of Object.values(everyone)) {
@@ -3828,9 +3848,9 @@ const CHECKS: Check[] = [
       assert.deepEqual(await notices(), [{ title: words, options: { tag: `cnd-${table.id}` }, open: true }]);
       assert.doesNotMatch(words, /\d|[♠♥♦♣]|\b[AKQJT2-9][shdc]\b/, 'a card or an amount on the lock screen');
 
-      await page.waitForTimeout(2300);
+      // It goes on changing for as long as the turn waits
+      await page.waitForFunction('window.titles.length >= 3');
       const titles = (await page.evaluate('window.titles')) as string[];
-      assert.ok(titles.length >= 3, `the title changed ${titles.length} times in two seconds`);
       assert.deepEqual([...new Set(titles)].sort(), [`● ${words}`, `○ ${words}`].sort(), 'a title that does not say it is the player’s turn');
 
       // Acting from another device, or the clock acting for the player, ends the turn the same way
@@ -3839,6 +3859,7 @@ const CHECKS: Check[] = [
       assert.equal(await page.title(), own, 'the title was not put back');
 
       const settled = ((await page.evaluate('window.titles')) as string[]).length;
+      // Longer than the title takes to change once, which is TITLE_SWAP_MS, a second
       await page.waitForTimeout(1500);
       assert.equal(((await page.evaluate('window.titles')) as string[]).length, settled, 'the title kept changing after the turn');
 
@@ -4241,10 +4262,10 @@ const CHECKS: Check[] = [
 
           await press('.hand-counts [data-hands="3"]');
           await host.waitForSelector('.dialog', { state: 'detached' });
-          assert.equal(table.view('Zed').feed.at(-1)!.text, 'The host calls it a night after this hand and 3 more');
 
           // A seated player's bar keeps its height, so the count costs their table nothing
           await host.waitForSelector('.controls .next-hand');
+          assert.equal(table.view('Zed').feed.at(-1)!.text, 'The host calls it a night after this hand and 3 more');
           assert.deepEqual(await boxes(host, '.stage'), [roomBefore], 'the count took room from a seated player\'s table');
           await lookInShapes('3', ['3 more hands after this one']);
 
@@ -4275,8 +4296,8 @@ const CHECKS: Check[] = [
           await shot(host, `last-hands-dialog-called-${kind.name}-${screen}`);
           await press('.this-hand [data-hands="0"]');
           await host.waitForSelector('.dialog', { state: 'detached' });
-          assert.equal(table.view('Zed').feed.at(-1)!.text, 'The host now calls it a night after this hand');
           await lookInShapes('last', ['Last hand of the night']);
+          assert.equal(table.view('Zed').feed.at(-1)!.text, 'The host now calls it a night after this hand');
           await press('[data-action="menu"]');
           await host.waitForSelector('.menu [data-action="lastHands"]');
           assert.equal(await host.locator('.menu [data-action="bomb-pot"]').count(), 0, 'a bomb pot is offered for a hand that never comes');
@@ -5482,27 +5503,10 @@ const CHECKS: Check[] = [
 
 await mkdir(OUT, { recursive: true });
 
-const rig = await Rig.start();
-const only = process.argv[2];
-let failed = 0;
+// Told to stop, Playwright closes the browsers and leaves the script running, and the workers would launch new ones and go on
+process.once('SIGTERM', () => process.exit(143));
 
-try {
-  for (const [name, run] of CHECKS) {
-    if (only && !name.includes(only)) {
-      continue;
-    }
+const passed = await runChecks(CHECKS, { only: process.argv[2], picturesIn: OUT });
 
-    try {
-      await run(rig);
-      console.log(`  ok    ${name}`);
-    } catch (error) {
-      failed += 1;
-      console.log(`  FAIL  ${name}\n${(error as Error).stack}`);
-    }
-  }
-
-  assert.deepEqual(rig.pageErrors, [], 'a page threw an error');
-  assert.equal(failed, 0, `${failed} screen checks failed`);
-} finally {
-  await rig.close();
-}
+// Ended outright once the report is out: a check that was stopped may have left a timer behind that would keep the script going
+process.stdout.write('', () => process.exit(passed ? 0 : 1));

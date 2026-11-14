@@ -11,13 +11,19 @@ const CACHE_KEY_LIMIT_CHARACTERS = 250;
  * A stand-in for a sheet that copies the behavior a store can get wrong: a string written to a cell
  * that isn't formatted as text is reinterpreted, as a formula if it starts with = or +, or as a number
  * if it looks like one. A cell takes 50,000 characters and no more, and half an emoji does not survive
- * being stored. A number shows only as many decimals as its cell's format has.
+ * being stored. A number shows only as many decimals as its cell's format has. Given a lock, it refuses
+ * a write made without holding it, since the store keeps the cache in step with the sheet only that way.
  */
 export class FakeSheet implements SheetLike {
   cells: unknown[][] = [];
   formats: string[][] = [];
   reads = 0;
   private writesAllowed = Infinity;
+  private readonly lock: FakeLock | null;
+
+  constructor(lock: FakeLock | null = null) {
+    this.lock = lock;
+  }
 
   /** Makes writes fail, the way the service now and then does, once `count` more have gone through. */
   refuseWritesAfter(count: number): void {
@@ -65,6 +71,10 @@ export class FakeSheet implements SheetLike {
       },
 
       setValues: (values: unknown[][]): void => {
+        if (this.lock && !this.lock.held) {
+          throw new Error('A write to the sheet without holding the script lock');
+        }
+
         if (this.writesAllowed <= 0) {
           throw new Error('Service Spreadsheets failed while accessing the document');
         }
@@ -123,13 +133,19 @@ export class FakeSheet implements SheetLike {
 
 export class FakeSpreadsheet implements SpreadsheetLike {
   sheets = new Map<string, FakeSheet>();
+  private readonly lock: FakeLock | null;
+
+  /** With a lock, every sheet in it refuses writes made without holding it. */
+  constructor(lock: FakeLock | null = null) {
+    this.lock = lock;
+  }
 
   getSheetByName(name: string): FakeSheet | null {
     return this.sheets.get(name) ?? null;
   }
 
   insertSheet(name: string): FakeSheet {
-    const sheet = new FakeSheet();
+    const sheet = new FakeSheet(this.lock);
     this.sheets.set(name, sheet);
 
     return sheet;

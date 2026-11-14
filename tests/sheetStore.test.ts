@@ -9,9 +9,9 @@ import { FakeCache, FakeLock, FakeSpreadsheet } from './fakes.ts';
 import { seededRng } from './helpers.ts';
 
 function setup() {
-  const spreadsheet = new FakeSpreadsheet();
-  const cache = new FakeCache();
   const lock = new FakeLock();
+  const spreadsheet = new FakeSpreadsheet(lock);
+  const cache = new FakeCache();
   const counts = { opens: 0, flushes: 0 };
   let failingFlush = 0;
 
@@ -413,22 +413,41 @@ test('a transfer whose copy reported failure after the table was saved is copied
   assert.equal(held(), '');
 });
 
-test('a Ledger tab made before transfers is given the transfer columns\' headers, and its old lines are left as they were', () => {
-  const { store, spreadsheet, anotherRun } = setup();
-  const old = spreadsheet.insertSheet('Ledger');
-  old.getRange(1, 1, 1, 7).setValues([['Time', 'Table', 'Player', 'Kind (renamed)', 'Amount', 'Player ID', 'Record ID']]);
-  old.getRange(2, 1, 1, 7).setValues([[new Date(0), 'ABC234', 'Ann', 'buy-in', 100, 'P1', 'ABC234:1:0']]);
+test('a Ledger tab made before transfers gets the transfer columns\' headers with the first transfer, and its old lines are left as they were', () => {
+  const { store, spreadsheet, lock, anotherRun } = setup();
 
-  // A buy-in whose copy reported failure although it landed, written the way older code wrote it
+  // The tab as the code before transfers made it, under the lock as the store holds it
+  const baseHeaders = ['Time', 'Table', 'Player', 'Type', 'Amount', 'Player ID', 'Record ID'];
+  lock.waitLock();
+  const old = spreadsheet.insertSheet('Ledger');
+  old.getRange(1, 1, 1, 7).setValues([baseHeaders]);
+  old.getRange(2, 1, 1, 7).setValues([[new Date(0), 'ABC234', 'Ann', 'buy-in', 100, 'P1', 'ABC234:1:0']]);
+  lock.releaseLock();
+
   save(store, table('ABC234', 2), [buyIn(200)]);
+  assert.deepEqual(old.cells[0], baseHeaders, 'a copy with no transfer in it left the headers alone');
+
+  // A buy-in whose copy reported failure although it landed, held from before the change
   const { tables, ledgerAmounts } = records(spreadsheet);
   tables.cells[1]![9] = `~${JSON.stringify([{ id: 'ABC234:1:0', record: buyIn(100) }])}`;
 
   save(anotherRun(), table('ABC234', 3), transfer(50));
 
-  assert.deepEqual(old.cells[0], ['Time', 'Table', 'Player', 'Kind (renamed)', 'Amount', 'Player ID', 'Record ID', 'Transferred', 'Other player', 'Other player ID']);
+  assert.deepEqual(old.cells[0], [...baseHeaders, 'Transferred', 'Other player', 'Other player ID']);
   assert.deepEqual(old.cells[1], [new Date(0), 'ABC234', 'Ann', 'buy-in', 100, 'P1', 'ABC234:1:0']);
   assert.deepEqual(ledgerAmounts(), [100, 200, -50, 50], 'the line written before the new columns was found by its id and not written again');
+});
+
+test('a header someone renamed is kept when the transfer columns are headed', () => {
+  const { store, spreadsheet, lock } = setup();
+
+  lock.waitLock();
+  spreadsheet.insertSheet('Ledger').getRange(1, 1, 1, 7).setValues([['When', 'Table', 'Player', 'Type', 'Amount', 'Player ID', 'Record ID']]);
+  lock.releaseLock();
+
+  save(store, table('ABC234'), transfer(50));
+
+  assert.deepEqual(spreadsheet.getSheetByName('Ledger')!.cells[0], ['When', 'Table', 'Player', 'Type', 'Amount', 'Player ID', 'Record ID', 'Transferred', 'Other player', 'Other player ID']);
 });
 
 test('a ledger entry in dollars and cents that had to wait in its row is written in dollars whichever way it goes out', () => {

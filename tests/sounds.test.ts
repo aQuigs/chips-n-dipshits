@@ -125,6 +125,14 @@ test('the viewer’s own pot sounds bigger than anyone else’s, and covers some
   assert.deepEqual(soundsHeard(split, 2), ['win']);
 });
 
+test('a slow view that brings a flop, the folds that end the hand and its rabbit hunt together plays the flop’s sound as it would without the hunt', () => {
+  const caughtUp: HandEvent[] = [['street', 0, ['Kh', '9c', '4s']], ['fold', 1], ['fold', 2], ['win', 0, 60, 0, 0]];
+  const hunted: HandEvent[] = [...caughtUp, ['hunt', [['Th', '2c']]]];
+
+  assert.deepEqual(soundsHeard(caughtUp, 1), ['street', 'fold', 'win']);
+  assert.deepEqual(soundsHeard(hunted, 1), ['street', 'fold', 'win', 'hunt']);
+});
+
 test('a hand plays its deal, its moves, its streets and its result as they come', () => {
   const table = new TestTable({ stacks: [1000, 1000, 1000] });
   const page = new Page(table, 2);

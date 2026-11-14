@@ -1,4 +1,5 @@
 import type { HandEvent } from '../engine/events.ts';
+import { ASIDE_SOUNDS } from './sound.ts';
 import type { SoundName } from './sound.ts';
 
 /**
@@ -78,8 +79,9 @@ export interface Heard {
 /**
  * What the hand's new events sound like to the viewer at `seat`, in order, each with the event it is
  * heard for. Each sound plays once, where it last came, and only the last few, so a burst of moves
- * reads as how it ended, not as noise. The viewer's own pot needs no second, smaller one for someone
- * else's beside it. `dealtOn` is how many boards the hand was dealt on from its first card.
+ * reads as how it ended, not as noise. A sound beside the game (`ASIDE_SOUNDS`) takes none of those
+ * few places. The viewer's own pot needs no second, smaller one for someone else's beside it. `dealtOn`
+ * is how many boards the hand was dealt on from its first card.
  */
 export function soundsPlaced(events: readonly HandEvent[], seat: number | null, dealtOn = 1): Heard[] {
   const heard = events.flatMap((event, nth) => {
@@ -89,8 +91,9 @@ export function soundsPlaced(events: readonly HandEvent[], seat: number | null, 
   });
   const sounds = heard.map(({ sound }) => sound);
   const once = heard.filter(({ sound }, index) => sounds.lastIndexOf(sound) === index && !(sound === 'win' && sounds.includes('myWin')));
+  const game = once.filter(({ sound }) => !ASIDE_SOUNDS.has(sound)).slice(-MOST_PER_VIEW);
 
-  return once.slice(-MOST_PER_VIEW);
+  return once.filter((placed) => ASIDE_SOUNDS.has(placed.sound) || game.includes(placed));
 }
 
 /** The sounds of `soundsPlaced` alone, as whatever plays them needs them. */

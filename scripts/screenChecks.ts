@@ -741,6 +741,12 @@ const CHECKS: Check[] = [
       ]);
       table.act('Quigs', { type: 'setCohost', playerId: table.auth('Stu').id, on: true });
 
+      // The host has the settings open from before the link was set, and saves something else after
+      const host = await table.open('Quigs', 'desktop');
+      await host.click('[data-action="menu"]');
+      await host.click('.menu [data-action="settings"]');
+      await host.waitForSelector('#table-voice-link');
+
       const cohost = await table.open('Stu', 'phone');
       await cohost.tap('[data-action="menu"]');
       await cohost.tap('.menu [data-action="settings"]');
@@ -762,6 +768,13 @@ const CHECKS: Check[] = [
       assert.equal(await text(cohost, '.voice-link'), 'Voice · meet.google.com');
       assert.match(await text(cohost, '.feed-toggle .latest'), /Co-host Stu set the voice chat link/);
       await cohost.context().close();
+
+      await host.fill('#table-big-blind', '40');
+      await host.click('[data-action="save-settings"]');
+      await host.waitForSelector('.dialog', { state: 'detached' });
+      assert.equal(table.view('Quigs').config.bigBlind, 40);
+      assert.equal(table.view('Quigs').config.voiceLink, 'https://meet.google.com/abc-defg-hij', 'a settings form opened earlier undid the co-host\'s link');
+      await host.context().close();
 
       const member = await table.open('Pam', 'phone');
       assert.equal(await member.getAttribute('.voice-link', 'href'), 'https://meet.google.com/abc-defg-hij', 'a player at the table has the button too');

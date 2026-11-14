@@ -6,14 +6,14 @@ import { h } from '../ui.ts';
  * where a script can't be sure of opening a window, and must never take the frame itself somewhere else.
  */
 export function voiceLinkEl(address: string): HTMLElement | null {
-  const place = address === '' ? null : callHost(address);
+  const place = callHost(address);
   if (!place) {
     return null;
   }
 
   return h(
     'a.btn.small.voice-link',
-    { href: address, target: '_blank', rel: 'noopener noreferrer', 'data-action': 'voice', title: `Join the voice chat at ${place.host}, in a new tab` },
+    { href: address, target: '_blank', rel: 'noopener noreferrer', title: `Join the voice chat at ${place.host}, in a new tab` },
     h('span', null, h('b', null, 'Voice'), ` · ${place.shown}`),
   );
 }

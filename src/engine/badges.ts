@@ -162,7 +162,7 @@ export const BADGES: readonly Badge[] = [
   {
     id: 'cooler',
     name: 'Cooler',
-    mark: '🧊',
+    mark: '❄️',
     description: 'Showed down four of a kind or better of their own, and won nothing on that board.',
     earned: (_hand, player) => monsters(player).some((shown) => !wonOn(player, shown.board)),
     story: (_hand, player) => `lost with ${named(monsters(player).filter((shown) => !wonOn(player, shown.board)))}`,

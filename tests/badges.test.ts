@@ -355,6 +355,22 @@ test('every badge has an id of its own, a name, a mark and a description', () =>
   }
 });
 
+/**
+ * Emoji a phone of any age draws: each in Unicode 6.0 (2010) or before. A phone without an emoji draws
+ * a blank box in its place, and beside a name the mark is all there is, so a new badge's mark joins this
+ * list only once it is checked to be as old.
+ */
+const OLD_MARKS = new Set(['💎', '🚽', '🍀', '💰', '🔥', '💀', '🍦', '💩', '🍔', '❄️', '🏧']);
+
+test('every mark is one emoji that every phone has', () => {
+  const graphemes = new Intl.Segmenter('en', { granularity: 'grapheme' });
+
+  for (const badge of BADGES) {
+    assert.equal([...graphemes.segment(badge.mark)].length, 1, `${badge.id}: ${badge.mark} is more than one mark`);
+    assert.ok(OLD_MARKS.has(badge.mark), `${badge.id}: ${badge.mark} is not known to be drawn on every phone`);
+  }
+});
+
 test('a badge earned is told to the table in the play-by-play, with what earned it', () => {
   const t = new TestTable({ stacks: [1000, 1000, 500], names: ['Dana', 'Lee', 'Sam'] });
 
@@ -388,7 +404,7 @@ test('two players earn in one hand, each their own badges, and a player earns se
   assert.deepEqual(badgesOf(t, 2), { quads: 1, cooler: 1 });
   assert.deepEqual(
     t.feedText().filter((line) => line.includes('earned')),
-    ['P0 earned 🚽 Straight Flush: straight flush, king high', 'P2 earned 🍀 Quads: four kings', 'P2 earned 🧊 Cooler: lost with four kings'],
+    ['P0 earned 🚽 Straight Flush: straight flush, king high', 'P2 earned 🍀 Quads: four kings', 'P2 earned ❄️ Cooler: lost with four kings'],
   );
 
   const shown = t.view(1).tonight.players.map((row) => [row.name, row.badges.map((badge) => badge.id)]);

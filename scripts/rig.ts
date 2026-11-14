@@ -6,12 +6,13 @@
 import assert from 'node:assert/strict';
 
 import { chromium } from 'playwright';
-import type { Browser, BrowserContext, BrowserContextOptions, Page, Route } from 'playwright';
+import type { APIResponse, Browser, BrowserContext, BrowserContextOptions, Page, Route } from 'playwright';
 
+import { MOVES } from '../src/client/connection.ts';
 import { startDevServer } from '../src/dev/server.ts';
 import type { DevServer } from '../src/dev/server.ts';
 import type { Command, TableConfig, TableState, TableView } from '../src/engine/index.ts';
-import type { ApiResponse, Auth } from '../src/server/api.ts';
+import type { ApiRequest, ApiResponse, Auth } from '../src/server/api.ts';
 import { MemoryPresetStore } from '../src/server/memoryPresetStore.ts';
 import { MemoryStore } from '../src/server/memoryStore.ts';
 import { PokerService } from '../src/server/service.ts';
@@ -386,6 +387,173 @@ export class RigBrowser {
 
   async close(): Promise<void> {
     await this.browser?.close();
+  }
+}
+
+/** Which of a page's requests a gate stands in the way of: the moves of a hand, or the polls for news of the table. */
+export type Gated = 'moves' | 'polls';
+
+/** Where a closed gate stops things: on their way to the server, which then has heard nothing, or on the way back from it. */
+export type GateSide = 'requests' | 'answers';
+
+interface Stopped {
+  route: Route;
+  /** Let through to the server. */
+  sent: boolean;
+  /** The server's answer, once it is back at the gate. */
+  answer: APIResponse | null;
+  /** What becomes of an answer still on its way from the server when the check has already said. */
+  onArrival: 'hold' | 'pass' | 'drop';
+}
+
+/**
+ * A gate between one page and the server, for a check that looks at the page while a request is on its
+ * way. The server here answers at once, where the deployed one takes a second or two, so without one
+ * a check never sees what the page shows in between. A check closes the gate, does what makes the page
+ * ask, waits for the gate to be `holding`, looks, and opens it: it never waits a length of time.
+ * A gate starts open. Two gates on one page, one for its moves and one for its polls, work apart.
+ */
+export class Gate {
+  private readonly page: Page;
+  private readonly what: Gated;
+  private side: GateSide | null = null;
+  private stopped: Stopped[] = [];
+  private waiting: (() => void)[] = [];
+
+  private constructor(page: Page, what: Gated) {
+    this.page = page;
+    this.what = what;
+  }
+
+  static async on(page: Page, what: Gated): Promise<Gate> {
+    const gate = new Gate(page, what);
+
+    await page.route('**/api', (route) => gate.meet(route));
+
+    return gate;
+  }
+
+  /**
+   * From now on, stops what the gate is for. Closed on `requests`, nothing reaches the server. Closed on
+   * `answers`, the server hears and acts, and what it says back waits here; requests already stopped go
+   * on to it. A page always has a poll out, which a gate closed later never met: closing a gate for polls
+   * has the page ask afresh, which is the one poll it then listens to, and waits for that poll to be here.
+   */
+  async close(side: GateSide): Promise<void> {
+    const wasOpen = this.side === null;
+
+    this.side = side;
+
+    if (side === 'answers') {
+      this.stopped.filter((stopped) => !stopped.sent).forEach((stopped) => this.send(stopped));
+    }
+
+    if (this.what === 'polls' && wasOpen) {
+      await this.page.evaluate(`document.dispatchEvent(new Event('visibilitychange'))`);
+      await this.until(() => this.stopped.length > 0);
+    }
+  }
+
+  /** Resolves once the gate holds something: a request the server has not heard, or an answer the page has not, by the side it is closed on. */
+  holding(): Promise<void> {
+    return this.until(() => this.stopped.some((stopped) => this.side === 'requests' || stopped.answer !== null));
+  }
+
+  /** Lets through everything held, and everything that comes after. */
+  async open(): Promise<void> {
+    this.side = null;
+
+    await Promise.all(
+      this.stopped.splice(0).map((stopped) => {
+        stopped.onArrival = 'pass';
+
+        if (!stopped.sent) {
+          return stopped.route.continue();
+        }
+
+        return stopped.answer ? stopped.route.fulfill({ response: stopped.answer }) : undefined;
+      }),
+    );
+  }
+
+  /**
+   * Loses everything held: the page gets no answer to it, as when a phone drops off the network. Whether
+   * the server heard depends on the side the gate was closed on. The gate stays closed.
+   */
+  async lose(): Promise<void> {
+    await Promise.all(
+      this.stopped.splice(0).map((stopped) => {
+        stopped.onArrival = 'drop';
+
+        return stopped.route.abort('failed');
+      }),
+    );
+  }
+
+  /**
+   * Answers everything held the way the server does when it could not get to the table in time: a
+   * refusal, with nothing played. Only for a gate closed on `requests`, where the server has heard
+   * none of it. The gate stays closed.
+   */
+  async refuse(): Promise<void> {
+    assert.equal(this.side, 'requests', 'a request the server has heard is past refusing');
+
+    await Promise.all(
+      this.stopped.splice(0).map((stopped) => {
+        // Answered as the build that asked, or the page would take the answer for a newer server's
+        const { build } = JSON.parse(stopped.route.request().postData() ?? '{}') as { build?: string };
+
+        return stopped.route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: false, code: 'busy', error: 'The table is busy, try again', build }) });
+      }),
+    );
+  }
+
+  private meet(route: Route): Promise<void> | void {
+    const body = JSON.parse(route.request().postData() ?? '{}') as ApiRequest;
+    const mine = this.what === 'polls' ? body.op === 'poll' : body.op === 'act' && MOVES.has(body.command.type);
+
+    if (this.side === null || !mine) {
+      return route.fallback();
+    }
+
+    const stopped: Stopped = { route, sent: false, answer: null, onArrival: 'hold' };
+
+    this.stopped.push(stopped);
+
+    if (this.side === 'answers') {
+      this.send(stopped);
+    }
+
+    this.changed();
+  }
+
+  private send(stopped: Stopped): void {
+    stopped.sent = true;
+
+    stopped.route.fetch().then(
+      (answer) => {
+        if (stopped.onArrival === 'pass') {
+          return stopped.route.fulfill({ response: answer });
+        }
+
+        if (stopped.onArrival === 'hold') {
+          stopped.answer = answer;
+          this.changed();
+        }
+      },
+      // The page was closed with its request still out
+      () => undefined,
+    );
+  }
+
+  private changed(): void {
+    this.waiting.splice(0).forEach((look) => look());
+  }
+
+  private async until(reached: () => boolean): Promise<void> {
+    while (!reached()) {
+      await new Promise<void>((resolve) => this.waiting.push(resolve));
+    }
   }
 }
 

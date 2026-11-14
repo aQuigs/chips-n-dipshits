@@ -26,7 +26,7 @@ export interface TableChange {
    * something they missed.
    */
   current: boolean;
-  /** The table itself returned to an earlier state, as after the Sheet was restored. */
+  /** The table returned to an earlier state: the Sheet was restored, or the viewer's own move, shown early, was taken off again. */
   wentBack: boolean;
   /** The server's time as the page reckons it when the view was put on screen, which is later than the view's own when it was slow to arrive. */
   now: number;
@@ -85,7 +85,8 @@ export class TableNews {
   }
 }
 
-function newEvents(before: TableView, view: TableView): HandEvent[] {
+/** What has happened in the hand `view` shows since `before` was showing: all of it when the hand began since. */
+export function newEvents(before: TableView, view: TableView): HandEvent[] {
   if (!view.hand) {
     return [];
   }

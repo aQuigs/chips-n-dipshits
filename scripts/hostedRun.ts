@@ -8,19 +8,18 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
 import { chromium } from 'playwright';
-import type { Browser, Page, Route } from 'playwright';
+import type { Browser, Page } from 'playwright';
 
 import { KEYS_SETTLE_MS } from '../src/client/hotkeys.ts';
 import { startDevServer } from '../src/dev/server.ts';
 import { UNSTAMPED_BUILD } from '../src/server/build.ts';
 import { clientPage } from './bundle.ts';
-import { complaints, NOTICES, STILL, TITLES } from './pageSpies.ts';
+import { answeredAfter, complaints, moveIn, movesSent, NOTICES, ownComplaints, STILL, TITLES, toldOf } from './pageSpies.ts';
+import { Gate } from './rig.ts';
 import { STAND_IN_HOST } from './standInHost.ts';
 
 const STEP_TIMEOUT_MS = 20_000;
-const SLOW_ANSWER_MS = 3000;
 const SLOW_POLL_MS = 1500;
-const MOVES = ['fold', 'check', 'call', 'raise'];
 
 // Longer than the page waits before it asks again, whether it was answered at once or not at all
 const QUIET_MS = 2500;
@@ -65,11 +64,25 @@ async function open(browser: Browser): Promise<Page> {
 
 const inAddress = (page: Page, name: string) => new URL(page.url()).searchParams.get(name);
 const remembered = (page: Page, tableId: string) => page.evaluate(`localStorage.getItem('cnd.seat.${tableId}')`) as Promise<string | null>;
-const moveOf = (route: Route): string | null => {
-  const body = JSON.parse(route.request().postData() ?? '{}') as { op?: string; command?: { type: string } };
+/** A page's own seat, the chips in front of it, the pot and the board, as they are drawn, less the turn's clock, which never stands still. */
+const ownPart = (page: Page) =>
+  page.evaluate(`['.seat.me', '.seat.me + .bet', '.pot', '.boards'].map((selector) => {
+    const part = document.querySelector(selector)?.cloneNode(true);
 
-  return body.op === 'act' && body.command && MOVES.includes(body.command.type) ? body.command.type : null;
-};
+    part?.querySelectorAll('.timer, .status.clock').forEach((clock) => clock.remove());
+
+    return part?.outerHTML ?? null;
+  })`) as Promise<(string | null)[]>;
+
+/** Every key of a turn, pressed long enough after the last redraw that a key would be taken. */
+async function pressTurnKeys(page: Page): Promise<void> {
+  await page.evaluate('document.activeElement.blur()');
+  await sleep(KEYS_SETTLE_MS + 100);
+
+  for (const key of ['f', 'c', 'r', 'Enter']) {
+    await page.keyboard.press(key);
+  }
+}
 
 async function createTable(page: Page, url: string, name: string): Promise<string> {
   await page.goto(url);
@@ -307,77 +320,61 @@ try {
     assert.equal(await first.locator('.turn [data-action="fold"]:enabled').count(), 1);
   }
 
-  console.log('While a move is on its way, nothing else frees the buttons for a second one');
+  console.log('A move shows the moment it is made, and no key or line of chat makes a second one while its answer is on its way');
   {
-    const sent: string[] = [];
+    const sent = movesSent(first);
+    const moves = await Gate.on(first, 'moves');
 
-    await first.route('**/api', async (route) => {
-      const move = moveOf(route);
-
-      if (move) {
-        sent.push(move);
-        await sleep(SLOW_ANSWER_MS);
-      }
-
-      return route.continue();
-    });
-
+    // The server plays the call, and its answer takes its time
+    await moves.close('answers');
     await first.click('.turn [data-action="call"]');
-    assert.equal(await first.locator('.turn [data-action="fold"]:disabled').count(), 1);
+    await first.waitForSelector('.turn', { state: 'detached' });
+    assert.equal(await first.innerText('.seat.me .status'), 'CALL', 'the call is on the table before the server has answered');
+    await moves.holding();
 
     await say(first, 'calling');
-    assert.equal(await first.locator('.turn [data-action="fold"]:disabled').count(), 1, 'still locked after the chat came back');
+    assert.equal(await first.locator('.turn').count(), 0, 'no buttons came back with the chat');
 
-    // A tap on a locked button is no tap, and nothing in the page turns one into a move either
-    await first.locator('.turn [data-action="fold"]').click({ force: true }).catch(() => undefined);
+    // A key presses a button, and there is none
+    await pressTurnKeys(first);
 
-    // Nor does a key, which presses the same buttons, once they have been up long enough to take one
-    await first.evaluate('document.activeElement.blur()');
-    await sleep(KEYS_SETTLE_MS + 100);
-    for (const key of ['f', 'c', 'r', 'Enter']) {
-      await first.keyboard.press(key);
-    }
+    await moves.open();
     await second.waitForSelector('.turn [data-action="check"]:enabled');
     assert.deepEqual(sent, ['call']);
 
     await first.unroute('**/api');
   }
 
-  console.log('A move whose answer is lost is looked up, not repeated on a guess');
+  console.log('A move whose answer is lost stays shown, marked, while it is looked up, and is not repeated on a guess');
   {
-    const sent: string[] = [];
-    let lost = false;
+    const sent = movesSent(second);
+    const moves = await Gate.on(second, 'moves');
+    const polls = await Gate.on(second, 'polls');
 
-    await second.route('**/api', async (route) => {
-      const move = moveOf(route);
-
-      if (!move) {
-        return route.continue();
-      }
-
-      sent.push(move);
-
-      if (lost) {
-        return route.continue();
-      }
-
-      // The server plays it, and the answer never arrives
-      lost = true;
-      await route.fetch();
-
-      return route.abort('failed');
-    });
+    // The server plays it and the answer never arrives; no poll gets through either, until the check lets one
+    await polls.close('requests');
+    await moves.close('answers');
 
     // The big blind checks; that brings the flop, where the big blind is first to act again
     await second.click('.turn [data-action="check"]');
+    await second.waitForSelector('.turn', { state: 'detached' });
+    await moves.holding();
+    await moves.lose();
+
     await second.waitForSelector('.toast:has-text("Checking whether that was played")');
+    await second.waitForSelector('.stage[data-unconfirmed]');
+    assert.equal(await second.innerText('.controls .waiting'), 'Waiting for the table to confirm your check…');
+    assert.equal(await second.locator('.board .card[data-card]').count(), 0, 'no card is shown that the server has not sent');
+
+    await polls.open();
     await second.waitForSelector('.board .card[data-card]');
     await second.waitForSelector('.turn [data-action="check"]:enabled');
 
     assert.equal(await second.locator('.board .card[data-card]').count(), 3, 'the check was played once: the flop is out and no further');
+    assert.equal(await second.locator('.stage[data-unconfirmed]').count(), 0);
     assert.deepEqual(sent, ['check']);
 
-    await second.unroute('**/api');
+    await second.unrouteAll({ behavior: 'ignoreErrors' });
   }
 
   console.log("A poll's answer that the answer to a move overtook does not put the old table back");
@@ -420,6 +417,136 @@ try {
     await second.unrouteAll({ behavior: 'ignoreErrors' });
   }
 
+  // The flop, with the big blind's check in and the button to act. From here each page's moves and polls go by a gate
+  {
+    const nameOf = (page: Page) => (page === host ? 'Quigs' : 'Danny');
+    const said = [complaints(first), complaints(second)];
+    const sent = [movesSent(first), movesSent(second)];
+    const gates = { first: { moves: await Gate.on(first, 'moves'), polls: await Gate.on(first, 'polls') }, second: { moves: await Gate.on(second, 'moves'), polls: await Gate.on(second, 'polls') } };
+
+    console.log('A bet the server refuses comes off the table, and the buttons are back with the amount as it was typed');
+    {
+      await first.fill('#raise-amount', '137');
+      const before = await ownPart(first);
+
+      await gates.first.moves.close('requests');
+      await first.click('.turn [data-action="raise"]');
+      await first.waitForSelector('.turn', { state: 'detached' });
+      assert.equal(await first.innerText('.seat.me + .bet'), '137', 'the bet is on the table before the server has answered');
+
+      await gates.first.moves.holding();
+      await gates.first.moves.refuse();
+      await first.waitForSelector('.toast:has-text("The table is busy, try again")');
+      await first.waitForSelector('.turn [data-action="raise"]:enabled');
+
+      assert.equal(await first.inputValue('#raise-amount'), '137');
+      assert.match(await first.innerText('.turn .btn.raise'), /137/);
+      assert.deepEqual(await ownPart(first), before, 'the table is as it was before the bet');
+      await gates.first.moves.open();
+    }
+
+    console.log('A move that never reaches the server is looked up, put back with a sentence, and not sent again');
+    {
+      const before = await ownPart(first);
+
+      await gates.first.polls.close('requests');
+      await gates.first.moves.close('requests');
+      await first.click('.turn [data-action="check"]');
+      await first.waitForSelector('.turn', { state: 'detached' });
+      await gates.first.moves.holding();
+      await gates.first.moves.lose();
+      await first.waitForSelector('.stage[data-unconfirmed]');
+
+      await gates.first.polls.open();
+      await first.waitForSelector('.toast:has-text("The table has no sign of your check, so it is still your turn.")');
+      await first.waitForSelector('.turn [data-action="check"]:enabled');
+
+      assert.deepEqual(await ownPart(first), before, 'the table is as it was before the check');
+      assert.equal(await first.inputValue('#raise-amount'), '137', 'the bet being sized is still there');
+      assert.equal(await second.locator('.turn').count(), 0, 'the other player was never given the turn');
+      await gates.first.moves.open();
+    }
+
+    console.log('A move the server confirms is drawn once: its answer changes nothing of what was shown at the tap');
+    {
+      await gates.first.moves.close('requests');
+      await first.click('.turn [data-action="raise"]');
+      await first.waitForSelector('.turn', { state: 'detached' });
+      await gates.first.moves.holding();
+
+      const made = await ownPart(first);
+      assert.equal(await first.innerText('.seat.me + .bet'), '137');
+      assert.equal(await second.locator('.bet').count(), 0, 'the other player sees no bet the server has not heard of');
+
+      await gates.first.moves.open();
+      await toldOf(first, nameOf(first));
+      await second.waitForSelector('.turn [data-action="call"]:enabled');
+      assert.deepEqual(await ownPart(first), made);
+    }
+
+    console.log('A view from before a move, arriving after the tap, does not put the turn back');
+    {
+      // The poll is answered with a line of chat, and the answer is still on its way when this player calls
+      await gates.second.polls.close('answers');
+      await say(first, 'well?');
+      await gates.second.polls.holding();
+
+      await gates.second.moves.close('requests');
+      await second.click('.turn [data-action="call"]');
+      await second.waitForSelector('.turn', { state: 'detached' });
+      await gates.second.moves.holding();
+      const made = await ownPart(second);
+
+      await gates.second.polls.open();
+      await second.waitForSelector('.feed li:has-text("well?")', { state: 'attached' });
+      assert.equal(await second.locator('.turn').count(), 0, 'the decision already made is not back on screen');
+      assert.deepEqual(await ownPart(second), made, 'and the call is still on the table');
+
+      // The call ends the flop, and the turn card comes with the answer, not before
+      assert.equal(await second.locator('.board .card[data-card]').count(), 3);
+      await gates.second.moves.open();
+      await second.waitForSelector('.turn [data-action="check"]:enabled');
+      assert.equal(await second.locator('.board .card[data-card]').count(), 4);
+    }
+
+    console.log('An answer that arrives after a poll already showed the move played, and the hand moved on, changes nothing and frees the buttons');
+    {
+      // The server plays the check, and its answer is held while the page's poll brings the news
+      await gates.second.moves.close('answers');
+      await second.click('.turn [data-action="check"]');
+      await second.waitForSelector('.turn', { state: 'detached' });
+      await toldOf(second, nameOf(second));
+
+      // The other player checks behind, and the river puts the action back on this one, whose first check is still unanswered
+      await first.click('.turn [data-action="check"]');
+      await second.waitForSelector('.turn [data-action="check"]:disabled');
+      assert.equal(await second.locator('.board .card[data-card]').count(), 5);
+
+      // A tap on a locked button is no tap, and a key presses nothing either
+      await second.locator('.turn [data-action="check"]').click({ force: true }).catch(() => undefined);
+      await pressTurnKeys(second);
+
+      const river = await ownPart(second);
+      await gates.second.moves.holding();
+      await gates.second.moves.open();
+      await second.waitForSelector('.turn [data-action="check"]:enabled');
+      assert.deepEqual(await ownPart(second), river, 'the old answer put nothing back');
+
+      // And the turn it freed is played as any other
+      await second.click('.turn [data-action="check"]');
+      await first.waitForSelector('.turn [data-action="check"]:enabled');
+    }
+
+    assert.deepEqual(sent, [['raise', 'check', 'raise', 'check'], ['call', 'check', 'check']], 'each move was sent once: the refused bet and the lost check were tapped again by the player');
+    assert.deepEqual(said.map(ownComplaints), [[], []], 'a page complained in the console');
+
+    await first.unrouteAll({ behavior: 'ignoreErrors' });
+    await second.unrouteAll({ behavior: 'ignoreErrors' });
+
+    // What these cases had the page say is gone before the next looks at what a page says
+    await first.waitForSelector('.toast', { state: 'hidden' });
+  }
+
   // What a page of the newer build would send, for what the pages left behind can no longer do
   const asNewerBuild = async (request: object) => {
     const response = await fetch(`${server.url}api`, { method: 'POST', body: JSON.stringify({ ...request, build: NEWER_BUILD }) });
@@ -441,7 +568,7 @@ try {
     let noticeUp = false;
 
     await first.route('**/api', (route) => {
-      const move = moveOf(route);
+      const move = moveIn(route.request());
 
       if (move) {
         moves.push(move);
@@ -462,6 +589,7 @@ try {
 
     assert.match(await noticeText(first), /The game was updated\s+Reload to keep playing\. Your place at the table is kept\./);
     assert.equal(await first.locator('.stage .table').count(), 1, 'the table as it last was is still behind the notice');
+    assert.equal(await first.locator('.seat.me.acting').count(), 1, 'with the check that may never be played taken off it');
     assert.equal(await first.locator('.toast:visible').count(), 0, 'the refusal is not also a toast');
 
     // The table hears from someone on the newer build, which answers the poll this page still had waiting
@@ -498,8 +626,9 @@ try {
     assert.equal(await first.locator('.outdated').count(), 0);
 
     // And it plays: the check that was refused goes through from the page that is current
-    await first.click('.turn [data-action="check"]');
-    await first.waitForSelector('.turn', { state: 'detached' });
+    // The page shows its check at the tap, so what says it went through is the answer, and no notice after it
+    const answer = await answeredAfter(first, () => first.click('.turn [data-action="check"]'));
+    assert.equal((await answer.json()).ok, true, 'the check was refused');
     assert.equal(await first.locator('.outdated').count(), 0);
   }
 

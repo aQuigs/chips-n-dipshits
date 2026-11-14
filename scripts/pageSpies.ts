@@ -1,8 +1,8 @@
 /*
  * What a browser check puts in a page to see what the page asks of the browser: scripts run before
- * anything of the page's own, and a listener for what it says in its console.
+ * anything of the page's own, and listeners for what it says in its console and sends to the server.
  */
-import type { Page } from 'playwright';
+import type { Page, Request, Response } from 'playwright';
 
 import type { Permission } from '../src/client/attentionWays.ts';
 import type { MoveName } from '../src/client/motion.ts';
@@ -52,6 +52,53 @@ export function complaints(page: Page): string[] {
 
   return said;
 }
+
+/** What a page said in the console that is the page's own doing: the browser adds a line of its own for a request a check lost on purpose. */
+export const ownComplaints = (said: string[]) => said.filter((line) => !line.startsWith('Failed to load resource'));
+
+/** The move a request carries, by name; null for any other request. */
+export function moveIn(request: Request): string | null {
+  const body = JSON.parse(request.postData() ?? '{}') as { op?: string; command?: { type: string; agree?: boolean } };
+
+  if (body.op !== 'act' || !body.command || !['fold', 'check', 'call', 'raise', 'ritVote'].includes(body.command.type)) {
+    return null;
+  }
+
+  return body.command.type === 'ritVote' ? `ritVote ${body.command.agree}` : body.command.type;
+}
+
+/** The moves a page sends from now on, in order, whatever becomes of them on the way. */
+export function movesSent(page: Page): string[] {
+  const sent: string[] = [];
+
+  page.on('request', (request) => {
+    const move = moveIn(request);
+
+    if (move) {
+      sent.push(move);
+    }
+  });
+
+  return sent;
+}
+
+/**
+ * Makes a move of the turn on a page, and resolves with the server's answer to it once the turn's
+ * buttons are gone. A page shows its own move the moment it is made, so the buttons going says
+ * nothing of the server: a check that goes on to read the table, or to act for the next player,
+ * makes the move this way.
+ */
+export async function answeredAfter(page: Page, make: () => Promise<unknown>): Promise<Response> {
+  const answer = page.waitForResponse((response) => moveIn(response.request()) !== null);
+
+  await make();
+  await page.waitForSelector('.turn', { state: 'detached' });
+
+  return answer;
+}
+
+/** Resolves once the last line of a page's play-by-play is about this player: the view that says what they did has been drawn. */
+export const toldOf = (page: Page, name: string) => page.waitForFunction(`[...document.querySelectorAll('.feed li')].at(-1)?.textContent.startsWith(${JSON.stringify(`${name} `)})`);
 
 /**
  * Run in the page before anything of its own: switches animations off, as a viewer can in Preferences,

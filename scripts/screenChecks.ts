@@ -24,9 +24,9 @@ import { shortAmount, signedAmount } from '../src/engine/amounts.ts';
 import { DEFAULT_CONFIG, LIMITS, presetSettings } from '../src/engine/index.ts';
 import type { Command, Straddle, TableConfig, TableView } from '../src/engine/index.ts';
 import { contrast } from '../tests/colorVision.ts';
-import { boxes, overlap, Rig, RigTable, SCREENS, setStageHeight, squeezed, textBoxes } from './rig.ts';
+import { boxes, Gate, overlap, Rig, RigTable, SCREENS, setStageHeight, squeezed, textBoxes } from './rig.ts';
 import type { Box, RigPlayer, ScreenName } from './rig.ts';
-import { complaints, MOTION, NOTICES, SPOTS, TITLES } from './pageSpies.ts';
+import { answeredAfter, complaints, MOTION, movesSent, NOTICES, ownComplaints, SPOTS, TITLES, toldOf } from './pageSpies.ts';
 import type { Flight, Spots } from './pageSpies.ts';
 import { STAND_IN_HOST } from './standInHost.ts';
 import { runChecks } from './checkRunner.ts';
@@ -411,21 +411,6 @@ const pressAsSoonAs = (page: Page, key: string, selector: string) =>
     }).observe(document.body, { childList: true, subtree: true, attributes: true });
   })()`);
 
-/** The moves a page sends, in order, as the server receives them. */
-function movesSent(page: Page): string[] {
-  const sent: string[] = [];
-
-  page.on('request', (request) => {
-    const body = JSON.parse(request.postData() ?? '{}') as { op?: string; command?: { type: string; agree?: boolean } };
-
-    if (body.op === 'act' && body.command && ['fold', 'check', 'call', 'raise', 'ritVote'].includes(body.command.type)) {
-      sent.push(body.command.type === 'ritVote' ? `ritVote ${body.command.agree}` : body.command.type);
-    }
-  });
-
-  return sent;
-}
-
 const HINT = '.seat.me .hint';
 
 /** Waits for whatever is moving on the table to land where it will sit. On a still table, as the rig keeps its pages, nothing is. */
@@ -625,18 +610,20 @@ interface Drawn {
 }
 
 // Run in the page
-const DRAWN = `(() => {
-  const stage = document.querySelector('.stage');
+const drawnOf = (selector: string) => `(() => {
+  const part = document.querySelector(${JSON.stringify(selector)});
 
   return {
-    markup: stage.outerHTML,
-    boxes: [...stage.querySelectorAll('*')].map((element) => {
+    markup: part.outerHTML,
+    boxes: [...part.querySelectorAll('*')].map((element) => {
       const { left, top, right, bottom } = element.getBoundingClientRect();
 
       return { left, top, right, bottom };
     }),
   };
 })()`;
+
+const DRAWN = drawnOf('.stage');
 
 const sameBox = (a: Box, b: Box | undefined) => b !== undefined && (['left', 'top', 'right', 'bottom'] as const).every((edge) => same(a[edge], b[edge]));
 
@@ -711,19 +698,24 @@ interface Watched {
   step(what: string, act: () => unknown): Promise<Seen>;
 }
 
+/** Holds a phone's table at the layout's height for the whole hand, whatever the buttons under it come to: its shape is the check's to choose. */
+async function holdShape(page: Page, layout: MotionLayout): Promise<void> {
+  if (!layout.height) {
+    return;
+  }
+
+  await page.setViewportSize({ width: SCREENS[layout.screen].width, height: layout.height + 600 });
+  // And at a width that is no whole number of pixels, as a zoomed browser gives it, which is where a rounded measure shows
+  await page.addStyleTag({ content: `.stage { align-self: start; width: calc(100% - 0.4px); height: ${layout.height}px; }` });
+  await page.waitForSelector(layout.height >= JUST_STANDING ? '.table.tall' : '.table.wide');
+}
+
 async function watch(table: RigTable, name: string, layout: MotionLayout, holdAt: number | null = 0): Promise<Watched> {
   const moving = await table.open(name, layout.screen, MOTION, { moving: true });
   const still = await table.open(name, layout.screen);
 
-  // A phone's table is held at one height for the whole hand, whatever the buttons under it come to: its shape is the check's to choose
-  if (layout.height) {
-    for (const page of [moving, still]) {
-      await page.setViewportSize({ width: SCREENS[layout.screen].width, height: layout.height + 600 });
-      // And at a width that is no whole number of pixels, as a zoomed browser gives it, which is where a rounded measure shows
-      await page.addStyleTag({ content: `.stage { align-self: start; width: calc(100% - 0.4px); height: ${layout.height}px; }` });
-      await page.waitForSelector(layout.height >= JUST_STANDING ? '.table.tall' : '.table.wide');
-    }
-  }
+  await holdShape(moving, layout);
+  await holdShape(still, layout);
 
   if (layout.slower) {
     const session = await moving.context().newCDPSession(moving);
@@ -1109,6 +1101,50 @@ async function assertTonightFits(page: Page, screen: ScreenName): Promise<void> 
 /** Every player with what they are up or down, by name, as the Tonight dialog and as the ledger write it. */
 const tonightNets = (page: Page) => page.evaluate(`[...document.querySelectorAll('.tonight-players li')].map((row) => [row.dataset.player, row.querySelector('.net').textContent]).sort()`) as Promise<string[][]>;
 const ledgerNets = (page: Page) => page.evaluate(`[...document.querySelectorAll('.ledger tbody tr')].map((row) => [row.firstElementChild.textContent, row.lastElementChild.textContent]).sort()`) as Promise<string[][]>;
+
+/** The table and the bar under it as a page draws them, less the mark of a move the server has yet to confirm. */
+interface Shown {
+  table: Drawn;
+  bar: Drawn;
+  /** The player's own move is marked as not confirmed yet. */
+  marked: boolean;
+}
+
+const UNCONFIRMED_MARK = ' data-unconfirmed=""';
+
+/** What a page shows once whatever was moving on it has landed. */
+async function shownOn(page: Page): Promise<Shown> {
+  await dealt(page);
+
+  const { table, bar } = (await page.evaluate(`({ table: ${DRAWN}, bar: ${drawnOf('.controls-slot')} })`)) as { table: Drawn; bar: Drawn };
+
+  return { table: { ...table, markup: table.markup.replace(UNCONFIRMED_MARK, '') }, bar, marked: table.markup.includes(UNCONFIRMED_MARK) };
+}
+
+function assertSameDrawn(found: Drawn, wanted: Drawn, what: string): void {
+  assert.equal(found.markup, wanted.markup, `${what}: it is not drawn as it was`);
+  found.boxes.forEach((box, index) => assert.ok(sameBox(box, wanted.boxes[index]), `${what}: something lies at ${JSON.stringify(box)} that lay at ${JSON.stringify(wanted.boxes[index])}`));
+}
+
+/**
+ * That a page shows the table and the bar under it as it did at another moment, to the last attribute
+ * and the last box. The mark of a move not confirmed yet is the one thing that may differ: it is left
+ * out of the table's markup, and the bar is compared only where neither moment has it, since the mark
+ * puts its own sentence there.
+ */
+function assertAsShown(found: Shown, wanted: Shown, what: string): void {
+  assertSameDrawn(found.table, wanted.table, `${what}, the table`);
+
+  if (!found.marked && !wanted.marked) {
+    assertSameDrawn(found.bar, wanted.bar, `${what}, the bar`);
+  }
+}
+
+/** An amount as a player types it at a table. */
+const typedAs = (amount: number, view: TableView) => (view.config.unit === 'cents' ? (amount / 100).toFixed(2) : String(amount));
+
+/** Where a player's own move is shown early: a phone's table standing up, with motion on, and lying down, and a desktop that plays to the cent. */
+const TAP_FIRST_LAYOUTS: (MotionLayout & { moving?: boolean })[] = [{ ...MOTION_LAYOUTS[0]!, moving: true }, MOTION_LAYOUTS[1]!, MOTION_LAYOUTS[2]!];
 
 type Check = [name: string, run: (rig: Rig) => Promise<void>];
 
@@ -1781,8 +1817,7 @@ const CHECKS: Check[] = [
       await page.keyboard.press('5');
       assert.equal(await text(page, '.turn [data-action="raise"]'), 'All in 1,000');
 
-      await page.keyboard.press('c');
-      await page.waitForSelector('.turn', { state: 'detached' });
+      await answeredAfter(page, () => page.keyboard.press('c'));
       assert.deepEqual(sent, ['call']);
       assert.equal(quigs().bet, 20, 'C did not call the big blind');
 
@@ -1791,8 +1826,7 @@ const CHECKS: Check[] = [
       table.act('Stu', { type: 'check' });
       await page.waitForSelector('.turn [data-action="check"]:enabled');
       await settle(page);
-      await page.keyboard.press('c');
-      await page.waitForSelector('.turn', { state: 'detached' });
+      await answeredAfter(page, () => page.keyboard.press('c'));
       assert.deepEqual(sent, ['call', 'check']);
       assert.equal(table.view('Quigs').hand!.street, 'turn', 'C did not check the flop through');
 
@@ -1803,8 +1837,7 @@ const CHECKS: Check[] = [
       await page.waitForTimeout(150);
       assert.deepEqual(sent, ['call', 'check'], 'a key pressed as the buttons changed was taken');
       await settle(page);
-      await page.keyboard.press('c');
-      await page.waitForSelector('.turn', { state: 'detached' });
+      await answeredAfter(page, () => page.keyboard.press('c'));
       assert.deepEqual(sent, ['call', 'check', 'call']);
       assert.equal(table.view('Quigs').hand!.street, 'river');
 
@@ -1820,8 +1853,7 @@ const CHECKS: Check[] = [
       await page.keyboard.press('r');
       await page.keyboard.type('120');
       assert.equal(await text(page, '.turn [data-action="raise"]'), 'Bet 120');
-      await page.keyboard.press('Enter');
-      await page.waitForSelector('.turn', { state: 'detached' });
+      await answeredAfter(page, () => page.keyboard.press('Enter'));
       assert.deepEqual(sent, ['call', 'check', 'call', 'raise']);
       assert.equal(quigs().bet, 120, 'Enter did not bet what was typed');
 
@@ -1829,11 +1861,12 @@ const CHECKS: Check[] = [
       table.act('Stu', { type: 'raise', to: 400 });
       await page.waitForSelector('.turn [data-action="fold"]:enabled');
       await settle(page);
-      for (let press = 0; press < 5; press++) {
-        await page.keyboard.down('f');
-      }
-      await page.keyboard.up('f');
-      await page.waitForSelector('.turn', { state: 'detached' });
+      await answeredAfter(page, async () => {
+        for (let press = 0; press < 5; press++) {
+          await page.keyboard.down('f');
+        }
+        await page.keyboard.up('f');
+      });
       await page.waitForTimeout(300);
       assert.deepEqual(sent, ['call', 'check', 'call', 'raise', 'fold']);
       assert.equal(quigs().folded, true, 'F did not fold');
@@ -1871,8 +1904,7 @@ const CHECKS: Check[] = [
       assert.equal(await complaintOf(page, '#raise-amount'), TO_THE_CENT);
 
       await page.fill('#raise-amount', '1.50');
-      await page.keyboard.press('Enter');
-      await page.waitForSelector('.turn', { state: 'detached' });
+      await answeredAfter(page, () => page.keyboard.press('Enter'));
       assert.deepEqual(sent, ['raise']);
       assert.equal(table.view('Stu').seats[0]!.bet, 150, 'Enter did not raise to 1.50');
       await page.context().close();
@@ -3036,8 +3068,7 @@ const CHECKS: Check[] = [
       // Back from the pick, the keys are the turn's again
       await page.evaluate('document.activeElement.blur()');
       await settle(page);
-      await page.keyboard.press('f');
-      await page.waitForSelector('.turn', { state: 'detached' });
+      await answeredAfter(page, () => page.keyboard.press('f'));
       assert.deepEqual(sent, ['fold']);
       await page.context().close();
     },
@@ -5031,6 +5062,8 @@ const CHECKS: Check[] = [
           await press('.turn [data-action="raise"]');
         }
         await moving.waitForSelector('.seat.acting[data-seat="1"]');
+        // The bet is on the page from the tap. Its line in the play-by-play comes with the server's answer, which draws nothing over the slide
+        await toldOf(moving, 'Quigs');
         assert.equal(table.view('Quigs').seats[0]!.bet, layout.screen === 'desktop' ? 20 : 55, where('the move did not reach the table'));
         await shown();
         assert.deepEqual(await inTheAir(moving), air(1, 0), where('the viewer’s bet slides alone, and nothing of the deal is left'));
@@ -6533,6 +6566,382 @@ const CHECKS: Check[] = [
       await alone.context().close();
     },
   ],
+  ...TAP_FIRST_LAYOUTS.map((layout): Check => [
+    `a player’s own move shows the moment it is made, the server’s answer changes nothing, and a move refused or lost comes off again (${layout.name})`,
+    async (rig) => {
+      const where = (what: string) => `${layout.name}, ${what}`;
+      const table = rig.table(MOTION_PLAYERS, layout.config);
+
+      // The button is on Al, so Quigs has the small blind: last but one to act before the flop, and first after it
+      table.deal({ button: 3, holes: { 0: 'As Ah' }, board: '2c 7d 9h Jc 3s' });
+      table.act('Pam', { type: 'call' });
+      table.act('Al', { type: 'call' });
+
+      const quigs = layout.moving ? await table.open('Quigs', layout.screen, MOTION, { moving: true }) : await table.open('Quigs', layout.screen);
+      const stu = await table.open('Stu', layout.screen);
+      const press = pressOn(quigs, layout.screen);
+      const sent = movesSent(quigs);
+      const said = complaints(quigs);
+      const moves = await Gate.on(quigs, 'moves');
+      const polls = await Gate.on(quigs, 'polls');
+
+      await holdShape(quigs, layout);
+
+      if (layout.moving) {
+        await quigs.evaluate('window.holdAt = 0');
+      }
+
+      const count = (selector: string) => quigs.locator(selector).count();
+      // What the page has set moving since it was last asked, by what it was; nothing on a page that stands still
+      const moved = async () => (layout.moving ? (await flown(quigs)).map((flight) => [flight.name, flight.what, flight.seat, flight.standIn]) : []);
+      const slide = layout.moving ? [['bet', 'chips', 0, false]] : [];
+
+      // The page shows the table as the server has it, with Quigs to act, and nothing is in the air
+      const onQuigs = async (button: string) => {
+        await caughtUp(quigs, table.view('Quigs'));
+        await quigs.waitForSelector(`.turn [data-action="${button}"]:enabled`);
+        await moved();
+      };
+
+      // The move is on the table and off the bar, before a word from the server
+      const assertMade = async (what: string, status: string, slid: unknown[]) => {
+        assert.deepEqual(await moved(), slid, where(`${what}: what moved as it was made`));
+        assert.equal(await count('.turn'), 0, where(`${what}: the buttons of the turn are still up`));
+        assert.equal(await text(quigs, '.seat.me .status'), status, where(`${what}: what the seat says`));
+        assert.equal(await count('.seat.me.acting'), 0, where(`${what}: the action still shows on the player`));
+        assert.equal(await count('[data-attention]'), 0, where(`${what}: the turn still calls for attention`));
+      };
+
+      /**
+       * A move made with its request held at the gate: it shows at once, nobody else sees it until the
+       * server has it, and the page is then the very page the server's answer draws. `during` looks at
+       * the page while the server still knows nothing.
+       */
+      const played = async (what: string, button: string, make: () => Promise<unknown>, status: string, slid: unknown[], during?: (made: Shown) => Promise<void>) => {
+        await onQuigs(button);
+        await caughtUp(stu, table.view('Stu'));
+        const elsewhere = (await stu.evaluate(DRAWN)) as Drawn;
+
+        await moves.close('requests');
+        await make();
+        await moves.holding();
+        await assertMade(what, status, slid);
+
+        const made = await shownOn(quigs);
+        assert.equal(made.marked, false, where(`${what}: marked as unconfirmed within moments of being made`));
+        assert.deepEqual(await stu.evaluate(DRAWN), elsewhere, where(`${what}: another player’s page shows it before the server has it`));
+        await quigs.evaluate(`document.querySelector('.stage .table').keptSinceTheMove = true`);
+        await during?.(made);
+
+        // The server hears it, and everyone else sees it then, whether or not the answer has reached the player
+        await moves.close('answers');
+        await caughtUp(stu, table.view('Stu'));
+        await moves.open();
+        await toldOf(quigs, 'Quigs');
+
+        assertAsShown(await shownOn(quigs), made, where(`${what}, once the server confirmed it`));
+        assert.deepEqual(await moved(), [], where(`${what}: something moved again when it was confirmed`));
+        // Not even drawn anew with the same things on it, which would cut short a bet still sliding in
+        assert.equal(await quigs.evaluate(`document.querySelector('.stage .table').keptSinceTheMove === true`), true, where(`${what}: the table was drawn again when the move was confirmed`));
+      };
+
+      // ---- Each move ----
+
+      await played('a call', 'call', () => press('.turn [data-action="call"]'), 'Call', slide);
+      await shot(quigs, `optimistic-call-${layout.name}`);
+      table.act('Stu', { type: 'check' });
+
+      // A key presses the button a tap would, where there is a keyboard
+      await onQuigs('check');
+      if (layout.screen === 'desktop') {
+        await settle(quigs);
+      }
+      await played('a check', 'check', () => (layout.screen === 'desktop' ? quigs.keyboard.press('c') : press('.turn [data-action="check"]')), 'Check', []);
+
+      table.act('Stu', { type: 'raise', to: table.view('Stu').hand!.options!.minRaiseTo });
+      table.act('Pam', { type: 'call' });
+      table.act('Al', { type: 'fold' });
+
+      // A raise the server refuses comes off the table, and the buttons are back with the amount as it was typed
+      await onQuigs('raise');
+      const typed = typedAs(table.view('Quigs').hand!.options!.minRaiseTo + 17, table.view('Quigs'));
+      await quigs.fill('#raise-amount', typed);
+      await quigs.locator('#raise-amount').blur();
+
+      const sizing = await shownOn(quigs);
+      await moves.close('requests');
+      await press('.turn [data-action="raise"]');
+      await moves.holding();
+      await assertMade('a raise to be refused', 'Raise', slide);
+
+      await moves.refuse();
+      await quigs.waitForSelector('.toast:has-text("The table is busy, try again")');
+      await quigs.waitForSelector('.turn [data-action="raise"]:enabled');
+      assert.equal(await quigs.inputValue('#raise-amount'), typed, where('the amount typed for a raise that was refused'));
+      assertAsShown(await shownOn(quigs), sizing, where('a raise the server refused'));
+      assert.deepEqual(await moved(), [], where('something moved as the refused raise came off'));
+      await shot(quigs, `optimistic-refused-${layout.name}`);
+      await moves.open();
+
+      await played('a raise', 'raise', () => press('.turn [data-action="raise"]'), 'Raise', slide);
+      table.act('Stu', { type: 'call' });
+      table.act('Pam', { type: 'call' });
+
+      // A bet, with a view from before it still on its way to the page: the poll is answered with a line of chat, and arrives after the tap
+      await onQuigs('raise');
+      await polls.close('answers');
+      table.act('Pam', { type: 'chat', text: 'any day now' });
+      await polls.holding();
+
+      await played('a bet', 'raise', () => press('.turn [data-action="raise"]'), 'Bet', slide, async (made) => {
+        await polls.open();
+        await quigs.getByText('any day now').first().waitFor({ state: 'attached' });
+
+        assertAsShown(await shownOn(quigs), made, where('a view from before the bet, arriving after it'));
+        assert.deepEqual(await moved(), [], where('something moved for a view from before the bet'));
+      });
+
+      table.act('Stu', { type: 'raise', to: table.view('Stu').hand!.options!.minRaiseTo });
+      table.act('Pam', { type: 'raise', to: table.view('Pam').hand!.options!.minRaiseTo });
+
+      // A fold: the player's own cards stay to look at, as after any fold of theirs
+      await played('a fold', 'fold', () => press('.turn [data-action="fold"]'), 'Fold', [], async () => {
+        assert.deepEqual([await count('.seat.me.folded'), await count('.seat.me .card[data-card]'), await count(HINT)], [1, 2, 0], where('a fold: the seat, its cards and the hint under them'));
+      });
+      await shot(quigs, `optimistic-fold-${layout.name}`);
+
+      playOut(table);
+      table.deal({ button: 3, holes: { 0: 'Ks Kh' } });
+      table.act('Pam', { type: 'raise', to: table.view('Pam').hand!.options!.minRaiseTo });
+      table.act('Al', { type: 'fold' });
+
+      await onQuigs('raise');
+      await press('.presets button:has-text("All in")');
+      await played('all in', 'raise', () => press('.turn [data-action="raise"]'), 'All in', slide);
+
+      // ---- A move that gets no answer ----
+
+      playOut(table);
+      table.deal({ button: 3 });
+      table.act('Pam', { type: 'call' });
+      table.act('Al', { type: 'call' });
+      await onQuigs('call');
+
+      const mine = await shownOn(quigs);
+      const lost = async (what: string, heard: boolean) => {
+        // No poll gets through either, so the page knows only what it is shown here
+        await polls.close('requests');
+        await moves.close(heard ? 'answers' : 'requests');
+        await press('.turn [data-action="call"]');
+        await moves.holding();
+        await assertMade(what, 'Call', slide);
+
+        const made = await shownOn(quigs);
+        await moves.lose();
+        await quigs.waitForSelector('.stage[data-unconfirmed]');
+        await quigs.waitForSelector('.toast:has-text("Checking whether that was played")');
+
+        // Marked, and otherwise the table it was: the label of the move and the chips go faint, and the bar says what is waited for
+        const marked = await shownOn(quigs);
+        assertAsShown(marked, made, where(`${what}, marked as unconfirmed`));
+        assert.equal(await text(quigs, '.controls .waiting'), 'Waiting for the table to confirm your call…', where(what));
+        assert.deepEqual([await style(quigs, '.seat.me .status', 'opacity'), await style(quigs, '.seat.me + .bet', 'opacity')], ['0.45', '0.45'], where(`${what}: the mark`));
+        assert.deepEqual([await style(quigs, '.seat:not(.me) .status', 'opacity'), await style(quigs, '.seat.me .stack', 'opacity')], ['1', '1'], where(`${what}: the mark is on more than the move`));
+        assert.equal(await count('.turn'), 0, where(`${what}: a move in doubt can be made again`));
+
+        return made;
+      };
+
+      // The request never reached the server: the lookup finds the turn still open, and the table is put back with a sentence
+      await lost('a call that never arrives', false);
+      await shot(quigs, `optimistic-unconfirmed-${layout.name}`);
+      await polls.open();
+      await quigs.waitForSelector('.toast:has-text("The table has no sign of your call, so it is still your turn.")');
+      await quigs.waitForSelector('.turn [data-action="call"]:enabled');
+      assertAsShown(await shownOn(quigs), mine, where('a call that never arrived, put back'));
+      assert.deepEqual([await count('.stage[data-unconfirmed]'), await moved()], [0, []], where('a call that never arrived, put back'));
+      await shot(quigs, `optimistic-put-back-${layout.name}`);
+      await moves.open();
+
+      // The server played it and the answer was lost: the lookup confirms it, and nothing more is said
+      const made = await lost('a call whose answer is lost', true);
+      await caughtUp(stu, table.view('Stu'));
+      await polls.open();
+      await quigs.waitForSelector('.stage:not([data-unconfirmed])');
+      await toldOf(quigs, 'Quigs');
+      assertAsShown(await shownOn(quigs), made, where('a call whose answer was lost, confirmed'));
+      assert.deepEqual(await moved(), [], where('something moved when the lost call was confirmed'));
+      assert.equal(await count('.toast:has-text("no sign of")'), 0, where('a call that was played is said not to have arrived'));
+      await moves.open();
+
+      // ---- A move that ends the street ----
+
+      // On the button Quigs acts last after the flop. What comes then is the server's to say: nobody is named, and no card comes early
+      playOut(table);
+      table.deal({ button: 0, board: '2c 7d 9h Jc 3s' });
+      for (const [name, type] of [['Al', 'call'], ['Quigs', 'call'], ['Stu', 'call'], ['Pam', 'check'], ['Stu', 'check'], ['Pam', 'check'], ['Al', 'check']] as const) {
+        table.act(name, { type });
+      }
+      await onQuigs('check');
+
+      await moves.close('requests');
+      await press('.turn [data-action="check"]');
+      await moves.holding();
+      await assertMade('a check that ends the street', 'Check', []);
+      assert.deepEqual(
+        [await text(quigs, '.controls .waiting'), await count('.seat.acting'), await count('.board .card[data-card]')],
+        ['Waiting for the dealer', 0, 3],
+        where('a check that ends the street: the bar, who is waited for, and the cards out'),
+      );
+
+      await moves.open();
+      await quigs.waitForFunction(`document.querySelectorAll('.board .card[data-card]').length === 4`);
+
+      // ---- The turn's clock ----
+
+      playOut(table);
+      table.act('Quigs', { type: 'updateConfig', config: { actionSeconds: 30 } });
+      table.deal({ button: 3 });
+      table.act('Pam', { type: 'call' });
+      table.act('Al', { type: 'call' });
+      await onQuigs('call');
+      await quigs.waitForSelector('.seat.me .status.clock');
+
+      // Their own clock stops at the tap. The next player's starts when the server hears the move, so it comes with the answer
+      await moves.close('requests');
+      await press('.turn [data-action="call"]');
+      await moves.holding();
+      await assertMade('a call on the clock', 'Call', slide);
+      assert.deepEqual([await count('.status.clock'), await count('.timer'), await quigs.getAttribute('.seat.acting', 'data-seat')], [0, 0, '1'], where('a call on the clock: the clocks shown, and who is waited for'));
+
+      await moves.open();
+      await quigs.waitForSelector('.seat[data-seat="1"] .status.clock');
+
+      // Each move was sent once: the refused raise and the lost call are the player's own second tries
+      assert.deepEqual(sent, ['call', 'check', 'raise', 'raise', 'raise', 'fold', 'raise', 'call', 'call', 'check', 'call'], where('the moves sent'));
+      // The browser's own line about a request that was lost on purpose
+      assert.deepEqual(ownComplaints(said), [], where('the console'));
+    },
+  ]),
+  ...[MOTION_LAYOUTS[0]!, MOTION_LAYOUTS[2]!].map((layout): Check => [
+    `a move shown early changes nothing in the Tonight and ledger dialogs, and a move the page cannot play out shows as sent with its buttons gone (${layout.name})`,
+    async (rig) => {
+      const where = (what: string) => `${layout.name}, ${what}`;
+      const table = rig.table(MOTION_PLAYERS, layout.config);
+
+      // A hand has been played, so the night has numbers, and in the next the action is on Quigs
+      table.deal({ button: 3 });
+      playOut(table);
+      table.deal({ button: 3, holes: { 0: 'As Ah' }, board: '2c 7d 9h Jc 3s' });
+      table.act('Pam', { type: 'call' });
+      table.act('Al', { type: 'call' });
+
+      const quigs = await table.open('Quigs', layout.screen);
+      const press = pressOn(quigs, layout.screen);
+      const sent = movesSent(quigs);
+      const said = complaints(quigs);
+      const moves = await Gate.on(quigs, 'moves');
+
+      await holdShape(quigs, layout);
+      await quigs.waitForSelector('.turn [data-action="call"]:enabled');
+
+      // ---- The night's numbers and the ledger are the server's: a move shown early is not in them ----
+
+      const DIALOGS = [
+        ['tonight', 'Tonight'],
+        ['ledger', 'Ledger'],
+      ] as const;
+      const dialog = (label: string) => `.dialog[aria-label="${label}"]`;
+      const drawn = (label: string) => quigs.evaluate(`document.querySelector(${JSON.stringify(dialog(label))}).outerHTML`) as Promise<string>;
+      const open = async (action: string, label: string) => {
+        await press('[data-action="menu"]');
+        await press(`.menu [data-action="${action}"]`);
+        await quigs.waitForSelector(dialog(label));
+      };
+      const close = async (label: string) => {
+        await press(`${dialog(label)} [data-action="close"]`);
+        await quigs.waitForSelector(dialog(label), { state: 'detached' });
+      };
+
+      const before: Record<string, string> = {};
+      for (const [action, label] of DIALOGS) {
+        await open(action, label);
+        before[label] = await drawn(label);
+        await close(label);
+      }
+
+      await moves.close('requests');
+      await press('.turn [data-action="call"]');
+      await moves.holding();
+      assert.equal(await text(quigs, '.seat.me .status'), 'Call', where('the call shows before the server has it'));
+
+      for (const [action, label] of DIALOGS) {
+        await open(action, label);
+        assert.equal(await drawn(label), before[label], where(`the ${label} dialog, with the player’s own call shown and the server yet to hear of it`));
+
+        if (label !== 'Ledger') {
+          await close(label);
+        }
+      }
+
+      // The answer comes with the ledger open: the chips of a call are still their owner's, so nothing in it changes and it is not drawn again
+      await quigs.evaluate(`document.querySelector('.dialog').keptSinceTheMove = true`);
+      await moves.open();
+      await toldOf(quigs, 'Quigs');
+      assert.equal(await quigs.evaluate(`document.querySelector('.dialog').keptSinceTheMove === true`), true, where('the ledger dialog was drawn again when the call was confirmed'));
+      assert.equal(await drawn('Ledger'), before.Ledger, where('the ledger dialog, once the call was confirmed'));
+      await close('Ledger');
+
+      // And with Tonight open: Stu checks, the flop comes, and Quigs bets under it
+      table.act('Stu', { type: 'check' });
+      await quigs.waitForSelector('.turn [data-action="raise"]:enabled');
+      await moves.close('requests');
+      await press('.turn [data-action="raise"]');
+      await moves.holding();
+      await open('tonight', 'Tonight');
+      assert.equal(await drawn('Tonight'), before.Tonight, where('the Tonight dialog, with the player’s own bet shown and the server yet to hear of it'));
+
+      await quigs.evaluate(`document.querySelector('.dialog').keptSinceTheMove = true`);
+      await moves.open();
+      await toldOf(quigs, 'Quigs');
+      assert.equal(await quigs.evaluate(`document.querySelector('.dialog').keptSinceTheMove === true`), true, where('the Tonight dialog was drawn again when the bet was confirmed'));
+      assert.equal(await drawn('Tonight'), before.Tonight, where('the Tonight dialog, once the bet was confirmed'));
+      await close('Tonight');
+
+      // ---- A move the page cannot play out: a run-it-twice vote ----
+
+      playOut(table);
+      table.deal({ button: 3, holes: { 0: 'As Ah', 1: 'Ks Kh' }, board: '2c 7d 9h Jc 3s' });
+      table.act('Pam', { type: 'fold' });
+      table.act('Al', { type: 'fold' });
+      table.act('Quigs', { type: 'raise', to: table.view('Quigs').hand!.options!.maxRaiseTo });
+      table.act('Stu', { type: 'call' });
+      await quigs.waitForSelector('.turn [data-action="rit-yes"]:enabled');
+
+      const voting = await shownOn(quigs);
+
+      // Sent, and that is all the page shows of it: the buttons are gone, and the table is as the server last told it
+      await moves.close('requests');
+      await press('.turn [data-action="rit-yes"]');
+      await moves.holding();
+      assert.equal(await quigs.locator('.turn').count(), 0, where('the vote’s buttons are still up while it is on its way'));
+      assert.equal(await text(quigs, '.controls .waiting'), 'Waiting for the run-it-twice votes', where('the bar with a vote sent'));
+      assertSameDrawn((await shownOn(quigs)).table, voting.table, where('the table with a vote sent'));
+      assert.equal(table.view('Quigs').seats[0]!.ritVote, null, where('the server has the vote already'));
+
+      // Refused, the buttons are back as they were
+      await moves.refuse();
+      await quigs.waitForSelector('.turn [data-action="rit-yes"]:enabled');
+      assertAsShown(await shownOn(quigs), voting, where('a vote the server refused'));
+      await moves.open();
+
+      await answeredAfter(quigs, () => press('.turn [data-action="rit-yes"]'));
+      assert.equal(table.view('Quigs').seats[0]!.ritVote, true, where('the vote did not reach the server'));
+
+      assert.deepEqual(sent, ['call', 'raise', 'ritVote true', 'ritVote true'], where('the moves sent'));
+      assert.deepEqual(ownComplaints(said), [], where('the console'));
+    },
+  ]),
 ];
 
 await mkdir(OUT, { recursive: true });

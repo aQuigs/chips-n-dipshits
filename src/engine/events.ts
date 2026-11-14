@@ -45,6 +45,26 @@ export type HandEvent =
   | [kind: 'win', seat: number, amount: number, pot: number, board: number]
   | [kind: 'bounty', seat: number, payments: [seat: number, amount: number][]];
 
+/**
+ * Events are saved with the table on every action, and unlike the play-by-play they are no use with
+ * a stretch missing. A hand that runs longer than any real one stops being recorded altogether.
+ */
+export const EVENT_LIMIT = 320;
+
+/**
+ * Whether a hand whose events are `events` takes one more, by the rule they are kept under: the whole
+ * hand from its start, or nothing. A hand with none past its start can't be followed, because it was
+ * under way before events were kept or it outgrew the limit; one at the limit is emptied for good.
+ */
+export function takesEvent(events: readonly HandEvent[], event: HandEvent): boolean {
+  return (events.length > 0 || event[0] === 'start') && events.length < EVENT_LIMIT;
+}
+
+/** A hand's events with one more, or none at all when the hand does not take it. The list given is left as it is. */
+export function eventsWith(events: readonly HandEvent[], event: HandEvent): HandEvent[] {
+  return takesEvent(events, event) ? [...events, event] : [];
+}
+
 export interface ReplaySeat {
   seat: number;
   name: string;

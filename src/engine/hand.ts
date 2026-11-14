@@ -1,8 +1,10 @@
 import { formatAmount } from './amounts.ts';
-import { bettingIsClosed, bettingOptions, owesAction } from './betting.ts';
+import { bettingIsClosed, bettingOptions, chipsFor, objectionTo, passesTo } from './betting.ts';
+import type { BettingAction } from './betting.ts';
 import { boardsComplete, dealStreet, newBoards, potShares, runOut } from './boards.ts';
 import { boardsDealt, bombPotName, claimBombPot } from './bombPots.ts';
 import { isSevenDeuce, prettyCards, shuffledDeck } from './cards.ts';
+import { takesEvent } from './events.ts';
 import type { HandEvent } from './events.ts';
 import { openingBet } from './forcedBets.ts';
 import type { ForcedBet } from './forcedBets.ts';
@@ -34,18 +36,10 @@ const LOG_LIMIT = 240;
 const LOG_HEAD = 40;
 const LOG_GAP = '… a long stretch of the action is left out …';
 
-/**
- * Events are saved with the table on every action too, and unlike the log they are no use with a
- * stretch missing. A hand that runs longer than any real one stops being recorded altogether.
- */
-export const EVENT_LIMIT = 320;
-
 const STREET_TITLES: Record<Street, string> = { preflop: 'Preflop', flop: 'Flop', turn: 'Turn', river: 'River' };
 
 /** What the play-by-play calls each board of a hand played on several. */
 const BOARD_NAMES = ['First board', 'Second board'];
-
-export type BettingAction = { type: 'fold' } | { type: 'check' } | { type: 'call' } | { type: 'raise'; to: number };
 
 function narrate(state: TableState, ctx: Ctx, text: string): void {
   addFeed(state, ctx.now, 'dealer', null, text);
@@ -69,17 +63,11 @@ function narrate(state: TableState, ctx: Ctx, text: string): void {
 
 /** Adds to the hand's events, which are either the whole hand from its start or nothing. */
 function record(hand: Hand, event: HandEvent): void {
-  // Empty past the start means the hand can't be followed: it was under way before events were kept, or it outgrew the limit
-  if (hand.events.length === 0 && event[0] !== 'start') {
-    return;
-  }
-
-  if (hand.events.length >= EVENT_LIMIT) {
+  if (takesEvent(hand.events, event)) {
+    hand.events.push(event);
+  } else {
     hand.events = [];
-    return;
   }
-
-  hand.events.push(event);
 }
 
 function playerAt(hand: Hand, seat: number): HandPlayer | undefined {
@@ -348,7 +336,7 @@ function advance(state: TableState, ctx: Ctx, afterSeat: number): void {
       continue;
     }
 
-    const next = clockwiseAfter(hand.players, from).find((p) => owesAction(hand, p))!;
+    const next = passesTo(hand, from)!;
     const seat = state.seats[next.seat]!;
 
     if (seat.away || seat.leaving) {
@@ -429,6 +417,13 @@ function collectBets(hand: Hand): void {
 function perform(state: TableState, ctx: Ctx, player: HandPlayer, action: BettingAction): void {
   const hand = state.hand!;
   const options = bettingOptions(state, hand, player);
+  const objection = objectionTo(action, options, hand.currentBet, state.config);
+
+  if (objection) {
+    throw new GameError(objection);
+  }
+
+  const paid = chipsFor(action, options, player.bet);
 
   switch (action.type) {
     case 'fold': {
@@ -440,10 +435,6 @@ function perform(state: TableState, ctx: Ctx, player: HandPlayer, action: Bettin
     }
 
     case 'check': {
-      if (!options.canCheck) {
-        throw new GameError(`You can't check, there is a bet of ${formatAmount(hand.currentBet, state.config)} to you`);
-      }
-
       player.lastAction = 'check';
       record(hand, ['check', player.seat]);
       narrate(state, ctx, `${player.name} checks`);
@@ -451,31 +442,19 @@ function perform(state: TableState, ctx: Ctx, player: HandPlayer, action: Bettin
     }
 
     case 'call': {
-      if (options.canCheck) {
-        throw new GameError('There is nothing to call');
-      }
-
-      pay(state, player, options.callAmount);
+      pay(state, player, paid);
       player.lastAction = 'call';
-      record(hand, ['call', player.seat, options.callAmount, state.seats[player.seat]!.stack]);
-      narrate(state, ctx, `${player.name} calls ${formatAmount(options.callAmount, state.config)}${player.allIn ? ' and is all in' : ''}`);
+      record(hand, ['call', player.seat, paid, state.seats[player.seat]!.stack]);
+      narrate(state, ctx, `${player.name} calls ${formatAmount(paid, state.config)}${player.allIn ? ' and is all in' : ''}`);
       break;
     }
 
     case 'raise': {
-      if (!options.canRaise) {
-        throw new GameError("You can't raise here");
-      }
-
       const { to } = action;
-      if (!Number.isInteger(to) || to < options.minRaiseTo || to > options.maxRaiseTo) {
-        throw new GameError(`A raise here must be between ${formatAmount(options.minRaiseTo, state.config)} and ${formatAmount(options.maxRaiseTo, state.config)}`);
-      }
-
       const opening = hand.currentBet === 0;
       const raisedBy = to - hand.currentBet;
 
-      pay(state, player, to - player.bet);
+      pay(state, player, paid);
 
       // Only a full raise sets the new minimum; a short all-in leaves it where it was
       if (raisedBy >= hand.minRaise) {

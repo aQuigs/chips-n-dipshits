@@ -7080,6 +7080,12 @@ const CHECKS: Check[] = [
       table.deal({ button: 3, holes: { 0: 'As Ah' }, board: '2c 7d 9h Jc 3s' });
       table.act('Pam', { type: 'call' });
       table.act('Al', { type: 'call' });
+      // Badges are the server's too, so Tonight is checked with some to show
+      table.alter((state) => {
+        for (const numbers of Object.values(state.tonight.players)) {
+          numbers.badges = everyBadge(1);
+        }
+      });
 
       const quigs = await table.open('Quigs', layout.screen);
       const press = pressOn(quigs, layout.screen);
@@ -7114,6 +7120,8 @@ const CHECKS: Check[] = [
         before[label] = await drawn(label);
         await close(label);
       }
+
+      assert.ok(before.Tonight!.includes('class="badge"'), where('the Tonight dialog shows no badges'));
 
       await moves.close('requests');
       await press('.turn [data-action="call"]');

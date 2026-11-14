@@ -24,10 +24,8 @@ export interface FeedLook {
 export interface Feed {
   element: HTMLElement;
   update(view: TableView): void;
-  /** Draws every line again when what the look has changed, who is muted or whether GIFs show, changes how any line shows. */
+  /** Draws every line again when what the look has changed, the deck, who is muted or whether GIFs show, changes how any line shows. */
   redraw(): void;
-  /** Draws every line again if the deck now chosen writes cards differently. */
-  showDeck(): void;
 }
 
 function latestText(entry: FeedEntry, deck: string): (string | HTMLElement)[] {
@@ -45,7 +43,13 @@ export function createFeed(onChat: (text: string) => void, look: () => FeedLook,
   const list = h('ol.entries', { 'aria-live': 'polite' });
   const latest = h('span.latest');
   const toggle = h('button.feed-toggle', { type: 'button', 'aria-expanded': 'false', 'aria-controls': 'feed-body' }, h('span.label', null, 'Chat'), latest);
-  const box = createChatBox(onChat);
+  let members: TableView['members'] = [];
+  const box = createChatBox(onChat, () =>
+    members
+      .filter((member) => member.id !== you)
+      .map((member) => member.name)
+      .sort((a, b) => a.localeCompare(b)),
+  );
 
   const element = h('aside.feed', null, h('div.feed-bar', null, toggle, beside), h('div.feed-body', { id: 'feed-body' }, list, box.element));
 
@@ -57,7 +61,6 @@ export function createFeed(onChat: (text: string) => void, look: () => FeedLook,
 
   let lastSeq = 0;
   let you = '';
-  let drawnDeck = look().deck;
   // Every line had, shown or not, so it can be drawn again for another look
   const had: FeedEntry[] = [];
   const gifs = new Map<Element, { address: string; from: string | null }>();
@@ -91,7 +94,17 @@ export function createFeed(onChat: (text: string) => void, look: () => FeedLook,
   );
 
   const isShown = (entry: FeedEntry, current: FeedLook) => chatLineShown(entry, current.shown);
-  const howDrawn = (entry: FeedEntry, current: FeedLook) => (!isShown(entry, current) ? 'hidden' : entry.kind === 'chat' && gifOf(entry, current.pictures) !== null ? 'gif' : 'words');
+  const howDrawn = (entry: FeedEntry, current: FeedLook) => {
+    if (!isShown(entry, current)) {
+      return 'hidden';
+    }
+
+    if (entry.kind !== 'chat') {
+      return marksCards(current.deck) ? 'cards marked' : 'cards plain';
+    }
+
+    return gifOf(entry, current.pictures) !== null ? 'gif' : 'words';
+  };
 
   const lineEl = (entry: FeedEntry, current: FeedLook): HTMLElement => {
     if (entry.kind !== 'chat') {
@@ -108,8 +121,12 @@ export function createFeed(onChat: (text: string) => void, look: () => FeedLook,
   };
 
   const showLatest = (current: FeedLook) => {
-    const newest = [...had].reverse().find((entry) => isShown(entry, current));
-    latest.replaceChildren(...(newest ? latestText(newest, current.deck) : []));
+    let newest = had.length - 1;
+    while (newest >= 0 && !isShown(had[newest]!, current)) {
+      newest -= 1;
+    }
+
+    latest.replaceChildren(...(newest >= 0 ? latestText(had[newest]!, current.deck) : []));
   };
 
   /** Notes how `entries` are drawn now, and gives back those that show. */
@@ -122,7 +139,6 @@ export function createFeed(onChat: (text: string) => void, look: () => FeedLook,
   const drawAll = () => {
     const current = look();
 
-    drawnDeck = current.deck;
     gifs.clear();
     sight.disconnect();
     keepFollowing(() => list.replaceChildren(...drawing(had, current).map((entry) => lineEl(entry, current))));
@@ -133,12 +149,7 @@ export function createFeed(onChat: (text: string) => void, look: () => FeedLook,
     element,
     update(view) {
       you = view.you.id;
-      box.offer(
-        view.members
-          .filter((member) => member.id !== you)
-          .map((member) => member.name)
-          .sort((a, b) => a.localeCompare(b)),
-      );
+      members = view.members;
 
       const fresh = view.feed.filter((entry) => entry.seq > lastSeq);
       if (fresh.length === 0) {
@@ -171,12 +182,6 @@ export function createFeed(onChat: (text: string) => void, look: () => FeedLook,
         drawAll();
       } else {
         showLatest(current);
-      }
-    },
-    showDeck() {
-      // Rewriting the list has a screen reader read it all again, so only when the cards are written differently
-      if (marksCards(look().deck) !== marksCards(drawnDeck)) {
-        drawAll();
       }
     },
   };

@@ -11,7 +11,11 @@ export type Sent = 'chat' | 'nudges' | 'reactions';
  * Everything filtered by sender goes through here, so a new way to hide one is another clause here.
  */
 export function sendersShown(prefs: AppPreferences, mutes: MuteList, viewer: string, what: Sent): (sender: string) => boolean {
-  return (sender) => sender === viewer || (!mutes.has(sender) && (what !== 'reactions' || prefs.get('reactions')));
+  // Read once, since a filter is asked of every line of the chat: whoever wants it as it stands later makes another
+  const muted = new Set(mutes.ids());
+  const othersShown = what !== 'reactions' || prefs.get('reactions');
+
+  return (sender) => sender === viewer || (!muted.has(sender) && othersShown);
 }
 
 /** Whether a chat line shows, by `shown` for chat. The play-by-play shows whoever it is about, and so does a line kept from before lines had a sender. */

@@ -21,16 +21,6 @@
   background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
-/* Words for a screen reader alone */
-.unseen {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
-}
-
 /* The names offered after an @, over the bottom of the chat, just above the box */
 .say {
   position: relative;
@@ -49,11 +39,7 @@
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--panel-raised);
-  box-shadow: 0 8px 30px rgb(0 0 0 / 40%);
-}
-
-.mention-list[hidden] {
-  display: none;
+  box-shadow: var(--shadow-raised);
 }
 
 .mention-list li {

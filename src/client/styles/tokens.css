@@ -56,6 +56,8 @@
   --display-scale: 1;
   --radius: 10px;
   --plate-radius: 10px;
+  /* Under what floats over the page: a toast, a picker, a list of names */
+  --shadow-raised: 0 8px 30px rgb(0 0 0 / 40%);
   /* The largest a GIF in the chat is drawn, whatever its own size, so no picture pushes the table around */
   --gif-height: 120px;
   --gif-width: 220px;

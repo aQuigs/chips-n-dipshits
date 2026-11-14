@@ -1,4 +1,4 @@
-import type { FeedEntry, Mention } from '../../engine/types.ts';
+import type { FeedEntry } from '../../engine/types.ts';
 import { gifAddress } from '../gifs.ts';
 import { h } from '../ui.ts';
 
@@ -22,26 +22,12 @@ export function gifOf(entry: FeedEntry, pictures: boolean): string | null {
   return pictures && !entry.mentions?.length ? gifAddress(entry.text) : null;
 }
 
-/** The mentions that fit in `text`, in order and none overlapping: the table wrote them, but a page draws only what makes sense. */
-function fitting(text: string, mentions: readonly Mention[]): Mention[] {
-  let end = 0;
-
-  return [...mentions]
-    .sort((a, b) => a[1] - b[1])
-    .filter(([, at, length]) => {
-      const fits = at >= end && length > 0 && at + length <= text.length;
-      end = fits ? at + length : end;
-
-      return fits;
-    });
-}
-
 /** The words of a line, with each name it mentions marked, the viewer's own more strongly. */
 function wordsOf(entry: FeedEntry, you: string): (string | HTMLElement)[] {
   const parts: (string | HTMLElement)[] = [];
   let from = 0;
 
-  for (const [id, at, length] of fitting(entry.text, entry.mentions ?? [])) {
+  for (const [id, at, length] of entry.mentions ?? []) {
     parts.push(entry.text.slice(from, at), h('span.mention', { 'data-you': id === you }, entry.text.slice(at, at + length)));
     from = at + length;
   }

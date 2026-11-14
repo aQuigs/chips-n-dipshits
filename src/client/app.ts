@@ -141,8 +141,9 @@ export class App {
     this.themeHost = themeHost;
     this.prefs = new Preferences(PREFERENCES, platform.memory, root);
     this.prefs.watch('theme', (id) => this.applyTheme(id));
-    this.prefs.watch('deck', () => this.screen?.feed.showDeck());
-    this.prefs.watch('gifs', () => this.screen?.feed.redraw());
+    for (const key of ['deck', 'gifs'] as const) {
+      this.prefs.watch(key, () => this.screen?.feed.redraw());
+    }
     this.sounds = new Sounds(pageSounds(), this.prefs, { inView: this.watching.inView });
     this.attention = new Attention(this.prefs, pageWays({ sounds: this.sounds, touch: pageTouch(), root, ownsTab: platform.ownsTab }));
     this.abilities = { of: (key) => (key === 'motion' ? motionAbility(this.watching) : this.attention.of(key)), ask: (key) => this.attention.ask(key) };

@@ -11,7 +11,7 @@
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--panel-raised);
-  box-shadow: 0 8px 30px rgb(0 0 0 / 40%);
+  box-shadow: var(--shadow-raised);
   color: var(--text);
   font-weight: 600;
   text-align: center;

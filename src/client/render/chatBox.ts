@@ -5,8 +5,6 @@ import { h } from '../ui.ts';
 
 export interface ChatBox {
   element: HTMLFormElement;
-  /** The names of the people the box offers to complete after an @: everyone at the table but the viewer. */
-  offer(names: readonly string[]): void;
 }
 
 const LIST_ID = 'mention-list';
@@ -20,7 +18,8 @@ const optionId = (index: number) => `mention-option-${index}`;
  * fit what follows it, picked by tap or with the arrow keys and Enter or Tab. Built once and never drawn
  * again, so what is typed, the list and the caret all stay as they are whatever the table does meanwhile.
  */
-export function createChatBox(onChat: (text: string) => void): ChatBox {
+/** `people` gives the names the box offers after an @, asked as the player types: everyone at the table but the viewer. */
+export function createChatBox(onChat: (text: string) => void, people: () => readonly string[]): ChatBox {
   const input = h('input', {
     type: 'text',
     id: 'chat-input',
@@ -35,7 +34,6 @@ export function createChatBox(onChat: (text: string) => void): ChatBox {
   });
   const list = h('ul.mention-list', { id: LIST_ID, role: 'listbox', 'aria-label': 'People to name', hidden: true });
 
-  let names: readonly string[] = [];
   let open: Completion | null = null;
   let active = 0;
 
@@ -73,7 +71,7 @@ export function createChatBox(onChat: (text: string) => void): ChatBox {
     }
   };
 
-  const look = () => show(input.selectionStart === input.selectionEnd ? completionAt(input.value, input.selectionStart ?? input.value.length, names) : null);
+  const look = () => show(input.selectionStart === input.selectionEnd ? completionAt(input.value, input.selectionStart ?? input.value.length, people()) : null);
 
   /** Writes the name out, or, where the line has no room for it, closes the list and leaves the line as typed. Says which. */
   const pick = (name: string): boolean => {
@@ -140,10 +138,5 @@ export function createChatBox(onChat: (text: string) => void): ChatBox {
     h('button.btn.small', { type: 'submit' }, 'Send'),
   );
 
-  return {
-    element,
-    offer: (offered) => {
-      names = offered;
-    },
-  };
+  return { element };
 }

@@ -60,6 +60,8 @@ function start(root: HTMLElement): void {
   // Both screens are the same player, as when someone carries on from their phone
   const apps = [laptop.screen, phone.screen].map((screen) => new App(screen, demoPlatform(demo), preview));
   apps[1]!.prefs.set('sound', false);
+  // Both hear every key, and one move is enough
+  apps[1]!.prefs.set('hotkeys', false);
 
   // And so they hold the same cards: a deck or a back chosen on one screen is on the other too
   for (const key of ['deck', 'cardBack'] as const) {

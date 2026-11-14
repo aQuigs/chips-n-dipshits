@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
 import type { Browser, Page, Route } from 'playwright';
 
+import { KEYS_SETTLE_MS } from '../src/client/hotkeys.ts';
 import { startDevServer } from '../src/dev/server.ts';
 import { clientPage } from './bundle.ts';
 
@@ -308,6 +309,13 @@ try {
 
     // A tap on a locked button is no tap, and nothing in the page turns one into a move either
     await first.locator('.turn [data-action="fold"]').click({ force: true }).catch(() => undefined);
+
+    // Nor does a key, which presses the same buttons, once they have been up long enough to take one
+    await first.evaluate('document.activeElement.blur()');
+    await sleep(KEYS_SETTLE_MS + 100);
+    for (const key of ['f', 'c', 'r', 'Enter']) {
+      await first.keyboard.press(key);
+    }
     await second.waitForSelector('.turn [data-action="check"]:enabled');
     assert.deepEqual(sent, ['call']);
 

@@ -114,3 +114,28 @@
     border-width: 3px;
   }
 }
+
+/* Lines under a preference, a term and what it stands for on each */
+.glossary {
+  display: grid;
+  gap: 4px;
+  margin: 8px 0 0;
+  padding: 0 4px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.glossary div {
+  display: grid;
+  grid-template-columns: 4.5em minmax(0, 1fr);
+  gap: 8px;
+}
+
+.glossary dt {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.glossary dd {
+  margin: 0;
+}

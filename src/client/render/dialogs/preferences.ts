@@ -92,6 +92,14 @@ function control(prefs: AnyPreferences, key: string, pref: Pref): HTMLElement {
   }
 }
 
+function glossary(key: string, lines: NonNullable<Pref['glossary']>): HTMLElement {
+  return h(
+    'dl.glossary',
+    { 'data-glossary': key },
+    lines.map((line) => h('div', null, h('dt', null, line.term), h('dd', null, line.meaning))),
+  );
+}
+
 function preferences(handlers: DialogHandlers): HTMLElement {
   const prefs: AnyPreferences = handlers.prefs;
   const groups = new Map<string, HTMLElement[]>();
@@ -102,6 +110,10 @@ function preferences(handlers: DialogHandlers): HTMLElement {
 
       groups.set(pref.group, controls);
       controls.push(control(prefs, key, pref));
+
+      if (pref.glossary) {
+        controls.push(glossary(key, pref.glossary));
+      }
     }
   }
 

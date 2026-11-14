@@ -82,16 +82,18 @@ export class Slot {
     this.element = element;
   }
 
-  /** `shows` is everything the content depends on; `build` runs only when that differs from last time. */
-  draw(shows: unknown, build: () => Child): void {
+  /** `shows` is everything the content depends on; `build` runs only when that differs from last time. Says whether it ran. */
+  draw(shows: unknown, build: () => Child): boolean {
     const signature = JSON.stringify(shows);
     if (signature === this.drawn) {
-      return;
+      return false;
     }
 
     this.drawn = signature;
     this.element.replaceChildren();
     append(this.element, build());
+
+    return true;
   }
 }
 

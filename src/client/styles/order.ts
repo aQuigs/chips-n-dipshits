@@ -25,4 +25,5 @@ export const STYLESHEETS = [
   'preferences.css',
   'deck.css',
   'voice.css',
+  'hotkeys.css',
 ];

@@ -12,6 +12,7 @@ No-limit hold'em for a group of friends, played in the browser. There is no serv
 - The host can name co-hosts, who can do all of that too except name co-hosts, hand the table over or remove the host. The host has a ★ by their name and co-hosts a ☆.
 - A ledger with who pays whom to settle up, hand history, table chat with the dealer's play-by-play.
 - Four themes with a picker on the front page and in the menu; each player chooses their own, along with a four-color deck and a card back. Works on a phone, upright or sideways, and on a desktop.
+- Keyboard shortcuts on a computer: F to fold, C to check or call, R to type a bet, 1 to 5 for the bet sizes, O or T to run it once or twice. Each button shows its key, and Preferences lists them and turns them off.
 - A personal link to carry on from another device.
 
 ## House rules

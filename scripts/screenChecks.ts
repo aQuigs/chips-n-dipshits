@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 
 import type { Page } from 'playwright';
 
+import { KEYS_SETTLE_MS } from '../src/client/hotkeys.ts';
 import type { Command, TableView } from '../src/engine/index.ts';
 import { boxes, overlap, Rig, SCREENS, squeezed, textBoxes } from './rig.ts';
 import type { Box, RigPlayer, ScreenName } from './rig.ts';
@@ -86,8 +87,8 @@ const tokenColor = (page: Page, token: string) =>
     return color;
   })()`) as Promise<string>;
 
-const style = (page: Page, selector: string, property: string) =>
-  page.evaluate(`getComputedStyle(document.querySelector(${JSON.stringify(selector)}))[${JSON.stringify(property)}]`) as Promise<string>;
+const style = (page: Page, selector: string, property: string, pseudo = '') =>
+  page.evaluate(`getComputedStyle(document.querySelector(${JSON.stringify(selector)}), ${JSON.stringify(pseudo)})[${JSON.stringify(property)}]`) as Promise<string>;
 
 /** The colors the cards on the table are drawn in, one card of each suit. */
 async function suitColors(page: Page): Promise<Record<string, string>> {
@@ -119,6 +120,27 @@ async function assertNoSidewaysScroll(page: Page): Promise<void> {
 
 /** What the browser would tell someone about a field it won't accept; empty when the field is fine. */
 const complaintOf = (page: Page, selector: string) => page.evaluate(`document.querySelector(${JSON.stringify(selector)}).validationMessage`) as Promise<string>;
+
+/** Whether the key hint on a button is drawn. */
+const hintShown = async (page: Page, selector: string) => (await style(page, selector, 'content', '::after')) !== 'none';
+
+/** Lets the buttons just drawn settle, so a key pressed next is taken. */
+const settle = (page: Page) => page.waitForTimeout(KEYS_SETTLE_MS + 100);
+
+/** The moves a page sends, in order, as the server receives them. */
+function movesSent(page: Page): string[] {
+  const sent: string[] = [];
+
+  page.on('request', (request) => {
+    const body = JSON.parse(request.postData() ?? '{}') as { op?: string; command?: { type: string; agree?: boolean } };
+
+    if (body.op === 'act' && body.command && ['fold', 'check', 'call', 'raise', 'ritVote'].includes(body.command.type)) {
+      sent.push(body.command.type === 'ritVote' ? `ritVote ${body.command.agree}` : body.command.type);
+    }
+  });
+
+  return sent;
+}
 
 type Check = [name: string, run: (rig: Rig) => Promise<void>];
 
@@ -526,6 +548,246 @@ const CHECKS: Check[] = [
 
         await page.context().close();
       }
+    },
+  ],
+  [
+    'keyboard shortcuts play the moves a tap would, never while typing, in a dialog, switched off or just after the buttons change',
+    async (rig) => {
+      const table = rig.table([
+        { name: 'Quigs', stack: 1000 },
+        { name: 'Stu', stack: 1000 },
+      ]);
+
+      // Heads-up the button acts first, so the deal puts the action on this page, facing the big blind
+      table.deal({ button: 0 });
+      const page = await table.open('Quigs', 'desktop');
+      const sent = movesSent(page);
+      const quigs = () => table.view('Stu').seats[0]!;
+      const nothingSent = async (what: string) => {
+        await page.waitForTimeout(300);
+        assert.deepEqual(sent, [], `${what} sent a move`);
+        assert.equal(table.view('Quigs').hand!.toAct, 0, `${what} moved the hand on`);
+      };
+
+      await page.waitForSelector('.turn [data-action="call"]:enabled');
+      await settle(page);
+
+      for (const selector of ['[data-action="fold"]', '[data-action="call"]', '[data-action="raise"]', '.presets button:nth-child(3)']) {
+        assert.equal(await hintShown(page, `.turn ${selector}`), true, `no key is shown on ${selector}`);
+      }
+      assert.equal(await page.getByRole('button', { name: 'Fold', exact: true }).count(), 1, 'the key is read out as part of the button\'s name');
+      assert.equal(await page.getByRole('button', { name: 'Call 10', exact: true }).count(), 1);
+      assert.equal(await page.getAttribute('.turn [data-action="call"]', 'data-hotkey'), 'C');
+      await shot(page, 'hotkeys-turn-desktop');
+
+      await page.focus('#chat-input');
+      await page.keyboard.type('fcr12345');
+      assert.equal(await page.inputValue('#chat-input'), 'fcr12345', 'the keys were not typed into the chat box');
+      assert.equal(await page.inputValue('#raise-amount'), '40', 'typing in the chat box changed the bet size');
+      await nothingSent('typing in the chat box');
+      await page.fill('#chat-input', '');
+
+      await page.click('[data-action="menu"]');
+      for (const key of ['f', 'c', '3']) {
+        await page.keyboard.press(key);
+      }
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('.dialog', { state: 'detached' });
+      assert.equal(await page.inputValue('#raise-amount'), '40', 'a key with the menu open changed the bet size');
+
+      // The buttons were behind the menu, so a key the moment it closes was not pressed looking at them
+      await page.keyboard.press('c');
+      await nothingSent('a key with the menu open, or just after it closed');
+
+      await page.click('[data-action="menu"]');
+      await page.click('.menu [data-action="preferences"]');
+      assert.match(await text(page, '[data-glossary="hotkeys"]'), /F\s*Fold/);
+      assertOnScreen(await boxes(page, '[data-glossary="hotkeys"] div'), 'desktop', 'the list of keys');
+      await shot(page, 'hotkeys-preferences-desktop');
+      await page.click('#pref-hotkeys');
+      await page.waitForSelector('#pref-hotkeys[aria-checked="false"]');
+      await page.click('[data-action="close"]');
+      assert.equal(await hintShown(page, '.turn [data-action="fold"]'), false, 'a key is still shown with the shortcuts off');
+      for (const key of ['f', 'c', 'r', '3']) {
+        await page.keyboard.press(key);
+      }
+      await nothingSent('a key with the shortcuts off');
+      assert.equal(await page.evaluate(`localStorage.getItem('cnd.hotkeys')`), 'off');
+
+      await page.click('[data-action="menu"]');
+      await page.click('.menu [data-action="preferences"]');
+      await page.click('#pref-hotkeys');
+      await page.click('[data-action="close"]');
+      await page.evaluate('document.activeElement.blur()');
+      await settle(page);
+
+      // 3 picks the third size, three quarters of the pot with the call counted: to 20 + ¾ × (30 + 10)
+      await page.keyboard.press('3');
+      assert.equal(await page.inputValue('#raise-amount'), '50');
+      assert.equal(await text(page, '.turn [data-action="raise"]'), 'Raise to 50');
+      await page.keyboard.press('4');
+      assert.equal(await text(page, '.turn [data-action="raise"]'), 'Raise to 60', 'the fourth size, the pot');
+      await page.keyboard.press('5');
+      assert.equal(await text(page, '.turn [data-action="raise"]'), 'All in 1,000');
+
+      await page.keyboard.press('c');
+      await page.waitForSelector('.turn', { state: 'detached' });
+      assert.deepEqual(sent, ['call']);
+      assert.equal(quigs().bet, 20, 'C did not call the big blind');
+
+      // The big blind checks, and checks again on the flop, which puts the action back here with a check to make
+      table.act('Stu', { type: 'check' });
+      table.act('Stu', { type: 'check' });
+      await page.waitForSelector('.turn [data-action="check"]:enabled');
+      await settle(page);
+      await page.keyboard.press('c');
+      await page.waitForSelector('.turn', { state: 'detached' });
+      assert.deepEqual(sent, ['call', 'check']);
+      assert.equal(table.view('Quigs').hand!.street, 'turn', 'C did not check the flop through');
+
+      // On the turn a bet arrives: the C meant for the check that is no longer there is not taken as a call
+      table.act('Stu', { type: 'raise', to: 60 });
+      await page.waitForSelector('.turn [data-action="call"]:enabled');
+      await page.keyboard.press('c');
+      await page.waitForTimeout(150);
+      assert.deepEqual(sent, ['call', 'check'], 'a key pressed as the buttons changed was taken');
+      await settle(page);
+      await page.keyboard.press('c');
+      await page.waitForSelector('.turn', { state: 'detached' });
+      assert.deepEqual(sent, ['call', 'check', 'call']);
+      assert.equal(table.view('Quigs').hand!.street, 'river');
+
+      // R goes to the amount, what is typed replaces it, Escape gives the keys back and Enter makes the bet
+      table.act('Stu', { type: 'check' });
+      await page.waitForSelector('.turn [data-action="check"]:enabled');
+      await settle(page);
+      await page.keyboard.press('r');
+      assert.equal(await page.evaluate('document.activeElement.id'), 'raise-amount');
+      assert.equal(await page.inputValue('#raise-amount'), '20', 'R was typed into the amount');
+      await page.keyboard.press('Escape');
+      assert.equal(await page.evaluate('document.activeElement === document.body'), true, 'Escape kept the keyboard in the amount');
+      await page.keyboard.press('r');
+      await page.keyboard.type('120');
+      assert.equal(await text(page, '.turn [data-action="raise"]'), 'Bet 120');
+      await page.keyboard.press('Enter');
+      await page.waitForSelector('.turn', { state: 'detached' });
+      assert.deepEqual(sent, ['call', 'check', 'call', 'raise']);
+      assert.equal(quigs().bet, 120, 'Enter did not bet what was typed');
+
+      // F held down folds once
+      table.act('Stu', { type: 'raise', to: 400 });
+      await page.waitForSelector('.turn [data-action="fold"]:enabled');
+      await settle(page);
+      for (let press = 0; press < 5; press++) {
+        await page.keyboard.down('f');
+      }
+      await page.keyboard.up('f');
+      await page.waitForSelector('.turn', { state: 'detached' });
+      await page.waitForTimeout(300);
+      assert.deepEqual(sent, ['call', 'check', 'call', 'raise', 'fold']);
+      assert.equal(quigs().folded, true, 'F did not fold');
+      await page.context().close();
+    },
+  ],
+  [
+    'on a cents table the keys size, type and play a bet in dollars and cents, and a box that cannot be read plays nothing',
+    async (rig) => {
+      const table = rig.table(
+        [
+          { name: 'Quigs', stack: 10_000 },
+          { name: 'Stu', stack: 10_000 },
+        ],
+        CENTS,
+      );
+      table.deal({ button: 0 });
+
+      const page = await table.open('Quigs', 'desktop');
+      const sent = movesSent(page);
+
+      await page.waitForSelector('.turn [data-action="call"]:enabled');
+      await settle(page);
+
+      // Three quarters of the pot with the call counted: to 0.50 + ¾ × (0.75 + 0.25)
+      await page.keyboard.press('3');
+      assert.equal(await text(page, '.turn [data-action="raise"]'), 'Raise to 1.25');
+      assert.equal(await page.inputValue('#raise-amount'), '1.25');
+
+      await page.keyboard.press('r');
+      await page.keyboard.type('1.505');
+      await page.keyboard.press('Enter');
+      await page.waitForTimeout(300);
+      assert.deepEqual(sent, [], 'a box that cannot be read played a move by key');
+      assert.equal(await complaintOf(page, '#raise-amount'), TO_THE_CENT);
+
+      await page.fill('#raise-amount', '1.50');
+      await page.keyboard.press('Enter');
+      await page.waitForSelector('.turn', { state: 'detached' });
+      assert.deepEqual(sent, ['raise']);
+      assert.equal(table.view('Stu').seats[0]!.bet, 150, 'Enter did not raise to 1.50');
+      await page.context().close();
+    },
+  ],
+  [
+    'O and T answer the run-it-twice question',
+    async (rig) => {
+      const table = rig.table([
+        { name: 'Quigs', stack: 1000 },
+        { name: 'Stu', stack: 1000 },
+      ]);
+      table.deal({ button: 0 });
+      table.act('Quigs', { type: 'raise', to: 1000 });
+      table.act('Stu', { type: 'call' });
+
+      const pages = [await table.open('Quigs', 'desktop'), await table.open('Stu', 'desktop')];
+      const sent = pages.map(movesSent);
+
+      for (const page of pages) {
+        await page.waitForSelector('.turn [data-action="rit-yes"]:enabled');
+        await settle(page);
+        assert.equal(await hintShown(page, '.turn [data-action="rit-no"]'), true);
+        assert.equal(await hintShown(page, '.turn [data-action="rit-yes"]'), true);
+      }
+      await shot(pages[0]!, 'hotkeys-run-it-twice-desktop');
+
+      // One no ends the vote, so the yes comes first
+      await pages[1]!.keyboard.press('t');
+      await pages[1]!.waitForSelector('.turn', { state: 'detached' });
+      assert.equal(table.view('Quigs').seats[1]!.ritVote, true, 'T did not say twice');
+
+      await pages[0]!.keyboard.press('o');
+      await pages[0]!.waitForSelector('.turn', { state: 'detached' });
+      assert.deepEqual(sent, [['ritVote false'], ['ritVote true']]);
+      assert.equal(table.view('Stu').seats[0]!.ritVote, false, 'O did not say once');
+
+      for (const page of pages) {
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'on a phone no key is shown and none does anything',
+    async (rig) => {
+      const table = rig.table([
+        { name: 'Quigs', stack: 1000 },
+        { name: 'Stu', stack: 1000 },
+      ]);
+      table.deal({ button: 0 });
+
+      const page = await table.open('Quigs', 'phone');
+      const sent = movesSent(page);
+
+      await page.waitForSelector('.turn [data-action="call"]:enabled');
+      await settle(page);
+      assert.equal(await page.locator('.turn [data-hotkey]').count(), 8);
+      for (const key of ['F', 'C', 'R', '1', '2', '3', '4', '5']) {
+        assert.equal(await hintShown(page, `.turn [data-hotkey="${key}"]`), false, `${key} is shown on a phone`);
+      }
+
+      await page.keyboard.press('c');
+      await page.waitForTimeout(300);
+      assert.deepEqual(sent, []);
+      assert.equal(table.view('Quigs').hand!.toAct, 0);
+      await page.context().close();
     },
   ],
   [

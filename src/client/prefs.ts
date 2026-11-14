@@ -1,4 +1,5 @@
 import type { Card } from '../engine/cards.ts';
+import { HOTKEY_LIST } from './hotkeys.ts';
 import { DEFAULT_THEME, THEMES } from './themes.ts';
 
 interface PrefBase<Kind extends string, Value> {
@@ -15,6 +16,8 @@ interface PrefBase<Kind extends string, Value> {
    * property `--<key>`. The key is spelled with dashes there: `cardBack` is `data-card-back`.
    */
   css?: 'attribute' | 'property';
+  /** Lines drawn under the control in the Preferences dialog, each a term and what it stands for: the keys a preference turns on, say. */
+  glossary?: readonly { term: string; meaning: string }[];
 }
 
 export type OnOffPref = PrefBase<'onOff', boolean>;
@@ -75,6 +78,16 @@ export const PREFERENCES = {
     default: 'theme',
     css: 'attribute',
     preview: [null],
+  },
+  // Off on a phone whatever is chosen: there the keys do nothing and no key is shown
+  hotkeys: {
+    kind: 'onOff',
+    label: 'Keyboard shortcuts',
+    hint: 'On a computer, keys for your moves, shown on the buttons',
+    group: 'Keyboard',
+    default: true,
+    css: 'attribute',
+    glossary: HOTKEY_LIST,
   },
 } satisfies Record<string, Pref>;
 

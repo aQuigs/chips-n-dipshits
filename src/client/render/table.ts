@@ -213,9 +213,6 @@ function markPlaying(cards: HTMLElement[], reads: readonly HandRead[]): HTMLElem
   return cards;
 }
 
-/** A figure in words, for where `~`, or the mark of one still being worked out, would say nothing. */
-const figureInWords = (figure: ChanceFigure | null) => (figure ? `${figure.text.replace('~', 'about ')}%` : 'still to come');
-
 /**
  * A hand's chance to win, a figure for each board in the order the boards lie, in the line of the plate
  * that otherwise says what its player did. One figure carries its sign; several stand bare, with no
@@ -223,11 +220,11 @@ const figureInWords = (figure: ChanceFigure | null) => (figure ? `${figure.text.
  */
 function chanceEl(figures: (ChanceFigure | null)[]): HTMLElement {
   const several = figures.length > 1;
-  const inWords = figures.map((figure, board) => (several ? `board ${board + 1} ${figureInWords(figure)}` : figureInWords(figure))).join(', ');
+  const inFull = figures.map((figure, board) => `${several ? `board ${board + 1} ` : ''}${figure ? `${figure.text}%` : 'still to come'}`).join(', ');
 
   return h(
     'div.status.chance',
-    { title: `Chance to win: ${inWords}` },
+    { title: `Chance to win: ${inFull}` },
     figures.map((figure) => h('span', { class: figure ? figure.favorite && 'favorite' : 'pending' }, figure ? `${figure.text}${several ? '' : '%'}` : '…')),
   );
 }
@@ -507,7 +504,7 @@ function potEl(table: Denominated, hand: HandView): HTMLElement | null {
  * of a runout being turned over: they are drawn, for the turn to show, but say nothing yet of the
  * viewer's hand. `chances` is what to write beside the hands that are face up against each other.
  */
-export function tableEl(view: TableView, shape: Shape, clockOffset: number, handlers: TableHandlers, turning: readonly BoardCard[], chances: ShownChances | null = null): HTMLElement {
+export function tableEl(view: TableView, shape: Shape, clockOffset: number, handlers: TableHandlers, turning: readonly BoardCard[], chances: ShownChances | null): HTMLElement {
   const seatCount = view.seats.length;
   const hero = view.you.seat ?? 0;
   const nodes: HTMLElement[] = [];

@@ -4,7 +4,7 @@
  * part of a table's state or of a view: whoever wants it asks here.
  */
 import { BOARD_SIZE } from './boards.ts';
-import { freshDeck } from './cards.ts';
+import { freshDeck, shuffle } from './cards.ts';
 import type { Card } from './cards.ts';
 import { evaluateHand } from './handRank.ts';
 import { seededRng, seedOf } from './seeded.ts';
@@ -64,52 +64,27 @@ function waysToPick(count: number, from: number): number {
   return ways;
 }
 
-/** Every way to pick `count` of `cards`. Each is handed back in the same array, for a reader who is done with one before asking for the next. */
-function* everyPick(cards: readonly Card[], count: number): Generator<readonly Card[]> {
-  const at = Array.from({ length: count }, (_, nth) => nth);
-  const picked: Card[] = [];
+/** Every way to pick `count` of `cards`, each once. */
+function* everyPick(cards: readonly Card[], count: number, from = 0): Generator<Card[]> {
+  if (count === 0) {
+    yield [];
+    return;
+  }
 
-  for (;;) {
-    for (let nth = 0; nth < count; nth++) {
-      picked[nth] = cards[at[nth]!]!;
-    }
-
-    yield picked;
-
-    // The last place whose card can still move on to a later one
-    let place = count - 1;
-    while (place >= 0 && at[place] === cards.length - count + place) {
-      place--;
-    }
-
-    if (place < 0) {
-      return;
-    }
-
-    at[place]! += 1;
-    for (let nth = place + 1; nth < count; nth++) {
-      at[nth] = at[nth - 1]! + 1;
+  for (let first = from; first <= cards.length - count; first++) {
+    for (const rest of everyPick(cards, count - 1, first + 1)) {
+      yield [cards[first]!, ...rest];
     }
   }
 }
 
-/** `picks` picks of `count` of `cards`, each as likely as any other, drawn from `seed`. Handed back like `everyPick`'s. */
-function* seededPicks(cards: readonly Card[], count: number, picks: number, seed: number): Generator<readonly Card[]> {
+/** `SAMPLED_BOARDS` picks of `count` of `cards`, each as likely as any other, drawn from `seed`. */
+function* sampledPicks(cards: readonly Card[], count: number, seed: number): Generator<Card[]> {
   const rng = seededRng(seed);
   const deck = [...cards];
-  const picked: Card[] = [];
 
-  for (let pick = 0; pick < picks; pick++) {
-    // The first cards of a shuffle, which is all of one that a pick needs
-    for (let nth = 0; nth < count; nth++) {
-      const from = nth + rng.int(deck.length - nth);
-
-      picked[nth] = deck[from]!;
-      deck[from] = deck[nth]!;
-      deck[nth] = picked[nth]!;
-    }
-
-    yield picked;
+  for (let pick = 0; pick < SAMPLED_BOARDS; pick++) {
+    yield shuffle(deck, rng).slice(0, count);
   }
 }
 
@@ -117,7 +92,7 @@ function* seededPicks(cards: readonly Card[], count: number, picks: number, seed
  * What tells one spot from another whatever order its cards are given in. An estimate is seeded with it,
  * so the same hands on the same table get the same estimate on every page and after every reload.
  */
-function sameEverywhere({ hands, board, dead }: Spot): string {
+function orderFreeKey({ hands, board, dead }: Spot): string {
   const sorted = (cards: readonly Card[]) => [...cards].sort().join('');
 
   return [hands.map(sorted).sort().join(' '), sorted(board), sorted(dead)].join('|');
@@ -127,9 +102,9 @@ function sameEverywhere({ hands, board, dead }: Spot): string {
  * The work of `chancesOf`, a board at a time: each step counts one way for the board to finish, and
  * the answer comes with the last. For a caller that must not be kept from anything else for long, and
  * so does a few steps at a time. A spot that names a card twice, or something that is no card, is
- * refused at once.
+ * refused at the first step.
  */
-export function chanceSteps(spot: Spot, method: ChanceMethod = {}): Generator<undefined, Chances, undefined> {
+export function* chanceSteps(spot: Spot, method: ChanceMethod = {}): Generator<undefined, Chances, undefined> {
   const { hands, board } = spot;
   const unseen = new Set(freshDeck());
 
@@ -144,46 +119,34 @@ export function chanceSteps(spot: Spot, method: ChanceMethod = {}): Generator<un
     throw new Error(`A board of ${board.length} cards cannot be finished from ${unseen.size}`);
   }
 
+  // A hand with nothing to beat is the best there is, however the board comes
+  if (hands.length < 2) {
+    return { shares: hands.map(() => 1), exact: true };
+  }
+
   // The deck in the one order every page lists it in, so that a sample deals the same boards from it everywhere
   const deck = [...unseen];
-  const ways = waysToPick(toCome, deck.length);
-  const exact = ways <= (method.mostCounted ?? MOST_COUNTED);
+  const exact = waysToPick(toCome, deck.length) <= (method.mostCounted ?? MOST_COUNTED);
+  const finishes = exact ? everyPick(deck, toCome) : sampledPicks(deck, toCome, method.seed ?? seedOf(orderFreeKey(spot)));
+  const won = hands.map(() => 0);
+  let counted = 0;
 
-  return (function* () {
-    // A hand with nothing to beat is the best there is, however the board comes
-    if (hands.length < 2) {
-      return { shares: hands.map(() => 1), exact: true };
-    }
+  for (const rest of finishes) {
+    const scores = hands.map((hand) => evaluateHand([...board, ...rest, ...hand]).score);
+    const best = Math.max(...scores);
+    const winners = scores.filter((score) => score === best).length;
 
-    const finishes = exact ? everyPick(deck, toCome) : seededPicks(deck, toCome, SAMPLED_BOARDS, method.seed ?? seedOf(sameEverywhere(spot)));
-    const won = hands.map(() => 0);
-    const scores: number[] = [];
-    let counted = 0;
+    scores.forEach((score, hand) => {
+      if (score === best) {
+        won[hand]! += 1 / winners;
+      }
+    });
 
-    for (const rest of finishes) {
-      let best = -1;
-      let winners = 0;
+    counted += 1;
+    yield;
+  }
 
-      hands.forEach((hand, nth) => {
-        const score = evaluateHand([...board, ...rest, ...hand]).score;
-
-        scores[nth] = score;
-        winners = score > best ? 1 : winners + Number(score === best);
-        best = Math.max(best, score);
-      });
-
-      scores.forEach((score, nth) => {
-        if (score === best) {
-          won[nth]! += 1 / winners;
-        }
-      });
-
-      counted += 1;
-      yield;
-    }
-
-    return { shares: won.map((share) => share / counted), exact };
-  })();
+  return { shares: won.map((share) => share / counted), exact };
 }
 
 /**
@@ -210,7 +173,7 @@ export interface ChanceFigure {
    * can still win, or 100 while it can still lose. An estimate has `~` in front.
    */
   text: string;
-  /** Ahead of every other hand, in its share and in the figure shown for it. */
+  /** Ahead of every other hand, in its share and in the figure shown for it, and in an estimate by more than the sample could have made up. */
   favorite: boolean;
 }
 
@@ -234,20 +197,24 @@ function wholePercent(shares: readonly number[]): number[] {
 }
 
 /**
+ * The lead an estimate needs to have a favorite. A sampled share is off by a standard error of up to
+ * 0.5 / √SAMPLED_BOARDS, and the difference of two by up to twice that, when one hand's loss is the
+ * other's gain. A lead under two such errors, four points, is one the sample cannot tell from none.
+ */
+const SAMPLED_LEAD = 2 / Math.sqrt(SAMPLED_BOARDS);
+
+/**
  * How each hand's chance is written. The figures of one spot add up to 100, and none lies at the ends:
  * 0 is only for a hand that cannot win or tie, and 100 only for one that cannot lose or tie. An
  * estimate cannot know either, so it never reads 0 or 100.
  */
 export function chanceFigures({ shares, exact }: Chances): ChanceFigure[] {
-  if (shares.length === 0) {
-    return [];
-  }
-
   const whole = wholePercent(shares);
+  const lead = exact ? 0 : SAMPLED_LEAD;
 
   return shares.map((share, hand) => {
     const points = whole[hand]!;
-    const ahead = shares.every((other, nth) => nth === hand || (share > other && points > whole[nth]!));
+    const ahead = shares.every((other, nth) => nth === hand || (share - other > lead && points > whole[nth]!));
 
     if (points === 0 && (share > 0 || !exact)) {
       return { text: '<1', favorite: false };

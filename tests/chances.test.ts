@@ -183,7 +183,7 @@ test('before the flop, an estimate is within three standard errors of the figure
     }
   }
 
-  assert.deepEqual(texts(chancesOf(spot(['As Ah', 'Kd Kc']))), ['~81', '~19']);
+  assert.deepEqual(texts(chancesOf(spot(['As Ah', 'Kd Kc']))), ['~82', '~18']);
 });
 
 test('the shares of a spot add up to one, and say 0 exactly for a hand no finish wins or ties for', () => {
@@ -249,8 +249,13 @@ test('a spot that names a card twice, or something that is no card face up, is r
 
   for (const [what, bad] of refused) {
     assert.throws(() => chancesOf(bad), Error, what);
-    assert.throws(() => chanceSteps(bad), Error, `${what}, before any of the work is done`);
+    assert.throws(() => chanceSteps(bad).next(), Error, `${what}, at the first step of the work`);
   }
+});
+
+test('a hand with nothing to beat has the board to itself, whatever is to come', () => {
+  assert.deepEqual(chancesOf(spot(['7c 2d'])), { shares: [1], exact: true });
+  assert.deepEqual(texts(chancesOf(spot(['7c 2d'], '', 'As Ah'))), ['100']);
 });
 
 test('the work comes a board at a time, and done in pieces gives the answer done at once gives', () => {
@@ -280,6 +285,15 @@ test('an estimate never reads 0 or 100, and is marked as one', () => {
   assert.deepEqual(texts({ shares: [0, 1], exact: false }), ['<1', '>99']);
   assert.deepEqual(texts({ shares: [0.4688, 0.5312], exact: false }), ['~47', '~53']);
   assert.deepEqual(favorites({ shares: [0.4688, 0.5312], exact: false }), [1]);
+});
+
+test('an estimate has a favorite only when it leads by more than its sample could have made up', () => {
+  // Two standard errors of the difference between two sampled shares: four points
+  assert.deepEqual(favorites({ shares: [0.485, 0.515], exact: false }), [], 'a lead of three points');
+  assert.deepEqual(favorites({ shares: [0.475, 0.525], exact: false }), [1], 'a lead of five');
+  assert.deepEqual(favorites({ shares: [0.19, 0.2, 0.61], exact: false }), [2]);
+  assert.deepEqual(favorites({ shares: [0.3, 0.335, 0.365], exact: false }), [], 'ahead of one by enough and of another by too little');
+  assert.deepEqual(favorites({ shares: [0.485, 0.515], exact: true }), [1], 'a counted lead is a lead');
 });
 
 test('a figure never lies at the ends: a hand that can still win does not read 0, nor one that can still lose 100', () => {

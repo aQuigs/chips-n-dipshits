@@ -11,6 +11,7 @@ import { HotkeyPresser } from './hotkeyPresser.ts';
 import { Modal } from './modal.ts';
 import { Motion, motionAbility } from './motion.ts';
 import { pageMotion, pageWatching } from './pageMotion.ts';
+import { pagePace } from './pagePace.ts';
 import type { Platform } from './platform.ts';
 import { PREFERENCES, Preferences } from './prefs.ts';
 import { movePromptEl, SeatMoves } from './seatMoves.ts';
@@ -432,7 +433,7 @@ export class App {
       feed,
       motion,
       effects,
-      shown: new ShownTable(motion, () => this.clock.now(), () => Date.now(), { now: () => performance.now(), later: (run) => void setTimeout(run) }, {
+      shown: new ShownTable(motion, () => this.clock.now(), () => Date.now(), pagePace(), {
         draw: () => this.drawShown(),
         tell: (change) => effects.run(change),
         say: (message) => this.toast(message),

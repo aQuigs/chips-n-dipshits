@@ -37,7 +37,6 @@ export function spotsOf(view: TableView, turning: readonly BoardCard[] = []): Ta
   }
 
   const boards = hand.boards.map((board, run) => board.filter((_card, nth) => !turning.some((held) => held.board === run && held.card === nth)));
-  const inHands = hands.flatMap(({ cards }) => cards);
   const elsewhere = [...faceUp.filter((shown) => !hands.includes(shown)).flatMap(({ cards }) => cards), ...boards.flat()];
 
   return {
@@ -46,7 +45,7 @@ export function spotsOf(view: TableView, turning: readonly BoardCard[] = []): Ta
       hands: hands.map(({ cards }) => cards),
       board,
       // Boards run one after the other start from the same cards, which are out of the deck once and on this board
-      dead: [...new Set(elsewhere)].filter((card) => !board.includes(card) && !inHands.includes(card)),
+      dead: [...new Set(elsewhere)].filter((card) => !board.includes(card)),
     })),
   };
 }
@@ -85,12 +84,16 @@ export class TableChances {
   private keys: string[] = [];
   /** The table has come to rest since it took these spots: what it shows from here on is of them. */
   private landed = false;
-  /** The figures of each spot worked out for the hands on the table, by its key; null for one that could not be. */
-  private readonly figures = new Map<string, ChanceFigure[] | null>();
-  /** What each board shows: the spot it last showed at rest, with its figures, or null for one with none to show. */
-  private showing: ({ key: string; figures: ChanceFigure[] | null } | null)[] = [];
+  /** The spots whose coming to rest is being waited for. */
+  private resting: TableSpots | null = null;
+  /** The figures of each spot worked out for the hands on the table, by its key. */
+  private readonly figures = new Map<string, ChanceFigure[]>();
+  /** A spot of these hands could not be worked out. They go without chances: figures for some boards would read as figures for all. */
+  private failed = false;
+  /** The spot whose figures each board shows, by its key: the one it last had at rest, or null for a board with none to show yet. */
+  private showing: (string | null)[] = [];
   private job: { key: string; steps: Generator<undefined, Chances, undefined> } | null = null;
-  private waiting = false;
+  private working = false;
 
   /** `changed` is called when what `shown` and `pending` say has changed, other than by `follow`. */
   constructor(motion: TableMotion, pace: Pace, changed: () => void) {
@@ -109,6 +112,7 @@ export class TableChances {
     // Other hands, or none: nothing worked out or shown for the last ones says anything of these
     if (JSON.stringify([spots?.seats, spots?.boards[0]?.hands]) !== JSON.stringify([this.spots?.seats, this.spots?.boards[0]?.hands])) {
       this.figures.clear();
+      this.failed = false;
       this.showing = [];
     }
 
@@ -123,24 +127,23 @@ export class TableChances {
 
   /** Call once the effects of what is shown have set the table moving: the spots on it count as seen when it is at rest again. */
   played(): void {
-    if (this.spots && !this.landed) {
-      this.showAtRest(() => (this.landed = true));
+    if (!this.landed) {
+      this.showAtRest();
     }
   }
 
   /** What to write beside the hands now; null when the table shows no spots, or one of them could not be worked out. */
   get shown(): ShownChances | null {
-    // Figures for some of the boards would be read as figures for all there are, so then the seats say what they did before
-    if (!this.spots || this.showing.some((board) => board?.figures === null)) {
+    if (!this.spots || this.failed) {
       return null;
     }
 
-    return { seats: this.spots.seats, boards: this.showing.map((board) => board?.figures ?? null) };
+    return { seats: this.spots.seats, boards: this.showing.map((key) => (key === null ? null : this.figures.get(key)!)) };
   }
 
   /** Whether what is written is not yet of the cards now on the table: those are on their way, or their figures still being worked out. */
   get pending(): boolean {
-    return this.keys.some((key, board) => this.showing[board]?.key !== key);
+    return !this.failed && this.keys.some((key, board) => this.showing[board] !== key);
   }
 
   /** Stops the working out, when the table is left. */
@@ -149,18 +152,26 @@ export class TableChances {
   }
 
   /** Writes what is worked out of the spots on the table the next time it is at rest, unless it has moved on to others by then. */
-  private showAtRest(first?: () => void): void {
+  private showAtRest(): void {
     const spots = this.spots;
+    if (!spots || this.resting === spots) {
+      return;
+    }
+
+    this.resting = spots;
 
     void this.motion.idle().then(() => {
+      if (this.resting === spots) {
+        this.resting = null;
+      }
+
       if (this.spots !== spots) {
         return;
       }
 
-      first?.();
-
       // A board that is not worked out yet shows no figure: the one it had is of cards that have been added to
-      this.showing = this.keys.map((key) => (this.figures.has(key) ? { key, figures: this.figures.get(key)! } : null));
+      this.landed = true;
+      this.showing = this.keys.map((key) => (this.figures.has(key) ? key : null));
       this.changed();
     });
   }
@@ -176,37 +187,36 @@ export class TableChances {
       }
 
       const board = this.keys.findIndex((key) => !this.figures.has(key));
-      if (board < 0) {
+      if (board < 0 || this.failed) {
         return;
       }
 
-      const key = this.job?.key ?? this.keys[board]!;
-
       try {
-        this.job ??= { key, steps: chanceSteps(this.spots!.boards[this.keys.indexOf(key)]!) };
+        this.job ??= { key: this.keys[board]!, steps: chanceSteps(this.spots!.boards[board]!) };
 
         const step = this.job.steps.next();
         if (step.done) {
-          this.finish(key, chanceFigures(step.value));
+          this.figures.set(this.job.key, chanceFigures(step.value));
+          this.finished();
         }
       } catch (error) {
         // A spot that cannot be worked out must not be what stops the table: the hands go without their chances
         console.error(error);
-        this.finish(key, null);
+        this.failed = true;
+        this.finished();
       }
     } while (this.pace.now() < until);
 
-    if (!this.waiting) {
-      this.waiting = true;
+    if (!this.working) {
+      this.working = true;
       this.pace.later(() => {
-        this.waiting = false;
+        this.working = false;
         this.work();
       });
     }
   }
 
-  private finish(key: string, figures: ChanceFigure[] | null): void {
-    this.figures.set(key, figures);
+  private finished(): void {
     this.job = null;
 
     if (this.landed) {

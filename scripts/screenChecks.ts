@@ -1234,17 +1234,14 @@ const nextStreet = (rig: Rig, table: RigTable, name: string) => rig.advance(tabl
 /** That every chance is whole and inside its own seat, squeezes nothing there, and lies clear of the cards, the bets and the middle of the table. */
 async function assertChancesFit(page: Page, what: string): Promise<void> {
   const figures = await textBoxes(page, '.status.chance');
-  assert.ok(figures.length > 0, `${what}: no chances to look at`);
+  const plates = await boxes(page, '.plate:has(.status.chance)');
+  assert.ok(figures.length > 0 && figures.length === plates.length, `${what}: no chances to look at`);
 
-  const spilled = await page.evaluate(`[...document.querySelectorAll('.status.chance')].filter((line) => {
-    const range = document.createRange();
-    range.selectNodeContents(line);
+  figures.forEach((text, seat) => {
+    const plate = plates[seat]!;
 
-    const [text, plate] = [range.getBoundingClientRect(), line.closest('.plate').getBoundingClientRect()];
-
-    return text.left < plate.left || text.right > plate.right || text.top < plate.top || text.bottom > plate.bottom;
-  }).map((line) => line.textContent)`);
-  assert.deepEqual(spilled, [], `${what}: a chance runs out of its seat`);
+    assert.ok(text.left >= plate.left && text.right <= plate.right && text.top >= plate.top && text.bottom <= plate.bottom, `${what}: a chance at ${JSON.stringify(text)} runs out of its seat at ${JSON.stringify(plate)}`);
+  });
 
   assert.deepEqual(await squeezed(page, '.status.chance, .plate .stack'), [], `${what}: a chance, or the stack over it, is cut off`);
   assertApart(figures, await boxes(page, '.board .card, .pot, .seat .hole .card, .bet'), `${what}: a chance and the cards or the middle of the table`);
@@ -1266,35 +1263,22 @@ interface ChanceChange {
 }
 
 /*
- * Run in a page that is on a table: writes down in `window.chanceLog` every change of what the seats say
- * of their chances. What is in flight is counted from the animations themselves, not read off the stage:
- * a table drawn again mid-move ends its moves and says it is still before anyone watching it is told,
- * but an animation ended that way has not yet said so to whoever waits on it.
+ * Run in a page that is on a table and has `MOTION`: writes down in `window.chanceLog` every change of
+ * what the seats say of their chances, with how much was in flight by `MOTION`'s count. The stage's own
+ * mark would not do: a table drawn again mid-move ends its moves and says it is still before anyone
+ * watching it is told.
  */
 const CHANCE_LOG = `(() => {
-  const stage = document.querySelector('.stage');
   const read = () => [...document.querySelectorAll('.seat[data-seat] .status.chance')].map((line) => line.textContent).join(' ');
-  const inFlight = new Set();
-  const animate = Element.prototype.animate;
   let last = read();
-
-  Element.prototype.animate = function (frames, options) {
-    const animation = animate.call(this, frames, options);
-    const landed = () => inFlight.delete(animation);
-
-    inFlight.add(animation);
-    animation.finished.then(landed, landed);
-
-    return animation;
-  };
 
   window.chanceLog = [];
   new MutationObserver(() => {
     if (read() !== last) {
       last = read();
-      window.chanceLog.push({ text: last, inFlight: inFlight.size });
+      window.chanceLog.push({ text: last, inFlight: window.inFlight.size });
     }
-  }).observe(stage, { subtree: true, childList: true, characterData: true });
+  }).observe(document.querySelector('.stage'), { subtree: true, childList: true, characterData: true });
 })()`;
 
 // Run in the page before anything of its own: writes down how long the page went between one frame and the next
@@ -7643,7 +7627,7 @@ const CHECKS: Check[] = [
       // Each hand with how many cards are out when the chips go in, and what the seats say from then on, a street at a time
       const hands = [
         // Before the flop the boards are too many to count: the chances are an estimate, and say so
-        { from: 'before-the-flop', out: 0, holes: { 0: 'As Ah', 1: 'Kd Kc' }, board: '3c 8d Jh Qs 4d', streets: [['~81%*', '~19%'], ['92%*', '8%'], ['95%*', '5%']] },
+        { from: 'before-the-flop', out: 0, holes: { 0: 'As Ah', 1: 'Kd Kc' }, board: '3c 8d Jh Qs 4d', streets: [['~82%*', '~18%'], ['92%*', '8%'], ['95%*', '5%']] },
         // A set against the nut flush draw
         { from: 'on-the-flop', out: 3, holes: { 0: '9c 9d', 1: 'Ah Kh' }, board: '9h 4h 2c Js 3d', streets: [['74%*', '26%'], ['84%*', '16%']] },
         // A flush draw with one card to come: nine of the 44 cards left, which is 20.45 in a hundred
@@ -7667,7 +7651,7 @@ const CHECKS: Check[] = [
 
           if (street === 0) {
             const [, page] = pages[0]!;
-            const said = quigs!.replace('*', '').replace('~', 'about ');
+            const said = quigs!.replace('*', '');
 
             assert.equal(await page.locator('.seat[data-seat="0"] .status.chance').getAttribute('title'), `Chance to win: ${said}`, `all in ${hand.from}: the figure in words`);
             await shot(page, `chances-all-in-${hand.from}-small-phone`);
@@ -7717,7 +7701,7 @@ const CHECKS: Check[] = [
 
       // Before the flop, on it, where the flush draw is ahead of the pair, and on the turn, which misses it
       const streets = [
-        { 0: '~35%', 1: '~44%*', 2: '~21%' },
+        { 0: '~35%', 1: '~42%*', 2: '~23%' },
         { 0: '16%', 1: '31%', 2: '53%*' },
         { 0: '12%', 1: '55%*', 2: '33%' },
       ];
@@ -7823,14 +7807,14 @@ const CHECKS: Check[] = [
 
       // The hands are up and the players are asked: what they vote on is on the table
       await quigs.waitForSelector('.turn [data-action="rit-yes"]');
-      await shows({ 0: '~81%*', 1: '~19%' }, 'while the vote is on');
+      await shows({ 0: '~82%*', 1: '~18%' }, 'while the vote is on');
       await inEveryShape(quigs, async (shape) => {
         await assertChancesFit(quigs, `while the vote is on, ${shape}`);
         await shot(quigs, `chances-run-twice-vote-phone-${shape}`);
       });
 
       table.play(allIn, (view) => view.hand!.stage === 'runout');
-      await shows({ 0: '~81%*', 1: '~19%' }, 'voted, with no card out');
+      await shows({ 0: '~82%*', 1: '~18%' }, 'voted, with no card out');
 
       nextStreet(rig, table, 'Quigs');
       await shows({ 0: '92%*', 1: '8%' }, 'the first board’s flop');
@@ -7840,8 +7824,8 @@ const CHECKS: Check[] = [
 
       // The first board is done and the second laid beside it with no card yet: every card of the first is out of its deck
       nextStreet(rig, table, 'Quigs');
-      await shows({ 0: '100* ~79*', 1: '0 ~21' }, 'the first board run out');
-      assert.equal(await quigs.locator('.seat[data-seat="0"] .status.chance').getAttribute('title'), 'Chance to win: board 1 100%, board 2 about 79%');
+      await shows({ 0: '100* ~81*', 1: '0 ~19' }, 'the first board run out');
+      assert.equal(await quigs.locator('.seat[data-seat="0"] .status.chance').getAttribute('title'), 'Chance to win: board 1 100%, board 2 ~81%');
 
       // A king on the second board’s flop
       nextStreet(rig, table, 'Quigs');
@@ -7876,7 +7860,7 @@ const CHECKS: Check[] = [
         await page.waitForSelector('.turn [data-action="rit-yes"]');
 
         const voting = await chancesOn(page, table, 'Quigs');
-        assert.deepEqual(voting, { 0: '~18%', 1: '~13%', 2: '~18%', 3: '~14%', 4: '~11%', 5: '~8%', 6: '~8%', 7: '~8%', 8: '~2%' }, `${screen}: nine hands before the flop, where the two best are level and neither is the favorite`);
+        assert.deepEqual(voting, { 0: '~18%', 1: '~12%', 2: '~18%', 3: '~14%', 4: '~12%', 5: '~8%', 6: '~8%', 7: '~8%', 8: '~2%' }, `${screen}: nine hands before the flop, where the two best are level and neither is the favorite`);
         assert.equal(Object.values(voting).reduce((sum, figure) => sum + wholeOf(figure), 0), 100, `${screen}: the nine chances add up`);
 
         await inShapesOf(page, screen, async (shape) => {
@@ -7887,7 +7871,7 @@ const CHECKS: Check[] = [
         // Run twice, with the first board done, which the jacks won, and the second laid: two figures a seat, and the widest there are
         table.play(allIn, (view) => view.hand!.boards.length === 2);
         const twice = await chancesOn(page, table, 'Quigs');
-        assert.deepEqual(twice, { 0: '0 ~19', 1: '0 ~12', 2: '0 ~19', 3: '100* ~8', 4: '0 ~13', 5: '0 ~10', 6: '0 ~9', 7: '0 ~8', 8: '0 ~2' }, `${screen}: nine hands on two boards`);
+        assert.deepEqual(twice, { 0: '0 ~19', 1: '0 ~13', 2: '0 ~20', 3: '100* ~8', 4: '0 ~12', 5: '0 ~10', 6: '0 ~8', 7: '0 ~8', 8: '0 ~2' }, `${screen}: nine hands on two boards`);
         assert.equal(Object.values(twice).reduce((sum, figures) => sum + wholeOf(figures.split(' ')[1]!), 0), 100, `${screen}: the nine chances on the second board add up`);
 
         await inShapesOf(page, screen, async (shape) => {
@@ -7939,7 +7923,7 @@ const CHECKS: Check[] = [
       await Promise.all([caughtUp(moving, table.view('Kibitz')), caughtUp(still, table.view('Kibitz'))]);
       await flown(moving);
 
-      const preflop = { 0: '~81%*', 1: '~19%' };
+      const preflop = { 0: '~82%*', 1: '~18%' };
       const flop = { 0: '92%*', 1: '8%' };
       const turn = { 0: '95%*', 1: '5%' };
 
@@ -7969,7 +7953,7 @@ const CHECKS: Check[] = [
       const figures = log.filter((change) => /\d/.test(change.text));
 
       assert.deepEqual(figures.filter((change) => change.inFlight > 0), [], where('a chance changed while something on the table was moving'));
-      assert.deepEqual(figures.map((change) => change.text), ['~81% ~19%', '92% 8%', '95% 5%'], where('the chances the page showed, in order'));
+      assert.deepEqual(figures.map((change) => change.text), ['~82% ~18%', '92% 8%', '95% 5%'], where('the chances the page showed, in order'));
       assert.equal(log.at(-1)!.text, '', where('the result took the chances away'));
 
       await moving.context().close();
@@ -8017,7 +8001,7 @@ const CHECKS: Check[] = [
       const took = to - from;
       const longest = Math.max(...gaps);
 
-      assert.deepEqual(Object.values(await chancesShown(page)), ['~18%', '~13%', '~18%', '~14%', '~11%', '~8%', '~8%', '~8%', '~2%']);
+      assert.deepEqual(Object.values(await chancesShown(page)), ['~18%', '~12%', '~18%', '~14%', '~12%', '~8%', '~8%', '~8%', '~2%']);
 
       // Worked out in one go, the page would draw nothing from the first figure wanted to the last one shown. A slow
       // machine stretches the work and the frames alike, so the longest wait for a frame is held to a share of the whole

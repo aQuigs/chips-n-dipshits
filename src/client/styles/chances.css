@@ -25,7 +25,3 @@
 .chance .favorite {
   color: var(--good);
 }
-
-.chance .pending {
-  color: var(--muted);
-}

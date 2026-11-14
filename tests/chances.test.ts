@@ -294,6 +294,12 @@ test('whole figures add up to 100: each share is rounded down, and the points le
   assert.deepEqual(texts({ shares: [1 / 3, 1 / 3, 1 / 3], exact: true }), ['34', '33', '33'], 'the earlier hand first where two lost the same');
   assert.deepEqual(favorites({ shares: [1 / 3, 1 / 3, 1 / 3], exact: true }), [], 'a point that only rounding gave makes no favorite');
   assert.deepEqual(texts({ shares: [0.125, 0.125, 0.75], exact: true }), ['13', '12', '75']);
+
+  // Two that lost the same half point and are not equal: the bigger has it, whichever is listed first
+  assert.deepEqual(texts({ shares: [0.125, 0.875], exact: true }), ['12', '88']);
+  assert.deepEqual(texts({ shares: [0.875, 0.125], exact: true }), ['88', '12']);
+  assert.deepEqual(texts({ shares: [0.495, 0.505], exact: true }), ['49', '51']);
+  assert.deepEqual(texts({ shares: [0.505, 0.495], exact: true }), ['51', '49']);
   assert.deepEqual(texts({ shares: [0.502, 0.498], exact: true }), ['50', '50']);
   assert.deepEqual(favorites({ shares: [0.502, 0.498], exact: true }), [], 'ahead by less than the figures show is no favorite');
   assert.deepEqual(texts({ shares: [0.57, 0.43], exact: true }), ['57', '43'], 'a share that is a whole figure but for how it is stored');

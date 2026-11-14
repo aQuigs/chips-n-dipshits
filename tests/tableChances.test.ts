@@ -374,7 +374,7 @@ test('other hands start from nothing: no figure of the last ones is carried over
   assert.deepEqual([page.chances.shown, page.chances.pending], [{ seats: [3, 5], boards: [null] }, true]);
 });
 
-test('a spot that cannot be worked out shows no figure and holds nothing up', async () => {
+test('a spot that cannot be worked out leaves the seats without chances and holds nothing up', async () => {
   const page = new Still();
   const complained: unknown[] = [];
   const error = console.error;
@@ -389,7 +389,26 @@ test('a spot that cannot be worked out shows no figure and holds nothing up', as
   }
 
   assert.equal(complained.length, 1);
-  assert.deepEqual([page.texts, page.chances.pending], [[null], false]);
+  assert.deepEqual([page.chances.shown, page.chances.pending], [null, false], 'no figure, and no mark of one still to come');
+});
+
+test('with two boards, one that cannot be worked out takes the other’s figures off as well', async () => {
+  const page = new Still();
+  const complained: unknown[] = [];
+  const error = console.error;
+
+  console.error = (...said) => void complained.push(said);
+
+  try {
+    // The second board names a card the hands hold
+    page.show({ seats: [0, 1], boards: [{ hands: HANDS, board: cards(BOARD), dead: [] }, { hands: HANDS, board: cards('As 4c 5h'), dead: [] }] });
+    await page.land();
+  } finally {
+    console.error = error;
+  }
+
+  assert.equal(complained.length, 1);
+  assert.deepEqual([page.chances.shown, page.chances.pending], [null, false]);
 });
 
 test('every page at a table shows the same figures: what a player, a player who folded and a watcher work out is one answer', () => {

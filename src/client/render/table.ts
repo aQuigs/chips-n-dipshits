@@ -284,7 +284,8 @@ function seatEl(view: TableView, seat: SeatView, slot: number, shape: Shape, clo
     null,
     h('div.name', { title: seat.name }, h('span', null, seat.name), roleMark(view, seat.playerId)),
     h('div.stack', { title: formatAmount(seat.stack, view.config) }, shortAmount(seat.stack, view.config), seat.pendingAdd > 0 ? h('span.pending', null, ` +${shortAmount(seat.pendingAdd, view.config)}`) : null),
-    // With hands face up and cards to come, how a hand stands says more than that its player is all in, which they all are
+    // The seat has one line. While hands are face up with cards to come it is the hand's chance, as at the result it is
+    // what the hand won: that its player is all in, away or leaving is back on it once the hand is over
     took > 0 ? h('div.status.won', null, `+${shortAmount(took, view.config)}`) : (chance ?? (status ? h('div.status', { 'data-status': status }, status) : null)),
     // The seconds left, for everyone: the bar under the name alone is easy to miss until the time is gone
     timer ? h('div.status.clock', { 'data-countdown': hand!.deadline }, '') : null,

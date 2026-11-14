@@ -1261,21 +1261,38 @@ const STOP_CLOCK = `(() => {
 /** One change of what the seats say of their chances, as `CHANCE_LOG` wrote it down. */
 interface ChanceChange {
   text: string;
-  /** Something on the table was moving at the time. */
-  moving: boolean;
+  /** How many things the page had set moving that had not landed when the seats were drawn saying this. */
+  inFlight: number;
 }
 
-// Run in a page that is on a table: writes down in `window.chanceLog` every change of what the seats say of their chances
+/*
+ * Run in a page that is on a table: writes down in `window.chanceLog` every change of what the seats say
+ * of their chances. What is in flight is counted from the animations themselves, not read off the stage:
+ * a table drawn again mid-move ends its moves and says it is still before anyone watching it is told,
+ * but an animation ended that way has not yet said so to whoever waits on it.
+ */
 const CHANCE_LOG = `(() => {
   const stage = document.querySelector('.stage');
   const read = () => [...document.querySelectorAll('.seat[data-seat] .status.chance')].map((line) => line.textContent).join(' ');
+  const inFlight = new Set();
+  const animate = Element.prototype.animate;
   let last = read();
+
+  Element.prototype.animate = function (frames, options) {
+    const animation = animate.call(this, frames, options);
+    const landed = () => inFlight.delete(animation);
+
+    inFlight.add(animation);
+    animation.finished.then(landed, landed);
+
+    return animation;
+  };
 
   window.chanceLog = [];
   new MutationObserver(() => {
     if (read() !== last) {
       last = read();
-      window.chanceLog.push({ text: last, moving: stage.hasAttribute('data-moving') });
+      window.chanceLog.push({ text: last, inFlight: inFlight.size });
     }
   }).observe(stage, { subtree: true, childList: true, characterData: true });
 })()`;
@@ -7951,7 +7968,7 @@ const CHECKS: Check[] = [
       const log = (await moving.evaluate('window.chanceLog')) as ChanceChange[];
       const figures = log.filter((change) => /\d/.test(change.text));
 
-      assert.deepEqual(figures.filter((change) => change.moving), [], where('a chance changed while something on the table was moving'));
+      assert.deepEqual(figures.filter((change) => change.inFlight > 0), [], where('a chance changed while something on the table was moving'));
       assert.deepEqual(figures.map((change) => change.text), ['~81% ~19%', '92% 8%', '95% 5%'], where('the chances the page showed, in order'));
       assert.equal(log.at(-1)!.text, '', where('the result took the chances away'));
 

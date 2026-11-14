@@ -128,9 +128,14 @@ export class TableChances {
     }
   }
 
-  /** What to write beside the hands now; null when the table shows no spots. */
+  /** What to write beside the hands now; null when the table shows no spots, or one of them could not be worked out. */
   get shown(): ShownChances | null {
-    return this.spots && { seats: this.spots.seats, boards: this.showing.map((board) => board?.figures ?? null) };
+    // Figures for some of the boards would be read as figures for all there are, so then the seats say what they did before
+    if (!this.spots || this.showing.some((board) => board?.figures === null)) {
+      return null;
+    }
+
+    return { seats: this.spots.seats, boards: this.showing.map((board) => board?.figures ?? null) };
   }
 
   /** Whether what is written is not yet of the cards now on the table: those are on their way, or their figures still being worked out. */
@@ -185,7 +190,7 @@ export class TableChances {
           this.finish(key, chanceFigures(step.value));
         }
       } catch (error) {
-        // A spot that cannot be worked out must not be what stops the table: its hands show no figure
+        // A spot that cannot be worked out must not be what stops the table: the hands go without their chances
         console.error(error);
         this.finish(key, null);
       }

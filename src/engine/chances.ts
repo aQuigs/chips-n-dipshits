@@ -219,13 +219,14 @@ const ROUNDING_STEPS = 1e9;
 
 /**
  * The shares as whole percent that add up to 100: each is rounded down, and the points left over go one
- * each to the hands that lost most by it, the earlier hand first where two lost the same.
+ * each to the hands that lost most by it. Where two lost the same, the bigger share is first, so the same
+ * shares read the same whichever hand is listed first; only between equal shares is it the earlier hand.
  */
 function wholePercent(shares: readonly number[]): number[] {
   const percent = shares.map((share) => Math.round(share * 100 * ROUNDING_STEPS) / ROUNDING_STEPS);
   const whole = percent.map(Math.floor);
   const left = 100 - whole.reduce((sum, points) => sum + points, 0);
-  const byLoss = percent.map((points, hand) => ({ hand, lost: points - whole[hand]! })).sort((a, b) => b.lost - a.lost || a.hand - b.hand);
+  const byLoss = percent.map((points, hand) => ({ hand, points, lost: points - whole[hand]! })).sort((a, b) => b.lost - a.lost || b.points - a.points || a.hand - b.hand);
 
   byLoss.slice(0, left).forEach(({ hand }) => (whole[hand]! += 1));
 

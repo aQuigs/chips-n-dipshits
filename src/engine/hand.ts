@@ -1,7 +1,7 @@
 import { formatAmount } from './amounts.ts';
 import { bettingIsClosed, bettingOptions, owesAction } from './betting.ts';
 import { boardsComplete, dealStreet, newBoards, potShares, runOut } from './boards.ts';
-import { claimBombPot } from './bombPots.ts';
+import { boardsDealt, bombPotName, claimBombPot } from './bombPots.ts';
 import { isSevenDeuce, prettyCards, shuffledDeck } from './cards.ts';
 import type { HandEvent } from './events.ts';
 import { forcedBets, openingBet, positionsOf } from './forcedBets.ts';
@@ -244,7 +244,7 @@ export function startHand(state: TableState, ctx: Ctx): void {
     bounty: sevenDeuceBounty,
     bombPot,
     deck,
-    ...newBoards(),
+    ...newBoards(boardsDealt(bombPot)),
     street: 'preflop',
     stage: 'betting',
     players,
@@ -260,7 +260,7 @@ export function startHand(state: TableState, ctx: Ctx): void {
   state.hand = hand;
 
   const stacks = players.map((p): [number, string, number] => [p.seat, p.name, p.startStack]);
-  const terms = bombPot ? `bomb pot ${formatAmount(bombPot.amount, state.config)}` : `blinds ${stakesText(state.config)}`;
+  const terms = bombPot ? `${bombPotName(bombPot)} ${formatAmount(bombPot.amount, state.config)}` : `blinds ${stakesText(state.config)}`;
 
   record(hand, ['start', hand.number, button, smallBlind, bigBlind, stacks, ...startTerms(state, bombPot)]);
   narrate(state, ctx, `Hand #${hand.number} · ${terms} · ${playerAt(hand, button)!.name} has the button`);
@@ -273,7 +273,7 @@ export function startHand(state: TableState, ctx: Ctx): void {
     return;
   }
 
-  // The flop comes whoever is all in. What nobody could match goes back first, so it is dealt to the pot it is played for
+  // The flop comes whoever is all in, on every board. What nobody could match goes back first, so it is dealt to the pot it is played for
   refundUncalledBet(state, ctx);
   dealNextStreet(state, ctx);
   advance(state, ctx, button);
@@ -563,14 +563,15 @@ function beginRunout(state: TableState, ctx: Ctx): void {
     }
   }
 
+  // A second board is offered only to a hand on one: boards dealt apart from the start are already two
   const everyoneCanVote = live.every((p) => !state.seats[p.seat]!.away && !state.seats[p.seat]!.leaving);
-  if (state.config.allowRunItTwice && everyoneCanVote) {
+  if (hand.runs === 1 && state.config.allowRunItTwice && everyoneCanVote) {
     hand.stage = 'ritVote';
     hand.deadline = ctx.now + TIMING.ritVoteMs;
     return;
   }
 
-  startRunout(state, ctx, 1);
+  startRunout(state, ctx, hand.runs);
 }
 
 function startRunout(state: TableState, ctx: Ctx, runs: number): void {

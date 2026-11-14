@@ -4,7 +4,7 @@
  */
 import assert from 'node:assert/strict';
 
-import { evaluateHand, FEED_LIMIT, LIMITS, PLAYING_THE_BOARD, reaches, replayHand, roleOf, viewFor } from '../src/engine/index.ts';
+import { BOARD_SIZE, boardsDealt, evaluateHand, FEED_LIMIT, FLOP_SIZE, LIMITS, PLAYING_THE_BOARD, reaches, replayHand, roleOf, viewFor } from '../src/engine/index.ts';
 import type { Effect, FeedEntry, HandPlayer, HandRecord, TableState } from '../src/engine/index.ts';
 import { CACHE_VALUE_BYTES, utf8Bytes } from '../src/gas/sheetStore.ts';
 import { restoreState } from '../src/server/store.ts';
@@ -82,11 +82,51 @@ export function assertSeatingHolds(state: TableState): void {
   }
 }
 
-/** A bomb pot has its flop out from the first moment anyone sees it, which a finished hand's record cannot show. */
+/**
+ * A bomb pot has its flop out from the first moment anyone sees it, on each board it was dealt on,
+ * which a finished hand's record cannot show. One dealt on several boards stays on those: only a hand
+ * on one board is ever run twice.
+ */
 export function assertBombPotsHold(state: TableState): void {
   const hand = state.hand;
+  if (!hand?.bombPot) {
+    return;
+  }
 
-  assert.ok(!hand?.bombPot || (hand.street !== 'preflop' && hand.boards[0]!.length >= 3), 'a bomb pot is on the table without its flop');
+  const dealtOn = boardsDealt(hand.bombPot);
+
+  assert.ok(hand.street !== 'preflop' && hand.boards.length >= dealtOn, 'a bomb pot is on the table without a board it was dealt on');
+  assert.ok(hand.boards.slice(0, dealtOn).every((board) => board.length >= FLOP_SIZE), 'a bomb pot is on the table without its flop');
+  assert.ok(dealtOn === 1 || hand.runs === dealtOn, 'a bomb pot dealt on several boards was put on more');
+}
+
+/**
+ * The boards on the table are the ones the hand says it is played on: no more of them than that, alike
+ * in the cards it says they have in common and in no other, and while there is betting, all out and
+ * all at the same street.
+ */
+export function assertBoardsHold(state: TableState): void {
+  const hand = state.hand;
+  if (!hand) {
+    return;
+  }
+
+  const { boards, runs, runIndex, sharedBoardLength: shared } = hand;
+  const dealt = boards.flat();
+
+  assert.ok(boards.length >= 1 && boards.length <= runs, `${boards.length} boards are out in a hand played on ${runs}`);
+  assert.ok(boards.every((board) => board.length === 0 || (board.length >= FLOP_SIZE && board.length <= BOARD_SIZE)), 'a board stopped between streets');
+  assert.ok(boards.slice(0, runIndex).every((board) => board.length === BOARD_SIZE), 'a board was left short when the dealing moved on');
+
+  for (const board of boards.slice(1)) {
+    assert.deepEqual(board.slice(0, shared), boards[0]!.slice(0, shared), 'two boards differ in the cards they are said to have in common');
+  }
+  assert.equal(new Set(dealt).size, dealt.length - (boards.length - 1) * (boards.length > 1 ? shared : 0), 'two boards hold the same card beyond those they have in common');
+
+  if (hand.stage === 'betting') {
+    assert.equal(boards.length, runs, 'a board is still to come while there is betting');
+    assert.ok(boards.every((board) => board.length === boards[0]!.length), 'the boards are at different streets while there is betting');
+  }
 }
 
 /** The table comes back from being saved exactly as it was. */
@@ -216,6 +256,7 @@ export function assertInvariants(state: TableState, now: number): void {
   assertRolesHold(state);
   assertSeatingHolds(state);
   assertBombPotsHold(state);
+  assertBoardsHold(state);
   assertSurvivesSaving(state);
   assertViewsKeepSecrets(state, now);
   assertFitsTheStore(state);
@@ -233,6 +274,51 @@ export function assertRecordBalances(record: HandRecord): void {
   assert.equal(won, pots);
   assert.ok(record.boards.every((board) => board.length === 0 || board.length >= 3));
   assert.equal(new Set([...record.boards.flat(), ...record.players.flatMap((p) => p.cards ?? [])]).size >= record.boards[0]!.length, true);
+}
+
+function sumOf(amounts: number[]): number {
+  return amounts.reduce((sum, amount) => sum + amount, 0);
+}
+
+/**
+ * Every board of a hand that was shown down played for an equal share of each pot, the chips that do
+ * not divide going to the first boards, and a board's share went only to players in for that pot whose
+ * hand there no other shown hand in for it beat. A hand won without a showdown went whole to its winner.
+ */
+export function assertBoardsShareThePots(record: HandRecord): void {
+  const { result, boards } = record;
+  const where = `hand ${record.number}`;
+
+  if (result.uncontested) {
+    assert.ok(result.pots.every((pot) => pot.awards.length === 1 && pot.awards[0]!.amount === pot.amount && pot.awards[0]!.run === 0), `${where}: a pot nobody contested was not paid whole`);
+    return;
+  }
+
+  assert.ok(boards.every((board) => board.length === BOARD_SIZE), `${where} was shown down on a board short of its cards`);
+
+  const scoreOf = (seat: number, run: number) => {
+    const shown = result.hands.find((hand) => hand.seat === seat && hand.run === run);
+    assert.ok(shown, `${where}: seat ${seat} was paid on board ${run + 1} without showing a hand there`);
+
+    return evaluateHand(shown.cards).score;
+  };
+
+  for (const pot of result.pots) {
+    boards.forEach((_board, run) => {
+      const share = Math.floor(pot.amount / boards.length) + (run < pot.amount % boards.length ? 1 : 0);
+      const paid = pot.awards.filter((award) => award.run === run);
+      const shownHere = result.hands.filter((hand) => hand.run === run && pot.eligible.includes(hand.seat));
+
+      assert.equal(sumOf(paid.map((award) => award.amount)), share, `${where}: board ${run + 1} of ${boards.length} did not play for its share of a pot of ${pot.amount}`);
+
+      for (const award of paid) {
+        assert.ok(pot.eligible.includes(award.seat), `${where}: seat ${award.seat} was paid from a pot they were not in for`);
+        assert.ok(shownHere.every((hand) => evaluateHand(hand.cards).score <= scoreOf(award.seat, run)), `${where}: seat ${award.seat} was paid on board ${run + 1} over a better hand`);
+      }
+    });
+
+    assert.ok(pot.awards.every((award) => award.run < boards.length), `${where}: a pot was paid on a board that was never dealt`);
+  }
 }
 
 /**
@@ -314,6 +400,15 @@ export function assertBombPotIsPlayedAsOne(record: HandRecord): void {
   const dealt = events[flop];
   assert.ok(dealt?.[0] === 'street' && dealt[2].length === 3, `hand ${record.number}: a bomb pot without a flop`);
   assert.ok(events.slice(1, flop).every((event) => event[0] === 'post' || event[0] === 'deal' || event[0] === 'return'), `hand ${record.number}: something was done before the flop of a bomb pot`);
+
+  // Every board it is dealt on gets its flop before anything else happens, and no board comes later
+  const boards = boardsDealt(bombPot);
+  assert.deepEqual(
+    events.slice(flop, flop + boards).map((event) => (event[0] === 'street' ? [event[1], event[2].length] : event[0])),
+    Array.from({ length: boards }, (_board, index) => [index, FLOP_SIZE]),
+    `hand ${record.number}: a bomb pot on ${boards} boards did not start with a flop on each`,
+  );
+  assert.ok(record.boards.length === boards || (boards === 1 && events.some((event) => event[0] === 'runs' && event[1] > 1)), `hand ${record.number}: a bomb pot dealt on ${boards} boards ended on ${record.boards.length}`);
 }
 
 /** Checks every finished hand among the effects, and says how many there were. */
@@ -324,6 +419,7 @@ export function assertHandRecordsHold(effects: Effect[]): number {
     assertRecordBalances(record);
     assertEventsRetellTheHand(record);
     assertBombPotIsPlayedAsOne(record);
+    assertBoardsShareThePots(record);
   }
 
   return records.length;

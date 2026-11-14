@@ -16,9 +16,12 @@ const STREET_BY_BOARD_LENGTH: Record<number, Street> = { 3: 'flop', 4: 'turn', 5
 /** What a hand keeps of its boards. A replay keeps the same, so its boards are laid out by the same rules. */
 export type Boards = Pick<Hand, 'boards' | 'runs' | 'runIndex' | 'sharedBoardLength'>;
 
-/** The boards of a hand as it is dealt: one, with nothing on it. */
-export function newBoards(): Boards {
-  return { boards: [[]], runs: 1, runIndex: 0, sharedBoardLength: 0 };
+/**
+ * The boards of a hand as it is dealt, with nothing on them yet. More than one are boards with no card
+ * in common: each street is dealt to all of them, from the flop on.
+ */
+export function newBoards(count = 1): Boards {
+  return { boards: Array.from({ length: count }, () => []), runs: count, runIndex: 0, sharedBoardLength: 0 };
 }
 
 /**
@@ -26,6 +29,11 @@ export function newBoards(): Boards {
  * it is played on that many boards, which have the cards already out in common.
  */
 export function runOut(hand: Boards, count: number): void {
+  // A hand is put on several boards once: those dealt apart from the start are simply dealt out
+  if (hand.runs > 1) {
+    return;
+  }
+
   hand.runs = count;
   hand.sharedBoardLength = hand.boards[0]!.length;
 }

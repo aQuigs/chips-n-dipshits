@@ -1,5 +1,6 @@
 /* What the host may do, and of that what co-hosts may do too: each handler's `by` says which. */
 import { formatAmount, validAmount } from '../amounts.ts';
+import { bombPotName, bombPotOf } from '../bombPots.ts';
 import { validatedConfig } from '../config.ts';
 import { restartActionClock } from '../hand.ts';
 import { actorName, dropCohost, requireMayRemove } from '../hosts.ts';
@@ -129,15 +130,18 @@ export const setBombPot: Handler<'setBombPot'> = {
   },
 };
 
+const BOMB_POT_SETTINGS = ['bombPotAmount', 'bombPotEvery', 'bombPotBoards'] as const;
+
 /** How the chat puts what the table plays for bomb pots. */
 function bombPotsText(config: TableConfig): string {
   const amount = formatAmount(config.bombPotAmount, config);
+  const name = bombPotName(bombPotOf(config));
 
   if (config.bombPotEvery === 0) {
-    return `A bomb pot is ${amount} and comes only when called`;
+    return `A ${name} is ${amount} and comes only when called`;
   }
 
-  return config.bombPotEvery === 1 ? `Every hand is a bomb pot of ${amount}` : `A bomb pot of ${amount} comes every ${config.bombPotEvery} hands`;
+  return config.bombPotEvery === 1 ? `Every hand is a ${name} of ${amount}` : `A ${name} of ${amount} comes every ${config.bombPotEvery} hands`;
 }
 
 export const updateConfig: Handler<'updateConfig'> = {
@@ -163,7 +167,7 @@ export const updateConfig: Handler<'updateConfig'> = {
       addFeed(state, ctx.now, 'system', null, bounty > 0 ? `The seven-deuce bounty is ${formatAmount(bounty, state.config)}${when}` : `The seven-deuce bounty is off${when}`);
     }
 
-    if (state.config.bombPotAmount !== before.bombPotAmount || state.config.bombPotEvery !== before.bombPotEvery) {
+    if (BOMB_POT_SETTINGS.some((key) => state.config[key] !== before[key])) {
       addFeed(state, ctx.now, 'system', null, `${bombPotsText(state.config)}${state.hand ? ', from the next hand' : ''}`);
     }
 

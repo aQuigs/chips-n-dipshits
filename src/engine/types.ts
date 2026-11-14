@@ -15,6 +15,9 @@ export type Unit = 'chips' | 'cents';
 /** Who pays the ante: every player dealt in pays one each, or the big blind pays one for the whole table. */
 export type AnteFrom = 'everyone' | 'bigBlind';
 
+/** How many boards a table plays its bomb pots on. */
+export type BombPotBoards = 'one' | 'two';
+
 export interface TableConfig {
   /** Chosen when the table is created and fixed from then on: the chips already on it would change their worth. */
   unit: Unit;
@@ -38,6 +41,8 @@ export interface TableConfig {
   bombPotAmount: number;
   /** One hand in this many is a bomb pot without being called; 0 for only when one is called. */
   bombPotEvery: number;
+  /** On two boards, each board wins half of every pot. */
+  bombPotBoards: BombPotBoards;
 }
 
 export interface Member {
@@ -99,6 +104,8 @@ export type Post = 'small blind' | 'big blind' | 'straddle' | 'ante' | 'big blin
 /** The terms of a bomb pot; a hand with none is an ordinary one. */
 export interface BombPot {
   amount: number;
+  /** How many boards it is dealt on, from the flop. Left out of one on a single board, as in every bomb pot saved before there were two. */
+  boards?: number;
 }
 
 export type PlayerAction = Post | 'fold' | 'check' | 'call' | 'bet' | 'raise';
@@ -178,11 +185,11 @@ export interface Hand {
   deck: Card[];
   /** The boards on the table. They and the three fields after them are kept by `boards.ts`, and written nowhere else. */
   boards: Card[][];
-  /** How many boards the hand is played on. More than are on the table while a hand run twice has its second still to come. */
+  /** How many boards the hand is played on: more than one from the deal in a double-board bomb pot, or from an all-in on when the rest is run twice. More than are on the table while a hand run twice has its second still to come. */
   runs: number;
   /** The first board still being dealt; any before it have all their cards. */
   runIndex: number;
-  /** How many community cards the hand's boards have in common: those that were out when it was put on more than one. */
+  /** How many community cards the hand's boards have in common: none when it was dealt on several, and for a hand run out after an all-in, those that were out by then. */
   sharedBoardLength: number;
   street: Street;
   stage: HandStage;

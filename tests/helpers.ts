@@ -30,7 +30,7 @@ export interface DealOptions {
   holes?: Record<number, string>;
   /** Community cards in the order they come out. */
   board?: string;
-  /** The extra cards the second board gets when the hand is run twice. */
+  /** The extra cards the second board gets when the hand is run twice, or all the cards of the second board of a hand dealt on two. */
   secondBoard?: string;
 }
 
@@ -50,10 +50,21 @@ export function ledgerEntries(effects: Effect[]): LedgerEntry[] {
   return effects.flatMap((effect) => (effect.type === 'ledger' ? [effect.entry] : []));
 }
 
+const STREET_ENDS = [0, 3, 4, 5];
+
+/** The cards of boards that are dealt together, in the order they leave the deck: a street at a time, to each board in turn. */
+function streetByStreet(boards: Card[][]): Card[] {
+  assert.ok(boards.every((board) => board.length === boards[0]!.length), 'boards dealt together have to be given to the same street');
+
+  return STREET_ENDS.slice(1).flatMap((end, street) => boards.flatMap((board) => board.slice(STREET_ENDS[street], end)));
+}
+
 /** Replaces the cards of a hand just dealt with the ones `options` names. */
 export function fixCards(hand: Hand, options: DealOptions): void {
   const holes = options.holes ?? {};
-  const upcoming = [...cards(options.board ?? ''), ...cards(options.secondBoard ?? '')];
+  const boards = [cards(options.board ?? ''), cards(options.secondBoard ?? '')];
+  // A hand dealt on two boards takes each street for both; a second board that comes with running it twice follows the whole first
+  const upcoming = hand.runs > 1 ? streetByStreet(boards) : boards.flat();
   const given = [...Object.values(holes).flatMap(cards), ...upcoming];
   const fixed = new Set(given);
   assert.equal(fixed.size, given.length, 'the same card was dealt twice');

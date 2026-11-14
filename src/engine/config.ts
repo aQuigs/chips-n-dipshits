@@ -199,6 +199,20 @@ export const CONFIG_SPECS: { [K in ConfigKey]-?: SpecFor<TableConfig[K]> } = {
     atCreate: true,
     nextHand: true,
   },
+  bombPotBoards: {
+    kind: 'choice',
+    label: 'A bomb pot is played on',
+    subject: 'The boards of a bomb pot',
+    hint: 'With two, each board wins half of every pot',
+    default: 'one',
+    options: [
+      { value: 'one', label: 'One board' },
+      { value: 'two', label: 'Two boards' },
+    ],
+    group: 'extras',
+    atCreate: true,
+    nextHand: true,
+  },
 };
 
 export const CONFIG_KEYS = Object.keys(CONFIG_SPECS) as ConfigKey[];

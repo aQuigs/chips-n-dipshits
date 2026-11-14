@@ -2,7 +2,9 @@
  * Which hands are bomb pots. A hand becomes one because the host called it or because the table plays
  * one every so many hands, and this is the only place that is decided.
  */
-import type { BombPot, TableState } from './types.ts';
+import type { BombPot, BombPotBoards, TableConfig, TableState } from './types.ts';
+
+const BOARDS: Record<BombPotBoards, number> = { one: 1, two: 2 };
 
 /** Whether the table's count makes the next hand dealt a bomb pot, called or not. */
 function dueByCount(state: TableState): boolean {
@@ -13,7 +15,25 @@ function dueByCount(state: TableState): boolean {
 
 /** The bomb pot the next hand dealt would be as the table stands, or null for an ordinary hand. */
 export function bombPotDue(state: TableState): BombPot | null {
-  return state.bombPotCalled || dueByCount(state) ? { amount: state.config.bombPotAmount } : null;
+  return state.bombPotCalled || dueByCount(state) ? bombPotOf(state.config) : null;
+}
+
+/** The bomb pot a table with these settings plays. */
+export function bombPotOf(config: TableConfig): BombPot {
+  const amount = config.bombPotAmount;
+  const boards = BOARDS[config.bombPotBoards];
+
+  return boards > 1 ? { amount, boards } : { amount };
+}
+
+/** How many boards a hand of this kind is dealt on. */
+export function boardsDealt(bombPot: BombPot | null): number {
+  return bombPot?.boards ?? 1;
+}
+
+/** What a bomb pot is called, as it reads inside a sentence. */
+export function bombPotName(bombPot: BombPot): string {
+  return boardsDealt(bombPot) > 1 ? 'double-board bomb pot' : 'bomb pot';
 }
 
 /** Whether the next hand is a bomb pot only because one was called, so that calling it off makes it an ordinary hand. */

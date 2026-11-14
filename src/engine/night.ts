@@ -3,6 +3,7 @@
  * dealt until play starts again. `endNight` is the only way a night ends and `restartNight` the only
  * way one starts again, so whatever has to happen at those moments goes in them.
  */
+import { bombPotName, bombPotOf } from './bombPots.ts';
 import { turnAway } from './seating.ts';
 import { addFeed } from './seats.ts';
 import type { Ctx, TableState } from './types.ts';
@@ -94,7 +95,7 @@ export function endNight(state: TableState, ctx: Ctx, saying: string): void {
 
   if (state.bombPotCalled) {
     state.bombPotCalled = false;
-    addFeed(state, ctx.now, 'system', null, 'The bomb pot that was called is off');
+    addFeed(state, ctx.now, 'system', null, `The ${bombPotName(bombPotOf(state.config))} that was called is off`);
   }
 
   turnAway(

@@ -99,7 +99,7 @@ export const FUZZ_COMMANDS: ((fuzz: Fuzz) => void)[] = [
   ({ t, rng }) => attempt(t, chance(rng, 85) ? someoneRunningTheGame(t, rng) : rng.int(t.ids.length), { type: 'setLastHands', hands: chance(rng, 50) ? null : rng.int(LIMITS.lastHands + 1), from: Math.max(0, t.state.handCount - rng.int(2)) }),
   ({ t, rng }) => {
     // Rarely: a table between hands is mostly one short of players, whose night would otherwise end at every turn
-    if (chance(rng, 10)) {
+    if (chance(rng, 4)) {
       attempt(t, chance(rng, 85) ? someoneRunningTheGame(t, rng) : rng.int(t.ids.length), { type: 'endNight' });
     }
   },

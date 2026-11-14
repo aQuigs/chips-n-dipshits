@@ -175,12 +175,12 @@ test('only the host or a co-host calls the last hands or ends the night: a seate
 test('the count goes down as each hand dealt is finished, whatever the hand was, and the last one ends the night', () => {
   // Paused, so that each hand is the one dealt here
   const t = new TestTable({ stacks: [1000, 1000, 1000], config: { allowRunItTwice: true } });
-  t.cmd(HOST, { type: 'setLastHands', hands: 4 });
+  t.cmd(HOST, { type: 'setLastHands', hands: 5 });
 
   t.deal({ button: 0 });
-  assert.equal(t.view(PLAYER).handsLeft, 3, 'the hand on the table is counted among the hands left');
+  assert.equal(t.view(PLAYER).handsLeft, 4, 'the hand on the table is counted among the hands left');
   foldAround(t);
-  assert.equal(t.view(PLAYER).handsLeft, 3);
+  assert.equal(t.view(PLAYER).handsLeft, 4);
 
   t.deal({ button: 1 });
   t.call(t.toAct!);
@@ -189,13 +189,23 @@ test('the count goes down as each hand dealt is finished, whatever the hand was,
     t.check(t.toAct!);
   }
   t.finishHand();
-  assert.equal(t.view(PLAYER).handsLeft, 2, 'a hand played to a showdown');
+  assert.equal(t.view(PLAYER).handsLeft, 3, 'a hand played to a showdown');
 
   t.cmd(HOST, { type: 'setBombPot', on: true });
   t.deal({ button: 2 });
   assert.notEqual(t.state.hand!.bombPot, null);
   foldAround(t);
-  assert.equal(t.view(PLAYER).handsLeft, 1, 'a bomb pot');
+  assert.equal(t.view(PLAYER).handsLeft, 2, 'a bomb pot');
+
+  t.cmd(HOST, { type: 'updateConfig', config: { bombPotBoards: 'two' } });
+  t.cmd(HOST, { type: 'setBombPot', on: true });
+  t.deal({ button: 1 });
+  assert.equal(t.state.hand!.boards.length, 2);
+  while (betting(t)) {
+    t.check(t.toAct!);
+  }
+  t.finishHand();
+  assert.equal(t.view(PLAYER).handsLeft, 1, 'a bomb pot on two boards');
 
   t.deal({ button: 0, holes: { 0: ACES, 1: KINGS }, board: BOARD, secondBoard: 'Kd 4c 5h 8s Td' });
   assert.equal(t.view(PLAYER).handsLeft, 0);
@@ -213,7 +223,7 @@ test('the count goes down as each hand dealt is finished, whatever the hand was,
   t.finishHand();
   assert.ok(nightIsOver(t.state), 'a hand run twice');
   assert.equal(lastLine(t), 'That was the last hand. The night is over');
-  assert.equal(handRecords(t.effects).length, 4);
+  assert.equal(handRecords(t.effects).length, 5);
   assert.equal(nightsEnded(t).length, 1);
   assertInvariants(t.state, t.now);
 });
@@ -332,7 +342,7 @@ test('starting play again after the night deals again, with no last hands called
 });
 
 test('when the night ends, requests waiting are dropped and a called bomb pot is called off, while the count to the next bomb pot is kept', () => {
-  const t = new TestTable({ stacks: [1000, 1000, 1000, 500], config: { bombPotEvery: 3 } });
+  const t = new TestTable({ stacks: [1000, 1000, 1000, 500], config: { bombPotEvery: 3, bombPotBoards: 'two' } });
   t.ids.push(addMember(t.state, 'Asker', t.ctx()).id);
   t.cmd(HOST, { type: 'start' });
   nextHand(t);
@@ -346,7 +356,7 @@ test('when the night ends, requests waiting are dropped and a called bomb pot is
 
   assert.deepEqual(t.feedText().slice(-4), [
     'The host ended the night',
-    'The bomb pot that was called is off',
+    'The double-board bomb pot that was called is off',
     "The night is over, so Asker's request for a seat is dropped",
     "The night is over, so P3's request for chips is dropped",
   ]);

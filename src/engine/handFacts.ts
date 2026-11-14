@@ -19,7 +19,7 @@ export interface PotWon {
   /** 0, or 1 for the second board of a hand played on two. */
   board: number;
   amount: number;
-  /** How many players were paid from that pot on that board, this one among them: more than 1 is a split. */
+  /** How many players were paid from that pot on that board, this one among them: more than 1 is a split. A tie over a single chip pays one of them, and is 1. */
   between: number;
 }
 
@@ -65,8 +65,9 @@ export interface PlayerFacts {
   /** The hand left them with no chips. */
   busted: boolean;
   /**
-   * The seats that took a busted player's last chips: everyone paid from a pot they were all in for,
-   * or whoever collected the bounty that emptied their stack. Empty for a player who did not bust.
+   * The seats that took a busted player's last chips: whoever collected the bounty that emptied
+   * their stack, or with no such bounty everyone paid from a pot they were all in for. Never the
+   * player themselves, and empty for a player who did not bust.
    */
   bustedBy: number[];
 }
@@ -135,16 +136,15 @@ export function handFacts(record: HandRecord): HandFacts {
     const busted = player.endStack === 0;
     const takers = new Set<number>();
 
-    if (busted && !folded) {
+    if (busted && paid > 0) {
+      // They had chips left when the pots were paid, some of them perhaps won there, and the bounty took the last
+      takers.add(result.bounty!.seat);
+    } else if (busted) {
       for (const each of result.pots) {
         if (each.eligible.includes(seat)) {
           each.awards.filter((award) => award.amount > 0).forEach((award) => takers.add(award.seat));
         }
       }
-    }
-
-    if (busted && paid > 0) {
-      takers.add(result.bounty!.seat);
     }
 
     return {

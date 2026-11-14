@@ -1064,6 +1064,29 @@ async function openTonight(page: Page, screen: ScreenName, shows = '.tonight-pla
   await page.waitForSelector(`.dialog[aria-label="Tonight"] ${shows}`);
 }
 
+const RECAP = '.dialog[aria-label="Tonight"] .tonight-crown';
+
+// How often the page looks whether a dialog it means to open may come up now: COUNTDOWN_TICK_MS in src/client/app.ts
+const OFFER_TICK_MS = 250;
+
+/** Quigs, Stu and Big Al one hand into a night that Quigs is up in and the other two are level in, with Zed watching, between hands and paused. */
+function nightOfOneHand(rig: Rig): RigTable {
+  const table = rig.table([{ name: 'Quigs', stack: 1000 }, { name: 'Stu', stack: 1000 }, { name: 'Big Al', stack: 1000 }], { allowRunItTwice: false });
+
+  table.join('Zed');
+  table.deal({ button: 0, holes: { 0: 'As Ah', 1: 'Ks Kh', 2: 'Qs Qh' }, board: '2c 7d 9h Jc 3s' });
+  table.act('Quigs', { type: 'pause' });
+  table.play(passive, (view) => view.hand === null);
+
+  return table;
+}
+
+/** That no dialog opens by itself, given longer than the page takes to open one that is waiting. With `open`, that the dialog of that title stays as it is. */
+async function assertNoDialogComes(page: Page, otherwise: string, open?: string): Promise<void> {
+  await page.waitForTimeout(3 * OFFER_TICK_MS);
+  assert.deepEqual(await texts(page, '.dialog h2'), open ? [open] : [], otherwise);
+}
+
 /** Closes the recap that comes up by itself when the night ends, for a check of what lies under it. */
 async function closeRecap(page: Page): Promise<void> {
   await page.click('.dialog[aria-label="Tonight"] [data-action="close"]');
@@ -6164,9 +6187,17 @@ const CHECKS: Check[] = [
           await press('.tonight-players li[data-player="Big Al"] summary');
           assert.deepEqual(await texts(host, '.tonight-players li[data-player="Big Al"] dl div'), ['Biggest pot\nNone yet', 'Best hand shown\nNone yet'], 'a player who won nothing and mucked what they had');
 
+          // Scrolled to the last player, as someone reading down the list would be
+          const scrolledTo = () => host.evaluate(`document.querySelector('.dialog-body').scrollTop`) as Promise<number>;
+          await host.evaluate(`document.querySelector('.tonight-players li:last-child').scrollIntoView()`);
+          const scrolled = await scrolledTo();
+          assert.ok(scrolled > 0, 'ten players fit the dialog without scrolling, so this proves nothing');
+
           table.act('Quigs', { type: 'transferChips', from: table.auth('Quigs').id, to: table.auth('Big Al').id, amount: 7 });
           await host.waitForSelector(`.tonight-players li[data-player="Big Al"] .net:has-text("${kind.afterTransfer}")`);
           assert.deepEqual(await texts(host, '.tonight-players details[open] .who'), [WIDEST, 'Quigs', 'Big Al'], 'a line someone had unfolded folded shut when the dialog was drawn again');
+          assert.equal(await scrolledTo(), scrolled, 'the dialog jumped from where its reader had scrolled to when it was drawn again');
+          await host.evaluate(`document.querySelector('.dialog-body').scrollTop = 0`);
           await assertTonightFits(host, screen);
           await shot(host, `tonight-unfolded-${kind.name}-${screen}`);
 
@@ -6266,91 +6297,135 @@ const CHECKS: Check[] = [
   [
     'when the night ends its recap opens once on every page at the table, waits for whoever is typing or has a dialog open rather than take either from them, and is not shown again by later news or to a page opened afterwards',
     async (rig) => {
-      const table = rig.table([{ name: 'Quigs', stack: 1000 }, { name: 'Stu', stack: 1000 }, { name: 'Big Al', stack: 1000 }], { allowRunItTwice: false });
-      table.join('Zed');
-      table.deal({ button: 0, holes: { 0: 'As Ah', 1: 'Ks Kh', 2: 'Qs Qh' }, board: '2c 7d 9h Jc 3s' });
-      table.act('Quigs', { type: 'pause' });
-      table.play(passive, (view) => view.hand === null);
-
+      const table = nightOfOneHand(rig);
       const idle = await table.open('Quigs', 'desktop');
-      const watching = await table.open('Zed', 'phone');
+      const looking = await table.open('Zed', 'phone');
       const typing = await table.open('Stu', 'desktop');
       const reading = await table.open('Big Al', 'phone');
-      const recap = '.dialog[aria-label="Tonight"] .tonight-crown';
-      const shown = (page: Page) => page.locator('.dialog').count();
 
-      // One is halfway through a chat message, another is reading the ledger
+      // One is halfway through a chat message, another is reading the ledger, and one who only watches has the night so far open already
       await typing.click('#chat-input');
       await typing.keyboard.type('gg every');
       await reading.tap('[data-action="menu"]');
       await reading.tap('.menu [data-action="ledger"]');
       await reading.waitForSelector('.ledger');
+      await openTonight(looking, 'phone');
 
       table.act('Quigs', { type: 'endNight' });
 
-      // Whoever is doing nothing gets it at once, a watcher like a player
-      await idle.waitForSelector(recap);
-      await watching.waitForSelector(recap);
+      // Whoever is doing nothing gets it at once
+      await idle.waitForSelector(RECAP);
       assert.equal(await text(idle, '.tonight-crown strong'), 'Big Al and Stu');
       await shot(idle, 'tonight-opens-by-itself');
 
+      // Open already, it gains the crown where it is, and closing it does not bring it back
+      await looking.waitForSelector(RECAP);
+      await looking.tap('.dialog [data-action="close"]');
+      await assertNoDialogComes(looking, 'the recap came back when the viewer closed the one they had open');
+
       // The one typing keeps the keyboard and every letter, and gets it when the message is sent
       await typing.waitForSelector('.message.night-over');
-      await typing.waitForTimeout(300);
-      assert.equal(await shown(typing), 0, 'the recap opened over someone who was typing');
+      await assertNoDialogComes(typing, 'the recap opened over someone who was typing');
       assert.deepEqual(await typing.evaluate('[document.activeElement.id, document.activeElement.value]'), ['chat-input', 'gg every']);
       await typing.keyboard.type('one');
       await typing.keyboard.press('Enter');
-      await typing.waitForSelector(recap);
+      await typing.waitForSelector(RECAP);
       assert.equal(table.view('Quigs').feed.at(-1)!.text, 'gg everyone');
 
       // The one reading keeps the ledger, and gets it on closing that
       await reading.waitForSelector('.message.night-over', { state: 'attached' });
-      await reading.waitForTimeout(300);
-      assert.equal(await text(reading, '.dialog h2'), 'Ledger', 'the recap took the place of a dialog someone had open');
+      await assertNoDialogComes(reading, 'the recap took the place of a dialog someone had open', 'Ledger');
       await reading.tap('.dialog [data-action="close"]');
-      await reading.waitForSelector(recap);
+      await reading.waitForSelector(RECAP);
 
       // Closed, it stays closed whatever the table says next
       await idle.click('.dialog [data-action="close"]');
-      await watching.tap('.dialog [data-action="close"]');
       table.act('Zed', { type: 'chat', text: 'good game' });
       await idle.waitForSelector('.feed li:has-text("good game")');
-      await watching.waitForSelector('.feed li:has-text("good game")', { state: 'attached' });
-      await idle.waitForTimeout(300);
-      assert.deepEqual([await shown(idle), await shown(watching)], [0, 0], 'the recap came up a second time');
+      await looking.waitForSelector('.feed li:has-text("good game")', { state: 'attached' });
+      await assertNoDialogComes(idle, 'the recap came up a second time');
+      await assertNoDialogComes(looking, 'the recap came up a second time');
 
       // A page opened after the end finds the night over and is shown nothing unasked; the recap is in the menu
       const late = await table.open('Big Al', 'phone');
       await late.waitForSelector('.message.night-over');
       table.act('Zed', { type: 'chat', text: 'same time next week' });
       await late.waitForSelector('.feed li:has-text("same time next week")', { state: 'attached' });
-      await late.waitForTimeout(300);
-      assert.equal(await shown(late), 0, 'a page opened after the night ended was shown the recap unasked');
+      await assertNoDialogComes(late, 'a page opened after the night ended was shown the recap unasked');
       await openTonight(late, 'phone');
       assert.equal(await text(late, '.tonight-crown strong'), 'Big Al and Stu');
 
-      // Played on before someone was free to look, the night is no longer over and its recap never comes
-      await late.tap('.dialog [data-action="close"]');
+      for (const page of [idle, looking, typing, reading, late]) {
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'a recap that had to wait keeps out of the way of what the viewer does next: it stays off a seat being picked, comes when a message is given up, and never comes once the night has been started again',
+    async (rig) => {
+      const table = nightOfOneHand(rig);
+      const host = await table.open('Quigs', 'desktop');
+      const typing = await table.open('Stu', 'desktop');
+
+      // The answer to starting play again takes its time, as it does from Apps Script
+      await host.route('**/api', async (route) => {
+        if ((JSON.parse(route.request().postData() ?? '{}') as { command?: Command }).command?.type === 'playOn') {
+          await new Promise((resolve) => setTimeout(resolve, 3 * OFFER_TICK_MS));
+        }
+
+        await route.continue();
+      });
+
+      // The host is in the Players dialog and a player is typing when the night ends
+      await host.click('[data-action="menu"]');
+      await host.click('.menu [data-action="players"]');
+      await host.waitForSelector('.dialog li:has-text("Stu") [data-action="move"]');
+      await typing.click('#chat-input');
+      await typing.keyboard.type('gg');
+      table.act('Quigs', { type: 'endNight' });
+      await host.waitForSelector('.message.night-over', { state: 'attached' });
+      await typing.waitForSelector('.message.night-over');
+
+      // Moving a player closes the dialog to pick a seat on the felt, which the recap leaves alone until the pick is over
+      await host.click('.dialog li:has-text("Stu") [data-action="move"]');
+      await host.waitForSelector('.banner.move-prompt');
+      await assertNoDialogComes(host, 'the recap opened over a seat being picked');
+      await host.click('[data-action="cancel-move"]');
+      await host.waitForSelector(RECAP);
+
+      // A message given up, with nothing sent and no news from the table, frees its player for it too
+      await assertNoDialogComes(typing, 'the recap opened over someone who was typing');
+      await typing.keyboard.press('Backspace');
+      await typing.keyboard.press('Backspace');
+      await typing.waitForSelector(RECAP);
+
+      await host.click('.dialog [data-action="close"]');
+      await typing.click('.dialog [data-action="close"]');
       table.act('Quigs', { type: 'playOn' });
       table.act('Quigs', { type: 'pause' });
+      await host.waitForSelector('.message.night-over', { state: 'detached' });
       await typing.waitForSelector('.message.night-over', { state: 'detached' });
-      await typing.click('.dialog [data-action="close"]');
+
+      // The night ends again under the host's open menu and a half-typed message, and the host plays on from that menu
+      await host.click('[data-action="menu"]');
+      await host.waitForSelector('.menu');
       await typing.click('#chat-input');
       await typing.keyboard.type('one more');
       rig.advance(1000);
       table.act('Quigs', { type: 'endNight' });
       await typing.waitForSelector('.message.night-over');
-      table.act('Quigs', { type: 'playOn' });
+      await host.click('.menu [data-action="keep-playing"]');
+      await assertNoDialogComes(host, 'the recap opened on the host while the table had yet to answer that play goes on');
+      await host.waitForSelector('.message.night-over', { state: 'detached' });
+      await assertNoDialogComes(host, 'the recap of a night that was started again came up after all');
+
       await typing.waitForSelector('.message.night-over', { state: 'detached' });
       await typing.keyboard.press('Enter');
       await typing.waitForSelector('.feed li:has-text("one more")');
-      await typing.waitForTimeout(300);
-      assert.equal(await shown(typing), 0, 'the recap of a night that was started again came up after all');
+      await assertNoDialogComes(typing, 'the recap of a night that was started again came up after all');
 
-      for (const page of [idle, watching, typing, reading, late]) {
-        await page.context().close();
-      }
+      await host.context().close();
+      await typing.context().close();
     },
   ],
   [

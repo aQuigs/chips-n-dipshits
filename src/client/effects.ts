@@ -15,8 +15,9 @@ import type { TableChange } from './tableChange.ts';
 export interface DialogOffers {
   /**
    * Opens the dialog without taking anything from the viewer: at once when they are doing nothing
-   * else, and otherwise once they have closed the dialog they had open or sent what they were typing.
-   * `still` is asked at that moment, and a dialog whose time has passed stays shut.
+   * else, and otherwise once they have closed the dialog they had open, placed the player they were
+   * moving, or sent or left what they were typing. `still` is asked at that moment, and a dialog
+   * whose time has passed stays shut. One that is open already is left as it is.
    */
   offer(dialog: Dialog, still: (view: TableView) => boolean): void;
 }

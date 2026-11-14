@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { addMember, countHand, countRebuy, handFacts, ledgerOf, newTonight, nightIsOver, SEAT_COUNT, tonightView } from '../src/engine/index.ts';
+import { addMember, evaluateHand, handFacts, ledgerOf, newTonight, nightIsOver, SEAT_COUNT, tonightView } from '../src/engine/index.ts';
 import type { Effect, HandRecord, PlayerTonight, TableState, Tonight, TonightView } from '../src/engine/index.ts';
 import { restoreState } from '../src/server/store.ts';
 import { ACES, BOARD, cards, checkAround, handRecords, KINGS, QUEENS, seededRng, TestTable } from './helpers.ts';
@@ -336,7 +336,8 @@ test('a table saved before the numbers were kept starts counting from now, and s
 
 /**
  * The night's numbers made again from nothing but what left the table for the record, its finished
- * hands and its ledger, one effect at a time.
+ * hands and its ledger, one effect at a time. Counted here from the records as they are saved, by the
+ * rules as the README gives them, and by none of the code that keeps the numbers.
  */
 class Recount {
   readonly tonight: Tonight = newTonight();
@@ -350,10 +351,10 @@ class Recount {
 
     for (const effect of fresh) {
       if (effect.type === 'hand') {
-        countHand(this.tonight, handFacts(effect.record));
+        this.count(effect.record);
       } else if (effect.type === 'ledger' && effect.entry.kind === 'buy-in') {
         if (this.bought.has(effect.entry.playerId)) {
-          countRebuy(this.tonight, effect.entry.playerId);
+          this.of(effect.entry.playerId).rebuys += 1;
         }
 
         this.bought.add(effect.entry.playerId);
@@ -361,6 +362,29 @@ class Recount {
     }
 
     return handRecords(fresh);
+  }
+
+  private of(playerId: string): PlayerTonight {
+    return (this.tonight.players[playerId] ??= { ...NOTHING });
+  }
+
+  private count(record: HandRecord): void {
+    this.tonight.hands += 1;
+
+    for (const player of record.players) {
+      const numbers = this.of(player.playerId);
+      const took = record.result.pots.flatMap((pot) => pot.awards).reduce((sum, award) => sum + (award.seat === player.seat ? award.amount : 0), 0);
+
+      numbers.hands += 1;
+      numbers.won += took > 0 ? 1 : 0;
+      numbers.biggest = Math.max(numbers.biggest, took);
+
+      for (const shown of record.result.hands.filter((hand) => hand.seat === player.seat)) {
+        if (numbers.best === null || evaluateHand(shown.cards).score > evaluateHand(numbers.best).score) {
+          numbers.best = shown.cards;
+        }
+      }
+    }
   }
 }
 
@@ -379,6 +403,14 @@ function assertFactsAgreeWithEvents(record: HandRecord): void {
   assert.ok(facts.players.every((p) => p.putIn >= 0 && p.net === p.tookOut - p.putIn + p.bounty), `${where}: a player's chips do not add up`);
   assert.ok(facts.players.every((p) => p.busted === p.bustedBy.length > 0 && !p.bustedBy.includes(p.seat)), `${where}: a bust with nobody to thank, or thanks with no bust`);
   assert.ok(facts.players.every((p) => p.shown.length === 0 || (!p.folded && p.cards !== null && facts.ended === 'showdown')), `${where}: a hand shown down by someone who was not there to show it`);
+
+  for (const player of facts.players) {
+    const gained = (seat: number) => facts.players.find((p) => p.seat === seat)!;
+
+    assert.ok(player.bustedBy.every((seat) => gained(seat).tookOut > 0 || gained(seat).bounty > 0), `${where}: a bust credited to someone who took nothing`);
+    assert.ok(player.shown.every((hand) => hand.cards.every((card) => player.cards!.includes(card) || record.boards[hand.board]!.includes(card))), `${where}: a hand shown that its cards and its board do not make`);
+    assert.ok(player.wins.every((win) => win.between >= 1 && win.amount > 0) && player.wins.reduce((sum, win) => sum + win.amount, 0) === player.tookOut, `${where}: the pots a player was paid from do not come to what they took`);
+  }
   assert.equal(facts.potInBigBlinds, facts.pot / record.bigBlind);
 
   if (record.events.length === 0) {

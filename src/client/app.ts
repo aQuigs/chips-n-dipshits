@@ -101,8 +101,14 @@ export class App {
   private dialog: Dialog | null = null;
   private dialogOpens = 0;
 
+  /** The opening that the dialog on screen was drawn for. */
+  private dialogDrawn = 0;
+
   /** A dialog the page means to open by itself, waiting for the viewer to be free for it. */
   private offered: { dialog: Dialog; still(view: TableView): boolean } | null = null;
+
+  /** How many commands are on their way to the table with no answer yet. */
+  private sending = 0;
 
   /**
    * A member the address names whom this browser hasn't taken up as its own. The address may be the
@@ -164,7 +170,10 @@ export class App {
 
   private begin(): void {
     this.applyTheme(this.prefs.get('theme'));
-    setInterval(() => this.tickCountdowns(), COUNTDOWN_TICK_MS);
+    setInterval(() => {
+      this.tickCountdowns();
+      this.showOffered();
+    }, COUNTDOWN_TICK_MS);
 
     document.addEventListener('keydown', (event) => {
       if (event.key !== 'Escape' || this.server.outdated) {
@@ -489,7 +498,13 @@ export class App {
   }
 
   private async send(command: Command): Promise<SendOutcome> {
-    return (await this.table?.send(command)) ?? 'refused';
+    this.sending += 1;
+
+    try {
+      return (await this.table?.send(command)) ?? 'refused';
+    } finally {
+      this.sending -= 1;
+    }
   }
 
   /** The server no longer knows this browser at the table, so start over from the join screen or the lobby. */
@@ -527,9 +542,6 @@ export class App {
       screen.effects.run(change);
       screen.suspense.played();
     }
-
-    // Whoever was typing when a dialog was offered may have sent it with this view
-    this.showOffered();
   }
 
   /** The cards of a runout are up: the table is drawn whole, and what was held back is told. */
@@ -724,26 +736,31 @@ export class App {
   private closeDialog(): void {
     this.dialog = null;
     this.drawDialog();
-    this.showOffered();
   }
 
   private offerDialog(dialog: Dialog, still: (view: TableView) => boolean): void {
+    // Open already, it is in front of them, and offering it would bring it back when they close it
+    if (this.dialog?.kind === dialog.kind) {
+      return;
+    }
+
     this.offered = { dialog, still };
     this.showOffered();
   }
 
   /**
    * Opens the dialog that is waiting, unless that would take something from the viewer: the dialog
-   * they have open, the seat they are picking for someone, or the keyboard from under what they are
-   * typing. It is tried again when a dialog closes and with every view, so it waits about as long as
-   * they are busy.
+   * they have open, the seat they are picking for someone, the keyboard from under what they are
+   * typing, or the screen while the table has yet to answer what they just asked of it, which may be
+   * what makes the dialog moot. Tried a few times a second, so it waits as long as they are busy and
+   * no longer.
    */
   private showOffered(): void {
     const offered = this.offered;
     const field = document.activeElement;
     const typing = field instanceof HTMLInputElement && field.type === 'text' && field.value !== '';
 
-    if (!offered || !this.view || this.dialog || typing || this.screen?.seatMoves.active || this.server.outdated) {
+    if (!offered || !this.view || this.dialog || typing || this.sending > 0 || this.screen?.seatMoves.active || this.server.outdated) {
       return;
     }
 
@@ -783,7 +800,15 @@ export class App {
 
     // Opening a dialog always draws it; after that only a change in what it shows does
     const handlers = this.dialogHandlers();
-    screen.overlay.draw([this.dialogOpens, dialogShows(dialog, view, handlers)], () => dialogEl(dialog, view, handlers));
+    const body = () => screen.overlay.element.querySelector('.dialog-body');
+    const scrolled = this.dialogDrawn === this.dialogOpens ? (body()?.scrollTop ?? 0) : 0;
+
+    // Drawn again for what changed at the table, a dialog stays where its reader had scrolled to
+    if (screen.overlay.draw([this.dialogOpens, dialogShows(dialog, view, handlers)], () => dialogEl(dialog, view, handlers)) && scrolled > 0) {
+      body()!.scrollTop = scrolled;
+    }
+
+    this.dialogDrawn = this.dialogOpens;
     screen.modal.update(true);
   }
 

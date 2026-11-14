@@ -264,6 +264,34 @@ test('won with seven-deuce: the cards are a fact when the bounty turned them up,
   assert.equal(at(factsOf(quiet), 0).cards, null);
 });
 
+test('a player who wins a side pot and loses it to the bounty is busted by whoever collected, and by nobody else', () => {
+  const t = new TestTable({ stacks: [80, 50, 1000], config: { smallBlind: 5, bigBlind: 10, sevenDeuceBounty: 100, allowRunItTwice: false } });
+  t.deal({ button: 0, holes: { 0: KINGS, 1: '7h 2s', 2: QUEENS }, board: '7c 2d 9h Jc 3s' });
+  t.raise(0, 80);
+  t.call(1);
+  t.call(2);
+
+  const facts = factsOf(t);
+
+  // Seven-deuce takes the main pot with two pair; the kings win the 60 on the side and hand all of it over for the bounty
+  assert.deepEqual(facts.players.map((p) => [p.putIn, p.tookOut, p.bounty, p.net]), [[80, 60, -60, -80], [50, 150, 160, 260], [80, 0, -100, -180]]);
+  assert.deepEqual(facts.players.map((p) => [p.busted, p.bustedBy]), [[true, [1]], [false, []], [false, []]], 'the kings paid themselves the side pot, which busts nobody');
+});
+
+test('a tie over a single chip pays one of the players, and that is how it is told: one pot won, by one', () => {
+  // Seat 0 has one chip to put in, so the main pot is three, and its second board plays for one
+  const t = doubleBoard([1, 1000, 1000], { 0: 'Ad Ac', 1: 'Kd Kc', 2: '8c 6d' }, 'As Ks Qs Js Ts');
+  t.check(1);
+  t.check(2);
+  checkAround(t, [1, 2], 2);
+
+  const facts = factsOf(t);
+  const onSecond = facts.players.flatMap((p) => p.wins.filter((win) => win.pot === 0 && win.board === 1));
+
+  assert.deepEqual(onSecond, [{ pot: 0, board: 1, amount: 1, between: 1 }]);
+  assert.equal(facts.players.filter((p) => p.shown.some((hand) => hand.board === 1 && hand.name === 'Royal flush')).length, 3, 'all three played the board');
+});
+
 test('a hand mucked at the showdown is not folded and not shown: its cards are no fact at all', () => {
   const t = new TestTable({ stacks: [1000, 1000, 1000] });
   t.deal({ button: 0, holes: { 0: ACES, 1: QUEENS, 2: KINGS }, board: BOARD });

@@ -289,6 +289,22 @@ test('sounds asked for together are spaced out, and one that would wait too long
   assert.equal(ears.played.at(-1)!.delay, SOUND_GAP_MS / 2 / 1000);
 });
 
+test('a throw’s whoosh plays the moment it is thrown, outside the queue: every sound of the game in the same batch plays just where it would without it', () => {
+  const game: SoundName[] = ['deal', 'street', 'chips', 'knock'];
+  const heard = (sounds: SoundName[]) => {
+    const ears = new Ears();
+    sounds.forEach((sound) => ears.sounds.play(sound));
+
+    return ears.played.map(({ sound, delay }) => `${sound} ${delay}`);
+  };
+
+  const quiet = heard(game);
+  const thrown = heard(['deal', 'whoosh', 'street', 'whoosh', 'whoosh', 'chips', 'knock', 'whoosh']);
+
+  assert.deepEqual(thrown.filter((played) => !played.startsWith('whoosh')), quiet);
+  assert.deepEqual(thrown.filter((played) => played.startsWith('whoosh')), ['whoosh 0', 'whoosh 0', 'whoosh 0', 'whoosh 0']);
+});
+
 test('the chime for the viewer’s turn waits behind other sounds, however many, and is never dropped', () => {
   const ears = new Ears();
 

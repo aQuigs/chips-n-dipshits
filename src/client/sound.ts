@@ -32,6 +32,13 @@ export const MOST_WAIT_MS = 400;
 // What calls the player back to the table: it plays while the page is out of sight, and waits behind other sounds rather than being dropped
 const CALLS_BACK: ReadonlySet<SoundName> = new Set(['turn']);
 
+/**
+ * Sounds that are decoration beside the game, such as a throw's whoosh, as `ASIDE_MOVES` are beside its
+ * motion: each plays the moment it is asked for, outside the queue, so it never pushes a deal's or a
+ * street's sound a gap later, nor is dropped for waiting behind them.
+ */
+export const ASIDE_SOUNDS: ReadonlySet<SoundName> = new Set<SoundName>(['whoosh']);
+
 // Once the volume slider rests this long, a sample plays at the new volume
 const SAMPLE_AFTER_MS = 200;
 
@@ -67,6 +74,11 @@ export class Sounds {
 
     const now = this.maker.now();
     if (now === null) {
+      return;
+    }
+
+    if (ASIDE_SOUNDS.has(sound)) {
+      this.maker.play(sound, volume, now);
       return;
     }
 

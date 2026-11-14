@@ -327,8 +327,13 @@ test('a table saved before the last hands could be called has none called, and i
 
 test('a table saved when running it more than once was a yes or no to twice: on is up to twice, off is once only, and each yes is a pick of twice', () => {
   for (const file of FILES) {
-    const raw = JSON.parse(readFileSync(new URL(file, FOLDER), 'utf8')) as { config: { allowRunItTwice?: boolean }; hand: { players: { ritVote: boolean | null }[] } | null };
+    const raw = JSON.parse(readFileSync(new URL(file, FOLDER), 'utf8')) as { config: { allowRunItTwice?: boolean; maxRuns?: number }; hand: { players: { ritVote: boolean | null }[] } | null };
     const state = load(file);
+
+    // Saved once the number of runs was a number: nothing to read again
+    if (raw.config.maxRuns !== undefined) {
+      continue;
+    }
 
     assert.equal(state.config.maxRuns, raw.config.allowRunItTwice === false ? 1 : 2, file);
     assert.ok(!('allowRunItTwice' in state.config), file);

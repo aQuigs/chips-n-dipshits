@@ -145,7 +145,7 @@ class Stage {
   readonly seatMarks: SeatMarks = { show: (mark, after) => void this.marks.push({ mark, after }), follow: () => undefined };
   readonly motion: TableMotion = { play: (moves) => void this.moved.push(...moves), cancel: () => undefined, idle: () => Promise.resolve(), seen: () => this.moving };
   private soundClock = 0;
-  readonly sounds = new Sounds({ play: (sound) => void this.heard.push(sound) }, this.prefs, { now: () => (this.soundClock += 60_000), inView: () => true });
+  readonly sounds = new Sounds({ now: () => (this.soundClock += 60), play: (sound) => void this.heard.push(sound) }, this.prefs, { inView: () => true });
 
   show(change: TableChange): void {
     showReactions(reactionsShown(change, sendersShown(this.prefs, change.view.you.id)), { marks: this.seatMarks, motion: this.motion, sounds: this.sounds });
@@ -156,7 +156,7 @@ class Stage {
 function bringing(t: TestTable, reactions: Reaction[]): TableChange {
   const view = seenBy(t);
 
-  return { before: view, view, feed: [], events: [], current: true, wentBack: false, nightEnded: false, earned: [], reactions, now: t.now };
+  return { before: view, view, feed: [], events: [], current: true, wentBack: false, nightEnded: false, earned: [], tookHighHand: false, reactions, now: t.now };
 }
 
 const where = (shown: ReactionShown[]) => shown.map(({ kind, seat, from, label }) => `${kind.id} ${from ?? '-'}>${seat}: ${label}`);

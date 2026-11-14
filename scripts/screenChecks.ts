@@ -1889,7 +1889,7 @@ const CHECKS: Check[] = [
   [
     'throws in the air hold up nothing of the game: with two stopped mid-flight, the river held face down turns, the result comes and the table comes to rest as on a quiet table',
     async (rig) => {
-      const table = rig.table(['Quigs', 'Stu', 'Pam', 'Al'].map((name) => ({ name, stack: 10_000 })), { allowRunItTwice: false });
+      const table = rig.table(['Quigs', 'Stu', 'Pam', 'Al'].map((name) => ({ name, stack: 10_000 })), { maxRuns: 1 });
       table.deal({ button: 0, holes: { 0: 'Ah Ad', 1: 'Kh Kd', 2: '8c 3d', 3: '9c 4d' }, board: '2c 7d 9h Jc Ks' });
       table.play((view, name) => (name === 'Pam' || name === 'Al' ? { type: 'fold' } : allIn(view)), (view) => view.hand!.stage !== 'betting');
       table.play(() => null, (view) => view.hand!.boards[0]!.length === 4);

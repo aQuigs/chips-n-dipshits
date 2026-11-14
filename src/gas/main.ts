@@ -1,10 +1,14 @@
+import { BuildGate } from '../server/build.ts';
 import { ByteRng } from '../server/byteRng.ts';
 import { PokerService } from '../server/service.ts';
-import type { ApiError } from '../server/api.ts';
+import type { ApiError, Built } from '../server/api.ts';
 import { SheetStore } from './sheetStore.ts';
 
 // Set by the build when the deployed address is known; otherwise the script asks Apps Script for it
 declare const WEB_APP_URL: string;
+
+// Written in by the build: the id the page of the same build carries
+declare const BUILD_ID: string;
 
 const APP_TITLE = "Chips n' Dipshits";
 
@@ -32,19 +36,22 @@ function uuidBytes(): number[] {
   return bytes;
 }
 
-let serviceForThisRun: PokerService | null = null;
+let serviceForThisRun: BuildGate | null = null;
 
-function service(): PokerService {
-  serviceForThisRun ??= new PokerService({
-    store: new SheetStore({
-      spreadsheet: () => SpreadsheetApp.getActiveSpreadsheet(),
-      cache: CacheService.getScriptCache(),
-      lock: LockService.getScriptLock(),
-      flush: () => SpreadsheetApp.flush(),
+function service(): BuildGate {
+  serviceForThisRun ??= new BuildGate(
+    new PokerService({
+      store: new SheetStore({
+        spreadsheet: () => SpreadsheetApp.getActiveSpreadsheet(),
+        cache: CacheService.getScriptCache(),
+        lock: LockService.getScriptLock(),
+        flush: () => SpreadsheetApp.flush(),
+      }),
+      clock: { now: () => Date.now() },
+      rng: new ByteRng(uuidBytes),
     }),
-    clock: { now: () => Date.now() },
-    rng: new ByteRng(uuidBytes),
-  });
+    BUILD_ID,
+  );
 
   return serviceForThisRun;
 }
@@ -112,7 +119,7 @@ export function api(body: string): string {
   } catch (error) {
     console.error(error);
 
-    const failure: ApiError = { ok: false, code: 'internal', error: 'Something went wrong on the server, try again' };
+    const failure: ApiError & Built = { ok: false, code: 'internal', error: 'Something went wrong on the server, try again', build: BUILD_ID };
 
     return JSON.stringify(failure);
   }

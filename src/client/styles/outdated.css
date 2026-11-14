@@ -1,0 +1,26 @@
+/* ---- The notice that the game was updated ---- */
+
+/* Over everything, the toast included: nothing under it can be used again */
+.outdated {
+  z-index: 40;
+}
+
+.outdated .dialog {
+  grid-template-rows: none;
+  gap: 12px;
+  justify-items: center;
+  padding: 24px 20px;
+  text-align: center;
+}
+
+.outdated p {
+  color: var(--muted);
+}
+
+/* The way out of another site's frame is a link, which has to look and sit like the button it is */
+.outdated .btn {
+  display: inline-grid;
+  place-items: center;
+  min-width: 160px;
+  text-decoration: none;
+}

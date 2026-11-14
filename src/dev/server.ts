@@ -3,6 +3,7 @@ import { createServer } from 'node:http';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
+import { BuildGate, UNSTAMPED_BUILD } from '../server/build.ts';
 import { ByteRng } from '../server/byteRng.ts';
 import { MemoryStore } from '../server/memoryStore.ts';
 import { PokerService } from '../server/service.ts';
@@ -23,6 +24,11 @@ export interface DevServerOptions {
 
 export interface DevServer {
   url: string;
+  /**
+   * From here on the server is another build of the game, as the deployed one is after a deploy: its
+   * answers say so, and the page it serves is that build's. Pages already open are left as they are.
+   */
+  deploy(build: string): void;
   close(): Promise<void>;
 }
 
@@ -56,13 +62,14 @@ function sleep(ms: number): Promise<void> {
  * instead of a Sheet. For trying changes and for the browser tests.
  */
 export async function startDevServer(options: DevServerOptions): Promise<DevServer> {
-  const service =
+  const game =
     options.service ??
     new PokerService({
       store: new MemoryStore(),
       clock: { now: () => Date.now() },
       rng: new ByteRng(() => [...randomBytes(RANDOM_BATCH_BYTES)]),
     });
+  let service = new BuildGate(game, UNSTAMPED_BUILD);
   let closing = false;
 
   /** Holds a poll open until there is news, like the deployed script does. */
@@ -88,7 +95,8 @@ export async function startDevServer(options: DevServerOptions): Promise<DevServ
     const path = new URL(request.url ?? '/', 'http://localhost').pathname;
 
     if (request.method === 'GET' && (path === '/' || path === '/index.html')) {
-      respond(response, 200, 'text/html', await options.page());
+      // The page is built unstamped, and says it is whichever build the server is when it is served
+      respond(response, 200, 'text/html', (await options.page()).replaceAll(UNSTAMPED_BUILD, () => service.build));
       return;
     }
 
@@ -108,7 +116,7 @@ export async function startDevServer(options: DevServerOptions): Promise<DevServ
       console.error(error);
 
       if (!response.headersSent) {
-        respond(response, 500, 'application/json', JSON.stringify({ ok: false, code: 'internal', error: 'Something went wrong on the server, try again' }));
+        respond(response, 500, 'application/json', JSON.stringify({ ok: false, code: 'internal', error: 'Something went wrong on the server, try again', build: service.build }));
       }
     });
   });
@@ -119,6 +127,9 @@ export async function startDevServer(options: DevServerOptions): Promise<DevServ
 
   return {
     url: `http://127.0.0.1:${port}/`,
+    deploy: (build) => {
+      service = new BuildGate(game, build);
+    },
     close: () => {
       closing = true;
       server.closeAllConnections();

@@ -28,4 +28,5 @@ export const STYLESHEETS = [
   'hotkeys.css',
   'seat-moves.css',
   'hand-hint.css',
+  'outdated.css',
 ];

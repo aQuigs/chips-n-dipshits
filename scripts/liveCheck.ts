@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import type { Browser, FrameLocator, Page } from 'playwright';
 
+import { buildOf } from './bundle.ts';
 import { readDeployment } from './deployment.ts';
 
 const OUT = fileURLToPath(new URL('../screenshots/', import.meta.url));
@@ -60,8 +61,13 @@ try {
 
   await timed('front page', () => host.app.locator('#host-name').waitFor());
 
+  const built = await readFile(BUILT_PAGE, 'utf8');
   const served = await host.app.locator('script').last().evaluate((script) => script.textContent ?? '');
-  assert.equal(served, largestScript(await readFile(BUILT_PAGE, 'utf8')), "the script Apps Script serves is not the one in dist/gas; build and deploy again, or Apps Script has changed it on the way");
+  assert.equal(served, largestScript(built), "the script Apps Script serves is not the one in dist/gas; build and deploy again, or Apps Script has changed it on the way");
+
+  // A page that took itself for another build than the script would stop at its first request and ask to be reloaded
+  const servedBuild = await host.app.locator('script').last().evaluate('window.CND_BUILD');
+  assert.equal(servedBuild, buildOf(built), 'the page Apps Script serves does not say it is the build in dist/gas');
 
   await host.app.locator('#host-name').fill('Host check');
   await timed('create a table', async () => {

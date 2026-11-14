@@ -217,6 +217,11 @@ export class Rig {
     return this.service.handle(request);
   }
 
+  /** Updates the game under the pages that are open, as a deploy does: they are now pages of another build. */
+  deploy(build: string): void {
+    this.server.deploy(build);
+  }
+
   /** A browser page on a screen of the given size, with nothing in it yet. `who` names it when it throws. */
   async page(screen: ScreenName, who: string): Promise<Page> {
     const touch = screen !== 'desktop';

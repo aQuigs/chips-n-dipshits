@@ -9650,7 +9650,7 @@ const CHECKS: Check[] = [
       await page.waitForSelector('.stage .table');
       await page.waitForTimeout(500);
       assert.equal(rig.gifs.length, 0, 'a picture was fetched for a closed chat');
-      assert.equal(await text(page, '.feed-toggle .latest'), 'Pam: https://i.imgur.com/named.gif#@Quigs');
+      assert.equal(await text(page, '.feed-toggle .latest'), 'Pam: https://i.imgur.com/named.gif#@Quigs', 'a GIF address that names someone is its words');
       assert.equal(await page.locator('.feed-toggle img').count(), 0, 'the bar shows a picture');
 
       await page.tap('.feed-toggle');
@@ -9674,6 +9674,15 @@ const CHECKS: Check[] = [
       await assertNoSidewaysScroll(page);
       await page.locator('.entries').evaluate((list) => (list.scrollTop = 0));
       await shot(page, 'gifs-open-chat-smallPhone');
+
+      // Newest, a GIF is named in the bar for what it is, still with nothing fetched for the bar
+      const fetched = rig.gifs.length;
+      table.act('Pam', { type: 'chat', text: 'https://i.imgur.com/newest.gif' });
+      await page.waitForSelector('.feed-toggle .latest:text-is("Pam: GIF")');
+      await page.tap('.feed-toggle');
+      await page.waitForTimeout(300);
+      assert.equal(rig.gifs.length, fetched, 'the bar fetched a picture');
+      await shot(page, 'gifs-bar-smallPhone');
     },
   ],
   [
@@ -9690,9 +9699,9 @@ const CHECKS: Check[] = [
       await page.click('.dialog [data-action="close"]');
 
       table.act('Pam', { type: 'chat', text: 'https://giphy.com/gifs/funny-cat-abc123' });
-      table.act('Pam', { type: 'chat', text: 'after the GIF' });
-      await page.waitForSelector('.entries li:has-text("after the GIF")');
+      await page.waitForSelector('.entries li:has-text("funny-cat")');
       await page.waitForTimeout(500);
+      assert.equal(await page.textContent('.feed-toggle .latest'), 'Pam: https://giphy.com/gifs/funny-cat-abc123', 'with GIFs off the bar has the line as typed');
       assert.equal(rig.gifs.length, 0, 'a picture was fetched with GIFs switched off');
       assert.equal(await page.locator('.entries img').count(), 0);
       assert.ok((await texts(page, '.entries li')).includes('Pam: https://giphy.com/gifs/funny-cat-abc123'));
@@ -9704,6 +9713,7 @@ const CHECKS: Check[] = [
       await page.click('.dialog [data-action="close"]');
       await page.waitForSelector('.entries li[data-gif="shown"] img.gif');
       assert.deepEqual(rig.gifs.map((asked) => asked.url), ['https://media.giphy.com/media/abc123/giphy.gif']);
+      assert.equal(await page.textContent('.feed-toggle .latest'), 'Pam: GIF', 'with GIFs on the bar names the GIF');
       await shot(page, 'gifs-desktop');
     },
   ],

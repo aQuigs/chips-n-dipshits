@@ -28,8 +28,13 @@ export interface Feed {
   redraw(): void;
 }
 
-function latestText(entry: FeedEntry, deck: string): (string | HTMLElement)[] {
-  return entry.kind === 'chat' ? [`${entry.from}: ${entry.text}`] : cardText(entry.text, deck);
+/** The newest line as the bar under the table says it: in words alone, a GIF the viewer sees as one named for what it is. */
+function latestText(entry: FeedEntry, current: FeedLook): (string | HTMLElement)[] {
+  if (entry.kind !== 'chat') {
+    return cardText(entry.text, current.deck);
+  }
+
+  return [`${entry.from}: ${gifOf(entry, current.pictures) === null ? entry.text : 'GIF'}`];
 }
 
 /**
@@ -126,7 +131,7 @@ export function createFeed(onChat: (text: string) => void, look: () => FeedLook,
       newest -= 1;
     }
 
-    latest.replaceChildren(...(newest >= 0 ? latestText(had[newest]!, current.deck) : []));
+    latest.replaceChildren(...(newest >= 0 ? latestText(had[newest]!, current) : []));
   };
 
   /** Notes how `entries` are drawn now, and gives back those that show. */

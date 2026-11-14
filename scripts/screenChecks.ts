@@ -30,7 +30,7 @@ import { PUT_AWAY_AFTER_MS, PUT_AWAY_MESSAGE } from '../src/server/putAway.ts';
 import { contrast } from '../tests/colorVision.ts';
 import { boxes, Gate, overlap, Rig, RigTable, SCREENS, setStageHeight, squeezed, textBoxes } from './rig.ts';
 import type { Box, RigDeal, RigPlayer, ScreenName } from './rig.ts';
-import { answeredAfter, complaints, MOTION, movesSent, NOTICES, opsSent, ownComplaints, SPOTS, TITLES, toldOf } from './pageSpies.ts';
+import { answeredAfter, answeredTo, complaints, LISTEN, MOTION, movesSent, NOTICES, opsSent, ownComplaints, soundOf, SPOTS, TITLES, toastTold, toasts, toldOf } from './pageSpies.ts';
 import type { Flight, Spots } from './pageSpies.ts';
 import { STAND_IN_HOST } from './standInHost.ts';
 import { runChecks } from './checkRunner.ts';
@@ -95,47 +95,6 @@ const pressOn = (page: Page, screen: ScreenName) => (selector: string) => (scree
 
 const text = async (page: Page, selector: string) => ((await page.locator(selector).first().textContent()) ?? '').trim();
 
-// Run in the page: writes down each sound it plays, since a check cannot listen. A sound starts with its
-// own gain going to the speakers, at the volume it is played at, and then the notes and noise it is made of.
-// A headless browser allows sound without a touch, so the check holds the page to the rule itself
-const LISTEN = `(() => {
-  window.played = [];
-  window.contexts = [];
-
-  // Each audio context, and whether the visitor's gesture was under way when it was set up, as a browser insists
-  const Audio = AudioContext;
-  window.AudioContext = class extends Audio {
-    constructor(...args) {
-      super(...args);
-      window.contexts.push({ audio: this, inGesture: navigator.userActivation.isActive });
-    }
-  };
-
-  const connect = AudioNode.prototype.connect;
-  AudioNode.prototype.connect = function (target, ...rest) {
-    if (target instanceof AudioDestinationNode) {
-      window.played.push({ gain: this.gain.value, voices: [], starts: [], frame: window.frame });
-    }
-
-    return connect.call(this, target, ...rest);
-  };
-
-  for (const kind of [OscillatorNode, AudioBufferSourceNode]) {
-    const start = kind.prototype.start;
-    kind.prototype.start = function (...args) {
-      window.played.at(-1).voices.push(this instanceof OscillatorNode ? 'tone ' + this.frequency.value : 'noise');
-      window.played.at(-1).starts.push(args[0] ?? this.context.currentTime);
-
-      return start.apply(this, args);
-    };
-  }
-})()`;
-
-const voicesOf = (voices: string[]) => [...voices].sort().join(', ');
-
-const SOUND_BY_VOICES = new Map(Object.entries(RECIPES).map(([sound, voices]) => [voicesOf(voices.map((voice) => ('tone' in voice ? `tone ${voice.tone}` : 'noise'))), sound]));
-assert.equal(SOUND_BY_VOICES.size, Object.keys(RECIPES).length, 'two sounds are made of the same notes, so a check cannot tell them apart');
-
 /** What the page has played since `from`, each sound by name, at the volume it was played at. */
 async function played(page: Page, from = 0): Promise<{ sound: string; gain: number }[]> {
   const sounds = (await page.evaluate('window.played')) as { gain: number; voices: string[] }[];
@@ -143,7 +102,7 @@ async function played(page: Page, from = 0): Promise<{ sound: string; gain: numb
   // The page keeps a gain to single precision
   const rounded = (gain: number) => Math.round(gain * 1000) / 1000;
 
-  return sounds.slice(from).map(({ gain, voices }) => ({ sound: SOUND_BY_VOICES.get(voicesOf(voices)) ?? `something else: ${voices.join(', ')}`, gain: rounded(gain) }));
+  return sounds.slice(from).map(({ gain, voices }) => ({ sound: soundOf(voices), gain: rounded(gain) }));
 }
 
 const playedNames = async (page: Page, from = 0) => (await played(page, from)).map((sound) => sound.sound);
@@ -747,9 +706,6 @@ async function caughtUp(page: Page, view: TableView): Promise<void> {
   ]) === ${JSON.stringify(JSON.stringify(wanted))}`);
 }
 
-// Longer than a runout's step and the sweat's room together: on a page whose clock ran on, the river would come too late to sweat
-const SLOW_RUNNER_LAG_MS = 6000;
-
 interface MotionLayout {
   name: string;
   screen: ScreenName;
@@ -799,13 +755,6 @@ async function holdShape(page: Page, layout: MotionLayout): Promise<void> {
 async function watch(table: RigTable, name: string, layout: MotionLayout, holdAt: number | null = 0): Promise<Watched> {
   const moving = await table.open(name, layout.screen, MOTION, { moving: true });
   const still = await table.open(name, layout.screen);
-
-  // The rig's clock stands still between its steps, and a page reckons the server's time from the times its
-  // answers carry: with its own clock running, a page slow between steps would think the table later than it is
-  // and fit no sweat before the next hand. Held still too, the page's reckoning is the rig's clock exactly
-  for (const page of [moving, still]) {
-    await page.clock.setFixedTime(Date.now() - 60_000);
-  }
 
   await holdShape(moving, layout);
   await holdShape(still, layout);
@@ -1291,7 +1240,8 @@ function feltingHand(rig: Rig): RigTable {
   return table;
 }
 
-const toastShown = (page: Page) => page.locator('.toast:visible').count();
+/** How many toasts a page has told since it was loaded. Asked of what the page kept, never of the screen, where a toast lasts seconds. */
+const toastsTold = async (page: Page) => (await toasts(page)).length;
 
 /**
  * What the seats say of their hands' chances to win, by seat: the figure of each board as it is written,
@@ -1649,6 +1599,8 @@ const chopTurnedDownCheck = (kind: ChopTable): Check => [
       await answeredAfter(big, () => pressOn(big, screen)('.turn [data-action="chop-no"]'));
       await big.waitForSelector(`.controls .waiting:has-text("Waiting for ${WIDEST}")`);
 
+      // The small blind's page had Call before the offer too: only the table's answer says it has heard the no
+      await table.heardBy(small);
       await small.waitForSelector('.turn [data-action="call"]');
       assert.deepEqual(await turnActions(small), ['fold', 'call', 'raise']);
       assert.equal(await text(small, '.turn [data-action="call"]'), `Call ${kind.call}`);
@@ -2205,11 +2157,11 @@ const CHECKS: Check[] = [
       }
 
       // Each goes by itself after its few seconds, on the page's own timer
-      await quigs.waitForSelector('.seat-reaction', { state: 'detached', timeout: 10_000 });
+      await quigs.waitForSelector('.seat-reaction', { state: 'detached' });
 
       // As many as the table takes, all on one seat by the table's edge: three thrown at Dot and Dot's own, side by side
       const pileOn = async (glyph: string) => {
-        await quigs.waitForSelector('.seat-reaction', { state: 'detached', timeout: 10_000 });
+        await quigs.waitForSelector('.seat-reaction', { state: 'detached' });
         rig.advance(REACTION_LIFE_MS);
         table.act('Pam', { type: 'react', kind: 'tomato', to: table.auth('Dot').id });
         table.act('Lu', { type: 'react', kind: 'rose', to: table.auth('Dot').id });
@@ -2252,7 +2204,7 @@ const CHECKS: Check[] = [
       // Thrown as this machine draws its emoji, and again with them drawn far wider: it leaves and lands on the same seats
       for (const glyph of ['own-emoji', 'wide-emoji']) {
         if (glyph === 'wide-emoji') {
-          await page.waitForSelector('.seat-reaction', { state: 'detached', timeout: 10_000 });
+          await page.waitForSelector('.seat-reaction', { state: 'detached' });
           await page.addStyleTag({ content: WIDE_EMOJI });
           rig.advance(REACTION_LIFE_MS);
         }
@@ -2273,7 +2225,7 @@ const CHECKS: Check[] = [
       // A hand dealt on a quiet table, then one dealt with a throw in the same moment: every card goes out just as it did
       const deal = async (throwing: boolean) => {
         playOut(table);
-        await page.waitForSelector('.seat-reaction', { state: 'detached', timeout: 10_000 });
+        await page.waitForSelector('.seat-reaction', { state: 'detached' });
         await dealt(page);
         await page.evaluate('window.flights.splice(0)');
 
@@ -2328,18 +2280,19 @@ const CHECKS: Check[] = [
       await page.tap('.seat.me .plate');
       await page.waitForSelector('.react-panel', { state: 'detached' });
 
+      // The table has it before the clock goes on, so the wait is counted from where the page counts it
       await page.tap('[data-action="reactions"]');
-      await page.tap('[data-react="cry"]');
+      await answeredTo(page, 'react', () => page.tap('[data-react="cry"]'));
       await assertMarkOn(page, 'cry', 0, 'Quigs is crying');
 
       // The wait after it stills the very buttons on screen, and lets them go as it ends: a tap then lands on what it was aimed at
-      rig.advance(REACTION_GAP_MS);
       await page.tap('[data-action="reactions"]');
       await page.waitForSelector('[data-react="clap"]:disabled');
       assert.equal(await text(page, '.react-note'), 'One at a time: give it a few seconds');
       await page.evaluate(`window.aimedAt = document.querySelector('[data-react="clap"]')`);
 
-      await page.waitForSelector('[data-react="clap"]:enabled', { timeout: REACTION_GAP_MS + 2000 });
+      rig.advance(REACTION_GAP_MS);
+      await page.waitForSelector('[data-react="clap"]:enabled');
       assert.ok(await page.evaluate(`window.aimedAt === document.querySelector('[data-react="clap"]')`), 'the buttons were drawn again as the wait ended, which loses a tap that lands then');
       assert.equal(await page.locator('.react-note').isVisible(), false);
       await page.tap('[data-react="clap"]');
@@ -2357,18 +2310,20 @@ const CHECKS: Check[] = [
       const page = await table.open('Quigs', 'smallPhone', MOTION, { moving: true });
       await dealt(page);
 
+      // Two throws back to back as the river comes face down, in the one view so that none can reach the page after the river has turned,
+      // and each stopped halfway for as long as the check looks, while the page turns the river in its own time
+      await page.evaluate(`window.holdAt = 0.5; window.holdOnly = 'throw'; window.flights.length = 0`);
       rig.advance(table.view('Quigs').hand!.deadline! - rig.now());
-      await page.waitForSelector('.board-card.stand-in', { state: 'attached' });
-
-      // Two throws back to back while the river lies face down, each stopped halfway for as long as the check looks
-      await page.evaluate('window.holdAt = 0.5');
       table.act('Pam', { type: 'react', kind: 'tomato', to: table.auth('Quigs').id });
       table.act('Al', { type: 'react', kind: 'fish', to: table.auth('Stu').id });
-      await page.waitForFunction(`window.flights.filter((flight) => flight.name === 'throw').length === 2`);
-      await page.evaluate(`window.holdAt = null; window.thrown = document.getAnimations().filter((animation) => animation.id === 'throw')`);
 
-      await page.waitForSelector('.message.result', { timeout: MOST_SWEAT_MS + 5000 });
+      await page.waitForSelector('.message.result');
       await dealt(page);
+      await page.evaluate(`window.thrown = document.getAnimations().filter((animation) => animation.id === 'throw')`);
+
+      const began = (await page.evaluate('window.flights.map((flight) => flight.name)')) as string[];
+      assert.equal(began.filter((name) => name === 'throw').length, 2, 'two throws');
+      assert.ok(began.includes('facedown') && began.lastIndexOf('throw') < began.indexOf('chips'), `the throws were not in the air while the river lay face down: ${began.join(', ')}`);
       assert.equal(await page.locator('.board-card.stand-in').count(), 0, 'the river is still face down');
       // Still in the air, or taken off with the table they flew over when it was drawn again: never landed, which would end the check's hold
       assert.deepEqual(await page.evaluate('window.thrown.map((animation) => animation.playState)').then((states) => (states as string[]).filter((state) => state === 'finished')), []);
@@ -2559,7 +2514,7 @@ const CHECKS: Check[] = [
       await page.fill('#table-small-blind', '50');
       await page.fill('#table-big-blind', '10');
       await page.click('[data-action="save-settings"]');
-      await page.waitForSelector('.toast:has-text("big blind")');
+      await toastTold(page, 'big blind');
       assert.equal(await page.inputValue('#table-small-blind'), '50', 'a refused save threw away what was typed');
       await shot(page, 'refused-save-desktop');
 
@@ -3416,7 +3371,7 @@ const CHECKS: Check[] = [
       const typed = 'http://meet.google.com/abc-defg-hij';
       await cohost.fill('#table-voice-link', typed);
       await cohost.tap('[data-action="save-settings"]');
-      await cohost.waitForSelector('.toast:has-text("The voice chat link must start with https://")');
+      await toastTold(cohost, 'The voice chat link must start with https://');
       assert.equal(await cohost.inputValue('#table-voice-link'), typed, 'a refused save threw away what was typed');
       await cohost.locator('#table-voice-link').scrollIntoViewIfNeeded();
       assertOnScreen(await boxes(cohost, '#table-voice-link'), 'phone', 'the voice chat link field');
@@ -3770,7 +3725,7 @@ const CHECKS: Check[] = [
 
           await page.fill('#transfer-amount', kind.tooMuch);
           await press('[data-action="confirm-transfer"]');
-          await page.waitForSelector(`.toast:has-text("${kind.refusal}")`);
+          await toastTold(page, kind.refusal);
           assert.equal(await page.inputValue('#transfer-amount'), kind.tooMuch, 'the refused amount was thrown away');
           assert.deepEqual([await page.inputValue('#transfer-from'), await page.inputValue('#transfer-to')], [table.auth(LONG).id, table.auth('Stu').id], 'the players picked were thrown away');
 
@@ -4772,8 +4727,11 @@ const CHECKS: Check[] = [
         // A button that had been pressed would be held while its move is on its way
         assert.equal(await page.locator('.turn [data-action="fold"]:enabled').count(), 1, 'a key or a tap pressed a button behind the notice');
 
-        // The clock on the table behind stops with the page: running on, it would say the table is being followed
+        // The clock on the table behind stops with the page: running on, it would say the table is being followed.
+        // Two seconds pass for the page, which is the rig's clock moved, and then several of the countdown's ticks
         const clock = await text(page, '.seat.me [data-countdown]');
+        rig.advance(2000);
+        await page.waitForFunction(`Date.now() === ${rig.now()}`);
         await page.waitForTimeout(1300);
         assert.equal(await text(page, '.seat.me [data-countdown]'), clock, 'the clock behind the notice is still counting down');
 
@@ -5881,6 +5839,7 @@ const CHECKS: Check[] = [
           await deciding.waitForFunction(`document.querySelector('.controls .next-hand')?.textContent === ${JSON.stringify(`1 more hand after this one${nextIsBombPot(kind.amount)}`)}`);
 
           // Made the last hand, nothing is said of a bomb pot that will never be dealt
+          await table.heardBy(host);
           await press('[data-action="menu"]');
           assert.equal(await text(host, '.menu [data-action="lastHands"] small'), '1 more hand after this one');
           await press('.menu [data-action="lastHands"]');
@@ -6034,189 +5993,188 @@ const CHECKS: Check[] = [
       }
     },
   ],
-  [
-    'with animations on, each move starts where it should and the table lands exactly as a still one stands, on one board and on two and at the end of the night, standing, lying, on the desktop and on a slow phone',
+  // A check for each layout: together they are the longest of the list by far, and a stalled run waits out its stall after every step of each
+  ...MOTION_LAYOUTS.map((layout): Check => [
+    `with animations on, each move starts where it should and the table lands exactly as a still one stands, on one board and on two and at the end of the night: ${layout.name}`,
     async (rig) => {
-      for (const layout of MOTION_LAYOUTS) {
-        const table = rig.table(MOTION_PLAYERS, layout.config);
-        const { config } = table.view('Quigs');
-        const big = config.bigBlind;
-        const says = (amount: number) => shortAmount(amount, config);
-        const { moving, still, step } = await watch(table, 'Quigs', layout);
-        const where = (what: string) => `${layout.name}, ${what}`;
+      const table = rig.table(MOTION_PLAYERS, layout.config);
+      const { config } = table.view('Quigs');
+      const big = config.bigBlind;
+      const says = (amount: number) => shortAmount(amount, config);
+      const { moving, still, step } = await watch(table, 'Quigs', layout);
+      const where = (what: string) => `${layout.name}, ${what}`;
 
-        // A hand's last move, with the game paused first: a table that is running deals the next hand itself, with cards nobody chose
-        const last = (move: () => unknown) => {
-          table.act('Quigs', { type: 'pause' });
-          move();
-        };
+      // A hand's last move, with the game paused first: a table that is running deals the next hand itself, with cards nobody chose
+      const last = (move: () => unknown) => {
+        table.act('Quigs', { type: 'pause' });
+        move();
+      };
 
-        // The button is on Al, so Quigs and Stu post the blinds and the cards go around from Quigs
-        let seen = await step('the deal', () => table.deal({ button: 3, holes: { 0: 'Ah Kd', 1: 'Qc Qd', 2: '7h 7s', 3: '9c 4d' }, board: 'Kh 7c 2c 9d 3s' }));
-        let bets = flightsOf(seen, 'chips', false);
-        let cards = flightsOf(seen, 'card', false);
+      // The button is on Al, so Quigs and Stu post the blinds and the cards go around from Quigs
+      let seen = await step('the deal', () => table.deal({ button: 3, holes: { 0: 'Ah Kd', 1: 'Qc Qd', 2: '7h 7s', 3: '9c 4d' }, board: 'Kh 7c 2c 9d 3s' }));
+      let bets = flightsOf(seen, 'chips', false);
+      let cards = flightsOf(seen, 'card', false);
 
-        assert.equal(seen.flights.length, 10, where('two blinds and eight cards move'));
-        assert.deepEqual(bets.map((bet) => [bet.seat, bet.text, bet.delay]), [[0, says(big / 2), 0], [1, says(big), 0]], where('the blinds'));
-        bets.forEach((bet) => assertOver(bet.from, seen.after.plates[bet.seat!], where(`the blind of seat ${bet.seat} leaves its seat`)));
-        assert.deepEqual(cards.map((card) => card.seat), [0, 0, 1, 1, 2, 2, 3, 3], where('the cards go around from the left of the button'));
-        cards.forEach((card) => assertOver(card.from, seen.after.felt, where(`a card of seat ${card.seat} leaves the middle of the table`)));
-        assert.equal(cards[0]!.delay, 0, where('the first cards wait'));
-        cards.slice(2).forEach((card, nth) => assert.ok(card.delay >= cards[nth]!.delay && card.delay > 0, where('a seat is dealt before the one to its right')));
+      assert.equal(seen.flights.length, 10, where('two blinds and eight cards move'));
+      assert.deepEqual(bets.map((bet) => [bet.seat, bet.text, bet.delay]), [[0, says(big / 2), 0], [1, says(big), 0]], where('the blinds'));
+      bets.forEach((bet) => assertOver(bet.from, seen.after.plates[bet.seat!], where(`the blind of seat ${bet.seat} leaves its seat`)));
+      assert.deepEqual(cards.map((card) => card.seat), [0, 0, 1, 1, 2, 2, 3, 3], where('the cards go around from the left of the button'));
+      cards.forEach((card) => assertOver(card.from, seen.after.felt, where(`a card of seat ${card.seat} leaves the middle of the table`)));
+      assert.equal(cards[0]!.delay, 0, where('the first cards wait'));
+      cards.slice(2).forEach((card, nth) => assert.ok(card.delay >= cards[nth]!.delay && card.delay > 0, where('a seat is dealt before the one to its right')));
 
-        seen = await step('a raise', () => table.act('Pam', { type: 'raise', to: 3 * big }));
-        assert.deepEqual(seen.flights.map((flight) => [flight.what, flight.standIn, flight.seat, flight.text, flight.delay]), [['chips', false, 2, says(3 * big), 0]], where('a raise'));
-        assertOver(seen.flights[0]!.from, seen.after.plates[2], where('the raise leaves its seat'));
+      seen = await step('a raise', () => table.act('Pam', { type: 'raise', to: 3 * big }));
+      assert.deepEqual(seen.flights.map((flight) => [flight.what, flight.standIn, flight.seat, flight.text, flight.delay]), [['chips', false, 2, says(3 * big), 0]], where('a raise'));
+      assertOver(seen.flights[0]!.from, seen.after.plates[2], where('the raise leaves its seat'));
 
-        seen = await step('a fold', () => table.act('Al', { type: 'fold' }));
-        assert.deepEqual(seen.flights.map((flight) => [flight.what, flight.standIn, flight.delay]), [['cards', true, 0]], where('a fold'));
-        assertLeavesSeat(seen.flights[0]!, seen, 3, where('a fold'));
+      seen = await step('a fold', () => table.act('Al', { type: 'fold' }));
+      assert.deepEqual(seen.flights.map((flight) => [flight.what, flight.standIn, flight.delay]), [['cards', true, 0]], where('a fold'));
+      assertLeavesSeat(seen.flights[0]!, seen, 3, where('a fold'));
 
-        seen = await step('the viewer’s own call', () => table.act('Quigs', { type: 'call' }));
-        assert.deepEqual(seen.flights.map((flight) => [flight.what, flight.standIn, flight.seat, flight.text]), [['chips', false, 0, says(3 * big)]], where('the viewer’s own call'));
-        assertOver(seen.flights[0]!.from, seen.after.plates[0], where('the viewer’s call leaves their seat'));
+      seen = await step('the viewer’s own call', () => table.act('Quigs', { type: 'call' }));
+      assert.deepEqual(seen.flights.map((flight) => [flight.what, flight.standIn, flight.seat, flight.text]), [['chips', false, 0, says(3 * big)]], where('the viewer’s own call'));
+      assertOver(seen.flights[0]!.from, seen.after.plates[0], where('the viewer’s call leaves their seat'));
 
-        // The last call ends the street: it is seen going to the pot with the other bets, and the flop comes a beat later
-        seen = await step('the end of a street', () => table.act('Stu', { type: 'call' }));
-        bets = flightsOf(seen, 'chips', true);
-        cards = flightsOf(seen, 'card', false);
+      // The last call ends the street: it is seen going to the pot with the other bets, and the flop comes a beat later
+      seen = await step('the end of a street', () => table.act('Stu', { type: 'call' }));
+      bets = flightsOf(seen, 'chips', true);
+      cards = flightsOf(seen, 'card', false);
 
-        assert.equal(seen.flights.length, 6, where('three bets and three cards move'));
-        assert.deepEqual(bets.map((bet) => [bet.text, bet.delay]), [0, 1, 2].map(() => [says(3 * big), 0]), where('the bets going to the pot'));
-        bets.forEach((bet, seat) => {
-          assertOver(bet.from, seen.before.bets[seat], where(`the bet of seat ${seat} leaves where it lay`));
-          assertOver(bet.to, seen.after.pot, where(`the bet of seat ${seat} goes to the pot`));
-        });
-        assert.deepEqual(cards.map((card) => [card.board, card.delay]), [0, 1, 2].map((nth) => [0, STEP_GAP_MS + nth * 60]), where('the flop'));
-        cards.forEach((card) => assertDrops(card, where('a card of the flop')));
+      assert.equal(seen.flights.length, 6, where('three bets and three cards move'));
+      assert.deepEqual(bets.map((bet) => [bet.text, bet.delay]), [0, 1, 2].map(() => [says(3 * big), 0]), where('the bets going to the pot'));
+      bets.forEach((bet, seat) => {
+        assertOver(bet.from, seen.before.bets[seat], where(`the bet of seat ${seat} leaves where it lay`));
+        assertOver(bet.to, seen.after.pot, where(`the bet of seat ${seat} goes to the pot`));
+      });
+      assert.deepEqual(cards.map((card) => [card.board, card.delay]), [0, 1, 2].map((nth) => [0, STEP_GAP_MS + nth * 60]), where('the flop'));
+      cards.forEach((card) => assertDrops(card, where('a card of the flop')));
 
-        seen = await step('a check', () => table.act('Quigs', { type: 'check' }));
-        assert.deepEqual(seen.flights, [], where('a check moves nothing'));
+      seen = await step('a check', () => table.act('Quigs', { type: 'check' }));
+      assert.deepEqual(seen.flights, [], where('a check moves nothing'));
 
-        seen = await step('a bet', () => table.act('Stu', { type: 'raise', to: 5 * big }));
-        assert.deepEqual(seen.flights.map((flight) => [flight.what, flight.standIn, flight.seat, flight.text]), [['chips', false, 1, says(5 * big)]], where('a bet'));
-        assertOver(seen.flights[0]!.from, seen.after.plates[1], where('the bet leaves its seat'));
+      seen = await step('a bet', () => table.act('Stu', { type: 'raise', to: 5 * big }));
+      assert.deepEqual(seen.flights.map((flight) => [flight.what, flight.standIn, flight.seat, flight.text]), [['chips', false, 1, says(5 * big)]], where('a bet'));
+      assertOver(seen.flights[0]!.from, seen.after.plates[1], where('the bet leaves its seat'));
 
-        seen = await step('another fold', () => table.act('Pam', { type: 'fold' }));
-        assert.equal(seen.flights.length, 1, where('another fold'));
-        assertLeavesSeat(seen.flights[0]!, seen, 2, where('another fold'));
+      seen = await step('another fold', () => table.act('Pam', { type: 'fold' }));
+      assert.equal(seen.flights.length, 1, where('another fold'));
+      assertLeavesSeat(seen.flights[0]!, seen, 2, where('another fold'));
 
-        // The viewer's own fold leaves their cards where they are and is silent to them, so the pot won is heard at once:
-        // the bet nobody called goes back and the pot leaves with it
-        seen = await step('a win', () => last(() => table.act('Quigs', { type: 'fold' })));
-        bets = flightsOf(seen, 'chips', true);
+      // The viewer's own fold leaves their cards where they are and is silent to them, so the pot won is heard at once:
+      // the bet nobody called goes back and the pot leaves with it
+      seen = await step('a win', () => last(() => table.act('Quigs', { type: 'fold' })));
+      bets = flightsOf(seen, 'chips', true);
 
-        assert.equal(seen.flights.length, 2, where('the bet going back and the pot move'));
-        assert.deepEqual(bets.map((bet) => [bet.text, bet.delay]), [[says(5 * big), 0], [says(9 * big), 0]], where('the bet going back and the pot'));
-        assertOver(bets[0]!.from, seen.before.bets[1], where('the bet going back leaves where it lay'));
-        assertOver(bets[1]!.from, seen.after.pot, where('the pot leaves the middle'));
-        bets.forEach((bet) => assertOver(bet.to, seen.after.plates[1], where('the winner’s chips go to their seat')));
+      assert.equal(seen.flights.length, 2, where('the bet going back and the pot move'));
+      assert.deepEqual(bets.map((bet) => [bet.text, bet.delay]), [[says(5 * big), 0], [says(9 * big), 0]], where('the bet going back and the pot'));
+      assertOver(bets[0]!.from, seen.before.bets[1], where('the bet going back leaves where it lay'));
+      assertOver(bets[1]!.from, seen.after.pot, where('the pot leaves the middle'));
+      bets.forEach((bet) => assertOver(bet.to, seen.after.plates[1], where('the winner’s chips go to their seat')));
 
-        // The board plays for everyone, so the pot is split four ways: the other hands turn up, then each winner gets a pile
-        await step('the next deal', () => {
-          table.play(() => null, (view) => !view.hand);
-          table.deal({ button: 3, board: 'As Ks Qs Js Ts' });
-        });
-        await step('to the river', () => table.play(passive, (view) => view.hand!.street === 'river' && view.hand!.toAct === 3));
+      // The board plays for everyone, so the pot is split four ways: the other hands turn up, then each winner gets a pile
+      await step('the next deal', () => {
+        table.play(() => null, (view) => !view.hand);
+        table.deal({ button: 3, board: 'As Ks Qs Js Ts' });
+      });
+      await step('to the river', () => table.play(passive, (view) => view.hand!.street === 'river' && view.hand!.toAct === 3));
 
-        seen = await step('a split pot', () => last(() => table.act('Al', { type: 'check' })));
-        bets = flightsOf(seen, 'chips', true);
-        cards = flightsOf(seen, 'card', false);
+      seen = await step('a split pot', () => last(() => table.act('Al', { type: 'check' })));
+      bets = flightsOf(seen, 'chips', true);
+      cards = flightsOf(seen, 'card', false);
 
-        assert.equal(seen.flights.length, 10, where('six cards turn up and four piles move'));
-        assert.deepEqual(cards.map((card) => [card.seat, card.delay]), [1, 1, 2, 2, 3, 3].map((seat) => [seat, 0]), where('the other three hands turn up'));
-        cards.forEach((card) => assertOver(card.from, card.to, where('a card turns up where it lies')));
-        assert.deepEqual(bets.map((bet) => [bet.text, bet.delay]), [0, 1, 2, 3].map(() => [says(big), STEP_GAP_MS]), where('a pile for each winner'));
-        assert.deepEqual(bets.map((bet) => Object.keys(seen.after.plates).find((seat) => over(bet.to, seen.after.plates[Number(seat)]!))).sort(), ['0', '1', '2', '3'], where('each pile goes to a winner of its own'));
-        bets.forEach((bet) => assertOver(bet.from, seen.after.pot, where('a winner’s pile leaves the middle')));
+      assert.equal(seen.flights.length, 10, where('six cards turn up and four piles move'));
+      assert.deepEqual(cards.map((card) => [card.seat, card.delay]), [1, 1, 2, 2, 3, 3].map((seat) => [seat, 0]), where('the other three hands turn up'));
+      cards.forEach((card) => assertOver(card.from, card.to, where('a card turns up where it lies')));
+      assert.deepEqual(bets.map((bet) => [bet.text, bet.delay]), [0, 1, 2, 3].map(() => [says(big), STEP_GAP_MS]), where('a pile for each winner'));
+      assert.deepEqual(bets.map((bet) => Object.keys(seen.after.plates).find((seat) => over(bet.to, seen.after.plates[Number(seat)]!))).sort(), ['0', '1', '2', '3'], where('each pile goes to a winner of its own'));
+      bets.forEach((bet) => assertOver(bet.from, seen.after.pot, where('a winner’s pile leaves the middle')));
 
-        // A bomb pot: a bare chip from every seat as the cards go out, then the flop
-        seen = await step('a bomb pot', () => {
-          table.play(() => null, (view) => !view.hand);
-          table.act('Quigs', { type: 'setBombPot', on: true });
-          table.deal({ button: 3, board: '2c 7d 9h Jc 3s' });
-        });
-        bets = flightsOf(seen, 'chips', true);
-        cards = flightsOf(seen, 'card', false);
+      // A bomb pot: a bare chip from every seat as the cards go out, then the flop
+      seen = await step('a bomb pot', () => {
+        table.play(() => null, (view) => !view.hand);
+        table.act('Quigs', { type: 'setBombPot', on: true });
+        table.deal({ button: 3, board: '2c 7d 9h Jc 3s' });
+      });
+      bets = flightsOf(seen, 'chips', true);
+      cards = flightsOf(seen, 'card', false);
 
-        assert.equal(seen.flights.length, 15, where('four chips, eight cards and the flop move'));
-        assert.deepEqual(bets.map((bet) => [bet.text, bet.delay]), [0, 1, 2, 3].map(() => ['', 0]), where('a bare chip from every seat'));
-        bets.forEach((bet, seat) => {
-          assertOver(bet.from, seen.after.plates[seat], where(`the chip of seat ${seat} leaves its seat`));
-          assertOver(bet.to, seen.after.pot, where(`the chip of seat ${seat} goes to the pot`));
-        });
-        assert.deepEqual(cards.map((card) => card.seat ?? `board ${card.board}`), [0, 0, 1, 1, 2, 2, 3, 3, 'board 0', 'board 0', 'board 0'], where('the cards, then the flop'));
-        assert.deepEqual(cards.slice(8).map((card) => card.delay), [0, 1, 2].map((nth) => STEP_GAP_MS + nth * 60), where('the flop comes a beat after the deal'));
+      assert.equal(seen.flights.length, 15, where('four chips, eight cards and the flop move'));
+      assert.deepEqual(bets.map((bet) => [bet.text, bet.delay]), [0, 1, 2, 3].map(() => ['', 0]), where('a bare chip from every seat'));
+      bets.forEach((bet, seat) => {
+        assertOver(bet.from, seen.after.plates[seat], where(`the chip of seat ${seat} leaves its seat`));
+        assertOver(bet.to, seen.after.pot, where(`the chip of seat ${seat} goes to the pot`));
+      });
+      assert.deepEqual(cards.map((card) => card.seat ?? `board ${card.board}`), [0, 0, 1, 1, 2, 2, 3, 3, 'board 0', 'board 0', 'board 0'], where('the cards, then the flop'));
+      assert.deepEqual(cards.slice(8).map((card) => card.delay), [0, 1, 2].map((nth) => STEP_GAP_MS + nth * 60), where('the flop comes a beat after the deal'));
 
-        // The same on two boards: both flops land together, each card on its own place
-        seen = await step('a double-board bomb pot', () => {
-          last(() => table.play(passive, (view) => view.hand?.stage === 'done'));
-          table.play(() => null, (view) => !view.hand);
-          table.act('Quigs', { type: 'updateConfig', config: { bombPotBoards: 'two' } });
-          table.act('Quigs', { type: 'setBombPot', on: true });
-          table.deal({ button: 3, board: '2c 7d 9h Jc 3s', secondBoard: 'Kd 5c 8h Ts 2h' });
-        });
-        bets = flightsOf(seen, 'chips', true);
-        cards = flightsOf(seen, 'card', false);
+      // The same on two boards: both flops land together, each card on its own place
+      seen = await step('a double-board bomb pot', () => {
+        last(() => table.play(passive, (view) => view.hand?.stage === 'done'));
+        table.play(() => null, (view) => !view.hand);
+        table.act('Quigs', { type: 'updateConfig', config: { bombPotBoards: 'two' } });
+        table.act('Quigs', { type: 'setBombPot', on: true });
+        table.deal({ button: 3, board: '2c 7d 9h Jc 3s', secondBoard: 'Kd 5c 8h Ts 2h' });
+      });
+      bets = flightsOf(seen, 'chips', true);
+      cards = flightsOf(seen, 'card', false);
 
-        assert.equal(seen.flights.length, 18, where('four chips, eight cards and two flops move'));
-        bets.forEach((bet, seat) => {
-          assertOver(bet.from, seen.after.plates[seat], where(`the chip of seat ${seat} leaves its seat for two boards`));
-          assertOver(bet.to, seen.after.pot, where(`the chip of seat ${seat} goes to the pot under two boards`));
-        });
-        assert.deepEqual(cards.slice(8).map((card) => [card.board, card.delay]), [0, 1].flatMap((board) => [0, 1, 2].map((nth) => [board, STEP_GAP_MS + nth * 60])), where('both flops come together, a beat after the deal'));
-        cards.slice(8).forEach((card) => assertDrops(card, where(`a card of the flop of board ${card.board}`)));
-        await shot(moving, `motion-landed-two-flops-${layout.name}`);
+      assert.equal(seen.flights.length, 18, where('four chips, eight cards and two flops move'));
+      bets.forEach((bet, seat) => {
+        assertOver(bet.from, seen.after.plates[seat], where(`the chip of seat ${seat} leaves its seat for two boards`));
+        assertOver(bet.to, seen.after.pot, where(`the chip of seat ${seat} goes to the pot under two boards`));
+      });
+      assert.deepEqual(cards.slice(8).map((card) => [card.board, card.delay]), [0, 1].flatMap((board) => [0, 1, 2].map((nth) => [board, STEP_GAP_MS + nth * 60])), where('both flops come together, a beat after the deal'));
+      cards.slice(8).forEach((card) => assertDrops(card, where(`a card of the flop of board ${card.board}`)));
+      await shot(moving, `motion-landed-two-flops-${layout.name}`);
 
-        // Bets lie clear of both boards, a row further out on a standing phone, and that is where each slides to and leaves from
-        for (const name of ['Quigs', 'Stu', 'Pam']) {
-          seen = await step(`${name}’s bet beside two boards`, () => table.act(name, name === 'Quigs' ? { type: 'raise', to: 2 * big } : { type: 'call' }));
-          assert.deepEqual(seen.flights.map((flight) => [flight.what, flight.standIn, flight.text]), [['chips', false, says(2 * big)]], where(`${name}’s bet beside two boards`));
-          assertOver(seen.flights[0]!.from, seen.after.plates[seen.flights[0]!.seat!], where(`${name}’s bet beside two boards leaves its seat`));
-        }
-
-        // The button's call ends the street: the bets go to the pot as it is heard, and the turn of both boards a beat later, as the one sound of the two
-        seen = await step('the turn of two boards', () => table.act('Al', { type: 'call' }));
-        bets = flightsOf(seen, 'chips', true);
-        cards = flightsOf(seen, 'card', false);
-
-        assert.equal(seen.flights.length, 6, where('four bets and the turn of two boards move'));
-        assert.deepEqual(bets.map((bet) => [bet.text, bet.delay]), [0, 1, 2, 3].map(() => [says(2 * big), 0]), where('the bets going to the pot under two boards'));
-        bets.forEach((bet, seat) => {
-          if (seen.before.bets[seat]) {
-            assertOver(bet.from, seen.before.bets[seat], where(`beside two boards, the bet of seat ${seat} leaves where it lay`));
-          }
-          assertOver(bet.to, seen.after.pot, where(`the bet of seat ${seat} goes to the pot under two boards`));
-        });
-        assert.deepEqual(Object.keys(seen.before.bets), ['0', '1', '2'], where('the bets that lay beside two boards'));
-        assert.deepEqual(cards.map((card) => [card.board, card.delay]), [0, 1].map((board) => [board, STEP_GAP_MS]), where('the turn of both boards comes together'));
-        cards.forEach((card) => assertDrops(card, where(`the turn of board ${card.board}`)));
-        await shot(moving, `motion-landed-two-turns-${layout.name}`);
-
-        // The last hand of the night, played out in one view: each winner gets one pile, all at once
-        table.act('Quigs', { type: 'setLastHands', hands: 0 });
-        seen = await step('the last hand of the night', () => table.play(passive, (view) => view.hand?.stage === 'done'));
-        bets = flightsOf(seen, 'chips', true);
-
-        assert.ok(bets.length > 0 && bets.every((bet) => bet.delay === bets[0]!.delay), where('the last pot goes to its winners at once'));
-        bets.forEach((bet) => assertOver(bet.from, seen.after.pot, where('a pile of the last pot leaves the middle')));
-        assert.equal(new Set(bets.map((bet) => Object.keys(seen.after.plates).find((seat) => over(bet.to, seen.after.plates[Number(seat)]!)))).size, bets.length, where('each pile of the last pot goes to a winner of its own'));
-
-        // And when the felt comes to say the night is over, nothing moves and nothing is left on it
-        seen = await step('the end of the night', () => rig.advance(table.view('Quigs').hand!.deadline! - rig.now()));
-        assert.notEqual(table.view('Quigs').nightEndedAt, null);
-        assert.deepEqual(seen.flights, [], where('the end of the night moves nothing'));
-        assert.equal(await text(moving, '.message.night-over > div'), 'The night is over', where('the felt'));
-        assert.equal(await moving.locator('.stand-in').count(), 0, where('something is left on the felt when the night is over'));
-        await closeRecap(moving);
-        await shot(moving, `motion-night-over-${layout.name}`);
-
-        await shot(moving, `motion-landed-${layout.name}`);
-        await moving.context().close();
-        await still.context().close();
+      // Bets lie clear of both boards, a row further out on a standing phone, and that is where each slides to and leaves from
+      for (const name of ['Quigs', 'Stu', 'Pam']) {
+        seen = await step(`${name}’s bet beside two boards`, () => table.act(name, name === 'Quigs' ? { type: 'raise', to: 2 * big } : { type: 'call' }));
+        assert.deepEqual(seen.flights.map((flight) => [flight.what, flight.standIn, flight.text]), [['chips', false, says(2 * big)]], where(`${name}’s bet beside two boards`));
+        assertOver(seen.flights[0]!.from, seen.after.plates[seen.flights[0]!.seat!], where(`${name}’s bet beside two boards leaves its seat`));
       }
+
+      // The button's call ends the street: the bets go to the pot as it is heard, and the turn of both boards a beat later, as the one sound of the two
+      seen = await step('the turn of two boards', () => table.act('Al', { type: 'call' }));
+      bets = flightsOf(seen, 'chips', true);
+      cards = flightsOf(seen, 'card', false);
+
+      assert.equal(seen.flights.length, 6, where('four bets and the turn of two boards move'));
+      assert.deepEqual(bets.map((bet) => [bet.text, bet.delay]), [0, 1, 2, 3].map(() => [says(2 * big), 0]), where('the bets going to the pot under two boards'));
+      bets.forEach((bet, seat) => {
+        if (seen.before.bets[seat]) {
+          assertOver(bet.from, seen.before.bets[seat], where(`beside two boards, the bet of seat ${seat} leaves where it lay`));
+        }
+        assertOver(bet.to, seen.after.pot, where(`the bet of seat ${seat} goes to the pot under two boards`));
+      });
+      assert.deepEqual(Object.keys(seen.before.bets), ['0', '1', '2'], where('the bets that lay beside two boards'));
+      assert.deepEqual(cards.map((card) => [card.board, card.delay]), [0, 1].map((board) => [board, STEP_GAP_MS]), where('the turn of both boards comes together'));
+      cards.forEach((card) => assertDrops(card, where(`the turn of board ${card.board}`)));
+      await shot(moving, `motion-landed-two-turns-${layout.name}`);
+
+      // The last hand of the night, played out in one view: each winner gets one pile, all at once
+      table.act('Quigs', { type: 'setLastHands', hands: 0 });
+      seen = await step('the last hand of the night', () => table.play(passive, (view) => view.hand?.stage === 'done'));
+      bets = flightsOf(seen, 'chips', true);
+
+      assert.ok(bets.length > 0 && bets.every((bet) => bet.delay === bets[0]!.delay), where('the last pot goes to its winners at once'));
+      bets.forEach((bet) => assertOver(bet.from, seen.after.pot, where('a pile of the last pot leaves the middle')));
+      assert.equal(new Set(bets.map((bet) => Object.keys(seen.after.plates).find((seat) => over(bet.to, seen.after.plates[Number(seat)]!)))).size, bets.length, where('each pile of the last pot goes to a winner of its own'));
+
+      // And when the felt comes to say the night is over, nothing moves and nothing is left on it
+      seen = await step('the end of the night', () => rig.advance(table.view('Quigs').hand!.deadline! - rig.now()));
+      assert.notEqual(table.view('Quigs').nightEndedAt, null);
+      assert.deepEqual(seen.flights, [], where('the end of the night moves nothing'));
+      assert.equal(await text(moving, '.message.night-over > div'), 'The night is over', where('the felt'));
+      assert.equal(await moving.locator('.stand-in').count(), 0, where('something is left on the felt when the night is over'));
+      await closeRecap(moving);
+      await shot(moving, `motion-night-over-${layout.name}`);
+
+      await shot(moving, `motion-landed-${layout.name}`);
+      await moving.context().close();
+      await still.context().close();
     },
-  ],
+  ]),
   [
     'with animations on, a tap, a key and a half-typed bet work while cards are in the air, and a new view, a squeezed table, a turned phone or the end of the night leaves nothing behind',
     async (rig) => {
@@ -7133,12 +7091,6 @@ const CHECKS: Check[] = [
         table.act('Pam', { type: 'call' });
       });
 
-      // A slow runner loses seconds between the turn and the river while the rig's clock stands still: lost here on
-      // purpose, they must not cost the slow page its sweat (see `watch`)
-      if (layout.slower) {
-        await new Promise((resolve) => setTimeout(resolve, SLOW_RUNNER_LAG_MS));
-      }
-
       rig.advance(table.view('Quigs').hand!.deadline! - rig.now());
       const small = table.view('Quigs');
 
@@ -7872,7 +7824,7 @@ const CHECKS: Check[] = [
       await assertMade('a raise to be refused', 'Raise', slide);
 
       await moves.refuse();
-      await quigs.waitForSelector('.toast:has-text("The table is busy, try again")');
+      await toastTold(quigs, 'The table is busy, try again');
       await quigs.waitForSelector('.turn [data-action="raise"]:enabled');
       assert.equal(await quigs.inputValue('#raise-amount'), typed, where('the amount typed for a raise that was refused'));
       assertAsShown(await shownOn(quigs), sizing, where('a raise the server refused'));
@@ -7926,6 +7878,8 @@ const CHECKS: Check[] = [
 
       const mine = await shownOn(quigs);
       const lost = async (what: string, heard: boolean) => {
+        const told = await toastsTold(quigs);
+
         // No poll gets through either, so the page knows only what it is shown here
         await polls.close('requests');
         await moves.close(heard ? 'answers' : 'requests');
@@ -7936,7 +7890,7 @@ const CHECKS: Check[] = [
         const made = await shownOn(quigs);
         await moves.lose();
         await quigs.waitForSelector('.stage[data-unconfirmed]');
-        await quigs.waitForSelector('.toast:has-text("Checking whether that was played")');
+        await toastTold(quigs, 'Checking whether that was played', told);
 
         // Marked, and otherwise the table it was: the label of the move and the chips go faint, and the bar says what is waited for
         const marked = await shownOn(quigs);
@@ -7953,7 +7907,7 @@ const CHECKS: Check[] = [
       await lost('a call that never arrives', false);
       await shot(quigs, `optimistic-unconfirmed-${layout.name}`);
       await polls.open();
-      await quigs.waitForSelector('.toast:has-text("The table has no sign of your call, so it is still your turn.")');
+      await toastTold(quigs, 'The table has no sign of your call, so it is still your turn.');
       await quigs.waitForSelector('.turn [data-action="call"]:enabled');
       assertAsShown(await shownOn(quigs), mine, where('a call that never arrived, put back'));
       assert.deepEqual([await count('.stage[data-unconfirmed]'), await moved()], [0, []], where('a call that never arrived, put back'));
@@ -7961,6 +7915,7 @@ const CHECKS: Check[] = [
       await moves.open();
 
       // The server played it and the answer was lost: the lookup confirms it, and nothing more is said
+      const toldBefore = await toastsTold(quigs);
       const made = await lost('a call whose answer is lost', true);
       await caughtUp(stu, table.view('Stu'));
       await polls.open();
@@ -7968,7 +7923,7 @@ const CHECKS: Check[] = [
       await toldOf(quigs, 'Quigs');
       assertAsShown(await shownOn(quigs), made, where('a call whose answer was lost, confirmed'));
       assert.deepEqual(await moved(), [], where('something moved when the lost call was confirmed'));
-      assert.equal(await count('.toast:has-text("no sign of")'), 0, where('a call that was played is said not to have arrived'));
+      assert.deepEqual((await toasts(quigs)).slice(toldBefore).filter((toast) => toast.text.includes('no sign of')), [], where('a call that was played is said not to have arrived'));
       await moves.open();
 
       // ---- A move that ends the street ----
@@ -8188,12 +8143,12 @@ const CHECKS: Check[] = [
       await press('.turn [data-action="offer-chop"]');
       await moves.holding();
       await moves.lose();
-      await small.waitForSelector('.toast:has-text("Checking whether that was played")');
+      await toastTold(small, 'Checking whether that was played');
       assert.equal(offers(), true, where('the server never heard the offer whose answer was lost'));
       assert.equal(await small.locator('.turn').count(), 0, where('an offer in doubt can be made again'));
       await polls.open();
       await small.waitForSelector(`.controls .waiting:has-text("You offered to chop. Waiting for ${UNICODE}")`);
-      assert.equal(await small.locator('.toast:has-text("no sign of")').count(), 0, where('an offer that was made is said not to have arrived'));
+      assert.deepEqual((await toasts(small)).filter((toast) => toast.text.includes('no sign of')), [], where('an offer that was made is said not to have arrived'));
       await moves.open();
       assert.deepEqual(sent, ['offerChop', 'offerChop'], where('the offers sent: one refused, one whose answer was lost'));
       assert.equal(table.view('Quigs').hand!.events.filter((event) => event[0] === 'chopOffer').length, 1, where('the offer was made twice'));
@@ -8278,6 +8233,7 @@ const CHECKS: Check[] = [
 
         // The night counts the chopped hand as a hand played by everyone dealt in, and as a pot won by nobody
         playOut(table);
+        await table.heardBy(small);
         await openTonight(small, screen);
         assert.equal(await text(small, '.tonight-standing'), 'So far tonight, after 1 hand. The dipshit of the night is crowned when the night ends.');
         assert.deepEqual(await texts(small, '.tonight-players .counts'), ['1 hand · 0 pots won', '1 hand · 0 pots won', '1 hand · 0 pots won', '1 hand · 0 pots won']);
@@ -8319,9 +8275,9 @@ const CHECKS: Check[] = [
       rig.advance(table.view('Quigs').hand!.deadline! - rig.now());
       assert.deepEqual(table.view('Quigs').feed.map((entry) => entry.text).filter((line) => line.includes(' earned ')), FELTED_LINES);
 
-      await quigs.waitForSelector('.toast:visible');
-      assert.equal(await text(quigs, '.toast'), FELTED_TOAST);
-      assertOnScreen(await boxes(quigs, '.toast'), 'smallPhone', 'the toast');
+      const toast = await toastTold(quigs);
+      assert.equal(toast.text, FELTED_TOAST);
+      assertOnScreen([toast.box], 'smallPhone', 'the toast');
       await shot(quigs, 'badges-toast-smallPhone');
 
       for (const page of pages) {
@@ -8331,7 +8287,7 @@ const CHECKS: Check[] = [
       }
 
       for (const [who, page] of [['the player who lost', stu], ['a watcher', kibitz]] as const) {
-        assert.equal(await toastShown(page), 0, `${who} is shown a toast for someone else's badge`);
+        assert.equal(await toastsTold(page), 0, `${who} is shown a toast for someone else's badge`);
       }
 
       await shot(kibitz, 'badges-line-desktop');
@@ -8341,7 +8297,7 @@ const CHECKS: Check[] = [
       await late.waitForSelector('.feed li:has-text("Felted")', { state: 'attached' });
       table.act('Kibitz', { type: 'chat', text: 'brutal' });
       await late.waitForSelector('.feed li:has-text("brutal")', { state: 'attached' });
-      assert.equal(await toastShown(late), 0, 'a page opened after the badge was earned was told of it');
+      assert.equal(await toastsTold(late), 0, 'a page opened after the badge was earned was told of it');
 
       for (const page of [...pages, late]) {
         await page.context().close();
@@ -8414,7 +8370,7 @@ const CHECKS: Check[] = [
       }
 
       const nothingTold = async (when: string) => {
-        assert.equal(await toastShown(quigs), 0, `${when}: the toast came`);
+        assert.equal(await toastsTold(quigs), 0, `${when}: the toast came`);
 
         for (const [who, page] of [...reading, ['the earner', quigs]] as const) {
           assert.equal(await page.locator('.feed li:has-text("earned")').count(), 0, `${who}, ${when}: the line came`);
@@ -8442,15 +8398,14 @@ const CHECKS: Check[] = [
       // Quigs's river is still face down when the hand is taken off the table: the wait ends there, and the toast comes with the card up
       rig.advance(table.view('Quigs').hand!.deadline! - rig.now());
 
-      await quigs.waitForSelector('.toast:visible');
-      assert.equal(await text(quigs, '.toast'), FELTED_TOAST);
+      assert.equal((await toastTold(quigs)).text, FELTED_TOAST);
       assert.equal(await quigs.locator('.board-card.stand-in').count(), 0, 'a card lies face down under the toast');
 
       for (const [who, page] of reading) {
         await page.waitForSelector('.tonight-players li[data-player="Quigs"] .badges');
         assert.deepEqual(await page.locator('.tonight-players li[data-player="Quigs"] .badge').allInnerTexts(), ['💰', '💀'], who);
         await page.waitForSelector(`.feed li:has-text(${JSON.stringify(FELTED_LINES[1])})`, { state: 'attached' });
-        assert.equal(await toastShown(page), 0, `${who} is shown a toast for Quigs's badges`);
+        assert.equal(await toastsTold(page), 0, `${who} is shown a toast for Quigs's badges`);
       }
 
       for (const page of [quigs, stu, kibitz]) {
@@ -9172,12 +9127,6 @@ const CHECKS: Check[] = [
       const kibitz = await table.open('Kibitz', 'desktop');
       const pages = [['Quigs', quigs], ['Stu', stu], ['a watcher', kibitz]] as const;
 
-      // A toast is for news, and a page tells news from a view it judges fresh by its own clock, which runs
-      // while the rig's stands still: a page slow between steps would take the high hand changing for old news
-      for (const [, page] of pages) {
-        await page.clock.setFixedTime(Date.now());
-      }
-
       for (const [who, page] of pages) {
         assert.deepEqual(await markedOn(page), [], `${who}: the high hand is marked before the hand is off the table`);
         assert.equal(await page.locator('.feed li:has-text("high hand")').count(), 0, `${who}: the high hand is told before the hand is off the table`);
@@ -9185,8 +9134,8 @@ const CHECKS: Check[] = [
 
       clear(rig, table);
 
-      await quigs.waitForSelector('.toast:visible');
-      assert.equal(await text(quigs, '.toast'), 'You have 🏆 the high hand with pair of aces');
+      const toast = await toastTold(quigs);
+      assert.equal(toast.text, 'You have 🏆 the high hand with pair of aces');
 
       for (const [who, page] of pages) {
         await page.waitForSelector('.feed li:has-text("Quigs takes the high hand with pair of aces")', { state: 'attached' });
@@ -9195,31 +9144,30 @@ const CHECKS: Check[] = [
         assert.equal(await page.getAttribute('.plate .high-hand', 'title'), 'Holds the high hand: Pair of aces', who);
       }
 
-      assertOnScreen(await boxes(quigs, '.toast, .plate .high-hand'), 'smallPhone', 'the toast and the trophy');
+      assertOnScreen([toast.box, ...(await boxes(quigs, '.plate .high-hand'))], 'smallPhone', 'the toast and the trophy');
       assert.deepEqual(await squeezed(quigs, '.plate .high-hand'), [], 'the trophy is cut off');
       await shot(quigs, 'high-hand-taken-smallPhone');
       await shot(kibitz, 'high-hand-taken-desktop');
 
       for (const [who, page] of [['Stu', stu], ['a watcher', kibitz]] as const) {
-        assert.equal(await toastShown(page), 0, `${who} is shown a toast for Quigs's high hand`);
+        assert.equal(await toastsTold(page), 0, `${who} is shown a toast for Quigs's high hand`);
       }
 
       // Stu's pair of kings is not as good, and the three kings after it are better
       toShowdown(table, { 0: '8s 4h', 1: 'Ks Kh', 2: 'Qs Qh' });
       clear(rig, table);
-      table.act('Kibitz', { type: 'chat', text: 'kings no good' });
 
       // Every page has to have heard of this hand before the next is played. One that hears of both at once gets
       // this hand's lines 14 seconds old, takes the view for a late one and tells no news from it, the toast included
       for (const [, page] of pages) {
-        await page.waitForSelector('.feed li:has-text("kings no good")', { state: 'attached' });
+        await table.heardBy(page);
       }
 
       assert.deepEqual(await markedOn(kibitz), ['Quigs'], 'a worse hand took the high hand');
 
       toShowdown(table, { 0: '8s 4h', 1: 'Ks Kh', 2: 'Qs Qh' }, 'Kd 7d 9h Jc 3s');
       clear(rig, table);
-      await stu.waitForSelector('.toast:has-text("You have 🏆 the high hand with three kings")');
+      await toastTold(stu, 'You have 🏆 the high hand with three kings');
 
       for (const [, page] of pages) {
         await page.waitForSelector('.feed li:has-text("Stu takes the high hand with three kings")', { state: 'attached' });
@@ -9393,7 +9341,7 @@ const CHECKS: Check[] = [
       }
 
       const nothingTold = async (when: string) => {
-        assert.equal(await toastShown(quigs), 0, `${when}: the toast came`);
+        assert.equal(await toastsTold(quigs), 0, `${when}: the toast came`);
 
         for (const [who, page] of [...reading, ['the taker', quigs]] as const) {
           assert.equal(await page.locator('.feed li:has-text("high hand")').count(), 0, `${who}, ${when}: the line came`);
@@ -9417,14 +9365,13 @@ const CHECKS: Check[] = [
       await nothingTold('the hand still on the table');
 
       clear(rig, table);
-      await quigs.waitForSelector('.toast:visible');
-      assert.equal(await text(quigs, '.toast'), FELTED_TOAST);
+      assert.equal((await toastTold(quigs)).text, FELTED_TOAST);
 
       for (const [who, page] of reading) {
         await page.waitForSelector('.tonight-leaders div:has-text("High hand")');
         assert.equal(await text(page, '.tonight-leaders div:has-text("High hand") dd b'), 'Quigs', who);
         await page.waitForSelector('.plate .high-hand', { state: 'attached' });
-        assert.equal(await toastShown(page), 0, `${who} is shown a toast for Quigs's high hand`);
+        assert.equal(await toastsTold(page), 0, `${who} is shown a toast for Quigs's high hand`);
       }
 
       for (const page of [quigs, stu, kibitz]) {
@@ -9554,7 +9501,9 @@ const CHECKS: Check[] = [
         await shot(pam, `rabbit-play-by-play-${screen}`);
         await toggleFeed(pam, screen);
 
+        // The history is asked for once the page has the hand off the table: asked sooner, it is answered before the table has put the hand in it
         clear(rig, table);
+        await table.heardBy(pam);
         const press = pressOn(pam, screen);
         await press('[data-action="menu"]');
         await press('.menu [data-action="history"]');
@@ -9751,7 +9700,7 @@ const CHECKS: Check[] = [
         assert.equal(await text(page, `${screenOf} h2`), `Table ${table.id}`);
         assert.deepEqual(await page.locator(`${screenOf} p`).allInnerTexts(), [PUT_AWAY_MESSAGE, 'Whoever runs the game can still find its ledger and its hands in the game’s Sheet.']);
         assert.equal(await text(page, `${screenOf} button`), 'Start a new table');
-        assert.equal(await page.locator('.stage, .toast:visible').count(), 0, 'the table or a toast is still showing');
+        assert.deepEqual([await page.locator('.stage').count(), await toastsTold(page)], [0, 0], 'the table is still showing, or a toast was');
 
         await shot(page, `put-away-${screen}`);
         assert.deepEqual(await squeezed(page, `${screenOf} h2, ${screenOf} p, ${screenOf} button`), [], 'part of what it says is cut off');
@@ -9771,7 +9720,7 @@ const CHECKS: Check[] = [
         await page.fill('#table-code', table.id);
         await press('button:has-text("Find table")');
         await page.waitForSelector(screenOf);
-        assert.equal(await toastShown(page), 0);
+        assert.equal(await toastsTold(page), 0);
 
         await page.context().close();
       }
@@ -10191,7 +10140,9 @@ const CHECKS: Check[] = [
         await shot(stu, `show-play-by-play-${screen}`);
         await toggleFeed(stu, screen);
 
+        // The history is asked for once the page has the hand off the table: asked sooner, it is answered before the table has put the hand in it
         clear(rig, table);
+        await table.heardBy(stu);
         const press = pressOn(stu, screen);
         await press('[data-action="menu"]');
         await press('.menu [data-action="history"]');
@@ -10239,7 +10190,7 @@ const CHECKS: Check[] = [
       await shows.holding();
       await shows.refuse();
       await pam.waitForSelector(`${king}:not([disabled])`);
-      await pam.waitForSelector('.toast:has-text("The table is busy, try again")');
+      await toastTold(pam, 'The table is busy, try again');
       assert.deepEqual(table.view('Stu').seats[2]!.cards, ['As', null]);
       assert.equal(await pam.locator('.seat.me .hole .card.seen').count(), 1);
       await shot(pam, 'show-refused-smallPhone');
@@ -10266,7 +10217,7 @@ const CHECKS: Check[] = [
       await pam.waitForSelector('.controls .show-cards', { state: 'detached' });
       const lostAt = sent.count;
       await shows.lose();
-      await pam.waitForSelector('.toast:has-text("No answer from the table")');
+      await toastTold(pam, 'No answer from the table');
       await pam.waitForTimeout(500);
       assert.equal(sent.count, lostAt, 'a show for a hand that is gone was sent again');
       assert.ok(table.view('Stu').seats[2]!.cards!.every((card) => card === null), 'a card of the next hand was shown');
@@ -10314,8 +10265,6 @@ const CHECKS: Check[] = [
       table.deal({ button: 0 });
 
       const page = await table.open('Quigs', 'smallPhone');
-      // Held as the rig's clock is, so that a page slow on a busy runner draws nothing new of its own accord between the two looks
-      await page.clock.setFixedTime(Date.now());
       await dealt(page);
 
       // The whole page as drawn, less the clocks, which count down by themselves
@@ -10332,8 +10281,8 @@ const CHECKS: Check[] = [
       await rig.throwIn(page, 'A failure on purpose');
       await rig.throwIn(page, 'A failure on purpose');
 
-      for (const deadline = Date.now() + 10_000; rig.errors.rows.length === 0; ) {
-        assert.ok(Date.now() < deadline, 'the failure never reached the error log');
+      // A report that never reaches the error log is ended by the check's own limit, which says it was waiting here
+      while (rig.errors.rows.length === 0) {
         await page.waitForTimeout(50);
       }
 
@@ -10347,7 +10296,7 @@ const CHECKS: Check[] = [
       assert.match(row!.browser, /^Chrome \d+ on a desktop$/);
 
       assert.equal(await drawn(), before, 'the page changed what it shows');
-      assert.equal(await page.locator('.toast:not([hidden])').count(), 0, 'the player was told something');
+      assert.equal(await toastsTold(page), 0, 'the player was told something');
       await shot(page, 'page-failure-smallPhone');
     },
   ],
@@ -10418,7 +10367,7 @@ const CHECKS: Check[] = [
           const members = rig.store.read(tableId)!.members.filter((member) => member.identity === bob!.id);
           assert.deepEqual(members.map((member) => member.name), where === 'lobby' || screen === 'smallPhone' ? ['Bob'] : ['Bob', 'Bob 2'], 'the second Bob at a table is a member of his own, under a number');
           assert.deepEqual(JSON.parse((await page.evaluate(`localStorage.getItem('cnd.player')`)) as string), bob);
-          assert.equal(await toastShown(page), 0);
+          assert.equal(await toastsTold(page), 0);
           await page.context().close();
         }
       }
@@ -10559,7 +10508,7 @@ const CHECKS: Check[] = [
       await heard;
       await gone.waitForSelector('.who-pick');
 
-      assert.equal(await gone.locator('.who-remembered:visible, .toast:visible').count(), 0);
+      assert.deepEqual([await gone.locator('.who-remembered:visible').count(), await toastsTold(gone)], [0, 0]);
       assert.deepEqual(await gone.evaluate(`[localStorage.getItem('cnd.player'), localStorage.getItem('cnd.seat.ABC234')]`), [null, 'MEMBER23.TOKEN']);
       await shot(gone, 'who-forgotten-smallPhone');
       await gone.context().close();
@@ -10589,11 +10538,11 @@ const CHECKS: Check[] = [
 
         // Trying anyway is refused in words that say what to do, and the form is as it was
         await press('[data-action="join-table"]');
-        await page.waitForSelector('.toast:visible');
-        assert.equal(await text(page, '.toast'), 'Big Al is already on the list of players. If that is you, pick Big Al from the list. If not, add something to your name');
+        const refusal = await toastTold(page);
+        assert.equal(refusal.text, 'Big Al is already on the list of players. If that is you, pick Big Al from the list. If not, add something to your name');
         await shot(page, `who-taken-name-refused-${screen}`);
-        assert.deepEqual(await squeezed(page, '.toast'), []);
-        assertOnScreen(await boxes(page, '.toast'), screen, 'the reason');
+        assert.equal(refusal.squeezed, false, 'the reason is cut off');
+        assertOnScreen([refusal.box], screen, 'the reason');
         assert.equal(await page.inputValue('#join-name'), 'big al');
         assert.equal(rig.players.list().length, 2);
         assert.equal(rig.store.read(table.id)!.members.filter((member) => member.identity === bigAl.id).length, screen === 'smallPhone' ? 0 : 1);
@@ -10638,7 +10587,7 @@ const CHECKS: Check[] = [
           await list.holding();
 
           assert.equal(await page.getAttribute('.who-ask', 'data-who'), remembered ? 'remembered' : 'name');
-          assert.equal(await toastShown(page), 0, 'the page said something about a list it can do without');
+          assert.equal(await toastsTold(page), 0, 'the page said something about a list it can do without');
           assert.equal(await page.locator('.who-pick:visible').count(), 0);
           await shot(page, `who-no-list-${remembered ? 'remembered-' : ''}${screen}`);
 
@@ -10648,7 +10597,7 @@ const CHECKS: Check[] = [
 
           await press('[data-action="join-table"]');
           await page.waitForSelector('.stage .table');
-          assert.equal(await toastShown(page), 0);
+          assert.equal(await toastsTold(page), 0);
 
           const member = rig.store.read(table.id)!.members.at(-1)!;
           assert.deepEqual([member.name.replace(/ \d$/, ''), member.identity], remembered ? ['Bob', bob.id] : [`Dee ${screen}`, rig.players.list().find((player) => player.name === `Dee ${screen}`)!.id]);
@@ -10698,7 +10647,7 @@ const CHECKS: Check[] = [
         await press('.dialog .who-pill:text-is("Bob")');
         await press('[data-action="say-who"]');
         await page.waitForSelector('.dialog', { state: 'detached' });
-        assert.equal(await text(page, '.toast'), 'Noted: on the list of players you are Bob.');
+        assert.equal((await toastTold(page)).text, 'Noted: on the list of players you are Bob.');
         assert.equal(identityOf('Bobby'), bob.id);
 
         // The table hears of it as it hears of anything, and goes on calling him what it did
@@ -10844,7 +10793,9 @@ const CHECKS: Check[] = [
         await shot(stu, `auto-show-play-by-play-${screen}`);
         await toggleFeed(stu, screen);
 
+        // The history is asked for once the page has the hand off the table: asked sooner, it is answered before the table has put the hand in it
         clear(rig, table);
+        await table.heardBy(stu);
         const press = pressOn(stu, screen);
         await press('[data-action="menu"]');
         await press('.menu [data-action="history"]');
@@ -10916,9 +10867,9 @@ const CHECKS: Check[] = [
       assert.deepEqual(await drawnCards(stu, 0), ['7s', '2d']);
 
       // The badge is earned as the hand is cleared, seconds after the cards were seen
-      assert.equal(await quigs.locator('.toast:not([hidden])').count(), 0, 'a toast came with the result');
+      assert.equal(await toastsTold(quigs), 0, 'a toast came with the result');
       clear(rig, table);
-      await quigs.waitForSelector('.toast:not([hidden]):has-text("Seven-Deuce")');
+      await toastTold(quigs, 'Seven-Deuce');
 
       await stu.context().close();
       await quigs.context().close();
@@ -11551,8 +11502,6 @@ const CHECKS: Check[] = [
     async (rig) => {
       const table = replayTableOf(rig);
       const page = await table.open('Quigs', 'desktop', LISTEN);
-      // A turn is called only for a view the page judges fresh by its own clock, which runs while the rig's stands still
-      await page.clock.setFixedTime(Date.now());
       const moves = movesSent(page);
       const chimes = async () => (await playedNames(page)).filter((sound) => sound === 'turn').length;
 
@@ -11582,7 +11531,7 @@ const CHECKS: Check[] = [
       await page.waitForSelector('.replay', { state: 'hidden' });
       await page.waitForSelector('.turn [data-action="check"]:enabled');
       assert.equal(await page.locator('.history').count(), 0, 'the history the replay was opened from still hides the buttons');
-      assert.equal(await text(page, '.toast:not([hidden])'), 'Your turn. The replay will pick up where you left it.');
+      assert.equal((await toastTold(page)).text, 'Your turn. The replay will pick up where you left it.');
       assert.ok(await page.evaluate(`(() => {
         const box = document.querySelector('.turn [data-action="check"]').getBoundingClientRect();
 
@@ -11707,7 +11656,7 @@ const CHECKS: Check[] = [
         await page.waitForSelector('.overlay', { state: 'detached' });
         assert.equal(await page.inputValue('#host-name'), `Hal ${screen}`);
         assert.equal(await page.evaluate('document.activeElement.dataset.action'), 'standings');
-        assert.equal(await page.evaluate('[...document.querySelectorAll("main, .toast")].some((part) => part.inert)'), false);
+        assert.equal(await page.evaluate('[...document.querySelectorAll(".cnd > *")].some((part) => part.inert)'), false);
 
         await press('[data-action="standings"]');
         await page.waitForSelector('[data-standings="empty"]');
@@ -11922,8 +11871,6 @@ const CHECKS: Check[] = [
       const stu = await table.open('Stu', 'phone');
       const polls = await Gate.on(stu, 'polls');
 
-      // The page waits a second of its own before it asks again, which must not count against what it then hears
-      await stu.clock.setFixedTime(Date.now());
       await stu.waitForSelector('.plate:has(.high-hand)');
 
       // Two hands go by, the second of them Stu's three kings, and the one answer on its way to his page is lost
@@ -11941,11 +11888,11 @@ const CHECKS: Check[] = [
       // The view that shows it is a late one: the table is drawn as it stands, and nothing in it is news
       await stu.waitForSelector('.feed li:has-text("Stu takes the high hand with three kings")', { state: 'attached' });
       assert.deepEqual(await markedOn(stu), ['Stu']);
-      assert.equal(await toastShown(stu), 0, 'a late view told its news');
+      assert.equal(await toastsTold(stu), 0, 'a late view told its news');
 
       // The next thing to happen brings a view on time, which tells what the late one could not
       table.act('Kibitz', { type: 'chat', text: 'nice kings' });
-      await stu.waitForSelector('.toast:has-text("You have 🏆 the high hand with three kings")');
+      await toastTold(stu, 'You have 🏆 the high hand with three kings');
       await stu.context().close();
     },
   ],
@@ -12038,7 +11985,6 @@ const CHECKS: Check[] = [
       const shown = () => texts(page, `${AHEAD_BUTTONS}:visible`);
       const stage = async () => (await boxes(page, '.stage'))[0]!;
 
-      await page.clock.setFixedTime(Date.now() - 60_000);
       await toggleFeed(page, 'smallPhone');
       await page.waitForSelector('.feed.open');
       const before = await stage();
@@ -12141,7 +12087,7 @@ const CHECKS: Check[] = [
           assert.equal(await page.evaluate(`document.activeElement.closest('.turn') === null`), true, 'the keyboard landed on a button of the turn');
         }
 
-        assert.deepEqual(await texts(page, '.toast:visible'), []);
+        assert.deepEqual(await toasts(page), []);
         await page.context().close();
       }
     },
@@ -12217,11 +12163,6 @@ const CHECKS: Check[] = [
       const usual = await table.open('Pam', 'desktop');
       const spoken = () => text(page, 'p.unseen[role="status"]');
 
-      // As a page slow between the rig's steps would not reckon the table later than it is
-      for (const each of [page, usual]) {
-        await each.clock.setFixedTime(Date.now() - 60_000);
-      }
-
       chooseAhead(table, 'Stu', 'call');
       await page.waitForSelector(aheadSet('call'));
 
@@ -12278,8 +12219,6 @@ const CHECKS: Check[] = [
         const page = await table.open('Stu', 'desktop');
         const gate = await Gate.on(page, 'choices');
 
-        await page.clock.setFixedTime(Date.now() - 60_000);
-
         return { table, page, gate };
       };
       const untouched = (table: RigTable) => table.view('Stu').seats[1]!.lastAction === 'small blind';
@@ -12300,7 +12239,7 @@ const CHECKS: Check[] = [
       const late = answered(held.page);
       await held.gate.open();
       await late;
-      await held.page.waitForSelector('.toast:visible:has-text("The hand moved on before that arrived, so nothing is set ahead")');
+      await toastTold(held.page, 'The hand moved on before that arrived, so nothing is set ahead');
       assert.ok(untouched(held.table), 'held: the table made a move for the player');
       assert.deepEqual(await turnActions(held.page), ['fold', 'call', 'raise']);
       await shot(held.page, 'ahead-held-until-the-turn');
@@ -12314,7 +12253,7 @@ const CHECKS: Check[] = [
       await lost.gate.holding();
       await polls.close('requests');
       await lost.gate.lose();
-      await lost.page.waitForSelector('.toast:visible:has-text("No answer from the table")');
+      await toastTold(lost.page, 'No answer from the table');
       assert.deepEqual(await aheadOffered(lost.page), ['Fold', 'Call 10', 'Call any ✓'], 'lost: the choice went off the page before the table was heard from');
 
       await lost.gate.open();
@@ -12334,7 +12273,7 @@ const CHECKS: Check[] = [
       await refused.page.click(aheadChoice('call'));
       await refused.gate.holding();
       await refused.gate.refuse();
-      await refused.page.waitForSelector('.toast:visible:has-text("The table is busy, try again")');
+      await toastTold(refused.page, 'The table is busy, try again');
       await refused.page.waitForSelector(`${aheadChoice('call')}[aria-pressed="false"]`);
       assert.equal(refused.table.view('Stu').preAction, null);
       await refused.page.context().close();
@@ -12354,7 +12293,7 @@ const CHECKS: Check[] = [
       back.table.act('Al', { type: 'call' });
       back.table.act('Quigs', { type: 'call' });
       const sentence = 'That came too late: your fold was already made.';
-      await back.page.waitForSelector(`.toast:visible:has-text("${sentence}")`);
+      await toastTold(back.page, sentence);
       await back.page.waitForSelector('.seat.me.folded');
 
       // The take-back gets there after the fold: the table answers with itself, and the page says nothing more
@@ -12362,9 +12301,55 @@ const CHECKS: Check[] = [
       await back.gate.open();
       assert.equal(((await (await tooLate).json()) as { ok: boolean }).ok, true, 'a take-back that came too late was refused');
       assert.equal(back.table.view('Stu').seats[1]!.folded, true);
-      assert.deepEqual((await texts(back.page, '.toast:visible')).filter((said) => said !== sentence), []);
+      assert.deepEqual((await toasts(back.page)).map((toast) => toast.text).filter((said) => said !== sentence), []);
       await shot(back.page, 'ahead-taken-back-too-late');
       await back.page.context().close();
+    },
+  ],
+  [
+    'a page of the rig tells the time by the rig’s clock alone: it stands still through a real wait, goes on with the clock when the check moves it, with news or with none, and is the rig’s again once a page loaded anew has heard from the table',
+    async (rig) => {
+      const table = rig.table(['Quigs', 'Pam', 'Sam'].map((name) => ({ name, stack: 1000 })), { actionSeconds: 30 });
+      table.deal({ button: 0 });
+
+      const page = await table.open('Quigs', 'phone');
+      const pageTime = () => page.evaluate('Date.now()') as Promise<number>;
+      const counted = (seconds: number) => page.waitForFunction(`document.querySelector('.seat.acting [data-countdown]')?.textContent === '${seconds}'`);
+
+      // What the turn's clock starts at: the seconds the table gives, and whatever the deal adds to them
+      const whole = Math.ceil((table.view('Quigs').hand!.deadline! - rig.now()) / 1000);
+      await counted(whole);
+      assert.equal(await pageTime(), rig.now());
+
+      // Longer than a second of the countdown and several of its ticks: a clock that ran would show it
+      await page.waitForTimeout(2500);
+      assert.equal(await pageTime(), rig.now(), 'the page’s clock ran while the rig’s stood still');
+      assert.equal(await text(page, '.seat.acting [data-countdown]'), String(whole), 'the countdown ran while the rig’s clock stood still');
+
+      // Time passes and nothing else happens, so the server has nothing to tell
+      rig.advance(10_000);
+      await counted(whole - 10);
+      assert.equal(await pageTime(), rig.now());
+
+      // Time passes and something happens: the answer that brings the news brings the time
+      rig.advance(5000);
+      table.act('Pam', { type: 'chat', text: 'tick' });
+      await page.waitForSelector('.feed li:has-text("tick")', { state: 'attached' });
+      assert.equal(await pageTime(), rig.now(), 'a page that has the news does not have the time it was made at');
+      await counted(whole - 15);
+
+      // A page loaded again starts from the time it was opened at, and has the rig's with the first answer it gets
+      await page.reload();
+      await page.waitForSelector('.stage .table');
+      await counted(whole - 15);
+      assert.equal(await pageTime(), rig.now());
+
+      // A page that hears nothing from the server, as a phone off the network, still has the time
+      const polls = await Gate.on(page, 'polls');
+      await polls.close('requests');
+      rig.advance(5000);
+      await counted(whole - 20);
+      assert.equal(await pageTime(), rig.now());
     },
   ],
 ];

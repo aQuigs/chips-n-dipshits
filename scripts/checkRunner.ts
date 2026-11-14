@@ -9,7 +9,7 @@ import { format, inspect } from 'node:util';
 
 import { runPool } from './pool.ts';
 import type { Result } from './pool.ts';
-import { RigBrowser } from './rig.ts';
+import { RigBrowser, STALL_MS } from './rig.ts';
 import type { Rig } from './rig.ts';
 
 export type Check = [name: string, run: (rig: Rig) => Promise<void>];
@@ -17,7 +17,7 @@ export type Check = [name: string, run: (rig: Rig) => Promise<void>];
 export interface CheckRun {
   /** Runs only the checks with this in their name. */
   only?: string;
-  /** The folder, ending in a slash, for pictures of the pages of a check that was stopped. */
+  /** The folder, ending in a slash, for pictures of the pages of a check that failed or was stopped. */
   picturesIn: string;
 }
 
@@ -29,18 +29,21 @@ export interface CheckRun {
  */
 const DEFAULT_WORKERS = 4;
 
-// Six times what the slowest check takes, and short enough that one stuck check is told well inside the timeout of the test that runs them all
-const LIMIT_MS = 90_000;
+// A stalled run spends nearly all its time waiting, on about one core between twelve workers
+const STALLED_WORKERS = 12;
 
-// Enough to take the pictures and close the pages of a check that was stopped
+// Six times what the slowest check takes, and short enough that one stuck check is told well inside the timeout of the test that runs them all.
+// A stalled run waits out its stall after every step: the check with the most steps has about 150
+const LIMIT_MS = 90_000 + 150 * STALL_MS;
+
+// Enough to look at the pages of a check that was stopped and close them
 const GRACE_MS = 20_000;
-const PICTURE_TIMEOUT_MS = 5_000;
 const SLOWEST_SHOWN = 5;
 
 /** How many checks run at once: CHECK_WORKERS when it is set. */
 function workerCount(): number {
   const asked = process.env.CHECK_WORKERS;
-  const count = asked === undefined ? DEFAULT_WORKERS : Number(asked);
+  const count = asked === undefined ? (STALL_MS > 0 ? STALLED_WORKERS : DEFAULT_WORKERS) : Number(asked);
   assert.ok(Number.isInteger(count) && count >= 1, `CHECK_WORKERS is how many checks run at once, a whole number from 1 up, not "${asked}"`);
 
   return count;
@@ -80,20 +83,6 @@ function keepPrintsApart(): AsyncLocalStorage<Worker> {
   return printedOn;
 }
 
-/** Saves a picture of each page a rig has open, and says where, or why there is none. */
-function picturesOf(rig: Rig, pathStart: string): Promise<string[]> {
-  return Promise.all(
-    rig.pages().map((page, index) => {
-      const path = `${pathStart}-${index + 1}.png`;
-
-      return page.screenshot({ path, timeout: PICTURE_TIMEOUT_MS }).then(
-        () => path,
-        (error: Error) => `no picture of page ${index + 1}: ${error.message.split('\n')[0]}`,
-      );
-    }),
-  );
-}
-
 const fileName = (name: string) => name.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 80);
 const seconds = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
 
@@ -121,8 +110,9 @@ export async function runChecks(checks: readonly Check[], { only, picturesIn }: 
 
     // A check out of time is waiting on something: closing its pages under it makes that wait throw, which says where it was
     stop.addEventListener('abort', () => {
-      void picturesOf(rig, `${picturesIn}stuck-${fileName(name)}`)
-        .then((pictures) => said.push('Its pages when it was stopped:', ...pictures))
+      void rig
+        .lastLook(`${picturesIn}stuck-${fileName(name)}`)
+        .then((pages) => said.push('Its pages when it was stopped:', ...pages))
         .finally(() => rig.close())
         // A close that fails is told by the close below, which is this same one
         .catch(() => undefined);
@@ -132,6 +122,13 @@ export async function runChecks(checks: readonly Check[], { only, picturesIn }: 
       // Out of time before there was a rig, with nobody yet to hear so
       stop.throwIfAborted();
       await run(rig);
+    } catch (error) {
+      // What the pages showed in place of what the check wanted, while they are still there to ask
+      if (!stop.aborted) {
+        said.push('Its pages when it failed:', ...(await rig.lastLook(`${picturesIn}failed-${fileName(name)}`)));
+      }
+
+      throw error;
     } finally {
       await rig.close();
 

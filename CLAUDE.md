@@ -7,6 +7,7 @@ Multiplayer no-limit hold'em whose backend is a Google Sheet with an Apps Script
 - `npm test`: unit tests, a few seconds. Run after every change.
 - `npm run build`: type-checks all three TypeScript projects (Node, client, Apps Script) and builds `dist/`.
 - `npm run test:e2e`: plays a full game in headless browsers, about three minutes. Run after any change to `src/client`, then look at the pictures it leaves in `screenshots/`.
+- `npm run test:stall`: the screen checks run as on a machine too slow to keep up, which finds a check that only passes on a fast one. Too slow for CI: run it on the checks a PR adds, by name.
 - `npm run dev`: the game on localhost with tables in memory.
 - `npm run deploy`: pushes the build to Apps Script. Outward-facing: only when asked.
 - `npm run check:live`: plays a short game at the deployed address. Run after every deploy; it adds a table to the real Sheet.
@@ -62,6 +63,20 @@ Multiplayer no-limit hold'em whose backend is a Google Sheet with an Apps Script
 - A move chosen ahead of a turn is played by the engine, never by the page. The page sends only the choice, one request at a time with the latest winning and none resent (`CHOICES` in `connection.ts`), and tells the player when the table made another move than the choice on screen stood for (`madeAhead` on the `TableChange`, `aheadLines`). `tests/preActionCheck.ts` replays every random game with each such move tapped instead and holds the two to the same table. The five buttons keep their places (`AHEAD_ORDER`), clear of where a turn's buttons come up in every shape of the bar (`--ahead-height` in `styles/pre-action.css`).
 - The table is drawn again only when something it draws has changed (`handDrawn` in `src/client/render/table.ts`), so the view that confirms a move draws nothing unless it brings something new, which on a table with an action clock is the next player's clock. Any redraw ends what is still moving, so nothing the table does not draw goes into that comparison.
 - A browser check that looks at a page while a request is on its way holds the request with a gate, never a delay: `Gate.on(page, 'moves' | 'choices' | 'polls')` in `scripts/rig.ts`, closed on requests or on answers, waited on with `holding()`, then opened, lost or refused. And since a page shows its own move at the tap, a check that goes on to read the table or act for the next player makes the move with `answeredAfter` (`scripts/pageSpies.ts`), which waits for the server's answer, not for the buttons to go.
+
+## How a screen check is written
+
+A check must pass on a machine too slow to keep up. Each rule here was once broken by a check that failed one run in many and passed when run again. `npm run test:stall -- "part of its name"` is that machine, where the same race loses every time: run it on every check a PR adds or changes.
+
+- A page's clock is the rig's (`RIG_PAGE` in `scripts/pageSpies.ts`): it stands still through any real wait and moves with `rig.advance`, so a page left waiting never takes the table's news for older than it is. Never set a page's clock, and to show that a countdown or a wait on the page runs or stands, move the rig's.
+- After a step, wait on each page you go on to read for something only that step brings. Where nothing new shows, or what you would wait for was there before, `await table.heardBy(page)`: it waits for the table's version, which only the server's answer brings.
+- A page that must tell news on its own (a toast, a sound, a move it plays) has heard of every earlier step first, with `table.heardBy`: handed two steps in one view it may take the lot for missed and tell nothing.
+- A page asks the server for something itself (the hand history, a list) only once it has heard of the last step: asked sooner, the answer can be from before the step, and nothing draws it again.
+- A tap that sends a command is still on its way when the check's next line runs. Before reading the rig's side or stepping it, make a move with `answeredAfter` and anything else (a reaction, a switch) with `answeredTo` (`scripts/pageSpies.ts`).
+- What a page told in a toast is asked with `toastTold` or `toasts` (`scripts/pageSpies.ts`), never a selector: a toast is gone in 4.5 seconds and a busy machine looks later. Each is kept with its words, its place and whether it was cut off.
+- No wait gets a `timeout` of its own: the rig's is the one with room for a slow runner and for a stalled run.
+- A check that fails prints what each of its pages showed (the table, the bar, the last lines, the toasts and sounds, how far behind the rig it was) and saves `screenshots/failed-*.png`. Read that before running it again.
+- `tests/screenCheckRules.test.ts` holds the script to the rules a pattern can find. A new class of race gets a helper and, where a pattern can find it, a line there.
 
 ## Google side
 

@@ -2,13 +2,205 @@
  * What a browser check puts in a page to see what the page asks of the browser: scripts run before
  * anything of the page's own, and listeners for what it says in its console and sends to the server.
  */
+import assert from 'node:assert/strict';
+
 import type { Page, Request, Response } from 'playwright';
 
 import type { Permission } from '../src/client/attentionWays.ts';
 import { MOVES } from '../src/client/connection.ts';
 import type { MoveName } from '../src/client/motion.ts';
+import { RECIPES } from '../src/client/soundRecipes.ts';
 import type { Command } from '../src/engine/index.ts';
 import type { Box } from './rig.ts';
+
+/** A toast as a page told it, kept from the moment it came up. */
+export interface Toast {
+  text: string;
+  /** Where it was drawn. */
+  box: Box;
+  /** Whether it had less room than its words need. */
+  squeezed: boolean;
+}
+
+/**
+ * Run in every page a rig opens, before anything of the page's own.
+ *
+ * It makes the page's clock the rig's. The game on a rig keeps a clock that stands still until the check
+ * moves it, and a page tells the time by `Date.now`, which runs: left alone, a page that waited in real
+ * time thinks the table later than it is, by however slow the machine was, and then finds no time left
+ * for what it would have done or takes what it hears for old news. So `Date.now` here is the rig's time
+ * and never runs by itself. It is put forward by every answer of the server, before the page reads the
+ * answer, and by the rig whenever its clock is moved (`window.rig.clock`). Never back, so the two can
+ * come in either order. Timers, animations and `performance.now` run as ever: what a page does in its
+ * own time is what a check watches.
+ *
+ * It also keeps what a check would otherwise have to catch while it lasts: every toast the page tells
+ * (`window.rig.toasts`), and the version of the newest table the page has taken up (`window.rig.version`),
+ * set once the page is done with the answer that brought it, which it is before any timer of its runs.
+ * A page loaded again starts both afresh.
+ */
+export const RIG_PAGE = (now: number) => `(() => {
+  const rig = { now: ${now}, version: -1, toasts: [] };
+
+  rig.clock = (ms) => {
+    rig.now = Math.max(rig.now, ms);
+  };
+  window.rig = rig;
+  Date.now = () => rig.now;
+
+  const heard = (answer) => {
+    const view = answer?.view;
+    const now = view?.now ?? answer?.now;
+
+    if (typeof now === 'number') {
+      rig.clock(now);
+    }
+
+    if (typeof view?.version === 'number') {
+      setTimeout(() => (rig.version = Math.max(rig.version, view.version)), 0);
+    }
+  };
+
+  const send = window.fetch;
+  window.fetch = async (...args) => {
+    const response = await send(...args);
+    const json = response.json.bind(response);
+    const text = response.text.bind(response);
+
+    response.json = async () => {
+      const answer = await json();
+      heard(answer);
+
+      return answer;
+    };
+    response.text = async () => {
+      const body = await text();
+
+      try {
+        heard(JSON.parse(body));
+      } catch {
+        // Not an answer of the game's
+      }
+
+      return body;
+    };
+
+    return response;
+  };
+
+  new MutationObserver((changes) => {
+    for (const { target } of changes) {
+      if (target instanceof Element && target.classList.contains('toast')) {
+        const { left, top, right, bottom } = target.getBoundingClientRect();
+        rig.toasts.push({ text: target.textContent, box: { left, top, right, bottom }, squeezed: target.scrollWidth > target.clientWidth + 1 });
+      }
+    }
+  }).observe(document, { subtree: true, childList: true });
+})()`;
+
+/** Every toast a page has told since it was loaded, in order, whether or not one is still up. */
+export const toasts = (page: Page) => page.evaluate('window.rig.toasts') as Promise<Toast[]>;
+
+/**
+ * Resolves with the first toast a page has told that has `words` in it, waiting for it if need be; with
+ * `after`, the first past that many toasts, for words a page tells more than once. A toast is up for a
+ * few seconds, so one that came while the check was looking elsewhere is gone from the screen by the time
+ * a slow machine looks for it: what the page told is asked of what was kept, never of the screen.
+ */
+export async function toastTold(page: Page, words = '', after = 0): Promise<Toast> {
+  const told = await page.waitForFunction(`window.rig.toasts.slice(${after}).find((toast) => toast.text.includes(${JSON.stringify(words)}))`);
+
+  return (await told.jsonValue()) as Toast;
+}
+
+// Run in the page: writes down each sound it plays, since a check cannot listen. A sound starts with its
+// own gain going to the speakers, at the volume it is played at, and then the notes and noise it is made of.
+// A headless browser allows sound without a touch, so the check holds the page to the rule itself
+export const LISTEN = `(() => {
+  window.played = [];
+  window.contexts = [];
+
+  // Each audio context, and whether the visitor's gesture was under way when it was set up, as a browser insists
+  const Audio = AudioContext;
+  window.AudioContext = class extends Audio {
+    constructor(...args) {
+      super(...args);
+      window.contexts.push({ audio: this, inGesture: navigator.userActivation.isActive });
+    }
+  };
+
+  const connect = AudioNode.prototype.connect;
+  AudioNode.prototype.connect = function (target, ...rest) {
+    if (target instanceof AudioDestinationNode) {
+      window.played.push({ gain: this.gain.value, voices: [], starts: [], frame: window.frame });
+    }
+
+    return connect.call(this, target, ...rest);
+  };
+
+  for (const kind of [OscillatorNode, AudioBufferSourceNode]) {
+    const start = kind.prototype.start;
+    kind.prototype.start = function (...args) {
+      window.played.at(-1).voices.push(this instanceof OscillatorNode ? 'tone ' + this.frequency.value : 'noise');
+      window.played.at(-1).starts.push(args[0] ?? this.context.currentTime);
+
+      return start.apply(this, args);
+    };
+  }
+})()`;
+
+const voicesOf = (voices: string[]) => [...voices].sort().join(', ');
+
+const SOUND_BY_VOICES = new Map(Object.entries(RECIPES).map(([sound, voices]) => [voicesOf(voices.map((voice) => ('tone' in voice ? `tone ${voice.tone}` : 'noise'))), sound]));
+assert.equal(SOUND_BY_VOICES.size, Object.keys(RECIPES).length, 'two sounds are made of the same notes, so a check cannot tell them apart');
+
+/** The name of a sound `LISTEN` wrote down, from the notes and noise it was made of. */
+export const soundOf = (voices: string[]) => SOUND_BY_VOICES.get(voicesOf(voices)) ?? `something else: ${voices.join(', ')}`;
+
+/** What a page shows at one moment, as `PAGE_NOW` reads it. */
+export interface PageNow {
+  /** The table it is at, by its address; null on the front page. */
+  table: string | null;
+  /** The newest version of its table it has taken up. */
+  version: number;
+  /** Its clock, or null when a check has taken the clock from the rig. */
+  clock: number | null;
+  stage: string;
+  controls: string;
+  /** What lies over the table: a dialog, a replay, the notice of an update. */
+  over: string;
+  feed: string[];
+  toasts: string[];
+  toastUp: boolean;
+  /** Each sound played, by its voices; null on a page nothing listens to. */
+  sounds: string[][] | null;
+}
+
+// Run in the page: what it shows, in few enough words to print under a check that failed
+export const PAGE_NOW = `(() => {
+  const said = (selector) => [...document.querySelectorAll(selector)].map((element) => element.innerText.replace(/\\s+/g, ' ').trim()).filter(Boolean);
+  const stage = document.querySelector('.stage');
+  const acting = document.querySelector('.seat.acting');
+
+  return {
+    table: new URLSearchParams(location.search).get('table'),
+    version: window.rig?.version ?? -1,
+    clock: window.rig && Date.now() === window.rig.now ? window.rig.now : null,
+    stage: !stage ? 'none' : [
+      ...said('.topbar .pill'),
+      acting ? 'seat ' + acting.dataset.seat + ' to act' : 'nobody to act',
+      'board ' + ([...stage.querySelectorAll('.board .card[data-card]')].map((card) => card.dataset.card).join(' ') || 'empty'),
+      ...said('.stage .message').map((message) => JSON.stringify(message)),
+      ...stage.getAttributeNames().filter((name) => name.startsWith('data-')),
+    ].join(', '),
+    controls: said('.controls-slot').join(' ').slice(0, 300) || 'nothing',
+    over: said('.overlay:not([hidden]) h2, .replay:not([hidden]) h2, .outdated').join(' | ').slice(0, 200),
+    feed: [...document.querySelectorAll('.feed li')].slice(-4).map((line) => line.textContent.trim().slice(0, 120)),
+    toasts: (window.rig?.toasts ?? []).map((toast) => toast.text),
+    toastUp: document.querySelector('.toast:not([hidden])') !== null,
+    sounds: window.played ? window.played.map((sound) => sound.voices) : null,
+  };
+})()`;
 
 /** Run in the page: notifications that are written down, not shown, with the browser's answer so far and the one it gives when asked. */
 export const NOTICES = (permission: Permission, answer = permission) => `(() => {
@@ -114,6 +306,22 @@ export async function answeredAfter(page: Page, make: () => Promise<unknown>): P
   return answer;
 }
 
+/** The command a request carries, by its type; null for any other request. */
+const commandIn = (request: Request) => (JSON.parse(request.postData() ?? '{}') as { command?: { type?: string } }).command?.type ?? null;
+
+/**
+ * Does on a page what sends a command of the given type, and resolves with the server's answer to it.
+ * For a command that is no move of the turn, a reaction or a setting: what the check does next, on
+ * the rig's side above all, then comes after the server has it.
+ */
+export async function answeredTo(page: Page, type: Command['type'], make: () => Promise<unknown>): Promise<Response> {
+  const answer = page.waitForResponse((response) => commandIn(response.request()) === type);
+
+  await make();
+
+  return answer;
+}
+
 /** Resolves once the last line of a page's play-by-play is about this player: the view that says what they did has been drawn. */
 export const toldOf = (page: Page, name: string) => page.waitForFunction(`[...document.querySelectorAll('.feed li')].at(-1)?.textContent.startsWith(${JSON.stringify(`${name} `)})`);
 
@@ -206,7 +414,9 @@ export interface Flight {
  * Run in the page: writes down in `window.flights` every animation the page starts, with where what it
  * moves is at either end. Read the moment each begins, so a slow machine sees what a fast one does.
  * Setting `window.holdAt` to a share of a move stops every move from then on at that point of its own
- * time, in the air, until `window.land()` lets them all finish. `window.frame` counts the page's frames.
+ * time, in the air, until `window.land()` lets them all finish; with `window.holdOnly` set to a move's
+ * name, only moves of that name, for a check that holds one thing while the page goes on with another
+ * in its own time. `window.frame` counts the page's frames.
  * `window.inFlight` holds every animation that has not yet told whoever waits on it that it ended: one
  * cut short by a table drawn again is still there while that draw is looked at, though the stage by
  * then says it is still.
@@ -215,6 +425,7 @@ export const MOTION = `(() => {
   window.flights = [];
   window.inFlight = new Set();
   window.holdAt = null;
+  window.holdOnly = null;
   window.frame = 0;
 
   const count = () => {
@@ -261,7 +472,7 @@ export const MOTION = `(() => {
     window.inFlight.add(animation);
     animation.finished.then(ended, ended);
 
-    if (window.holdAt !== null) {
+    if (window.holdAt !== null && (window.holdOnly === null || window.holdOnly === options.id)) {
       animation.currentTime = options.delay + options.duration * window.holdAt;
       animation.pause();
       held.push(animation);

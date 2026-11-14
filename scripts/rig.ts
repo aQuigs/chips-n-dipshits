@@ -4,6 +4,7 @@
  * milliseconds, and a browser is opened only for the screens the check wants to look at.
  */
 import assert from 'node:assert/strict';
+import { setTimeout as sleep } from 'node:timers/promises';
 
 import { chromium } from 'playwright';
 import type { APIResponse, Browser, BrowserContext, BrowserContextOptions, Page, Route } from 'playwright';
@@ -25,12 +26,125 @@ import { seededRng, TestTable } from '../tests/helpers.ts';
 import type { DealOptions } from '../tests/helpers.ts';
 import { assertInvariants } from '../tests/invariants.ts';
 import { clientPage } from './bundle.ts';
-import { STILL } from './pageSpies.ts';
+import { PAGE_NOW, RIG_PAGE, soundOf, STILL } from './pageSpies.ts';
+import type { PageNow } from './pageSpies.ts';
 
 // Names a font to draw every screen in. CI's browser has other fonts than the machine a check was written on,
 // and what fails only there usually fails here in a narrower font ('Times New Roman') or a wider one ('Verdana').
 const FONT_OVERRIDE = process.env.RIG_FONT;
 const STEP_TIMEOUT_MS = 15_000;
+
+// Enough to ask a page of a check that failed what it shows, and to take its picture
+const LAST_LOOK_TIMEOUT_MS = 5000;
+
+/**
+ * How long, in milliseconds, the pages of every rig hear nothing after each step that changes the table:
+ * RIG_STALL, and 0 when it is not set. Longer than a toast stays up is what finds the most.
+ */
+export const STALL_MS = stallAsked();
+
+// How long the server of a stalled rig sits on any request before it hears it: longer than a check takes to go from a tap to its next line
+const STALLED_ANSWER_MS = 300;
+
+// How many stalls a page hears nothing for while the check is not waiting on it
+const UNWATCHED_STALLS = 2;
+
+// How long after anything else a poll is heard, so that what a page asks for itself gets there before the page's news does
+const POLL_LAST_MS = 100;
+
+// How often a request that is held back looks whether the check has turned to its page
+const LOOK_MS = 50;
+
+// What a stalled rig's pages put on their requests, so its server knows which page is asking
+const PAGE_HEADER = 'x-rig-page';
+
+function stallAsked(): number {
+  const asked = process.env.RIG_STALL;
+  const ms = asked === undefined ? 0 : Number(asked);
+  assert.ok(Number.isInteger(ms) && ms >= 0, `RIG_STALL is how long the pages hear nothing after each step, in whole milliseconds, not "${asked}"`);
+
+  return ms;
+}
+
+/**
+ * What makes a rig as slow as a machine too busy to keep up, in a run that asks for it with RIG_STALL.
+ * A check's steps are done at once, as ever, but its pages hear of none of them until the stall after
+ * the last is over, and the server sits on every request a while before it hears it. To a page that is
+ * the step itself coming late, since the game's clock stands still meanwhile. And a page the check is
+ * not waiting on hears later still, as the page a busy machine gets to last.
+ *
+ * So a page is always left waiting in real time before it hears of a step, a move tapped on a page is
+ * still on its way when the check's next line runs, a page gets nothing of the table between two steps
+ * unless the check waited on it, and what a page asks for itself is answered before its news of the
+ * last step: what loses such a race once in a hundred runs on a slow runner loses it here every time.
+ */
+class Stall {
+  private readonly ms: number;
+  private steppedAt = -Infinity;
+
+  /** For each page, how many things the check has asked of it and not yet got. */
+  private readonly asked = new Map<string, { pending: number }>();
+
+  constructor(ms: number) {
+    this.ms = ms;
+  }
+
+  /** The check has changed the table or moved its clock. */
+  stepped(): void {
+    this.steppedAt = performance.now();
+  }
+
+  /**
+   * Counts whatever the check asks of a page from now on, a wait, a read or a tap, as the check waiting
+   * on that page until it has its answer. `id` is what the page's requests carry in `PAGE_HEADER`.
+   */
+  watch(page: Page, id: string): void {
+    const asked = { pending: 0 };
+    const methods = Object.getPrototypeOf(page) as Record<string, unknown>;
+
+    this.asked.set(id, asked);
+
+    for (const name of Object.getOwnPropertyNames(methods)) {
+      const method = methods[name];
+
+      if (name === 'constructor' || name.startsWith('_') || typeof method !== 'function') {
+        continue;
+      }
+
+      (page as unknown as Record<string, unknown>)[name] = (...args: unknown[]) => {
+        const result: unknown = method.apply(page, args);
+
+        if (result instanceof Promise) {
+          const got = () => (asked.pending -= 1);
+
+          asked.pending += 1;
+          result.then(got, got);
+        }
+
+        return result;
+      };
+    }
+  }
+
+  /** Resolves when a request that has just reached the server may be heard: `page` is who asks, when it said, and `poll` whether it asks for news. */
+  async lag(page: string | undefined, poll: boolean): Promise<void> {
+    const asked = page === undefined ? undefined : this.asked.get(page);
+
+    await sleep(STALLED_ANSWER_MS);
+
+    for (;;) {
+      const waitedOn = !asked || asked.pending > 0;
+      const left = this.steppedAt + (waitedOn ? 1 : UNWATCHED_STALLS) * this.ms + (poll ? POLL_LAST_MS : 0) - performance.now();
+
+      if (left <= 0) {
+        return;
+      }
+
+      // Looked at again soon: the check may turn to the page meanwhile, or step again
+      await sleep(Math.min(left, LOOK_MS));
+    }
+  }
+}
 
 // Built once for the whole run, since no check can change the page
 let built: Promise<string> | undefined;
@@ -184,6 +298,7 @@ export class RigTable {
 
       return { save: state, at: this.rig.now(), effects: [], result: null };
     });
+    this.rig.changed();
   }
 
   /** Starts the game if need be and deals a hand with the button and the cards fixed: a new game, with the blinds left of that button. */
@@ -243,6 +358,18 @@ export class RigTable {
     throw new Error('the table never got where the check wanted it');
   }
 
+  /**
+   * Resolves once a page has taken up the table as it stands now, by the number only the server's answer
+   * brings. A page left to itself between two steps may get the table after each or only after the last,
+   * as the machine has it: wait this way before a step whose news the page must tell on its own, and
+   * before reading from the page anything the last step did not visibly change.
+   */
+  async heardBy(page: Page): Promise<void> {
+    const { version } = this.view(this.host);
+
+    await page.waitForFunction(`window.rig.version >= ${version}`);
+  }
+
   /** The table in a browser, as one of its members, on a screen of the given size. `init` runs in the page before anything of its own. */
   async open(name: string, screen: ScreenName, init?: string, options?: PageOptions): Promise<Page> {
     const { id, token } = this.auth(name);
@@ -285,12 +412,16 @@ export class Rig {
   /** The game's time, which stands still until the check moves it: running, it would play a hand on under a check that is looking at it. */
   private readonly clock: { ms: number };
   private readonly contexts: BrowserContext[] = [];
+  /** Whose page each is, for telling of it. */
+  private readonly whose = new Map<Page, string>();
+  private readonly stall: Stall | null;
+  private tellingTheTime = false;
   private closing: Promise<void> | null = null;
 
   /** What a check throws in a page on purpose, which is then no failure of the check. */
   private readonly meant: string[] = [];
 
-  private constructor(parts: { store: MemoryStore; presets: MemoryPresetStore; players: MemoryPlayerStore; results: MemoryResultStore; errors: MemoryErrorLog; browser: Browser; service: PokerService; server: DevServer; clock: { ms: number } }) {
+  private constructor(parts: { store: MemoryStore; presets: MemoryPresetStore; players: MemoryPlayerStore; results: MemoryResultStore; errors: MemoryErrorLog; browser: Browser; service: PokerService; server: DevServer; clock: { ms: number }; stall: Stall | null }) {
     this.store = parts.store;
     this.presets = parts.presets;
     this.players = parts.players;
@@ -300,6 +431,7 @@ export class Rig {
     this.service = parts.service;
     this.server = parts.server;
     this.clock = parts.clock;
+    this.stall = parts.stall;
   }
 
   /** A rig with nothing on it yet, whose pages open in `browser`. */
@@ -313,9 +445,15 @@ export class Rig {
     const errors = new MemoryErrorLog({ now: () => clock.ms });
     const service = new PokerService({ store, presets, players, results, clock: { now: () => clock.ms }, rng: seededRng(20261113), errors });
     const html = await (built ??= clientPage({}));
-    const server = await startDevServer({ port: 0, page: async () => html, service });
+    const stall = STALL_MS > 0 ? new Stall(STALL_MS) : null;
+    const server = await startDevServer({
+      port: 0,
+      page: async () => html,
+      service,
+      lag: stall ? ({ body, headers }) => stall.lag([headers[PAGE_HEADER]].flat()[0], (body as { op?: string } | null)?.op === 'poll') : undefined,
+    });
 
-    return new Rig({ store, presets, players, results, errors, browser, service, server, clock });
+    return new Rig({ store, presets, players, results, errors, browser, service, server, clock, stall });
   }
 
   get url(): string {
@@ -326,13 +464,52 @@ export class Rig {
     return this.clock.ms;
   }
 
-  /** Moves the game's clock forward. Pages follow, since they take the time from the server's answers. */
+  /** Moves the game's clock forward, and with it the clock of every page: the rig's time is the only time its pages have. */
   advance(ms: number): void {
     this.clock.ms += ms;
+    this.changed();
+    this.tellTheTime();
+  }
+
+  /** Puts the clock of every open page to the rig's, once for all the moves of the clock made in one go. */
+  private tellTheTime(): void {
+    if (this.tellingTheTime) {
+      return;
+    }
+
+    this.tellingTheTime = true;
+    queueMicrotask(() => {
+      this.tellingTheTime = false;
+
+      for (const page of this.pages()) {
+        // Through the frame, which a stalled rig does not take for the check waiting on the page. A page
+        // that has gone, or is between two documents, gets the time with the server's next answer
+        void page.mainFrame().evaluate(`window.rig?.clock(${this.clock.ms})`).catch(() => undefined);
+      }
+    });
   }
 
   ask(request: unknown): ApiResponse {
-    return this.service.handle(request);
+    if (!this.stall) {
+      return this.service.handle(request);
+    }
+
+    // A step when it changed its table, which a look at the table may too: a poll lets whatever came due happen
+    const { tableId } = request as { tableId?: string };
+    const version = () => (tableId ? this.store.peek(tableId)?.version : undefined);
+    const before = version();
+    const answer = this.service.handle(request);
+
+    if (!tableId || version() !== before) {
+      this.changed();
+    }
+
+    return answer;
+  }
+
+  /** Told of every step that changes a table or moves the clock, which is what a stalled rig's pages hear of late. */
+  changed(): void {
+    this.stall?.stepped();
   }
 
   /** Updates the game under the pages that are open, as a deploy does: they are now pages of another build. */
@@ -343,8 +520,11 @@ export class Rig {
   /** A browser page on a screen of the given size, with nothing in it yet and its table kept still. `who` names it when it throws. */
   async page(screen: ScreenName, who: string, { moving = false }: PageOptions = {}): Promise<Page> {
     const touch = screen !== 'desktop';
-    const context = await this.context({ viewport: SCREENS[screen], ...(touch ? { deviceScaleFactor: 2, isMobile: true, hasTouch: true } : {}) });
+    const id = String(this.contexts.length);
+    const context = await this.context({ viewport: SCREENS[screen], ...(touch ? { deviceScaleFactor: 2, isMobile: true, hasTouch: true } : {}), ...(this.stall ? { extraHTTPHeaders: { [PAGE_HEADER]: id } } : {}) });
     const page = await context.newPage();
+
+    this.stall?.watch(page, id);
 
     if (!moving) {
       await context.addInitScript(STILL);
@@ -358,7 +538,9 @@ export class Rig {
       });`);
     }
 
-    page.setDefaultTimeout(STEP_TIMEOUT_MS);
+    this.whose.set(page, who);
+    // In a stalled run a page nobody was waiting on takes that much longer to hear of the last step
+    page.setDefaultTimeout(STEP_TIMEOUT_MS + UNWATCHED_STALLS * STALL_MS);
     page.on('pageerror', (error) => {
       if (!this.meant.some((text) => error.message.includes(text))) {
         this.pageErrors.push(`${who}: ${error.message}`);
@@ -414,6 +596,7 @@ export class Rig {
   private async context(options: BrowserContextOptions): Promise<BrowserContext> {
     const context = await this.browser.newContext(options);
     this.contexts.push(context);
+    await context.addInitScript(RIG_PAGE(this.clock.ms));
     await context.route(FONTS, answerFont);
     await context.route(isGifHost, (route) => answerGif(route, this.gifs));
 
@@ -428,6 +611,42 @@ export class Rig {
 
   pages(): Page[] {
     return this.contexts.flatMap((context) => context.pages());
+  }
+
+  /**
+   * What every open page shows right now, in words and as a picture saved at `pathStart` and the page's
+   * number: for a check that failed or was stopped, whose error names one thing it waited for and
+   * nothing of what was there in its place.
+   */
+  lastLook(pathStart: string): Promise<string[]> {
+    const inTime = <T>(asked: Promise<T>): Promise<T | null> => Promise.race([asked, sleep(LAST_LOOK_TIMEOUT_MS, null)]).catch(() => null);
+
+    return Promise.all(
+      this.pages().map(async (page, index) => {
+        const path = `${pathStart}-${index + 1}.png`;
+        const [now, picture] = await Promise.all([inTime(page.evaluate(PAGE_NOW) as Promise<PageNow>), inTime(page.screenshot({ path, timeout: LAST_LOOK_TIMEOUT_MS }))]);
+        const lines = [`Page ${index + 1}, ${this.whose.get(page) ?? 'opened by the page before it'}: ${picture ? path : 'no picture could be taken'}`];
+
+        if (!now) {
+          return `${lines[0]}\n  it did not say what it shows`;
+        }
+
+        const table = now.table === null ? null : this.store.peek(now.table);
+
+        lines.push(
+          table ? `has taken up version ${now.version} of its table, which is at ${table.version}` : 'is at no table of this rig',
+          `its clock is ${now.clock === null ? 'not the rig\'s' : `${this.clock.ms - now.clock} ms behind the rig's`}`,
+          `the table: ${now.stage}`,
+          `under the table: ${now.controls}`,
+          ...(now.over ? [`over the table: ${now.over}`] : []),
+          `the last lines of the play-by-play: ${now.feed.length > 0 ? now.feed.map((line) => JSON.stringify(line)).join(', ') : 'none'}`,
+          `toasts told: ${now.toasts.length > 0 ? now.toasts.map((toast) => JSON.stringify(toast)).join(', ') : 'none'}${now.toastUp ? ', the last still up' : ''}`,
+          ...(now.sounds ? [`sounds played: ${now.sounds.map(soundOf).join(', ') || 'none'}`] : []),
+        );
+
+        return lines.join('\n  ');
+      }),
+    );
   }
 
   /** Closes this rig's pages and its server. The browser stays open, for the rig of the next check. */

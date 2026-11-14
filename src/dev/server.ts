@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
-import type { IncomingMessage, ServerResponse } from 'node:http';
+import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
 import { BuildGate, UNSTAMPED_BUILD } from '../server/build.ts';
@@ -26,6 +26,12 @@ export interface DevServerOptions {
   service?: PokerService;
   /** Where the fresh game writes its failures, when one is not passed. */
   errors?: ErrorLog;
+  /**
+   * Awaited before each request to the game is handled, once any wait for news is over, with what was
+   * asked and the headers it came with. Left out, the game answers at once; a check passes one to hear
+   * and answer as late as a busy machine would.
+   */
+  lag?: (asked: { body: unknown; headers: IncomingHttpHeaders }) => Promise<void>;
 }
 
 export interface DevServer {
@@ -116,6 +122,7 @@ export async function startDevServer(options: DevServerOptions): Promise<DevServ
       const body: unknown = JSON.parse(await readBody(request));
 
       await holdUntilNews(body);
+      await options.lag?.({ body, headers: request.headers });
       respond(response, 200, 'application/json', JSON.stringify(service.handle(body)));
       return;
     }

@@ -12,6 +12,7 @@
     "build": "tsc --noEmit -p . && tsc --noEmit -p src/client && tsc --noEmit -p src/gas && node scripts/build.ts",
     "test": "node --test \"tests/**/*.test.ts\"",
     "test:e2e": "E2E=1 node --test tests/e2e.test.ts",
+    "test:stall": "RIG_STALL=5000 node scripts/screenChecks.ts",
     "screenshots": "node scripts/screenshots.ts",
     "gallery": "node scripts/gallery.ts",
     "deploy": "npm run build && node scripts/deploy.ts",

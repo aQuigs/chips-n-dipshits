@@ -245,6 +245,7 @@ To see that it works on the live game, sit at a table, open the browser's develo
 | `npm run dev` | Runs the game at <http://127.0.0.1:8787> with tables kept in memory, reachable from this machine only. Open it in several windows to play against yourself. |
 | `npm test` | The rules, the request handling and the Sheet storage, against fakes. |
 | `npm run test:e2e` | Six players in real browsers through two hands, then the page served the way Apps Script serves it, with requests made to fail, then the screens where they are tightest: small phones, long chat, the largest stacks. Needs `npx playwright install chromium` once. |
+| `npm run test:stall` | The screen checks again, on a rig as slow as a machine too busy to keep up: a page hears of each step five seconds late, a page the check is not waiting on later still, and the server sits on every request. A check that passes only when the machine is quick fails here every time. Run it for the checks a change adds or alters before landing it (`npm run test:stall -- "part of a name"`). The whole list takes about nine minutes, so CI does not run it. |
 | `npm run screenshots` | The same browser run, saving a picture of every screen, and of the table in every theme, to `screenshots/`. |
 | `npm run build` | Type-checks and writes `dist/gas` (what is pushed to Apps Script) and `dist/web` (the page for any static host). |
 | `npm run gallery` | Writes `dist/gallery.html`, a showcase of the themes with the app playing against bots in the page. |

@@ -3,6 +3,7 @@ import type { TableConfig } from '../../../engine/types.ts';
 import type { TableView } from '../../../engine/view.ts';
 import { h } from '../../ui.ts';
 import { configForm } from '../configForm.ts';
+import { presetsPanel } from '../presets.ts';
 import { hostOrCohost } from '../roles.ts';
 import { frame, submit } from './dialog.ts';
 import type { DialogHandlers, DialogKind } from './dialog.ts';
@@ -17,20 +18,17 @@ function changed(opened: TableConfig, held: Partial<TableConfig>): Partial<Table
 
 function settings(view: TableView, handlers: DialogHandlers): HTMLElement {
   const fields = configForm(view.config, 'table-', false);
-
-  return frame(
-    'Table settings',
-    handlers,
-    h(
-      'form',
-      {
-        onsubmit: (event: Event) => submit(event, handlers, { type: 'updateConfig', config: changed(view.config, fields.read(event.target as HTMLFormElement)) }, handlers.close),
-      },
-      fields.rows,
-      h('p.note', null, 'New blinds, a new ante, a new bounty and new bomb pot settings apply from the next hand.'),
-      h('button.btn.primary', { type: 'submit', 'data-action': 'save-settings' }, 'Save'),
-    ),
+  const form = h(
+    'form',
+    {
+      onsubmit: (event: Event) => submit(event, handlers, { type: 'updateConfig', config: changed(view.config, fields.read(form)) }, handlers.close),
+    },
+    fields.rows,
+    h('p.note', null, 'New blinds, a new ante, a new bounty and new bomb pot settings apply from the next hand.'),
+    h('button.btn.primary', { type: 'submit', 'data-action': 'save-settings' }, 'Save'),
   );
+
+  return frame('Table settings', handlers, form, presetsPanel(view.config, handlers.presets, () => ({ ...view.config, ...fields.read(form) })));
 }
 
 export const settingsDialog: DialogKind<'settings'> = {

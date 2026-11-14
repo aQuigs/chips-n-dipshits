@@ -12,6 +12,7 @@ import { startDevServer } from '../src/dev/server.ts';
 import type { DevServer } from '../src/dev/server.ts';
 import type { Command, TableConfig, TableState, TableView } from '../src/engine/index.ts';
 import type { ApiResponse, Auth } from '../src/server/api.ts';
+import { MemoryPresetStore } from '../src/server/memoryPresetStore.ts';
 import { MemoryStore } from '../src/server/memoryStore.ts';
 import { PokerService } from '../src/server/service.ts';
 import { seededRng, TestTable } from '../tests/helpers.ts';
@@ -179,6 +180,8 @@ export class RigTable {
 /** The local server with a game whose cards and clock belong to the check. */
 export class Rig {
   readonly store: MemoryStore;
+  /** The group's presets, which every check shares: a check that saves some deletes them before it ends. */
+  readonly presets: MemoryPresetStore;
   readonly browser: Browser;
   readonly pageErrors: string[] = [];
   private readonly service: PokerService;
@@ -186,8 +189,9 @@ export class Rig {
   /** How far the game's clock runs ahead of the real one. */
   private readonly lead: { ms: number };
 
-  private constructor(parts: { store: MemoryStore; browser: Browser; service: PokerService; server: DevServer; lead: { ms: number } }) {
+  private constructor(parts: { store: MemoryStore; presets: MemoryPresetStore; browser: Browser; service: PokerService; server: DevServer; lead: { ms: number } }) {
     this.store = parts.store;
+    this.presets = parts.presets;
     this.browser = parts.browser;
     this.service = parts.service;
     this.server = parts.server;
@@ -196,12 +200,13 @@ export class Rig {
 
   static async start(): Promise<Rig> {
     const store = new MemoryStore();
+    const presets = new MemoryPresetStore();
     const lead = { ms: 0 };
-    const service = new PokerService({ store, clock: { now: () => Date.now() + lead.ms }, rng: seededRng(20261113) });
+    const service = new PokerService({ store, presets, clock: { now: () => Date.now() + lead.ms }, rng: seededRng(20261113) });
     const html = await clientPage({});
     const server = await startDevServer({ port: 0, page: async () => html, service });
 
-    return new Rig({ store, browser: await chromium.launch(), service, server, lead });
+    return new Rig({ store, presets, browser: await chromium.launch(), service, server, lead });
   }
 
   get url(): string {

@@ -33,7 +33,8 @@
   color: var(--good-ink);
 }
 
-.btn.fold {
+.btn.fold,
+.btn.danger {
   border-color: transparent;
   background: var(--bad);
   color: var(--bad-ink);

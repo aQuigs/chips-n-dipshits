@@ -1,4 +1,4 @@
-import type { CacheLike, LockLike, RangeLike, SheetLike, SpreadsheetLike } from '../src/gas/sheetStore.ts';
+import type { CacheLike, LockLike, RangeLike, SheetLike, SpreadsheetLike } from '../src/gas/sheets.ts';
 
 const TEXT_FORMAT = '@';
 const DECIMALS_OF_FORMAT = /^0(?:\.(0+))?$/;
@@ -13,6 +13,7 @@ const CACHE_KEY_LIMIT_CHARACTERS = 250;
  * if it looks like one. A cell takes 50,000 characters and no more, and half an emoji does not survive
  * being stored. A number shows only as many decimals as its cell's format has. Given a lock, it refuses
  * a write made without holding it, since the store keeps the cache in step with the sheet only that way.
+ * Given a row limit, it refuses a write below it.
  */
 export class FakeSheet implements SheetLike {
   cells: unknown[][] = [];
@@ -20,9 +21,12 @@ export class FakeSheet implements SheetLike {
   reads = 0;
   private writesAllowed = Infinity;
   private readonly lock: FakeLock | null;
+  private readonly rowLimit: number;
 
-  constructor(lock: FakeLock | null = null) {
+  /** `rowLimit` is the most rows, headers included, the store may ever write to. */
+  constructor(lock: FakeLock | null = null, rowLimit = Infinity) {
     this.lock = lock;
+    this.rowLimit = rowLimit;
   }
 
   /** Makes writes fail, the way the service now and then does, once `count` more have gone through. */
@@ -71,8 +75,10 @@ export class FakeSheet implements SheetLike {
       },
 
       setValues: (values: unknown[][]): void => {
-        if (this.lock && !this.lock.held) {
-          throw new Error('A write to the sheet without holding the script lock');
+        this.mustHoldLock();
+
+        if (row - 1 + numRows > this.rowLimit) {
+          throw new Error(`A write to row ${row - 1 + numRows} of a tab that may have ${this.rowLimit} rows`);
         }
 
         if (this.writesAllowed <= 0) {
@@ -110,8 +116,15 @@ export class FakeSheet implements SheetLike {
   }
 
   deleteRow(row: number): void {
+    this.mustHoldLock();
     this.cells.splice(row - 1, 1);
     this.formats.splice(row - 1, 1);
+  }
+
+  private mustHoldLock(): void {
+    if (this.lock && !this.lock.held) {
+      throw new Error('A write to the sheet without holding the script lock');
+    }
   }
 
   private interpret(value: unknown, format: string | undefined): unknown {
@@ -134,10 +147,12 @@ export class FakeSheet implements SheetLike {
 export class FakeSpreadsheet implements SpreadsheetLike {
   sheets = new Map<string, FakeSheet>();
   private readonly lock: FakeLock | null;
+  private readonly rowLimits: Record<string, number>;
 
-  /** With a lock, every sheet in it refuses writes made without holding it. */
-  constructor(lock: FakeLock | null = null) {
+  /** With a lock, every sheet in it refuses writes made without holding it. `rowLimits` caps the rows of the tabs it names. */
+  constructor(lock: FakeLock | null = null, rowLimits: Record<string, number> = {}) {
     this.lock = lock;
+    this.rowLimits = rowLimits;
   }
 
   getSheetByName(name: string): FakeSheet | null {
@@ -145,7 +160,11 @@ export class FakeSpreadsheet implements SpreadsheetLike {
   }
 
   insertSheet(name: string): FakeSheet {
-    const sheet = new FakeSheet(this.lock);
+    if (this.lock && !this.lock.held) {
+      throw new Error('A tab made without holding the script lock');
+    }
+
+    const sheet = new FakeSheet(this.lock, this.rowLimits[name]);
     this.sheets.set(name, sheet);
 
     return sheet;

@@ -13,6 +13,9 @@ export const LIMITS = {
   linkLength: 500,
   /** Rarer than this in a night's play is as good as never. */
   handsPerBombPot: 100,
+  presetNameLength: 30,
+  /** How many presets the group may keep. Few enough to pick from on a phone. */
+  presets: 20,
 };
 
 export function isWholeIn(value: unknown, min: number, max: number): value is number {

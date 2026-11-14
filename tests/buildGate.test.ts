@@ -3,6 +3,7 @@ import { test } from 'node:test';
 
 import type { ApiError, ApiRequest, ApiResponse, Auth, Built } from '../src/server/api.ts';
 import { BuildGate, OUTDATED_MESSAGE } from '../src/server/build.ts';
+import { MemoryPresetStore } from '../src/server/memoryPresetStore.ts';
 import { MemoryStore } from '../src/server/memoryStore.ts';
 import { PokerService } from '../src/server/service.ts';
 import { seededRng } from './helpers.ts';
@@ -13,7 +14,7 @@ const OLDER_BUILD = 'bbbbbbbbbbbb';
 /** A table with its host seated, behind the gate of one build. */
 function setup() {
   const store = new MemoryStore();
-  const gate = new BuildGate(new PokerService({ store, clock: { now: () => 1_000_000 }, rng: seededRng(7) }), THIS_BUILD);
+  const gate = new BuildGate(new PokerService({ store, presets: new MemoryPresetStore(), clock: { now: () => 1_000_000 }, rng: seededRng(7) }), THIS_BUILD);
 
   const created = gate.handle({ op: 'create', name: 'Host', build: THIS_BUILD });
   assert.ok(created.ok && created.kind === 'joined', JSON.stringify(created));

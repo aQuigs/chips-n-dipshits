@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { createTable } from '../src/engine/index.ts';
+import { createTable, DEFAULT_CONFIG, LIMITS, presetSettings } from '../src/engine/index.ts';
 import type { Effect, HandRecord, TableConfig, TableState } from '../src/engine/index.ts';
+import { SheetPresetStore } from '../src/gas/sheetPresetStore.ts';
 import { SheetStore } from '../src/gas/sheetStore.ts';
+import { MemoryPresetStore } from '../src/server/memoryPresetStore.ts';
+import type { PresetStore, SavedPreset } from '../src/server/presetStore.ts';
 import { StoreBusyError } from '../src/server/store.ts';
 import { FakeCache, FakeLock, FakeSpreadsheet } from './fakes.ts';
 import { seededRng } from './helpers.ts';
@@ -301,12 +304,14 @@ test('a missing table is remembered briefly, and creating it clears that', () =>
 });
 
 test('rows that moved in the sheet are found again', () => {
-  const { store, spreadsheet, anotherRun } = setup();
+  const { store, spreadsheet, lock, anotherRun } = setup();
   save(store, table('AAA222'));
   save(store, table('BBB333'));
   save(store, table('CCC444', 5));
 
+  lock.waitLock();
   spreadsheet.getSheetByName('Tables')!.deleteRow(2);
+  lock.releaseLock();
 
   const found = anotherRun().transact('CCC444', (state) => ({ save: null, effects: [], result: state }));
   assert.equal(found!.version, 5);
@@ -452,11 +457,13 @@ test('a header someone renamed is kept when the transfer columns are headed', ()
 });
 
 test('a ledger entry in dollars and cents that had to wait in its row is written in dollars whichever way it goes out', () => {
-  const { store, spreadsheet, cache, anotherRun } = setup();
+  const { store, spreadsheet, cache, lock, anotherRun } = setup();
   const cents = (version: number) => table('CNT234', version, { unit: 'cents' });
 
   save(store, cents(1));
+  lock.waitLock();
   const ledger = spreadsheet.getSheetByName('Ledger') ?? spreadsheet.insertSheet('Ledger');
+  lock.releaseLock();
 
   // With the next save
   ledger.refuseWritesAfter(0);
@@ -684,4 +691,190 @@ test('a lock that cannot be had in time becomes a retryable error', () => {
   lock.busy = true;
 
   assert.throws(() => save(store, table('ABC234')), StoreBusyError);
+});
+
+// ---- Presets ----
+
+const PRESET_ROWS = 1 + LIMITS.presets;
+
+function presetSetup() {
+  const lock = new FakeLock();
+  const spreadsheet = new FakeSpreadsheet(lock, { Presets: PRESET_ROWS });
+  const store = new SheetPresetStore({ spreadsheet: () => spreadsheet, lock, flush: () => {} });
+
+  /** A second store over the same Sheet, as another script run, answering another player at the same moment, would have. */
+  const anotherRun = () => new SheetPresetStore({ spreadsheet: () => spreadsheet, lock, flush: () => {} });
+  const tab = () => spreadsheet.getSheetByName('Presets')!;
+
+  return { store, spreadsheet, lock, anotherRun, tab };
+}
+
+function preset(name: string, settings: Record<string, unknown> = { smallBlind: 25, bigBlind: 50 }): SavedPreset {
+  return { name, settings, savedAt: 1_700_000_000_000, savedBy: 'Quigs' };
+}
+
+const names = (store: PresetStore) => store.list().map((kept) => kept.name);
+
+for (const [kind, make] of [
+  ['in the Sheet', () => presetSetup().store],
+  ['in memory', () => new MemoryPresetStore()],
+] as [string, () => PresetStore][]) {
+  test(`presets ${kind}: saved, listed in order, replaced in place only when asked, deleted whatever the case`, () => {
+    const store = make();
+
+    store.save(preset('Friday 25/50'), false);
+    store.save(preset('Tuesday cents', { unit: 'cents' }), false);
+    assert.deepEqual(store.list(), [
+      { name: 'Friday 25/50', settings: { smallBlind: 25, bigBlind: 50 } },
+      { name: 'Tuesday cents', settings: { unit: 'cents' } },
+    ]);
+
+    assert.throws(() => store.save(preset('friday 25/50'), false), { name: 'GameError', message: 'There is already a preset called Friday 25/50' });
+
+    assert.deepEqual(store.save(preset('FRIDAY 25/50', { smallBlind: 50 }), true), store.list(), 'a save answers with the presets as they are after it');
+    assert.deepEqual(store.list()[0], { name: 'FRIDAY 25/50', settings: { smallBlind: 50 } });
+    assert.equal(store.list().length, 2);
+
+    assert.deepEqual(store.delete('tuesday CENTS'), store.list());
+    assert.deepEqual(store.delete('Nothing by this name'), store.list());
+    assert.deepEqual(names(store), ['FRIDAY 25/50']);
+  });
+
+  test(`presets ${kind}: past the limit a new name is refused, while one of the same name is still replaced`, () => {
+    const store = make();
+
+    for (let index = 0; index < LIMITS.presets; index++) {
+      store.save(preset(`Night ${index}`), false);
+    }
+
+    assert.throws(() => store.save(preset('One more'), false), { name: 'GameError', message: `There are ${LIMITS.presets} presets already. Delete one to save another` });
+    assert.throws(() => store.save(preset('One more'), true), { name: 'GameError' });
+
+    store.save(preset('night 3', { bigBlind: 100 }), true);
+    store.delete('Night 0');
+    store.save(preset('One more'), false);
+    assert.equal(store.list().length, LIMITS.presets);
+    assert.equal(names(store).at(-1), 'One more');
+  });
+}
+
+test('presets in a Sheet that has never had one: listing finds none and makes no tab, and the first save makes it with its headers', () => {
+  const { store, spreadsheet, tab } = presetSetup();
+
+  assert.deepEqual(store.list(), []);
+  store.delete('Anything');
+  assert.equal(spreadsheet.getSheetByName('Presets'), null, 'reading or deleting made the tab');
+
+  store.save(preset('Friday 25/50'), false);
+  assert.deepEqual(tab().cells[0], ['Name', 'Settings (the game reads these, so edit with care)', 'Saved', 'Saved by']);
+  assert.deepEqual(tab().cells[1], ['Friday 25/50', '{"smallBlind":25,"bigBlind":50}', new Date(1_700_000_000_000), 'Quigs']);
+});
+
+test('a preset name that reads like a formula is kept as text', () => {
+  const { store } = presetSetup();
+
+  store.save(preset('=1+1'), false);
+  store.save(preset('2024'), false);
+  assert.deepEqual(names(store), ['=1+1', '2024']);
+});
+
+test('presets are written only under the script lock, and a lock that can\'t be had is a busy store, not a failure', () => {
+  const { store, lock, tab } = presetSetup();
+
+  store.save(preset('Friday 25/50'), false);
+  assert.equal(lock.held, false, 'the lock was kept');
+
+  lock.busy = true;
+  assert.throws(() => store.save(preset('Tuesday'), false), StoreBusyError);
+  assert.throws(() => store.delete('Friday 25/50'), StoreBusyError);
+  assert.deepEqual(store.list().map((kept) => kept.name), ['Friday 25/50'], 'listing needs no lock');
+
+  // The fake refuses what the store would do outside the lock
+  lock.busy = false;
+  assert.throws(() => tab().deleteRow(2), /without holding the script lock/);
+});
+
+test('two saves of one name at the same moment make one preset: the second sees the first under the lock', () => {
+  const { store, anotherRun, tab } = presetSetup();
+
+  // Both pages listed the presets before either saved, and neither found the name
+  const second = anotherRun();
+  assert.deepEqual(store.list(), []);
+  assert.deepEqual(second.list(), []);
+
+  store.save(preset('Friday 25/50'), false);
+  assert.throws(() => second.save(preset('friday 25/50', { bigBlind: 100 }), false), { message: 'There is already a preset called Friday 25/50' });
+  assert.equal(tab().getLastRow(), 2);
+
+  second.save(preset('friday 25/50', { bigBlind: 100 }), true);
+  assert.deepEqual(store.list(), [{ name: 'friday 25/50', settings: { bigBlind: 100 } }]);
+});
+
+test('two saves of new names when one place is left: the second is refused, and the tab never grows past the limit', () => {
+  const { store, anotherRun, tab } = presetSetup();
+
+  for (let index = 0; index < LIMITS.presets - 1; index++) {
+    store.save(preset(`Night ${index}`), false);
+  }
+
+  store.save(preset('Last place'), false);
+  assert.throws(() => anotherRun().save(preset('Too late'), false), { message: /Delete one to save another/ });
+  assert.equal(tab().getLastRow(), PRESET_ROWS);
+});
+
+test('a row someone made unreadable by hand is skipped, keeps its place, and stops nothing else', () => {
+  const { store, tab } = presetSetup();
+  store.save(preset('Friday 25/50'), false);
+  store.save(preset('Broken'), false);
+  store.save(preset('Tuesday'), false);
+  store.save(preset('Not settings'), false);
+
+  tab().cells[2]![1] = '{"smallBlind": 25,';
+  tab().cells[4]![1] = '[1, 2]';
+  tab().cells.push(['', 'a note to self', '', '']);
+  tab().cells.push(['x'.repeat(31), '{}', '', '']);
+
+  assert.deepEqual(names(store), ['Friday 25/50', 'Tuesday']);
+
+  // A row that can't be read is no preset by any name, so a new one called that goes after the others
+  store.save(preset('Broken'), false);
+  assert.deepEqual(names(store), ['Friday 25/50', 'Tuesday', 'Broken']);
+  assert.equal(tab().cells[2]![1], '{"smallBlind": 25,', 'the row someone was editing is left for them');
+
+  store.delete('Tuesday');
+  assert.deepEqual(names(store), ['Friday 25/50', 'Broken']);
+});
+
+test('a row cleared by hand is free again, and a note typed further down the tab takes no place', () => {
+  const { store, tab } = presetSetup();
+  store.save(preset('Friday 25/50'), false);
+  store.save(preset('Cleared'), false);
+  store.save(preset('Tuesday'), false);
+
+  // Cleared rather than deleted, and a note to the side far down, as someone working in the Sheet leaves them
+  tab().cells[2] = ['', '', '', ''];
+  tab().cells[29] = ['', '', '', '', '', 'ask Stu about Fridays'];
+  assert.deepEqual(names(store), ['Friday 25/50', 'Tuesday']);
+
+  assert.deepEqual(store.save(preset('Saturday'), false), store.list());
+  assert.equal(tab().cells[2]![0], 'Saturday', 'the new preset went past the cleared row');
+  assert.deepEqual(names(store), ['Friday 25/50', 'Saturday', 'Tuesday']);
+
+  for (let index = 0; index < LIMITS.presets - 3; index++) {
+    store.save(preset(`Night ${index}`), false);
+  }
+
+  assert.equal(store.list().length, LIMITS.presets, 'the note took the place of a preset');
+});
+
+test('the largest preset the game can make fits its cell with room to spare, and one too long for a cell is refused whole', () => {
+  const { store, tab } = presetSetup();
+  const longest = presetSettings({ ...DEFAULT_CONFIG, name: 'W'.repeat(LIMITS.tableNameLength), smallBlind: LIMITS.chips, bigBlind: LIMITS.chips, minBuyIn: LIMITS.chips, maxBuyIn: LIMITS.chips });
+
+  store.save(preset('W'.repeat(LIMITS.presetNameLength), longest), false);
+  assert.ok(String(tab().cells[1]![1]).length < 1000);
+
+  assert.throws(() => store.save(preset('Huge', { name: 'x'.repeat(50_000) }), false), /maximum of 50000 characters/);
+  assert.deepEqual(names(store), ['W'.repeat(LIMITS.presetNameLength)], 'nothing of the refused one was left behind');
+  assert.equal(tab().getLastRow(), 2);
 });

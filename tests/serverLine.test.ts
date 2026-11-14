@@ -5,6 +5,7 @@ import { ServerClock, ServerLine, sleep, TableConnection } from '../src/client/c
 import type { Transport } from '../src/client/transport.ts';
 import type { ApiRequest, ApiResponse, Auth, Built } from '../src/server/api.ts';
 import { BuildGate } from '../src/server/build.ts';
+import { MemoryPresetStore } from '../src/server/memoryPresetStore.ts';
 import { MemoryStore } from '../src/server/memoryStore.ts';
 import { PokerService } from '../src/server/service.ts';
 import { seededRng } from './helpers.ts';
@@ -14,7 +15,7 @@ const NEWER_BUILD = 'cccccccccccc';
 
 /** A server the test can update under the page, and everything the page sent it. */
 function server() {
-  const game = new PokerService({ store: new MemoryStore(), clock: { now: () => Date.now() }, rng: seededRng(3) });
+  const game = new PokerService({ store: new MemoryStore(), presets: new MemoryPresetStore(), clock: { now: () => Date.now() }, rng: seededRng(3) });
   const sent: (ApiRequest & Built)[] = [];
   let gate = new BuildGate(game, PAGE_BUILD);
 

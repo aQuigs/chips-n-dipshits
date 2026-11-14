@@ -4,9 +4,10 @@ import { boardsComplete, dealStreet, newBoards, potShares, runOut } from './boar
 import { boardsDealt, bombPotName, claimBombPot } from './bombPots.ts';
 import { isSevenDeuce, prettyCards, shuffledDeck } from './cards.ts';
 import type { HandEvent } from './events.ts';
-import { forcedBets, openingBet, positionsOf } from './forcedBets.ts';
+import { openingBet } from './forcedBets.ts';
 import type { ForcedBet } from './forcedBets.ts';
 import { madeHandName, midSentence } from './handNames.ts';
+import { planHand } from './handPlan.ts';
 import { playerHand } from './handRank.ts';
 import type { HandValue } from './handRank.ts';
 import { buildPots, splitAmount } from './pots.ts';
@@ -182,25 +183,21 @@ function postForcedBets(state: TableState, ctx: Ctx, bets: readonly ForcedBet[])
 }
 
 export function startHand(state: TableState, ctx: Ctx): void {
-  const eligible = eligibleSeats(state);
-  if (eligible.length < 2) {
+  if (eligibleSeats(state).length < 2) {
     throw new Error('A hand needs at least two players');
   }
 
   const { smallBlind, bigBlind, sevenDeuceBounty } = state.config;
-  const button = state.buttonSeat === null ? eligible[ctx.rng.int(eligible.length)]! : seatsClockwiseAfter(eligible, state.buttonSeat)[0]!;
-
-  const positions = positionsOf(eligible, button);
-  const { order, sbSeat, bbSeat } = positions;
   const bombPot = claimBombPot(state);
 
   // Worked out while every stack is still whole: what the hand starts with is settled before any of it is posted
-  const forced = forcedBets(state, positions, bombPot);
+  const { button, order, sbSeat, bbSeat, bets: forced } = planHand(state, bombPot, ctx.rng);
 
   // A bomb pot has no bet to call before the flop, and no betting there
   const opening = bombPot ? null : openingBet(forced);
 
-  const players: HandPlayer[] = eligible.map((seat) => {
+  // Kept in seat order, whatever order they are dealt in
+  const players: HandPlayer[] = [...order].sort((a, b) => a - b).map((seat) => {
     const playerId = state.seats[seat]!.playerId;
 
     return {

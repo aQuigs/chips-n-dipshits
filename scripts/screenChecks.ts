@@ -4839,7 +4839,7 @@ const CHECKS: Check[] = [
           keep('Tuesday cents', { unit: 'cents', smallBlind: 25, bigBlind: 50, ante: 10, minBuyIn: 2000, maxBuyIn: 10_000, actionSeconds: 20, allowStraddle: false, sevenDeuceBounty: 100 });
 
           // Saved when the clock could be set higher, with a setting the game has since dropped, and before a bomb pot could have two boards
-          const { bombPotBoards: _boards, ...fromBefore } = { ...presetSettings({ ...DEFAULT_CONFIG, smallBlind: 5, bigBlind: 10 }), actionSeconds: 900, rabbitHunting: true };
+          const { bombPotBoards: _boards, ...fromBefore } = { ...presetSettings({ ...DEFAULT_CONFIG, smallBlind: 5, bigBlind: 10 }), actionSeconds: 900, dealersChoice: true };
           rig.presets.save({ name: 'From before', settings: fromBefore, savedAt: 0, savedBy: 'Quigs' }, false);
 
           keep('Bombs in chips', { bombPotAmount: 300, bombPotEvery: 5, bombPotBoards: 'two' });

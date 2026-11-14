@@ -3,7 +3,7 @@ import { formatAmount, validAmount } from '../amounts.ts';
 import { bombPotName, bombPotOf } from '../bombPots.ts';
 import { stopChoppingUnasked } from '../chop.ts';
 import { validatedConfig } from '../config.ts';
-import { restartActionClock } from '../hand.ts';
+import { restartActionClock, retimeRabbitOffer } from '../hand.ts';
 import { forgive, forgiveEveryone, owes } from '../handPlan.ts';
 import { payHighHandNow } from '../highHand.ts';
 import { actorName, dropCohost, requireMayRemove } from '../hosts.ts';
@@ -262,6 +262,7 @@ export const updateConfig: Handler<'updateConfig'> = {
     }
 
     if (state.config.rabbitHunting !== before.rabbitHunting) {
+      retimeRabbitOffer(state, ctx.now);
       addFeed(state, ctx.now, 'system', null, state.config.rabbitHunting ? 'Rabbit hunting is on: after a hand ends early, anyone dealt in can see the cards that would have come' : 'Rabbit hunting is off');
     }
 

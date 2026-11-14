@@ -543,13 +543,20 @@ export class App {
 
   /**
    * Asks to see the cards a hand would have dealt. Asking twice shows nothing twice, so unlike a move,
-   * a request that got no answer is sent once more rather than looked up: the hand is off the table
-   * a few seconds later, which is no time to wait for a poll.
+   * a request that got no answer is sent once more rather than only looked up: the hand is off the table
+   * a few seconds later. Only while the page still offers that hand's hunt, though: an answer that never
+   * came can take longer than the hand stays up, and a hunt that went through shows with the poll.
    */
   private async hunt(hand: number): Promise<void> {
-    if ((await this.send({ type: 'huntRabbit', hand })) === 'unanswered') {
+    if ((await this.send({ type: 'huntRabbit', hand })) === 'unanswered' && this.offersHunt(hand)) {
       await this.send({ type: 'huntRabbit', hand });
     }
+  }
+
+  private offersHunt(hand: number): boolean {
+    const shown = this.shownView()?.hand;
+
+    return shown?.number === hand && shown.canHunt;
   }
 
   /** The server no longer knows this browser at the table, so start over from the join screen or the lobby. */

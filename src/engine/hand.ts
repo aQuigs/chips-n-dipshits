@@ -975,7 +975,20 @@ function wonBySomebody(result: HandResult): boolean {
  * cards to come of a hand nobody won, as one the blinds chopped, stay in the deck.
  */
 export function rabbitToHunt(state: TableState, hand: Hand): boolean {
-  return state.config.rabbitHunting && hand.stage === 'done' && hand.hunted === null && !boardsComplete(hand) && wonBySomebody(hand.result!);
+  return state.config.rabbitHunting && rabbitLeft(hand);
+}
+
+function rabbitLeft(hand: Hand): boolean {
+  return hand.stage === 'done' && hand.hunted === null && !boardsComplete(hand) && wonBySomebody(hand.result!);
+}
+
+/** Rabbit hunting was switched while a hand that has a rabbit is up: its pause becomes what it would have been had the table been set so when it ended. */
+export function retimeRabbitOffer(state: TableState, now: number): void {
+  const hand = state.hand;
+
+  if (hand?.deadline != null && rabbitLeft(hand)) {
+    hand.deadline = Math.max(now, hand.deadline + (state.config.rabbitHunting ? TIMING.rabbitOfferMs : -TIMING.rabbitOfferMs));
+  }
 }
 
 /** Whether the player in a seat may hunt the hand's rabbit: one dealt into it, folded or not, who has not left. */
@@ -996,7 +1009,7 @@ export function huntRabbit(state: TableState, ctx: Ctx, seatIndex: number, numbe
   const hand = state.hand;
 
   if (!hand || hand.number !== number) {
-    throw new GameError('That hand is over and the next one is on its way, so its rabbit is gone');
+    throw new GameError('That hand is over, so its rabbit is gone');
   }
 
   const player = playerAt(hand, seatIndex);

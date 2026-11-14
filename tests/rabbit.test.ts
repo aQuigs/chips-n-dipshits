@@ -289,7 +289,7 @@ test('once the next hand is dealt, a hunt for the last one is refused, and it ne
   foldOutAt(t, 3);
   assert.equal(t.state.hand!.number, last + 1);
 
-  assert.throws(() => t.cmd(dealtIn(t), { type: 'huntRabbit', hand: last }), { name: 'GameError', message: /next one is on its way/ });
+  assert.throws(() => t.cmd(dealtIn(t), { type: 'huntRabbit', hand: last }), { name: 'GameError', message: /That hand is over, so its rabbit is gone/ });
   assert.equal(t.state.hand!.hunted, null);
 });
 
@@ -319,6 +319,24 @@ test('switched on during a hand, the setting lets that hand be hunted; switched 
   off.cmd(0, { type: 'updateConfig', config: { rabbitHunting: false } });
   assert.equal(off.feedText().at(-1), 'Rabbit hunting is off');
   assert.throws(() => hunt(off), { name: 'GameError', message: /doesn't hunt/ });
+});
+
+test('switched while a hand with a rabbit is up, the setting gives that hand the pause it would have had: a table switched off waits no longer than one that never hunted', () => {
+  const off = shuffledTable(7);
+  foldOutAt(off, 3);
+  const ended = off.now;
+
+  off.now += 1000;
+  off.cmd(0, { type: 'updateConfig', config: { rabbitHunting: false } });
+  assert.equal(off.state.hand!.deadline, ended + TIMING.uncontestedPauseMs);
+
+  off.cmd(0, { type: 'updateConfig', config: HUNTING });
+  assert.equal(off.state.hand!.deadline, ended + TIMING.uncontestedPauseMs + TIMING.rabbitOfferMs);
+  hunt(off);
+
+  const deadline = off.state.hand!.deadline;
+  off.cmd(0, { type: 'updateConfig', config: { rabbitHunting: false } });
+  assert.equal(off.state.hand!.deadline, deadline, 'a hunted hand keeps the time to see its cards');
 });
 
 test('the pause: unchanged at a table that does not hunt, longer by a fixed time after a hand that can be hunted, and one player holds the next hand up by no more than the time it takes to see the cards', () => {

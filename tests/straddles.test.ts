@@ -417,6 +417,58 @@ test('a straddle is all of it or none: a player a chip short posts no part of on
   assertInvariants(exact.state, exact.now);
 });
 
+test('a double straddler all in from posting it can win what each player matched of it, and the rest is a side pot between the others', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 1000, 1000, 80, 1000], config: allowing('UD') });
+  choose(t, 3, 'U');
+  choose(t, 4, 'D');
+  t.deal({ button: 0, holes: { 3: 'Qs Qh', 4: 'As Ah', 5: 'Ks Kh' }, board: '2c 7d 9h Jc 3s' });
+
+  assert.deepEqual([t.state.hand!.players[4]!.allIn, t.toAct], [true, 5]);
+  t.call(5);
+  t.fold(0);
+  t.fold(1);
+  t.fold(2);
+
+  // The straddler under the gun closes the betting: the player whose double they call has nothing left to raise with
+  assert.equal(options(t, 3).callAmount, 40);
+  t.call(3);
+  assert.equal(t.state.hand!.street, 'flop');
+
+  t.raise(3, 100);
+  t.call(5);
+  for (let street = 0; street < 2; street++) {
+    t.check(3);
+    t.check(5);
+  }
+
+  t.finishHand();
+
+  const [record] = handRecords(t.effects);
+  assert.deepEqual(record!.result.pots.map((pot) => pot.amount), [270, 200]);
+  assert.deepEqual(t.stacks(), [1000, 990, 980, 820, 270, 1020]);
+  assertHandRecordsHold(t.effects);
+});
+
+test('a straddler who gets up in the middle of the hand leaves it as it was dealt, and the next hand is dealt without them', () => {
+  const t = dealt({ name: 'leaving', players: 6, on: 'UDB', want: { 3: 'U', 4: 'D', 0: 'B' }, line: [], acts: '' });
+
+  t.cmd(0, { type: 'standUp' });
+  assert.deepEqual(t.state.hand!.straddles, [{ seat: 0, what: 'button straddle', amount: 40 }]);
+  assert.deepEqual(t.view(3).hand!.passedOver, { seat: 3, why: 'right', ahead: 0 });
+  assertInvariants(t.state, t.now);
+
+  // Everyone folds to the straddle, which the player who left wins and takes with them
+  t.foldOut();
+  assert.equal(t.state.seats[0], null);
+  assert.deepEqual(t.stacks(), [0, 990, 980, 1000, 1000, 1000]);
+  assertHandRecordsHold(t.effects);
+
+  // Five are dealt in. Seat 3, who asked to straddle under the gun, has the big blind, and seat 4 asked only to double
+  t.deal();
+  assert.deepEqual([t.state.hand!.button, t.state.hand!.players.length, t.state.hand!.straddles, t.state.hand!.passedOver], [1, 5, [], []]);
+  assertInvariants(t.state, t.now);
+});
+
 test('a bomb pot has no straddle of any kind, and nobody is told they were passed over for one', () => {
   const t = new TestTable({ stacks: [1000, 1000, 1000, 1000, 1000, 1000], config: allowing(EVERY_KIND) });
   for (let seat = 0; seat < 6; seat++) {

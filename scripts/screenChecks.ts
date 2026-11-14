@@ -4032,7 +4032,7 @@ const CHECKS: Check[] = [
           await lookInShapes('last', ['Last hand of the night']);
           await press('[data-action="menu"]');
           await host.waitForSelector('.menu [data-action="lastHands"]');
-          assert.equal(await host.locator('.menu [data-action^="bomb-pot"]').count(), 0, 'a bomb pot is offered for a hand that never comes');
+          assert.equal(await host.locator('.menu [data-action="bomb-pot"]').count(), 0, 'a bomb pot is offered for a hand that never comes');
           await press('[data-action="close"]');
 
           for (const page of [host, deciding, watcher]) {

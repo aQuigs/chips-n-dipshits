@@ -13,6 +13,11 @@ import type { Browser, Page } from 'playwright';
 import { KEYS_SETTLE_MS } from '../src/client/hotkeys.ts';
 import { startDevServer } from '../src/dev/server.ts';
 import { UNSTAMPED_BUILD } from '../src/server/build.ts';
+import { MemoryPresetStore } from '../src/server/memoryPresetStore.ts';
+import { MemoryStore } from '../src/server/memoryStore.ts';
+import { PUT_AWAY_AFTER_MS, PUT_AWAY_MESSAGE } from '../src/server/putAway.ts';
+import { PokerService } from '../src/server/service.ts';
+import { seededRng } from '../tests/helpers.ts';
 import { clientPage } from './bundle.ts';
 import { answeredAfter, complaints, moveIn, movesSent, NOTICES, ownComplaints, STILL, TITLES, toldOf } from './pageSpies.ts';
 import { Gate } from './rig.ts';
@@ -838,6 +843,67 @@ try {
     await context.close();
     await dealer.context().close();
     google.close();
+  }
+
+  console.log('A table that was put away says so once, stops asking, and is in neither the address nor the browser afterwards');
+  {
+    // A game of its own, whose clock can be moved on two weeks
+    let ahead = 0;
+    const game = new PokerService({ store: new MemoryStore(), presets: new MemoryPresetStore(), clock: { now: () => Date.now() + ahead }, rng: seededRng(14) });
+    const later = await startDevServer({ port: 0, page: async () => html, service: game });
+
+    try {
+      const page = await open(browser);
+      const old = await createTable(page, later.url, 'Marge');
+      const member = inAddress(page, 'me')!;
+      assert.equal(await remembered(page, old), member);
+
+      const polls: unknown[] = [];
+      page.on('request', (request) => {
+        const sent = JSON.parse(request.postData() ?? '{}') as { op?: string; tableId?: string };
+
+        if (sent.op === 'poll' && sent.tableId === old) {
+          polls.push(sent);
+        }
+      });
+
+      // Nobody plays for two weeks, the page open all the while, and then someone else starts a table
+      ahead = PUT_AWAY_AFTER_MS;
+      const other = await open(browser);
+      await createTable(other, later.url, 'Homer');
+
+      await page.waitForSelector('[data-screen="put-away"]');
+      assert.equal(await page.innerText('[data-screen="put-away"] p >> nth=0'), PUT_AWAY_MESSAGE);
+      assert.deepEqual([inAddress(page, 'table'), inAddress(page, 'me')], [null, null], 'the address still names the table that is gone');
+      assert.equal(await remembered(page, old), null, 'the browser still remembers a seat at it');
+
+      // The answer was a plain one, not a failure to be tried again
+      const asked = polls.length;
+      await sleep(QUIET_MS);
+      assert.equal(polls.length, asked, 'the page went on asking for a table that was put away');
+
+      // Loaded again there is no table to go back to, and the personal link someone kept is answered the same way
+      await page.reload();
+      await page.waitForSelector('[data-action="create-table"]');
+
+      const kept = await open(browser);
+      await kept.goto(`${later.url}?table=${old}&me=${member}`);
+      await kept.waitForSelector('[data-screen="put-away"]');
+      assert.deepEqual([inAddress(kept, 'table'), inAddress(kept, 'me')], [null, null]);
+
+      await kept.click('[data-action="start-new-table"]');
+      await kept.waitForSelector('[data-action="create-table"]');
+
+      // The table made since is none the worse
+      await other.waitForSelector('.stage .table');
+      await say(other, 'still here');
+
+      for (const each of [page, other, kept]) {
+        await each.context().close();
+      }
+    } finally {
+      await later.close();
+    }
   }
 
   console.log('The Apps Script-hosted page holds up');

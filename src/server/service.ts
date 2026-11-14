@@ -2,6 +2,8 @@ import { addMember, applyCommand, createTable, GameError, presetName, presetSett
 import type { Command, Ctx, Member, Preset, Rng, TableState } from '../engine/index.ts';
 import type { ApiResponse, Auth, ErrorCode } from './api.ts';
 import type { PresetStore } from './presetStore.ts';
+import { PUT_AWAY_MESSAGE } from './putAway.ts';
+import type { LastWords } from './putAway.ts';
 import { StoreBusyError } from './store.ts';
 import type { TableStore } from './store.ts';
 
@@ -33,11 +35,14 @@ export interface PollWait {
 /** A request that can't be served, with the code the caller should react to. */
 export class ApiFailure extends Error {
   readonly code: ErrorCode;
+  /** The table asked for was put away, which a page tells its player in its own words. */
+  readonly putAway: boolean;
 
-  constructor(code: ErrorCode, message: string) {
+  constructor(code: ErrorCode, message: string, putAway = false) {
     super(message);
     this.name = 'ApiFailure';
     this.code = code;
+    this.putAway = putAway;
   }
 }
 
@@ -65,7 +70,7 @@ function tableIdOf(request: Fields): string {
 
   const id = wellFormedTableId(request.tableId);
   if (id === null) {
-    throw noSuchTable();
+    throw new ApiFailure('not_found', NO_SUCH_TABLE);
   }
 
   return id;
@@ -95,9 +100,20 @@ function presetsAnswer(presets: Preset[]): ApiResponse {
   return { ok: true, kind: 'presets', presets: presets.map(sharedPreset) };
 }
 
-function noSuchTable(): ApiFailure {
-  return new ApiFailure('not_found', 'That table does not exist');
+const NO_SUCH_TABLE = 'That table does not exist';
+
+/** The store has no table under this id. Whether it was put away is found out in one place, `answer`. */
+class NoSuchTable extends ApiFailure {
+  readonly tableId: string;
+
+  constructor(tableId: string) {
+    super('not_found', NO_SUCH_TABLE);
+    this.tableId = tableId;
+  }
 }
+
+/** Nothing yet: whatever comes to want a table's last state answers here. */
+const LAST_WORDS: LastWords = () => [];
 
 /**
  * Serves every request the game's clients make. It knows nothing about HTTP, Apps Script or Sheets:
@@ -120,14 +136,14 @@ export class PokerService {
   /** Answers one request. Rule violations and bad requests come back as error responses; only bugs and outages throw. */
   handle(request: unknown): ApiResponse {
     try {
-      return this.route(fieldsOf(request));
+      return this.answer(fieldsOf(request));
     } catch (error) {
       if (error instanceof GameError) {
         return { ok: false, code: 'invalid', error: error.message };
       }
 
       if (error instanceof ApiFailure) {
-        return { ok: false, code: error.code, error: error.message };
+        return { ok: false, code: error.code, error: error.message, ...(error.putAway ? { putAway: true } : {}) };
       }
 
       if (error instanceof StoreBusyError) {
@@ -177,6 +193,22 @@ export class PokerService {
     return !peek || peek.version !== since || (peek.wakeAt !== null && peek.wakeAt <= this.clock.now());
   }
 
+  /**
+   * The answer to a request, with one failure looked into: of a table that isn't there, whether it was
+   * put away. Asked here, when the request holds no lock any more, since the store may take one to find out.
+   */
+  private answer(request: Fields): ApiResponse {
+    try {
+      return this.route(request);
+    } catch (error) {
+      if (error instanceof NoSuchTable && this.store.wasPutAway(error.tableId)) {
+        throw new ApiFailure('not_found', PUT_AWAY_MESSAGE, true);
+      }
+
+      throw error;
+    }
+  }
+
   private route(request: Fields): ApiResponse {
     switch (request.op) {
       case 'create':
@@ -210,15 +242,28 @@ export class PokerService {
   private mutate<T>(tableId: string, change: (state: TableState, ctx: Ctx) => T): T {
     return this.store.transact(tableId, (state) => {
       if (!state) {
-        throw noSuchTable();
+        throw new NoSuchTable(tableId);
       }
 
       const ctx = this.ctx();
       tick(state, ctx);
       state.version += 1;
 
-      return { save: state, effects: ctx.effects, result: change(state, ctx) };
+      return { save: state, at: ctx.now, effects: ctx.effects, result: change(state, ctx) };
     });
+  }
+
+  /**
+   * Puts away the tables nobody has changed for a long time. The one place it is asked for, so that
+   * whatever else comes to ask does it the same way. It rides on a request a player made for something
+   * else, which nothing that goes wrong here may fail.
+   */
+  private putAwayOldTables(): void {
+    try {
+      this.store.putAwayOld(this.clock.now(), LAST_WORDS);
+    } catch (error) {
+      console.error(error);
+    }
   }
 
   private create(request: Fields): ApiResponse {
@@ -236,10 +281,13 @@ export class PokerService {
 
         const auth: Auth = { id: host.id, token: host.token };
 
-        return { save: state, effects: ctx.effects, result: { auth, view: viewFor(state, host.id, ctx.now) } };
+        return { save: state, at: ctx.now, effects: ctx.effects, result: { auth, view: viewFor(state, host.id, ctx.now) } };
       });
 
       if (created) {
+        // A new table is rare and already a write to the store, so it is when the old ones are seen to
+        this.putAwayOldTables();
+
         return { ok: true, kind: 'joined', ...created };
       }
     }
@@ -250,7 +298,7 @@ export class PokerService {
   private info(tableId: string): ApiResponse {
     const state = this.store.read(tableId);
     if (!state) {
-      throw noSuchTable();
+      throw new NoSuchTable(tableId);
     }
 
     const players = state.seats.flatMap((seat) => (seat ? [state.members.find((m) => m.id === seat.playerId)!.name] : []));
@@ -283,7 +331,7 @@ export class PokerService {
     const now = this.clock.now();
     const peek = this.store.peek(tableId);
     if (!peek) {
-      throw noSuchTable();
+      throw new NoSuchTable(tableId);
     }
 
     // Nothing runs in the background, so whoever polls first after a deadline is the one who applies it
@@ -311,7 +359,7 @@ export class PokerService {
 
       state.version += 1;
 
-      return { save: state, effects: ctx.effects, result: null };
+      return { save: state, at: ctx.now, effects: ctx.effects, result: null };
     });
   }
 
@@ -349,7 +397,7 @@ export class PokerService {
   private memberOf(tableId: string, auth: Auth): { state: TableState; member: Member } {
     const state = this.store.read(tableId);
     if (!state) {
-      throw noSuchTable();
+      throw new NoSuchTable(tableId);
     }
 
     return { state, member: authenticate(state, auth) };

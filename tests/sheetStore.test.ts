@@ -6,16 +6,20 @@ import type { Effect, HandRecord, TableConfig, TableState } from '../src/engine/
 import { SheetPresetStore } from '../src/gas/sheetPresetStore.ts';
 import { SheetStore } from '../src/gas/sheetStore.ts';
 import { MemoryPresetStore } from '../src/server/memoryPresetStore.ts';
+import { MemoryStore } from '../src/server/memoryStore.ts';
 import type { PresetStore, SavedPreset } from '../src/server/presetStore.ts';
+import type { LastWords } from '../src/server/putAway.ts';
 import { StoreBusyError } from '../src/server/store.ts';
-import { FakeCache, FakeLock, FakeSpreadsheet } from './fakes.ts';
-import { cards, seededRng, TestTable } from './helpers.ts';
+import type { TableStore } from '../src/server/store.ts';
+import { Calls, FakeCache, FakeLock, FakeSpreadsheet } from './fakes.ts';
+import { cards, DAY_MS, seededRng, TestTable } from './helpers.ts';
 import { fullestChat } from './invariants.ts';
 
 function setup() {
   const lock = new FakeLock();
-  const spreadsheet = new FakeSpreadsheet(lock);
-  const cache = new FakeCache();
+  const calls = new Calls();
+  const spreadsheet = new FakeSpreadsheet(lock, {}, calls);
+  const cache = new FakeCache(calls);
   const counts = { opens: 0, flushes: 0 };
   let failingFlush = 0;
 
@@ -27,6 +31,7 @@ function setup() {
     cache,
     lock,
     flush: () => {
+      calls.note('flush');
       counts.flushes += 1;
 
       if (counts.flushes === failingFlush) {
@@ -39,9 +44,9 @@ function setup() {
   const failFlush = (nth: number) => (failingFlush = counts.flushes + nth);
 
   /** A second store over the same sheet and cache, as a separate script run would have. */
-  const anotherRun = () => new SheetStore({ spreadsheet: () => spreadsheet, cache, lock, flush: () => {} });
+  const anotherRun = () => new SheetStore({ spreadsheet: () => spreadsheet, cache, lock, flush: () => calls.note('flush') });
 
-  return { store, spreadsheet, cache, lock, counts, anotherRun, failFlush, failNextFlush: () => failFlush(1) };
+  return { store, spreadsheet, cache, lock, calls, counts, anotherRun, failFlush, failNextFlush: () => failFlush(1) };
 }
 
 function buyIn(amount: number, tableId = 'ABC234'): Effect {
@@ -69,8 +74,11 @@ function table(id: string, version = 1, config: Partial<TableConfig> = {}): Tabl
   return state;
 }
 
-function save(store: SheetStore, state: TableState, effects: Effect[] = []): void {
-  store.transact(state.id, () => ({ save: state, effects, result: null }));
+// When the tables of these tests are saved, unless a test says otherwise
+const NOW = Date.UTC(2026, 10, 14, 20);
+
+function save(store: TableStore, state: TableState, effects: Effect[] = [], at = NOW): void {
+  store.transact(state.id, () => ({ save: state, at, effects, result: null }));
 }
 
 function handRecord(tableId: string, number: number): HandRecord {
@@ -130,7 +138,7 @@ test('a transaction sees the latest saved state and updates the same row', () =>
     state!.version = 2;
     state!.running = true;
 
-    return { save: state, effects: [], result: state!.version };
+    return { save: state!, at: NOW, effects: [], result: state!.version };
   });
 
   assert.equal(seen, 2);
@@ -989,4 +997,862 @@ test('after the longest night the fullest table still fits its row and the cache
 
   cache.entries.clear();
   assert.deepEqual(anotherRun().read(t.state.id), t.state, 'and it reads back from its row the same');
+});
+
+// ---- Putting old tables away ----
+
+const TABLE_CELLS = 12;
+const nothingToSay: LastWords = () => [];
+
+/** The ids in a tab's first column, row by row from the second, '' for a row that is empty there. */
+function idsIn(sheet: { cells: unknown[][] } | null): string[] {
+  return (sheet?.cells ?? []).slice(1).map((row) => String(row?.[0] ?? ''));
+}
+
+/** A Sheet with some tables in it, each last saved the given number of days before `NOW`. */
+function aged(ages: Record<string, number>) {
+  const context = setup();
+
+  // Looking for a table is what makes the Tables tab, so it is there for a test that starts with none
+  context.store.transact('NONE22', () => ({ save: null, effects: [], result: null }));
+
+  for (const [id, days] of Object.entries(ages)) {
+    save(context.store, table(id), [], NOW - days * DAY_MS);
+  }
+
+  const tables = context.spreadsheet.getSheetByName('Tables')!;
+  const archive = () => context.spreadsheet.getSheetByName('Archive');
+
+  return { ...context, tables, archive, sweep: (lastWords: LastWords = nothingToSay, now = NOW) => context.anotherRun().putAwayOld(now, lastWords) };
+}
+
+/** The two kinds of store, each with a look at the ledger entries it has kept. */
+const STORES: [string, () => { store: TableStore; ledgerAmounts(): unknown[] }][] = [
+  [
+    'in the Sheet',
+    () => {
+      const { store, spreadsheet } = setup();
+
+      return { store, ledgerAmounts: () => (spreadsheet.getSheetByName('Ledger')?.cells ?? []).slice(1).map((row) => row[4]) };
+    },
+  ],
+  [
+    'in memory',
+    () => {
+      const store = new MemoryStore();
+
+      return { store, ledgerAmounts: () => store.ledger.map((entry) => entry.amount) };
+    },
+  ],
+];
+
+for (const [kind, make] of STORES) {
+  test(`tables ${kind}: one nobody has saved for two weeks is put away, and from then on there is no such table, only the knowledge that it was put away`, () => {
+    const { store } = make();
+    save(store, table('OLD222', 7), [], NOW - 14 * DAY_MS);
+    save(store, table('NEW333'), [], NOW - 14 * DAY_MS + 1);
+
+    store.putAwayOld(NOW, nothingToSay);
+
+    assert.equal(store.read('OLD222'), null);
+    assert.equal(store.peek('OLD222'), null);
+    assert.equal(store.transact('OLD222', (state) => ({ save: null, effects: [], result: state })), null);
+    assert.equal(store.wasPutAway('OLD222'), true);
+
+    assert.equal(store.read('NEW333')!.id, 'NEW333', 'a millisecond short of two weeks is not two weeks');
+    assert.equal(store.wasPutAway('NEVER2'), false, 'a table that never was is not one that was put away');
+  });
+
+  test(`tables ${kind}: looking at a table does not keep it, and saving it does`, () => {
+    const { store } = make();
+    save(store, table('SEEN22'), [], NOW - 20 * DAY_MS);
+    save(store, table('PLAYED'), [], NOW - 20 * DAY_MS);
+
+    // A page left open polls for ever, and now and then something looks the table up without changing it
+    store.read('SEEN22');
+    store.peek('SEEN22');
+    store.transact('SEEN22', () => ({ save: null, effects: [], result: null }));
+    save(store, table('PLAYED', 2), [], NOW - DAY_MS);
+
+    store.putAwayOld(NOW, nothingToSay);
+
+    assert.equal(store.read('SEEN22'), null);
+    assert.equal(store.read('PLAYED')!.version, 2);
+  });
+
+  test(`tables ${kind}: a sweep puts away three at most, the longest unchanged first, and the next sweeps take the rest`, () => {
+    const { store } = make();
+    const ages: Record<string, number> = { DAYS15: 15, DAYS40: 40, DAYS20: 20, DAYS30: 30, DAYS16: 16, YOUNG2: 2 };
+
+    for (const [id, days] of Object.entries(ages)) {
+      save(store, table(id), [], NOW - days * DAY_MS);
+    }
+
+    const left = () => Object.keys(ages).filter((id) => store.read(id) !== null);
+
+    store.putAwayOld(NOW, nothingToSay);
+    assert.deepEqual(left(), ['DAYS15', 'DAYS16', 'YOUNG2']);
+
+    store.putAwayOld(NOW, nothingToSay);
+    assert.deepEqual(left(), ['YOUNG2']);
+
+    store.putAwayOld(NOW, nothingToSay);
+    assert.deepEqual(left(), ['YOUNG2']);
+  });
+
+  test(`tables ${kind}: a table is asked its last words once, with its last state, and what it says is kept like the effects of a save`, () => {
+    const { store, ledgerAmounts } = make();
+    const last = table('OLD222', 4);
+    last.config.name = 'Friday night';
+    save(store, table('OLD222', 3), [], NOW - 30 * DAY_MS);
+    save(store, last, [buyIn(100, 'OLD222')], NOW - 20 * DAY_MS);
+    save(store, table('NEW333'), [], NOW);
+
+    const asked: [TableState, number][] = [];
+    store.putAwayOld(NOW, (state, at) => {
+      asked.push([state, at]);
+
+      return [buyIn(-100, 'OLD222'), { type: 'nightEnded', night: { at, tableId: state.id } }];
+    });
+
+    assert.deepEqual(asked, [[last, NOW]], 'only the table that was put away, as it was last saved');
+    assert.deepEqual(ledgerAmounts(), [100, -100]);
+
+    store.putAwayOld(NOW + DAY_MS, () => {
+      throw new Error('a table that is gone was asked again');
+    });
+  });
+
+  test(`tables ${kind}: last words that cannot be had stop nothing: the table is put away all the same`, () => {
+    const { store, ledgerAmounts } = make();
+    save(store, table('OLD222'), [buyIn(100, 'OLD222')], NOW - 20 * DAY_MS);
+    save(store, table('OLD333'), [], NOW - 19 * DAY_MS);
+
+    store.putAwayOld(NOW, (state) => {
+      if (state.id === 'OLD222') {
+        throw new Error('whoever wanted to know has a bug');
+      }
+
+      return [buyIn(7, state.id)];
+    });
+
+    assert.deepEqual([store.wasPutAway('OLD222'), store.wasPutAway('OLD333')], [true, true]);
+    assert.deepEqual(ledgerAmounts(), [100, 7]);
+  });
+}
+
+test('a sweep with nothing to put away reads two small cells a row in one call, writes nothing and makes no tab', () => {
+  const { tables, archive, calls, sweep } = aged({ AAA222: 13, BBB333: 1, CCC444: 0 });
+  calls.made = [];
+
+  sweep();
+
+  assert.deepEqual(calls.made, ['spreadsheet.getSheetByName', 'Tables.getLastRow', 'Tables.getValues'], 'no write, no flush, no call to the cache');
+  assert.equal(archive(), null);
+  assert.deepEqual(idsIn(tables), ['AAA222', 'BBB333', 'CCC444']);
+});
+
+test('an old table moves to the Archive whole, with what tells it from the others beside it, and leaves an empty row and no cache entry behind', () => {
+  const { store, tables, archive, cache, anotherRun, sweep } = aged({});
+  const old = table('OLD222', 3);
+  old.config.name = '=Friday night';
+  old.members[0]!.buyIn = 500;
+  addMember(old, 'Ann', { now: 2000, rng: seededRng(4), effects: [] }).buyIn = 200;
+  addMember(old, 'Watcher', { now: 2000, rng: seededRng(5), effects: [] });
+
+  save(store, table('NEW333'), [], NOW - DAY_MS);
+  save(store, old, [], NOW - 15 * DAY_MS);
+  save(store, table('NEW444'), [], NOW - DAY_MS);
+
+  const row = [...tables.cells[2]!];
+  const others = [1, 3].map((index) => [...tables.cells[index]!]);
+  const cached = (id: string) => ['state', 'peek', 'row'].map((key) => cache.entries.has(`${key}:${id}`));
+  assert.deepEqual([cached('OLD222'), cached('NEW444')], [[true, true, true], [true, true, true]]);
+
+  sweep();
+
+  assert.deepEqual(archive()!.cells[0], [
+    'Table',
+    'Updated',
+    'Version',
+    'State (the game reads and writes these cells, so leave them alone)',
+    ...['', '', '', '', ''],
+    'Records on their way to the Ledger and Hands tabs (normally empty)',
+    ...['', ''],
+    'Name',
+    'Created',
+    'Players',
+    'Put away',
+  ]);
+  assert.deepEqual(archive()!.cells[1], [...row, '=Friday night', new Date(1000), 'Host, Ann', new Date(NOW)]);
+  assert.equal(row.length, TABLE_CELLS);
+  assert.equal(row[1], new Date(NOW - 15 * DAY_MS).toISOString(), 'when it last changed is the row\'s own Updated cell');
+
+  assert.deepEqual(tables.cells[2], Array.from({ length: TABLE_CELLS }, () => ''), 'its row is emptied');
+  assert.deepEqual([tables.cells[1], tables.cells[3]], others, 'and no other row has moved or changed');
+
+  assert.deepEqual(cached('OLD222'), [false, false, false]);
+  assert.deepEqual(cached('NEW444'), [true, true, true], 'a table still there keeps its entries');
+  assert.equal(cache.get('row:NEW444'), '4', 'and the row remembered for it is still its row');
+
+  assert.equal(anotherRun().read('OLD222'), null);
+  assert.equal(anotherRun().read('NEW444')!.id, 'NEW444');
+});
+
+test('the row a table left empty is taken by the next new table, so the tab stops growing', () => {
+  const { store, tables, anotherRun, sweep } = aged({ OLD222: 20, NEW333: 1, OLD444: 20, NEW555: 1 });
+  sweep();
+  assert.deepEqual(idsIn(tables), ['', 'NEW333', '', 'NEW555']);
+
+  save(anotherRun(), table('2E5678'));
+  save(anotherRun(), table('NEXT33'));
+  save(anotherRun(), table('NEXT44'));
+
+  assert.deepEqual(idsIn(tables), ['2E5678', 'NEW333', 'NEXT33', 'NEW555', 'NEXT44']);
+  assert.equal(tables.cells[1]![0], '2E5678', 'kept as text in a row that was used before');
+
+  for (const id of ['2E5678', 'NEW333', 'NEXT33', 'NEW555', 'NEXT44']) {
+    assert.equal(store.read(id)!.id, id);
+    assert.equal(anotherRun().transact(id, (state) => ({ save: null, effects: [], result: state!.id })), id);
+  }
+});
+
+test('a row that only lost its id is not an empty row: a new table goes past it, and it is left as it is', () => {
+  const { tables, anotherRun } = aged({ AAA222: 1, BBB333: 1 });
+  tables.cells[1]![0] = '';
+  const orphan = [...tables.cells[1]!];
+
+  save(anotherRun(), table('NEW444'));
+
+  assert.deepEqual(tables.cells[1], orphan);
+  assert.deepEqual(idsIn(tables), ['', 'BBB333', 'NEW444']);
+});
+
+test('a table whose Updated cell is empty or says nothing readable counts as new and is left exactly where it is', () => {
+  const { tables, archive, sweep } = aged({ BLANK2: 30, WORDS2: 30, SERIAL: 30, WRONG2: 30, FUTURE: 30, DATED2: 30, YOUNG2: 1 });
+  const cell = (index: number, value: unknown) => (tables.cells[index]![1] = value);
+
+  // What a tab from before the column was written would have, and what a hand can leave there
+  cell(1, '');
+  cell(2, 'last month');
+  cell(3, 45_000);
+  cell(4, '2026-02-31');
+  cell(5, new Date(NOW + 400 * DAY_MS).toISOString());
+  cell(6, new Date(NOW - 30 * DAY_MS));
+  const before = tables.cells.map((row) => [...row]);
+
+  sweep();
+
+  assert.deepEqual(idsIn(tables), ['BLANK2', 'WORDS2', 'SERIAL', 'WRONG2', 'FUTURE', '', 'YOUNG2'], 'only the one whose cell holds a date two weeks old has gone');
+  assert.deepEqual(tables.cells.slice(0, 6), before.slice(0, 6));
+  assert.deepEqual(idsIn(archive()), ['DATED2']);
+});
+
+test('rows that do not read as the tables they name are left exactly where they are, and however many there are the tables behind them are still put away', () => {
+  const ages: Record<string, number> = { BROKEN: 90, OTHER2: 89, NOJSON: 88, NOTE22: 87, HELD22: 86, HELD33: 85, HELD44: 84 };
+  const good = ['GOOD22', 'GOOD33', 'GOOD44', 'GOOD55', 'GOOD66'];
+  good.forEach((id, index) => (ages[id] = 60 - index));
+
+  const { store, tables, archive, sweep } = aged(ages);
+
+  tables.cells[1]![3] = '~{"id":"BROKEN","schema":';
+  tables.cells[2]![3] = `~${JSON.stringify(table('ELSE22'))}`;
+  tables.cells[3]![3] = '~[1, 2]';
+  tables.cells[4] = ['a note to self', new Date(NOW - 87 * DAY_MS).toISOString()];
+
+  // What is in the cells for waiting records and is not such records: cut short by hand, not a list, a list of something else
+  tables.cells[5]![9] = '~[{"id":"HELD22:1:0","record":{"type":"ledger","entry":{"amount":500}}';
+  tables.cells[6]![9] = '~{"id":"HELD33:1:0"}';
+  tables.cells[7]![10] = '~[7]';
+  const before = tables.cells.slice(1, 8).map((row) => [...row]);
+
+  // Seven rows that stay, the oldest of all: more than a sweep looks at. Each sweep is at a time of its own, as each new table is
+  for (let later = 0; later < 12; later++) {
+    sweep(nothingToSay, NOW + later);
+    assert.deepEqual(tables.cells.slice(1, 8), before, `sweep ${later}`);
+  }
+
+  assert.deepEqual(idsIn(archive()).sort(), good);
+  assert.deepEqual(idsIn(tables).slice(7), ['', '', '', '', '']);
+  assert.equal(store.wasPutAway('GOOD66'), true);
+  assert.equal(store.wasPutAway('HELD22'), false);
+});
+
+test('a table saved by code too old to load is put away as it is, with nothing asked of it', () => {
+  const { tables, archive, anotherRun, sweep } = aged({ FIRST2: 20 });
+  const ancient = { ...table('FIRST2'), schema: 1 };
+  tables.cells[1]![3] = `~${JSON.stringify(ancient)}`;
+  const row = [...tables.cells[1]!];
+  assert.throws(() => anotherRun().transact('FIRST2', () => ({ save: null, effects: [], result: null })), /schema 1/);
+
+  sweep(() => {
+    throw new Error('asked of a table that cannot be loaded');
+  });
+
+  assert.deepEqual(archive()!.cells[1]!.slice(0, TABLE_CELLS), row);
+  assert.deepEqual(archive()!.cells[1]!.slice(TABLE_CELLS, TABLE_CELLS + 3), ["Chips n' Dipshits", new Date(1000), '']);
+  assert.equal(anotherRun().wasPutAway('FIRST2'), true);
+});
+
+test('the Archive tab is made by the first table that moves, and one that is already there is added to, whatever its headers', () => {
+  const { spreadsheet, archive, lock, sweep, anotherRun } = aged({ OLD222: 20, OLD333: 19 });
+
+  assert.equal(anotherRun().wasPutAway('OLD222'), false);
+  assert.equal(archive(), null, 'asking after a table made no tab');
+
+  // A tab of that name the owner made, or renamed the headers of
+  lock.waitLock();
+  spreadsheet.insertSheet('Archive').getRange(1, 1, 2, 2).setValues([
+    ['Old tables', 'When'],
+    ['a note', ''],
+  ]);
+  lock.releaseLock();
+
+  sweep();
+
+  assert.deepEqual(archive()!.cells[0], ['Old tables', 'When']);
+  assert.deepEqual(idsIn(archive()), ['a note', 'OLD222', 'OLD333']);
+  assert.equal(anotherRun().wasPutAway('OLD333'), true);
+});
+
+test('an Archive tab left without its headers, as when making it failed halfway, gets them with the next table', () => {
+  const { spreadsheet, archive, lock, sweep } = aged({ OLD222: 20 });
+
+  lock.waitLock();
+  spreadsheet.insertSheet('Archive');
+  lock.releaseLock();
+
+  sweep();
+
+  assert.deepEqual(archive()!.cells[0]!.slice(TABLE_CELLS), ['Name', 'Created', 'Players', 'Put away']);
+  assert.deepEqual(idsIn(archive()), ['OLD222']);
+});
+
+test('a table is asked its last words while its row is still in the Tables tab, and a record of them that cannot be copied keeps it there until it can', () => {
+  const { store, spreadsheet, tables, archive, anotherRun, sweep } = aged({ OLD222: 20 });
+  save(store, table('NEW333'), [buyIn(100, 'NEW333')]);
+  const ledger = spreadsheet.getSheetByName('Ledger')!;
+  const seen: string[][] = [];
+  const lastWords: LastWords = (state) => {
+    seen.push([idsIn(tables).join(), idsIn(archive()).join()]);
+
+    return [buyIn(-50, state.id)];
+  };
+
+  ledger.refuseWritesAfter(0);
+  sweep(lastWords);
+
+  assert.deepEqual(seen, [['OLD222,NEW333', '']], 'asked before anything of it has moved');
+  assert.deepEqual(idsIn(tables), ['OLD222', 'NEW333'], 'it stays where its record is still waiting');
+  assert.equal(archive(), null);
+  assert.match(String(tables.cells[1]![9]), /"id":"OLD222:1:away:0"/);
+  assert.equal(anotherRun().read('OLD222')!.id, 'OLD222');
+
+  ledger.acceptWrites();
+  sweep(lastWords);
+
+  assert.deepEqual(idsIn(tables), ['', 'NEW333']);
+  assert.deepEqual(ledger.cells.slice(1).map((row) => [row[4], row[6]]), [[100, 'NEW333:1:0'], [-50, 'OLD222:1:away:0']], 'its record was written once, though it was asked twice');
+  assert.deepEqual(archive()!.cells[1]!.slice(9, TABLE_CELLS), ['', '', ''], 'and it went to the Archive with nothing left waiting');
+});
+
+test('a table with records still on their way to the Ledger is put away once they have arrived', () => {
+  const { store, spreadsheet, tables, archive, sweep } = aged({});
+  save(store, table('NEW333'), [buyIn(1, 'NEW333')]);
+  const ledger = spreadsheet.getSheetByName('Ledger')!;
+
+  ledger.refuseWritesAfter(0);
+  save(store, table('OLD222'), [buyIn(500, 'OLD222')], NOW - 20 * DAY_MS);
+  assert.match(String(tables.cells[2]![9]), /"amount":500/);
+
+  sweep();
+  assert.deepEqual(idsIn(tables), ['NEW333', 'OLD222'], 'the Ledger is still refusing, so the table and its buy-in stay');
+
+  ledger.acceptWrites();
+  sweep();
+
+  assert.deepEqual(idsIn(tables), ['NEW333', '']);
+  assert.deepEqual(idsIn(archive()), ['OLD222']);
+  assert.deepEqual(ledger.cells.slice(1).map((row) => row[4]), [1, 500]);
+});
+
+/** Ledger lines of another table, more than a retry at the table would look back through. */
+function manyLinesSince(store: TableStore): void {
+  for (let version = 1; version <= 3; version++) {
+    save(store, table('BUSY22', version), Array.from({ length: 200 }, (_line, index) => buyIn(index + 1, 'BUSY22')));
+  }
+}
+
+test('a record that reached its tab long ago, though its row still says it is waiting, is not written again when its table is put away', () => {
+  const { store, spreadsheet, tables, archive, failFlush, sweep } = aged({});
+
+  // The line landed, the push after it failed, and everyone had left: nothing read the row again to find out
+  failFlush(2);
+  save(store, table('OLD222'), [buyIn(100, 'OLD222')], NOW - 20 * DAY_MS);
+  assert.match(String(tables.cells[1]![9]), /"id":"OLD222:1:0"/);
+
+  manyLinesSince(store);
+  const ledger = spreadsheet.getSheetByName('Ledger')!;
+  assert.equal(ledger.getLastRow(), 602);
+
+  sweep();
+
+  assert.deepEqual(idsIn(archive()), ['OLD222']);
+  assert.equal(ledger.cells.filter((row) => row[6] === 'OLD222:1:0').length, 1);
+  assert.equal(ledger.getLastRow(), 602);
+});
+
+test('last words that reached their tab in a sweep that then failed are not written again by the sweep that finishes it, however much later', () => {
+  const { store, spreadsheet, lock, tables, archive, sweep } = aged({ OLD222: 20 });
+  const lastWords: LastWords = (state) => [buyIn(-50, state.id)];
+
+  lock.waitLock();
+  const made = spreadsheet.insertSheet('Archive');
+  lock.releaseLock();
+  made.refuseWritesAfter(0);
+
+  sweep(lastWords);
+  assert.deepEqual(idsIn(tables), ['OLD222'], 'the Archive could not take it');
+
+  const ledger = spreadsheet.getSheetByName('Ledger')!;
+  assert.deepEqual(ledger.cells.slice(1).map((row) => row[6]), ['OLD222:1:away:0']);
+
+  manyLinesSince(store);
+  made.acceptWrites();
+  sweep(lastWords, NOW + DAY_MS);
+
+  assert.deepEqual(idsIn(archive()), ['OLD222']);
+  assert.equal(ledger.cells.filter((row) => row[6] === 'OLD222:1:away:0').length, 1);
+  assert.equal(ledger.getLastRow(), 602);
+});
+
+test('rows sorted by hand while a sweep runs: a row that no longer names the table that was leaving is not emptied', () => {
+  const { spreadsheet, cache, lock, tables, archive, anotherRun, sweep } = aged({ OLD222: 20, LIVE33: 1 });
+  let flushes = 0;
+
+  // The owner sorts the tab between the sweep reading the old table's row and emptying it
+  const sweeper = new SheetStore({
+    spreadsheet: () => spreadsheet,
+    cache,
+    lock,
+    flush: () => {
+      flushes += 1;
+
+      if (flushes === 1) {
+        [tables.cells[1], tables.cells[2]] = [tables.cells[2]!, tables.cells[1]!];
+      }
+    },
+  });
+
+  sweeper.putAwayOld(NOW, nothingToSay);
+
+  assert.deepEqual(idsIn(tables), ['LIVE33', 'OLD222'], 'the live table is in the row the old one had, and is still there');
+  assert.deepEqual(anotherRun().read('LIVE33'), table('LIVE33'));
+  assert.equal(anotherRun().transact('LIVE33', (state) => ({ save: null, effects: [], result: state!.id })), 'LIVE33');
+
+  // The old table is in both tabs, as after any sweep that could not finish, and the next one finishes it where it now is
+  sweep();
+  assert.deepEqual(idsIn(tables), ['LIVE33', '']);
+  assert.deepEqual(idsIn(archive()), ['OLD222']);
+});
+
+test('a table whose saved state says something of it that cannot be written to a cell is put away without that', () => {
+  const { tables, archive, sweep } = aged({ ODD222: 20, OLD333: 19 });
+  const odd = { ...table('ODD222'), createdAt: 1e20, members: [null, { name: 7, buyIn: 'lots' }], config: null };
+  tables.cells[1]![3] = `~${JSON.stringify(odd)}`;
+
+  sweep();
+
+  assert.deepEqual(idsIn(archive()), ['ODD222', 'OLD333'], 'and it keeps back nothing it is written with');
+  assert.deepEqual(archive()!.cells[1]!.slice(TABLE_CELLS, TABLE_CELLS + 3), ['', '', '']);
+});
+
+/** Whether every table saved is still somewhere, whole, and the store answers for each as the Tables tab has it. */
+function assertNothingLost(context: ReturnType<typeof aged>, saved: Record<string, number>): void {
+  const { tables, archive, cache, anotherRun } = context;
+  const stateIn = (row: unknown[] | undefined) => (row ? row.slice(3, 9).map((cell) => String(cell).slice(1)).join('') : '');
+
+  for (const [id, version] of Object.entries(saved)) {
+    const expected = JSON.stringify(table(id, version));
+    const here = tables.cells.slice(1).filter((row) => row?.[0] === id);
+    const away = (archive()?.cells ?? []).slice(1).filter((row) => row?.[0] === id);
+
+    assert.ok(here.length + away.length >= 1, `${id} is in neither tab`);
+    assert.ok(here.length <= 1, `${id} is in the Tables tab twice`);
+    for (const row of [...here, ...away]) {
+      assert.equal(stateIn(row), expected, `${id} is not whole`);
+    }
+
+    // The cache never answers for a table the Tables tab no longer has, and a row remembered for a table is its row
+    if (here.length === 0) {
+      assert.deepEqual(['state', 'peek', 'row'].map((key) => cache.entries.has(`${key}:${id}`) && cache.entries.get(`${key}:${id}`) !== 'away'), [false, false, false], `${id} is still cached`);
+    }
+
+    const read = anotherRun().read(id);
+    assert.deepEqual(read, here.length === 1 ? table(id, version) : null, `the store answers wrongly for ${id}`);
+    assert.equal(anotherRun().transact(id, (state) => ({ save: null, effects: [], result: state?.id ?? null })), here.length === 1 ? id : null);
+
+    // Asked only of a table the store has said it does not have
+    if (here.length === 0) {
+      assert.equal(anotherRun().wasPutAway(id), true);
+    }
+  }
+}
+
+test('a sweep that fails at any one of its calls loses no table, never answers for the wrong one, and the next sweep finishes what it left', () => {
+  const ages = { OLD222: 30, NEW333: 1, OLD444: 25, OLD555: 20, NEW666: 2 };
+  const versions = { OLD222: 1, NEW333: 1, OLD444: 1, OLD555: 1, NEW666: 1 };
+  const lastWords: LastWords = (state) => (state.id === 'OLD444' ? [buyIn(-50, state.id)] : []);
+
+  // Once over with nothing failing, to learn every call a sweep makes
+  const clean = aged(ages);
+  clean.calls.made = [];
+  clean.sweep(lastWords);
+  const steps = [...clean.calls.made];
+  assertNothingLost(clean, versions);
+  assert.deepEqual(idsIn(clean.tables), ['', 'NEW333', '', '', 'NEW666']);
+
+  for (const kind of ['spreadsheet.insertSheet', 'Archive.setValues', 'Tables.setValues', 'Ledger.setValues', 'cache.remove', 'flush']) {
+    assert.ok(steps.includes(kind), `the sweep being failed makes no call to ${kind}`);
+  }
+
+  // The Archive has the tables, and has been made to say so, before anything of them is taken away
+  const pushed = steps.indexOf('flush', steps.lastIndexOf('Archive.setValues'));
+  const after = steps.slice(pushed + 1);
+  assert.ok(pushed > 0 && !steps.slice(0, pushed).includes('cache.remove'));
+  assert.deepEqual(
+    after,
+    ['Tables.getValues', ...Array.from({ length: 3 }, () => ['cache.remove', 'cache.remove', 'cache.remove', 'Tables.setValues']).flat(), 'flush'],
+    'then their rows are looked at once more, and a table at a time its cache entries go before its row is emptied',
+  );
+
+  for (let failing = 1; failing <= steps.length; failing++) {
+    const context = aged(ages);
+    const step = `call ${failing}, ${steps[failing - 1]}`;
+
+    context.calls.failNth(failing);
+    assert.doesNotThrow(() => context.sweep(lastWords), step);
+    assert.equal(context.lock.held, false, step);
+    assertNothingLost(context, versions);
+
+    context.sweep(lastWords);
+    context.sweep(lastWords);
+    assertNothingLost(context, versions);
+    assert.deepEqual(idsIn(context.tables), ['', 'NEW333', '', '', 'NEW666'], `${step}: the old tables have gone`);
+    assert.deepEqual(idsIn(context.archive()).sort(), ['OLD222', 'OLD444', 'OLD555'], `${step}: each once in the Archive`);
+    assert.deepEqual((context.spreadsheet.getSheetByName('Ledger')?.cells ?? []).slice(1).map((row) => row[4]), [-50], `${step}: a table's last words are written once`);
+  }
+});
+
+test('a sweep whose writes landed although the reply was lost adds nothing to the Archive twice', () => {
+  const ages = { OLD222: 30, OLD444: 25, NEW666: 2 };
+
+  for (const lost of [1, 2]) {
+    const context = aged(ages);
+
+    context.failFlush(lost);
+    context.store.putAwayOld(NOW, nothingToSay);
+    assertNothingLost(context, { OLD222: 1, OLD444: 1, NEW666: 1 });
+
+    context.sweep();
+    assert.deepEqual(idsIn(context.archive()), ['OLD222', 'OLD444'], `flush ${lost}`);
+    assert.deepEqual(idsIn(context.tables), ['', '', 'NEW666']);
+  }
+});
+
+test('the most a sweep does is bounded: six rows read, three tables moved in one write, two flushes', () => {
+  // However many tables there are, and whichever of them the sweep goes on to after the ones it must leave
+  const ages: Record<string, number> = { NEW222: 1 };
+  for (let index = 0; index < 12; index++) {
+    ages[`OLD${index + 100}`] = 90 - index;
+  }
+
+  const { tables, archive, calls, sweep } = aged(ages);
+
+  // The three unchanged longest cannot be read, so the sweep goes on to the next three
+  for (const index of [2, 3, 4]) {
+    tables.cells[index]![3] = '~not a table';
+  }
+
+  sweep();
+  calls.made = [];
+  sweep();
+
+  assert.deepEqual(idsIn(archive()).length, 6);
+  assert.deepEqual(
+    { reads: calls.count('.getValues'), writes: calls.count('.setValues'), formats: calls.count('.setNumberFormats'), flushes: calls.count('flush'), cache: calls.count('cache.remove'), cacheOther: calls.count('cache.get') + calls.count('cache.put') },
+    { reads: 9, writes: 4, formats: 1, flushes: 2, cache: 9, cacheOther: 0 },
+    'reads: the two columns of every row, the Archive\'s three, six rows, and the ids of the rows about to be emptied; writes: three tables to the Archive at once, and their three rows emptied',
+  );
+  assert.deepEqual(calls.made.filter((call) => call.startsWith('Ledger') || call.startsWith('Hands')), []);
+});
+
+test('last words kept in both tabs cost each table a fixed number of calls more, so the most a sweep does is still bounded', () => {
+  const ages: Record<string, number> = { NEW222: 1 };
+  for (let index = 0; index < 8; index++) {
+    ages[`OLD${index + 100}`] = 90 - index;
+  }
+
+  const { archive, calls, spreadsheet, sweep } = aged(ages);
+  const lastWords: LastWords = (state) => [buyIn(-1, state.id), { type: 'hand', record: handRecord(state.id, 1) }];
+
+  sweep(lastWords);
+  calls.made = [];
+  sweep(lastWords);
+
+  assert.equal(idsIn(archive()).length, 6);
+  assert.equal(spreadsheet.getSheetByName('Ledger')!.getLastRow() - 1, 6);
+  assert.deepEqual(
+    { reads: calls.count('.getValues'), writes: calls.count('.setValues'), flushes: calls.count('flush') },
+    { reads: 3 + 3 * 3, writes: 4 + 3 * 4, flushes: 2 + 3 * 4 },
+    'for each table: its row and the end of two tabs read; its records held, written to each tab and taken off its row, each pushed through',
+  );
+});
+
+test('a table that was put away is known from the Archive, which is read once and then remembered, like a table that never was', () => {
+  const { archive, cache, anotherRun, sweep } = aged({ OLD222: 20, NEW333: 1 });
+  sweep();
+
+  const reads = () => archive()!.reads;
+  const before = reads();
+
+  assert.equal(anotherRun().peek('OLD222'), null);
+  assert.equal(reads(), before + 1, 'the first look reads the Archive\'s ids');
+  assert.equal(cache.get('peek:OLD222'), 'away');
+  assert.equal(cache.seconds.get('peek:OLD222'), 30);
+
+  // Every poll of a page left open on it, and every question after it, for as long as the cache remembers
+  for (let poll = 0; poll < 5; poll++) {
+    assert.equal(anotherRun().peek('OLD222'), null);
+    assert.equal(anotherRun().read('OLD222'), null);
+    assert.equal(anotherRun().wasPutAway('OLD222'), true);
+  }
+
+  assert.equal(anotherRun().peek('NEVER2'), null);
+  assert.equal(reads(), before + 2);
+  assert.equal(cache.get('peek:NEVER2'), 'none');
+  assert.equal(anotherRun().wasPutAway('NEVER2'), false);
+  assert.equal(reads(), before + 2, 'a table that never was costs the Archive one look too');
+
+  // After a table was looked up under its lock, which leaves no note, the answer is found without one
+  cache.entries.clear();
+  assert.equal(anotherRun().transact('OLD222', (state) => ({ save: null, effects: [], result: state })), null);
+  assert.equal(anotherRun().wasPutAway('OLD222'), true);
+  assert.equal(reads(), before + 3);
+
+  // And asked of a table that is there, whatever the cache has lost, it says no and notes nothing against it
+  cache.entries.clear();
+  assert.equal(anotherRun().wasPutAway('NEW333'), false);
+  assert.equal(cache.get('peek:NEW333'), null);
+  assert.equal(anotherRun().peek('NEW333')!.version, 1);
+});
+
+test('a sweep does not queue for the lock as a move does: when it is taken, the old tables wait for the next sweep', () => {
+  const { store, tables, lock, sweep } = aged({ OLD222: 20 });
+
+  lock.waits = [];
+  save(store, table('NEW333'));
+  sweep();
+  assert.deepEqual(lock.waits, [20_000, 1000]);
+  assert.deepEqual(idsIn(tables), ['', 'NEW333']);
+
+  const busy = aged({ OLD222: 20 });
+  busy.lock.busy = true;
+  assert.doesNotThrow(() => busy.sweep());
+  assert.deepEqual(idsIn(busy.tables), ['OLD222']);
+});
+
+test('a table put back by hand is a table again, and is not put away once more until two weeks after it is next saved', () => {
+  const { tables, archive, cache, anotherRun, sweep } = aged({ OLD222: 20, NEW333: 1 });
+  sweep();
+  assert.equal(anotherRun().read('OLD222'), null);
+
+  // As the README says: the first twelve cells of its Archive row into an empty row of Tables, and its Updated cell emptied
+  tables.cells[1] = archive()!.cells[1]!.slice(0, TABLE_CELLS);
+  tables.formats[1] = Array.from({ length: TABLE_CELLS }, () => '@');
+  tables.cells[1]![1] = '';
+  cache.entries.clear();
+
+  assert.deepEqual(anotherRun().read('OLD222'), table('OLD222'));
+  sweep();
+  assert.deepEqual(idsIn(tables), ['OLD222', 'NEW333'], 'with no time in its Updated cell it counts as new');
+
+  save(anotherRun(), table('OLD222', 2), [], NOW);
+  save(anotherRun(), table('NEW333', 2), [], NOW);
+  sweep(nothingToSay, NOW + 14 * DAY_MS - 1);
+  assert.deepEqual(idsIn(tables), ['OLD222', 'NEW333']);
+
+  sweep(nothingToSay, NOW + 14 * DAY_MS);
+  assert.deepEqual(idsIn(tables), ['', '']);
+  assert.deepEqual(archive()!.cells.slice(1).map((row) => [row[0], row[2]]), [['OLD222', '1'], ['NEW333', '2'], ['OLD222', '2']], 'the Archive keeps both times it was put away');
+
+  // Put back from the older of its rows and played on, it comes to a version the Archive has under another save
+  const replayed = table('OLD222', 2);
+  replayed.config.name = 'Played again';
+  tables.cells[1] = archive()!.cells[1]!.slice(0, TABLE_CELLS);
+  tables.cells[1]![1] = '';
+  cache.entries.clear();
+  save(anotherRun(), replayed, [], NOW + 15 * DAY_MS);
+
+  sweep(nothingToSay, NOW + 30 * DAY_MS);
+  assert.deepEqual(idsIn(tables), ['', '']);
+  assert.deepEqual(archive()!.cells.slice(1).map((row) => [row[0], row[2], row[12]]).slice(2), [['OLD222', '2', "Chips n' Dipshits"], ['OLD222', '2', 'Played again']], 'which is kept as well, not taken for the one already there');
+});
+
+test('a table put away whose cache entries outlived it, and a new table in its row: nothing asked of either reads or writes the other', () => {
+  const { cache, tables, anotherRun, sweep } = aged({ OLD222: 20, LIVE33: 0 });
+  const entries = ['state:OLD222', 'peek:OLD222', 'row:OLD222'];
+  const outlived = entries.map((key) => cache.get(key)!);
+  assert.equal(cache.get('row:OLD222'), '2');
+
+  sweep();
+  save(anotherRun(), table('NEW444'));
+  assert.equal(cache.get('row:NEW444'), '2', 'the new table has taken the row the old one left');
+
+  // Everything the cache had of the old table is back, as if none of it had been removed: its row number
+  // and the new table's now name the same row
+  const stale = (): void => entries.forEach((key, index) => cache.put(key, outlived[index]!, 600));
+  const theirRow = (): unknown[] => [...tables.cells[1]!];
+  const before = theirRow();
+  stale();
+
+  // A move from a tab left open on the old table: it is handed no table, least of all the new one, and writes nothing
+  const handed: unknown[] = [];
+  const moved = anotherRun().transact('OLD222', (state) => {
+    handed.push(state);
+
+    return state ? { save: { ...state, version: 99 }, at: NOW, effects: [buyIn(999, 'OLD222')], result: 'saved' } : { save: null, effects: [], result: 'no table' };
+  });
+
+  assert.deepEqual([moved, handed], ['no table', [null]]);
+  assert.deepEqual(theirRow(), before, 'the row is the new table\'s, untouched');
+
+  // What its polls are answered from is its own last state out of the cache, never the row
+  assert.deepEqual(anotherRun().read('OLD222'), table('OLD222'));
+  assert.deepEqual(anotherRun().peek('OLD222'), { version: 1, wakeAt: null });
+
+  // Asked what became of it, as the service asks after such a move, the store finds out and lets go of all three
+  assert.equal(anotherRun().wasPutAway('OLD222'), true);
+  assert.deepEqual(entries.map((key) => cache.get(key)), [null, 'away', null]);
+  assert.deepEqual([anotherRun().read('OLD222'), anotherRun().peek('OLD222')], [null, null]);
+
+  // The other way round: the new table is read and saved in its row with the old one's number pointing there too
+  stale();
+  assert.deepEqual(anotherRun().read('NEW444'), table('NEW444'));
+  save(anotherRun(), table('NEW444', 2));
+  assert.deepEqual([tables.cells[1]![0], tables.cells[1]![2]], ['NEW444', '2']);
+  assert.equal(anotherRun().transact('OLD222', (state) => ({ save: null, effects: [], result: state })), null);
+
+  // And a wrong number for a table that is there sends the store to look for it, never to another table's row
+  cache.put('row:LIVE33', '2', 600);
+  save(anotherRun(), table('LIVE33', 2));
+  assert.deepEqual(tables.cells.slice(1).map((row) => [row[0], row[2]]), [['NEW444', '2'], ['LIVE33', '2']]);
+  assert.equal(cache.get('row:LIVE33'), '3');
+});
+
+// ---- The two stores, held to each other ----
+
+const TABLES_AT_ONCE = 8;
+const STEPS = 250;
+const SEEDS = 30;
+const JUMPS = [1000, 60_000, 3_600_000, DAY_MS, 3 * DAY_MS, 6 * DAY_MS, 15 * DAY_MS];
+
+test('the Sheet store and the memory store agree after every step of random creates, saves, loads, polls and sweeps, with cache entries lost at any moment', () => {
+  // What the random runs came to between them, so that the test cannot pass by never doing the thing it is about
+  const seen = { putAway: 0, askedAfter: 0, rowsTakenAgain: 0, sweepsWithOthersLeft: 0 };
+
+  // Something to tell for every other table, which the stores must then both have kept
+  const lastWords: LastWords = (state) => (state.version % 2 === 0 ? [buyIn(-state.version, state.id)] : []);
+
+  for (let seed = 1; seed <= SEEDS; seed++) {
+    const rng = seededRng(seed);
+    const memory = new MemoryStore();
+
+    // A script run of its own for every request, as the deployed game has: nothing is carried over but the Sheet and the cache
+    const { spreadsheet, cache, anotherRun: sheet } = setup();
+    const both = <T>(what: string, ask: (store: TableStore) => T): T => {
+      const answers = [ask(sheet()), ask(memory)] as const;
+      assert.deepEqual(answers[0], answers[1], what);
+
+      return answers[1];
+    };
+
+    const ids: string[] = [];
+    let now = NOW;
+
+    for (let step = 0; step < STEPS; step++) {
+      const at = `seed ${seed}, step ${step}`;
+      const id = ids.length > 0 ? ids[rng.int(ids.length)]! : null;
+      const roll = rng.int(100);
+
+      // The cache may drop anything at any time: everything it holds, or one entry while its neighbors stay
+      if (rng.int(10) === 0) {
+        cache.entries.clear();
+      } else if (rng.int(4) === 0 && cache.entries.size > 0) {
+        cache.entries.delete([...cache.entries.keys()][rng.int(cache.entries.size)]!);
+      }
+
+      if (roll < 12 && ids.filter((known) => memory.read(known)).length < TABLES_AT_ONCE) {
+        const created = `M${String(seed).padStart(2, '0')}${String(ids.length).padStart(3, '0')}`;
+
+        seen.rowsTakenAgain += idsIn(spreadsheet.getSheetByName('Tables')).includes('') ? 1 : 0;
+        ids.push(created);
+        both(`${at}: creating ${created}`, (store) => store.transact(created, (existing) => (existing ? { save: null, effects: [], result: false } : { save: table(created), at: now, effects: [], result: true })));
+      } else if (roll < 40 && id) {
+        const effects = rng.int(3) === 0 ? [buyIn(100 + step, id)] : [];
+
+        seen.askedAfter += memory.wasPutAway(id) ? 1 : 0;
+        both(`${at}: saving ${id}`, (store) =>
+          store.transact(id, (state) => {
+            if (!state) {
+              return { save: null, effects: [], result: null };
+            }
+
+            state.version += 1;
+
+            return { save: state, at: now, effects, result: state.version };
+          }),
+        );
+      } else if (roll < 55 && id) {
+        both(`${at}: loading ${id}`, (store) => store.read(id));
+      } else if (roll < 70 && id) {
+        both(`${at}: polling ${id}`, (store) => store.peek(id));
+      } else if (roll < 78 && id) {
+        both(`${at}: looking up ${id} under its lock`, (store) => store.transact(id, (state) => ({ save: null, effects: [], result: state })));
+      } else if (roll < 90) {
+        const before = ids.filter((known) => memory.wasPutAway(known)).length;
+
+        sheet().putAwayOld(now, lastWords);
+        memory.putAwayOld(now, lastWords);
+
+        const moved = ids.filter((known) => memory.wasPutAway(known)).length - before;
+        seen.putAway += moved;
+        seen.sweepsWithOthersLeft += moved > 0 && ids.some((known) => memory.read(known)) ? 1 : 0;
+      } else {
+        now += JUMPS[rng.int(JUMPS.length)]!;
+      }
+
+      // After every step, every table ever made: there or not, the same table, and put away or not
+      for (const known of ids) {
+        const state = both(`${at}: ${known} as loaded`, (store) => store.read(known));
+        both(`${at}: ${known} as polled`, (store) => store.peek(known));
+
+        if (!state) {
+          assert.deepEqual([sheet().wasPutAway(known), memory.wasPutAway(known)], [true, true], `${at}: ${known} is gone without having been put away`);
+        }
+
+        // The Sheet itself: a table is in the Tables tab exactly when it is there to load, once, and in the Archive when it was put away
+        assert.equal(idsIn(spreadsheet.getSheetByName('Tables')).filter((row) => row === known).length, state ? 1 : 0, `${at}: ${known} in the Tables tab`);
+        assert.equal(idsIn(spreadsheet.getSheetByName('Archive')).includes(known), !state, `${at}: ${known} in the Archive`);
+      }
+
+      const ledger = (spreadsheet.getSheetByName('Ledger')?.cells ?? []).slice(1).map((row) => row[4]);
+      assert.deepEqual(ledger, memory.ledger.map((entry) => entry.amount), `${at}: the ledger entries kept`);
+    }
+  }
+
+  assert.ok(seen.putAway > 100, `only ${seen.putAway} tables were put away`);
+  assert.ok(seen.sweepsWithOthersLeft > 30, `only ${seen.sweepsWithOthersLeft} sweeps moved tables from among others that stayed`);
+  assert.ok(seen.askedAfter > 100, `a table that had been put away was saved to only ${seen.askedAfter} times`);
+  assert.ok(seen.rowsTakenAgain > 30, `a new table found an empty row only ${seen.rowsTakenAgain} times`);
 });

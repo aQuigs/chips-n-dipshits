@@ -8,10 +8,11 @@ import type { ApiResponse, Auth } from '../src/server/api.ts';
 import { ByteRng } from '../src/server/byteRng.ts';
 import { MemoryPresetStore } from '../src/server/memoryPresetStore.ts';
 import { MemoryStore } from '../src/server/memoryStore.ts';
+import { PUT_AWAY_MESSAGE } from '../src/server/putAway.ts';
 import { PokerService } from '../src/server/service.ts';
 import type { TableStore } from '../src/server/store.ts';
 import { FakeCache, FakeLock, FakeSpreadsheet } from './fakes.ts';
-import { seededRng } from './helpers.ts';
+import { DAY_MS, seededRng } from './helpers.ts';
 
 function setup(store: TableStore = new MemoryStore()) {
   const clock = { time: 1_000_000, now: () => clock.time };
@@ -422,4 +423,124 @@ test('integers from random bytes cover the whole range evenly', () => {
   for (const count of counts) {
     assert.ok(Math.abs(count - draws / 52) < 300, `a value came up ${count} times`);
   }
+});
+
+// ---- Old tables put away ----
+
+function sheetStore(): TableStore {
+  const lock = new FakeLock();
+  const spreadsheet = new FakeSpreadsheet(lock);
+
+  return new SheetStore({ spreadsheet: () => spreadsheet, cache: new FakeCache(), lock, flush: () => {} });
+}
+
+const EITHER_STORE: [string, () => TableStore][] = [
+  ['in memory', () => new MemoryStore()],
+  ['in the Sheet', sheetStore],
+];
+
+for (const [kind, makeStore] of EITHER_STORE) {
+  test(`tables ${kind}: one left two weeks is put away when the next table is made, and everything asked of it gets one plain answer`, () => {
+    const { service, clock, tableId, players, poll } = seatedTable(makeStore());
+    const spare = joined(service.handle({ op: 'join', tableId, name: 'Cy' })).auth;
+
+    clock.time += 14 * DAY_MS - 1;
+    const young = joined(service.handle({ op: 'create', name: 'Dee' }));
+    assert.equal(viewOf(poll(0)).id, tableId, 'a millisecond short of two weeks, a new table moves nothing');
+
+    clock.time += 1;
+    const next = joined(service.handle({ op: 'create', name: 'Eve' }));
+
+    const asked: [string, unknown][] = [
+      ['info', { op: 'info', tableId }],
+      ['join', { op: 'join', tableId, name: 'Flo' }],
+      ['poll', { op: 'poll', tableId, auth: players[0], since: 3 }],
+      ['poll by another member', { op: 'poll', tableId, auth: spare, since: -1 }],
+      ['poll with a wrong token', { op: 'poll', tableId, auth: { id: players[0]!.id, token: 'WRONG' }, since: -1 }],
+      ['act', { op: 'act', tableId, auth: players[0], command: { type: 'start' } }],
+      ['history', { op: 'history', tableId, auth: players[0] }],
+      ['savePreset', { op: 'savePreset', tableId, auth: players[0], name: 'Fridays', settings: {}, replace: false }],
+      ['deletePreset', { op: 'deletePreset', tableId, auth: players[0], name: 'Fridays' }],
+    ];
+
+    for (const [what, request] of [...asked, ...asked]) {
+      assert.deepEqual(service.handle(request), { ok: false, code: 'not_found', error: PUT_AWAY_MESSAGE, putAway: true }, what);
+    }
+
+    assert.equal(service.hasNews(tableId, 3), true, 'a poll for it is answered at once, not held');
+
+    const never = failure(service.handle({ op: 'info', tableId: 'NEVER2' }));
+    assert.deepEqual([never.code, 'putAway' in never], ['not_found', false], 'a table that never was is still only that');
+
+    for (const other of [young, next]) {
+      assert.equal(viewOf(service.handle({ op: 'poll', tableId: other.view.id, auth: other.auth, since: -1 })).id, other.view.id, 'the tables made since are untouched');
+    }
+  });
+
+  test(`tables ${kind}: a page left open and asking does not keep a table, and a move at it does`, () => {
+    const { service, clock, tableId, act, poll } = seatedTable(makeStore());
+    const played = joined(service.handle({ op: 'create', name: 'Dee' }));
+    const version = viewOf(poll(0)).version;
+
+    // Three weeks of a tab left open on one table, and of a game now and then at the other
+    for (let hour = 0; hour < 21 * 24; hour++) {
+      clock.time += DAY_MS / 24;
+      assert.equal(poll(0, version).ok, true);
+      assert.equal(service.handle({ op: 'info', tableId }).ok, true);
+
+      if (hour % (5 * 24) === 0) {
+        joined(service.handle({ op: 'join', tableId: played.view.id, name: `Guest ${hour}` }));
+      }
+    }
+
+    joined(service.handle({ op: 'create', name: 'Eve' }));
+
+    assert.equal(failure(poll(0, version)).putAway, true);
+    assert.equal(failure(act(0, { type: 'start' })).putAway, true);
+    assert.equal(service.handle({ op: 'poll', tableId: played.view.id, auth: played.auth, since: -1 }).ok, true);
+  });
+}
+
+test('a new table is made and handed back whatever becomes of putting the old ones away', () => {
+  const broken = new MemoryStore();
+  let asked = 0;
+  broken.putAwayOld = () => {
+    asked += 1;
+    throw new Error('a store that breaks its word never to throw');
+  };
+  const { service } = setup(broken);
+
+  const host = joined(service.handle({ op: 'create', name: 'Host' }));
+
+  assert.equal(asked, 1);
+  assert.equal(viewOf(service.handle({ op: 'poll', tableId: host.view.id, auth: host.auth, since: -1 })).id, host.view.id);
+});
+
+test('old tables are seen to when a table is made and at no other time, by the clock the game is played on', () => {
+  const watched = new MemoryStore();
+  const sweeps: number[] = [];
+  const putAwayOld = watched.putAwayOld.bind(watched);
+  watched.putAwayOld = (now, lastWords) => {
+    sweeps.push(now);
+    putAwayOld(now, lastWords);
+  };
+
+  const { service, clock, tableId, players, act, poll } = seatedTable(watched);
+  assert.deepEqual(sweeps, [clock.time], 'once, for the table that was made');
+
+  clock.time += 20 * DAY_MS;
+  poll(0);
+  act(0, { type: 'start' });
+  service.handle({ op: 'info', tableId });
+  service.handle({ op: 'history', tableId, auth: players[0] });
+  service.handle({ op: 'presets' });
+  service.handle({ op: 'join', tableId, name: 'Cy' });
+  service.handle({ op: 'info', tableId: 'NEVER2' });
+  assert.equal(sweeps.length, 1);
+
+  assert.equal(failure(service.handle({ op: 'create', name: '' })).code, 'invalid');
+  assert.equal(sweeps.length, 1, 'a table that was not made sweeps nothing');
+
+  joined(service.handle({ op: 'create', name: 'Dee' }));
+  assert.deepEqual(sweeps, [clock.time - 20 * DAY_MS, clock.time]);
 });

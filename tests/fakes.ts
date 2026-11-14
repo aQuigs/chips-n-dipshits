@@ -8,6 +8,34 @@ const CACHE_VALUE_LIMIT_BYTES = 100_000;
 const CACHE_KEY_LIMIT_CHARACTERS = 250;
 
 /**
+ * Every call a store makes to the stand-ins that share one of these, in order, by name, such as
+ * `Tables.setValues` or `cache.remove`. It can make one of them fail, to act out the service giving up
+ * at that very step. A call that fails has done nothing; what was done before it stays done.
+ */
+export class Calls {
+  made: string[] = [];
+  private failing = 0;
+
+  /** Makes the nth call from now fail, once. */
+  failNth(nth: number): void {
+    this.failing = this.made.length + nth;
+  }
+
+  note(name: string): void {
+    this.made.push(name);
+
+    if (this.made.length === this.failing) {
+      throw new Error(`Service failed at ${name}`);
+    }
+  }
+
+  /** How many calls were made whose name ends as given, such as `.getValues`. */
+  count(ending: string): number {
+    return this.made.filter((name) => name.endsWith(ending)).length;
+  }
+}
+
+/**
  * A stand-in for a sheet that copies the behavior a store can get wrong: a string written to a cell
  * that isn't formatted as text is reinterpreted, as a formula if it starts with = or +, or as a number
  * if it looks like one. A cell takes 50,000 characters and no more, and half an emoji does not survive
@@ -22,11 +50,19 @@ export class FakeSheet implements SheetLike {
   private writesAllowed = Infinity;
   private readonly lock: FakeLock | null;
   private readonly rowLimit: number;
+  private readonly calls: Calls | null;
+  private readonly name: string;
 
-  /** `rowLimit` is the most rows, headers included, the store may ever write to. */
-  constructor(lock: FakeLock | null = null, rowLimit = Infinity) {
+  /** `rowLimit` is the most rows, headers included, the store may ever write to. `calls` is told of every call, under the tab's `name`. */
+  constructor(lock: FakeLock | null = null, rowLimit = Infinity, calls: Calls | null = null, name = 'Sheet') {
     this.lock = lock;
     this.rowLimit = rowLimit;
+    this.calls = calls;
+    this.name = name;
+  }
+
+  private note(call: string): void {
+    this.calls?.note(`${this.name}.${call}`);
   }
 
   /** Makes writes fail, the way the service now and then does, once `count` more have gone through. */
@@ -39,6 +75,8 @@ export class FakeSheet implements SheetLike {
   }
 
   getLastRow(): number {
+    this.note('getLastRow');
+
     for (let row = this.cells.length - 1; row >= 0; row--) {
       if ((this.cells[row] ?? []).some((cell) => cell !== '' && cell !== undefined)) {
         return row + 1;
@@ -67,6 +105,7 @@ export class FakeSheet implements SheetLike {
 
     return {
       getValues: (): unknown[][] => {
+        this.note('getValues');
         this.reads += 1;
 
         return Array.from({ length: numRows }, (_line, i) =>
@@ -75,6 +114,7 @@ export class FakeSheet implements SheetLike {
       },
 
       setValues: (values: unknown[][]): void => {
+        this.note('setValues');
         this.mustHoldLock();
 
         if (row - 1 + numRows > this.rowLimit) {
@@ -97,6 +137,8 @@ export class FakeSheet implements SheetLike {
       },
 
       setNumberFormats: (formats: string[][]): void => {
+        this.note('setNumberFormats');
+
         each(formats, (r, c, i, j) => {
           (this.formats[r] ??= [])[c] = formats[i]![j]!;
         });
@@ -116,6 +158,7 @@ export class FakeSheet implements SheetLike {
   }
 
   deleteRow(row: number): void {
+    this.note('deleteRow');
     this.mustHoldLock();
     this.cells.splice(row - 1, 1);
     this.formats.splice(row - 1, 1);
@@ -148,23 +191,29 @@ export class FakeSpreadsheet implements SpreadsheetLike {
   sheets = new Map<string, FakeSheet>();
   private readonly lock: FakeLock | null;
   private readonly rowLimits: Record<string, number>;
+  private readonly calls: Calls | null;
 
-  /** With a lock, every sheet in it refuses writes made without holding it. `rowLimits` caps the rows of the tabs it names. */
-  constructor(lock: FakeLock | null = null, rowLimits: Record<string, number> = {}) {
+  /** With a lock, every sheet in it refuses writes made without holding it. `rowLimits` caps the rows of the tabs it names. `calls` is told of every call to it and to its tabs. */
+  constructor(lock: FakeLock | null = null, rowLimits: Record<string, number> = {}, calls: Calls | null = null) {
     this.lock = lock;
     this.rowLimits = rowLimits;
+    this.calls = calls;
   }
 
   getSheetByName(name: string): FakeSheet | null {
+    this.calls?.note('spreadsheet.getSheetByName');
+
     return this.sheets.get(name) ?? null;
   }
 
   insertSheet(name: string): FakeSheet {
+    this.calls?.note('spreadsheet.insertSheet');
+
     if (this.lock && !this.lock.held) {
       throw new Error('A tab made without holding the script lock');
     }
 
-    const sheet = new FakeSheet(this.lock, this.rowLimits[name]);
+    const sheet = new FakeSheet(this.lock, this.rowLimits[name], this.calls, name);
     this.sheets.set(name, sheet);
 
     return sheet;
@@ -177,11 +226,15 @@ export class FakeCache implements CacheLike {
   /** How long each key was last asked to be kept. Nothing expires by itself; a test empties `entries` to act that out. */
   seconds = new Map<string, number>();
   failNextWrite = false;
+  private readonly calls: Calls | null;
+
+  constructor(calls: Calls | null = null) {
+    this.calls = calls;
+  }
 
   get(key: string): string | null {
-    if (key.length > CACHE_KEY_LIMIT_CHARACTERS) {
-      throw new Error('Argument too large: key');
-    }
+    this.calls?.note('cache.get');
+    this.checkKey(key);
 
     return this.entries.get(key) ?? null;
   }
@@ -191,12 +244,16 @@ export class FakeCache implements CacheLike {
   }
 
   putAll(values: Record<string, string>, expirationInSeconds: number): void {
+    this.calls?.note('cache.put');
+
     if (this.failNextWrite) {
       this.failNextWrite = false;
       throw new Error('The cache is unavailable');
     }
 
     for (const [key, value] of Object.entries(values)) {
+      this.checkKey(key);
+
       if (Buffer.byteLength(value, 'utf8') > CACHE_VALUE_LIMIT_BYTES) {
         throw new Error('Argument too large: value');
       }
@@ -207,7 +264,15 @@ export class FakeCache implements CacheLike {
   }
 
   remove(key: string): void {
+    this.calls?.note('cache.remove');
+    this.checkKey(key);
     this.entries.delete(key);
+  }
+
+  private checkKey(key: string): void {
+    if (key.length > CACHE_KEY_LIMIT_CHARACTERS) {
+      throw new Error('Argument too large: key');
+    }
   }
 }
 
@@ -216,8 +281,12 @@ export class FakeLock implements LockLike {
   held = false;
   busy = false;
   acquisitions = 0;
+  /** How long each caller was prepared to wait for it, in the order they asked. */
+  waits: number[] = [];
 
-  waitLock(): void {
+  waitLock(timeoutInMillis = 0): void {
+    this.waits.push(timeoutInMillis);
+
     if (this.busy) {
       throw new Error('Lock timeout: another process was holding the lock for too long.');
     }

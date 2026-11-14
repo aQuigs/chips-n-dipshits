@@ -1,8 +1,10 @@
 import { asNumber, upgradeRecord } from '../engine/index.ts';
 import type { Denominated, Effect, HandRecord, TableState, Unit } from '../engine/index.ts';
+import { dueToLookAt, lastWordsOf, PUT_AWAY_AT_ONCE } from '../server/putAway.ts';
+import type { LastWords } from '../server/putAway.ts';
 import { peekOf, restoreState } from '../server/store.ts';
 import type { TablePeek, TableStore, Txn } from '../server/store.ts';
-import { FIRST_DATA_ROW, openTab, TEXT, TIMESTAMP, underLock, WHOLE_NUMBER } from './sheets.ts';
+import { dataRows, FIRST_DATA_ROW, openTab, TEXT, TIMESTAMP, underLock, WHOLE_NUMBER } from './sheets.ts';
 import type { CacheLike, LockLike, SheetLike, SpreadsheetLike } from './sheets.ts';
 
 export interface SheetStoreDeps {
@@ -15,6 +17,8 @@ export interface SheetStoreDeps {
 }
 
 type SheetKey = 'tables' | 'ledger' | 'hands';
+
+const BUSY = 'The table is busy, try again';
 
 const SHEET_NAMES: Record<SheetKey, string> = { tables: 'Tables', ledger: 'Ledger', hands: 'Hands' };
 
@@ -45,6 +49,21 @@ const HEADERS: Record<SheetKey, string[]> = {
   hands: ['Time', 'Table', 'Hand', 'Summary', 'Record', 'Record ID'],
 };
 
+// Plain text everywhere, or the sheet would turn an id like 2E5678 into a number
+const TABLE_FORMATS = Array.from({ length: TABLE_COLUMNS }, () => TEXT);
+
+const ARCHIVE = 'Archive';
+
+// A table that was put away keeps the cells of its row, in the columns they had, so that it can be put back by
+// hand. After them comes what tells it from the others without opening its state
+const ARCHIVE_HEADERS = [...HEADERS.tables, ...Array.from({ length: TABLE_COLUMNS - HEADERS.tables.length }, () => ''), 'Name', 'Created', 'Players', 'Put away'];
+const ARCHIVE_FORMATS = [...TABLE_FORMATS, TEXT, TIMESTAMP, TEXT, TIMESTAMP];
+
+// What the Archive says of a table is for a person to read, and one cell too long would stop every table it is written with
+const DESCRIPTION_LENGTH = 1000;
+
+const EMPTY_ROW = Array.from({ length: TABLE_COLUMNS }, () => '');
+
 // An amount is written as its table writes it, 1.50 for 150 cents, and as a number so the column can be added up
 const AMOUNT: Record<Unit, string> = { chips: WHOLE_NUMBER, cents: '0.00' };
 
@@ -74,19 +93,32 @@ const CACHE_SECONDS = 21_600;
 // reader goes to the sheet and the copy is tried again, even if nobody at the table ever acts again
 const RETRY_SECONDS = 60;
 
-// How far up a tab a record being retried is looked for, in case it did arrive the first time
+// How far up a tab a record being retried is looked for, in case it did arrive the first time. A record never
+// tried is not looked for at all, and one of a table being put away through the whole tab: it was last tried
+// when the table was last played at, and everything written since lies below it
+const NEVER_TRIED = 0;
 const RETRY_SCAN_ROWS = 500;
+const WHOLE_TAB = Infinity;
 
 // The cache takes 100 KB per key; leave headroom. A table past this is still saved, but every poll then reads it from the sheet under the lock
 export const CACHE_VALUE_BYTES = 95_000;
 
-// How long to remember that a table doesn't exist, so a mistyped link doesn't hit the sheet on every poll
+// How long to remember that a table isn't there, so a mistyped link, or a page left open on a table that was put
+// away, doesn't hit the sheet on every poll. `AWAY` says the table is in the Archive
 const MISSING_SECONDS = 30;
 const MISSING = 'none';
+const AWAY = 'away';
+
+// Putting old tables away can wait for the next new table, so it does not queue for the lock as a move does
+const PUT_AWAY_LOCK_WAIT_MS = 1000;
+
+const SAVED_TIME = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z$/;
 
 // History is read from the bottom of the Hands tab, a page at a time, and gives up this far back
 const HAND_SCAN_ROWS = 300;
 const HAND_SCAN_PAGES = 10;
+
+const isGone = (peek: string | null) => peek === MISSING || peek === AWAY;
 
 const stateKey = (tableId: string) => `state:${tableId}`;
 const peekKey = (tableId: string) => `peek:${tableId}`;
@@ -135,6 +167,11 @@ function fromCells(cells: unknown[]): string {
 interface Held {
   id: string;
   record: Recorded;
+}
+
+/** The effects that have a tab to go to, each under an id made from `made`, which says what made them, and its place among them. */
+function heldOf(effects: Effect[], made: string): Held[] {
+  return effects.flatMap((record, index) => (hasTab(record) ? [{ id: `${made}:${index}`, record }] : []));
 }
 
 /** The cells that keep records in a table's row until they are copied out. If they can't all fit, hands give way before money, oldest first. */
@@ -192,12 +229,72 @@ interface TableRow {
   held: Held[];
 }
 
+/** The JSON a row's state cells hold between them. */
+function stateText(values: unknown[]): string {
+  return fromCells(values.slice(STATE_COLUMN - 1, STATE_COLUMN - 1 + STATE_CHUNKS));
+}
+
 function parseRow(values: unknown[]): TableRow {
   return {
-    state: restoreState(fromCells(values.slice(STATE_COLUMN - 1, STATE_COLUMN - 1 + STATE_CHUNKS))),
+    state: restoreState(stateText(values)),
     held: heldFrom(fromCells(values.slice(HELD_COLUMN - 1, HELD_COLUMN - 1 + HELD_CHUNKS))),
   };
 }
+
+/**
+ * When a row's Updated cell says its table was last saved, or null when it says nothing this code can
+ * read. A table with no such time counts as new, never as old.
+ */
+function savedAt(cell: unknown): number | null {
+  const time = cell instanceof Date ? cell.getTime() : typeof cell === 'string' && SAVED_TIME.test(cell) ? Date.parse(cell) : NaN;
+
+  return Number.isNaN(time) ? null : time;
+}
+
+/**
+ * The table a row's state cells hold, as it was saved: null when they do not hold the table the row
+ * is under, which is then nothing this code may move. It is not loaded as a table, so one saved by
+ * code too old to be loaded is still known for what it is.
+ */
+function savedTable(json: string, id: string): Record<string, unknown> | null {
+  try {
+    const saved: unknown = JSON.parse(json);
+
+    return typeof saved === 'object' && saved !== null && (saved as { id?: unknown }).id === id ? (saved as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** What the Archive says of a saved table for whoever looks through it: its name, when it was made and who bought chips at it. */
+function describe(saved: Record<string, unknown>): unknown[] {
+  const { config, createdAt, members } = saved as { config?: { name?: unknown } | null; createdAt?: unknown; members?: unknown };
+  const everyone = (Array.isArray(members) ? members : []) as ({ name?: unknown; buyIn?: unknown } | null)[];
+  const players = everyone.flatMap((member) => (member && typeof member.buyIn === 'number' && member.buyIn > 0 ? [String(member.name)] : []));
+
+  const created = new Date(typeof createdAt === 'number' ? createdAt : NaN);
+
+  return [String(config?.name ?? '').slice(0, DESCRIPTION_LENGTH), Number.isNaN(created.getTime()) ? '' : created, players.join(', ').slice(0, DESCRIPTION_LENGTH)];
+}
+
+/** A table on its way to the Archive. */
+interface Leaving {
+  id: string;
+  row: number;
+  /** The Archive already has this save of it, from a sweep that got that far and then failed. */
+  archived: boolean;
+  /** Its row in the Archive. */
+  cells: unknown[];
+}
+
+const saveOf = (id: unknown, version: unknown) => `${String(id)}:${String(version)}`;
+
+/**
+ * One save of a table, told from the first three cells of its row. When it was saved is part of it: a
+ * table put back by hand from an older row of the Archive comes to the versions it had before, and
+ * those are other saves, which the Archive does not have.
+ */
+const savedAs = ([id, updated, version]: unknown[]) => `${saveOf(id, version)}:${String(savedAt(updated))}`;
 
 function recordRow({ id, record }: Held, table: Denominated): unknown[] {
   if (record.type === 'ledger') {
@@ -257,15 +354,14 @@ export class SheetStore implements TableStore {
     return this.locked(() => {
       const found = this.locate(tableId);
       const txn = fn(found ? found.state : null);
-      const save = txn.save;
 
-      if (save) {
+      if (txn.save !== null) {
         // A table's version changes with every save, which makes these ids one of a kind
-        const fresh = txn.effects.flatMap((record, index) => (hasTab(record) ? [{ id: `${save.id}:${save.version}:${index}`, record }] : []));
+        const fresh = heldOf(txn.effects, saveOf(txn.save.id, txn.save.version));
 
-        this.persist(save, found ? found.row : null, found ? found.held : [], fresh);
+        this.persist(txn.save, txn.at, found ? found.row : null, found ? found.held : [], fresh);
       } else if (found && found.held.length > 0) {
-        this.copyOut(found.row, found.held, true, found.state.config);
+        this.copyOut(found.row, found.held, RETRY_SCAN_ROWS, found.state.config);
       }
 
       return txn.result;
@@ -278,7 +374,7 @@ export class SheetStore implements TableStore {
       return restoreState(cached);
     }
 
-    if (this.deps.cache.get(peekKey(tableId)) === MISSING) {
+    if (isGone(this.deps.cache.get(peekKey(tableId)))) {
       return null;
     }
 
@@ -287,7 +383,7 @@ export class SheetStore implements TableStore {
 
   peek(tableId: string): TablePeek | null {
     const cached = this.deps.cache.get(peekKey(tableId));
-    if (cached === MISSING) {
+    if (isGone(cached)) {
       return null;
     }
 
@@ -319,8 +415,27 @@ export class SheetStore implements TableStore {
     return found.sort((a, b) => a.number - b.number).slice(-limit);
   }
 
+  putAwayOld(now: number, lastWords: LastWords): void {
+    try {
+      underLock(this.deps.lock, BUSY, () => this.sweep(now, lastWords), PUT_AWAY_LOCK_WAIT_MS);
+    } catch (error) {
+      // Whatever was not put away is still in the Tables tab, where the next new table finds it
+      console.error(error);
+    }
+  }
+
+  wasPutAway(tableId: string): boolean {
+    const known = this.deps.cache.get(peekKey(tableId));
+    if (isGone(known)) {
+      return known === AWAY;
+    }
+
+    // Looked for once more, under the lock: a table that has come to be there since must never be noted as gone
+    return this.locked(() => !this.locate(tableId) && this.rememberGone(tableId));
+  }
+
   private locked<T>(work: () => T): T {
-    return underLock(this.deps.lock, 'The table is busy, try again', work);
+    return underLock(this.deps.lock, BUSY, work);
   }
 
   /** Reads a table from the sheet into the cache. Under the lock, so a write can't slip in between the two. */
@@ -336,11 +451,11 @@ export class SheetStore implements TableStore {
       const found = this.locate(tableId);
 
       if (!found) {
-        this.deps.cache.put(peekKey(tableId), MISSING, MISSING_SECONDS);
+        this.rememberGone(tableId);
         return null;
       }
 
-      const settled = found.held.length === 0 || this.copyOut(found.row, found.held, true, found.state.config);
+      const settled = found.held.length === 0 || this.copyOut(found.row, found.held, RETRY_SCAN_ROWS, found.state.config);
       this.remember(found.state, found.row, settled);
 
       return found.state;
@@ -374,13 +489,7 @@ export class SheetStore implements TableStore {
       }
     }
 
-    const lastRow = sheet.getLastRow();
-    if (lastRow < FIRST_DATA_ROW) {
-      return null;
-    }
-
-    const ids = sheet.getRange(FIRST_DATA_ROW, 1, lastRow - FIRST_DATA_ROW + 1, 1).getValues();
-    const index = ids.findIndex((row) => String(row[0]) === tableId);
+    const index = dataRows(sheet, 1).findIndex((row) => String(row[0]) === tableId);
     if (index < 0) {
       return null;
     }
@@ -390,13 +499,13 @@ export class SheetStore implements TableStore {
     return { row, ...parseRow(rowAt(row)) };
   }
 
-  private persist(state: TableState, knownRow: number | null, leftOver: Held[], fresh: Held[]): void {
+  private persist(state: TableState, at: number, knownRow: number | null, leftOver: Held[], fresh: Held[]): void {
     const held = [...leftOver, ...fresh];
     let row: number;
 
     try {
       // One write holds the table and the records of what just happened to it, so neither is saved without the other
-      row = this.writeTable(state, knownRow, held);
+      row = this.writeTable(state, at, knownRow, held);
       this.deps.flush();
     } catch (error) {
       // Whatever did or didn't reach the sheet, the cache must not keep serving the old table
@@ -404,7 +513,7 @@ export class SheetStore implements TableStore {
       throw error;
     }
 
-    const settled = held.length === 0 || this.copyOut(row, held, leftOver.length > 0, state.config);
+    const settled = held.length === 0 || this.copyOut(row, held, leftOver.length > 0 ? RETRY_SCAN_ROWS : NEVER_TRIED, state.config);
 
     // The save itself succeeded, so a cache that can't be refreshed is only emptied, not treated as a failure
     try {
@@ -414,7 +523,7 @@ export class SheetStore implements TableStore {
     }
   }
 
-  private writeTable(state: TableState, knownRow: number | null, held: Held[]): number {
+  private writeTable(state: TableState, at: number, knownRow: number | null, held: Held[]): number {
     const sheet = this.sheet('tables');
     const json = JSON.stringify(state);
     const stateCells = toCells(json, STATE_CHUNKS);
@@ -423,17 +532,32 @@ export class SheetStore implements TableStore {
       throw new Error(`Table ${state.id} has grown to ${json.length} characters, more than its row can hold`);
     }
 
-    const row = knownRow ?? Math.max(sheet.getLastRow(), 1) + 1;
+    const row = knownRow ?? this.rowForNew(sheet);
     const range = sheet.getRange(row, 1, 1, TABLE_COLUMNS);
 
-    // Plain text everywhere, or the sheet would turn an id like 2E5678 into a number
     if (knownRow === null) {
-      range.setNumberFormats([Array.from({ length: TABLE_COLUMNS }, () => TEXT)]);
+      range.setNumberFormats([TABLE_FORMATS]);
     }
 
-    range.setValues([[state.id, new Date().toISOString(), String(state.version), ...stateCells, ...heldCells(held)]]);
+    range.setValues([[state.id, new Date(at).toISOString(), String(state.version), ...stateCells, ...heldCells(held)]]);
 
     return row;
+  }
+
+  /**
+   * The row a new table takes: the first one that a table put away left empty, so that the tab stops
+   * growing, or else the one after the last. Only a row with nothing in a table's cells is taken: one
+   * that merely lost its id is somebody's, and is left as it is.
+   */
+  private rowForNew(sheet: SheetLike): number {
+    const ids = dataRows(sheet, 1);
+    const empty = ids.findIndex((row) => row[0] === '') + FIRST_DATA_ROW;
+
+    if (empty >= FIRST_DATA_ROW && sheet.getRange(empty, 1, 1, TABLE_COLUMNS).getValues()[0]!.every((cell) => cell === '')) {
+      return empty;
+    }
+
+    return FIRST_DATA_ROW + ids.length;
   }
 
   /**
@@ -441,10 +565,11 @@ export class SheetStore implements TableStore {
    * row. Whatever can't be written stays held and is tried again the next time the row is read, so a
    * failing write costs no record and never holds up the game. Returns whether the row is now clear.
    *
-   * `retrying` says some of these were tried before. A write that reported failure may have landed all
-   * the same, so those are looked for in their tab first and not written twice.
+   * `triedWithin` says how many rows back in their tabs some of these may have been tried before. A
+   * write that reported failure may have landed all the same, so they are looked for there first and
+   * not written twice.
    */
-  private copyOut(row: number, held: Held[], retrying: boolean, table: Denominated): boolean {
+  private copyOut(row: number, held: Held[], triedWithin: number, table: Denominated): boolean {
     const waiting: Held[] = [];
 
     for (const { type, sheet, idColumn, formats } of RECORD_SHEETS) {
@@ -456,7 +581,7 @@ export class SheetStore implements TableStore {
       const rowFormats = formats(table);
 
       try {
-        const arrived = retrying ? this.recentIds(sheet, idColumn) : new Set<string>();
+        const arrived = this.recentIds(sheet, idColumn, triedWithin);
         const fresh = mine.filter((item) => !arrived.has(item.id));
 
         // The Ledger tab gained the columns for chips moved between players after Sheets were in use. Only such a
@@ -465,7 +590,7 @@ export class SheetStore implements TableStore {
           headBlankColumns(this.sheet(sheet), HEADERS[sheet]);
         }
 
-        this.appendRows(sheet, fresh.map((item) => recordRow(item, table)), rowFormats);
+        this.appendRows(this.sheet(sheet), fresh.map((item) => recordRow(item, table)), rowFormats);
         this.deps.flush();
       } catch (error) {
         console.error(error);
@@ -490,26 +615,25 @@ export class SheetStore implements TableStore {
     return waiting.length === 0;
   }
 
-  /** The ids of the records at the bottom of a tab. */
-  private recentIds(key: SheetKey, idColumn: number): Set<string> {
+  /** The ids of the records in the last `rows` rows of a tab. */
+  private recentIds(key: SheetKey, idColumn: number, rows: number): Set<string> {
     const sheet = this.sheet(key);
-    const lastRow = sheet.getLastRow();
+    const lastRow = rows > 0 ? sheet.getLastRow() : 0;
     if (lastRow < FIRST_DATA_ROW) {
       return new Set();
     }
 
-    const firstRow = Math.max(FIRST_DATA_ROW, lastRow - RETRY_SCAN_ROWS + 1);
+    const firstRow = Math.max(FIRST_DATA_ROW, lastRow - rows + 1);
     const ids = sheet.getRange(firstRow, idColumn, lastRow - firstRow + 1, 1).getValues();
 
     return new Set(ids.map((row) => String(row[0])));
   }
 
-  private appendRows(key: SheetKey, rows: unknown[][], formats: string[]): void {
+  private appendRows(sheet: SheetLike, rows: unknown[][], formats: string[]): void {
     if (rows.length === 0) {
       return;
     }
 
-    const sheet = this.sheet(key);
     const range = sheet.getRange(Math.max(sheet.getLastRow(), 1) + 1, 1, rows.length, formats.length);
 
     range.setNumberFormats(rows.map(() => formats));
@@ -541,5 +665,177 @@ export class SheetStore implements TableStore {
         // Nothing more can be done; the entry expires by itself
       }
     }
+  }
+
+  /**
+   * Moves old tables from the Tables tab to the Archive, under the lock. Each step leaves every table
+   * in at least one of the two: a table is written to the Archive, and that write pushed through,
+   * before anything of it is taken out of Tables, and its cache entries go before its row does, so the
+   * cache never answers for a table the tab no longer has. Its row is emptied, never deleted: no other
+   * table's row moves, so no row number remembered for another table is made wrong.
+   */
+  private sweep(now: number, lastWords: LastWords): void {
+    const tables = this.sheet('tables');
+    const due = dueToLookAt(this.savedTimes(tables), now);
+    if (due.length === 0) {
+      return;
+    }
+
+    const archive = this.archive(false);
+    const kept = archive ? this.archivedSaves(archive) : new Set<string>();
+    const leaving: Leaving[] = [];
+
+    for (const candidate of due) {
+      if (leaving.length === PUT_AWAY_AT_ONCE) {
+        break;
+      }
+
+      try {
+        const ready = this.readyToLeave(tables, candidate.id, candidate.row, now, lastWords, kept);
+        if (ready) {
+          leaving.push(ready);
+        }
+      } catch (error) {
+        console.error(error);
+      }
+    }
+
+    const unkept = leaving.filter((table) => !table.archived);
+    if (unkept.length > 0) {
+      this.appendRows(archive ?? this.archive(true)!, unkept.map((table) => table.cells), ARCHIVE_FORMATS);
+      this.deps.flush();
+    }
+
+    for (const table of this.whereTheyWere(tables, leaving)) {
+      try {
+        for (const key of [stateKey(table.id), peekKey(table.id), rowKey(table.id)]) {
+          this.deps.cache.remove(key);
+        }
+
+        tables.getRange(table.row, 1, 1, TABLE_COLUMNS).setValues([EMPTY_ROW]);
+      } catch (error) {
+        // Still in both tabs, and finished by a later sweep
+        console.error(error);
+      }
+    }
+
+    if (leaving.length > 0) {
+      this.deps.flush();
+    }
+  }
+
+  /**
+   * Those of the tables that are leaving whose rows still name them. The lock keeps the game out of
+   * the tab while a sweep runs, but not a person: rows sorted or deleted by hand since they were read
+   * would have another table where one of these was, and emptying a row is the one thing a sweep does
+   * that cannot be done again. One read, of the cells between the first of the rows and the last.
+   */
+  private whereTheyWere(tables: SheetLike, leaving: Leaving[]): Leaving[] {
+    if (leaving.length === 0) {
+      return [];
+    }
+
+    const rows = leaving.map((table) => table.row);
+    const first = Math.min(...rows);
+    const ids = tables.getRange(first, 1, Math.max(...rows) - first + 1, 1).getValues();
+
+    return leaving.filter((table) => String(ids[table.row - first]?.[0]) === table.id);
+  }
+
+  /** Every row of the Tables tab that names a table and says when it was last saved, read without its state. */
+  private savedTimes(tables: SheetLike): { id: string; row: number; changedAt: number }[] {
+    return dataRows(tables, 2).flatMap(([id, updated], index) => {
+      const changedAt = savedAt(updated);
+
+      return id !== '' && changedAt !== null ? [{ id: String(id), row: FIRST_DATA_ROW + index, changedAt }] : [];
+    });
+  }
+
+  /**
+   * Reads an old table's row and gets it ready to go: asks it its last words, and sees every record of
+   * it to its tab. Null when it stays where it is this time: the row is not all something this code
+   * wrote, or a record of it could not be copied out, which the next sweep tries again.
+   */
+  private readyToLeave(tables: SheetLike, id: string, row: number, now: number, lastWords: LastWords, kept: Set<string>): Leaving | null {
+    const values = tables.getRange(row, 1, 1, TABLE_COLUMNS).getValues()[0]!;
+    const json = stateText(values);
+    const saved = String(values[0]) === id ? savedTable(json, id) : null;
+    const heldAs = values.slice(HELD_COLUMN - 1, HELD_COLUMN - 1 + HELD_CHUNKS);
+    const held = heldFrom(fromCells(heldAs));
+
+    // Whatever is in the cells for waiting records and is not such records would be gone once they are settled
+    if (!saved || heldCells(held).some((cell, index) => cell !== heldAs[index])) {
+      console.error('Left a row of the Tables tab where it is, since it does not read as the table it names', id, row);
+
+      return null;
+    }
+
+    const archived = kept.has(savedAs(values));
+    let state: TableState | null = null;
+
+    try {
+      state = restoreState(json);
+    } catch {
+      // Saved by code too old to load: put away as it is, with nothing asked of it
+    }
+
+    // A table the Archive already has was asked when it got there, by the sweep that could not finish
+    const waiting = new Set(held.map((item) => item.id));
+    const fresh = state && !archived ? heldOf(lastWordsOf(state, now, lastWords), `${saveOf(id, values[2])}:away`).filter((item) => !waiting.has(item.id)) : [];
+
+    if (held.length + fresh.length > 0 && !(state && this.settle(row, held, fresh, state.config))) {
+      return null;
+    }
+
+    return { id, row, archived, cells: [...values.slice(0, HELD_COLUMN - 1), ...heldCells([]), ...describe(saved), new Date(now)] };
+  }
+
+  /**
+   * Sees the records of a table that is leaving to their tabs: those still held in its row, and `fresh`
+   * ones, which are held there first, as a save holds them, so that a copy that fails leaves them where
+   * the next try finds them. Returns whether none is left waiting.
+   */
+  private settle(row: number, held: Held[], fresh: Held[], table: Denominated): boolean {
+    const all = [...held, ...fresh];
+
+    if (fresh.length > 0) {
+      this.sheet('tables').getRange(row, HELD_COLUMN, 1, HELD_CHUNKS).setValues([heldCells(all)]);
+      this.deps.flush();
+    }
+
+    return this.copyOut(row, all, WHOLE_TAB, table);
+  }
+
+  /** The Archive tab, which the first table to be put away makes. Until then there is none, which is nothing put away. */
+  private archive(create: boolean): SheetLike | null {
+    return openTab(this.deps.spreadsheet(), ARCHIVE, ARCHIVE_HEADERS, create);
+  }
+
+  /** Every save of a table the Archive holds. A tab left without its headers, as when making it failed halfway, gets them. */
+  private archivedSaves(archive: SheetLike): Set<string> {
+    const lastRow = archive.getLastRow();
+    const rows = lastRow < 1 ? [] : archive.getRange(1, 1, lastRow, 3).getValues();
+
+    if (rows.length === 0 || rows[0]![0] === '') {
+      headBlankColumns(archive, ARCHIVE_HEADERS);
+    }
+
+    return new Set(rows.slice(1).map(savedAs));
+  }
+
+  /**
+   * Notes for a while that a table isn't in the Tables tab, and whether that is because it was put
+   * away, which it answers. The Archive is asked once and the cache remembers, so a page left open on
+   * such a table costs one look, not one with every poll.
+   */
+  private rememberGone(tableId: string): boolean {
+    const archive = this.archive(false);
+    const away = archive !== null && dataRows(archive, 1).some((row) => String(row[0]) === tableId);
+
+    // Anything the cache still has of the table has outlived it
+    this.forget(tableId);
+    this.deps.cache.put(peekKey(tableId), away ? AWAY : MISSING, MISSING_SECONDS);
+
+    return away;
   }
 }

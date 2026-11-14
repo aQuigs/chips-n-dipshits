@@ -215,6 +215,22 @@ export function noticeEl(text: string, wayOut?: { label: string; action(): void 
 }
 
 /**
+ * Shown to someone who asked for a table that was put away. `said` is the server's sentence, which
+ * says how long a table may go without play. It stays up until they leave it: someone coming back to
+ * a tab after weeks should not find the reason gone with a toast.
+ */
+export function putAwayEl(tableId: string, said: string, startNew: () => void): HTMLElement {
+  const panel = h(
+    'div.card-panel',
+    { 'data-screen': 'put-away' },
+    h('div.about', null, h('h2', null, `Table ${tableId}`), h('p', null, said), h('p.note', null, 'Whoever runs the game can still find its ledger and its hands in the game’s Sheet.')),
+    h('button.btn.primary', { type: 'button', 'data-action': 'start-new-table', onclick: startNew }, 'Start a new table'),
+  );
+
+  return h('main.lobby', null, brand(), h('div.panels.single', null, panel));
+}
+
+/**
  * Shown to someone who arrived by a personal link on a browser that doesn't know them yet.
  * `hasOwnSeat` says this browser already sits at the table as someone else, which "no" goes back to.
  */

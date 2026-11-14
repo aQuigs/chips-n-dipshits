@@ -5,6 +5,8 @@ import { applyCommand, createTable, addMember, freshDeck, seededRng, startHand, 
 import type { Card, Command, Ctx, Effect, Hand, HandRecord, LedgerEntry, Rng, TableConfig, TableState, TableView } from '../src/engine/index.ts';
 
 /** A small repeatable generator; the same seed always deals the same cards. */
+export const DAY_MS = 24 * 60 * 60 * 1000;
+
 export { seededRng };
 
 export function cards(text: string): Card[] {

@@ -2,20 +2,23 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { ServerClock, ServerLine, sleep, TableConnection } from '../src/client/connection.ts';
+import type { TableListener } from '../src/client/connection.ts';
 import type { Transport } from '../src/client/transport.ts';
-import type { ApiRequest, ApiResponse, Auth, Built } from '../src/server/api.ts';
+import type { ApiError, ApiRequest, ApiResponse, Auth, Built } from '../src/server/api.ts';
 import { BuildGate } from '../src/server/build.ts';
 import { MemoryPresetStore } from '../src/server/memoryPresetStore.ts';
 import { MemoryStore } from '../src/server/memoryStore.ts';
+import { PUT_AWAY_AFTER_MS, PUT_AWAY_MESSAGE } from '../src/server/putAway.ts';
 import { PokerService } from '../src/server/service.ts';
 import { seededRng } from './helpers.ts';
 
 const PAGE_BUILD = 'aaaaaaaaaaaa';
 const NEWER_BUILD = 'cccccccccccc';
 
-/** A server the test can update under the page, and everything the page sent it. */
+/** A server the test can update under the page and move the clock of, and everything the page sent it. */
 function server() {
-  const game = new PokerService({ store: new MemoryStore(), presets: new MemoryPresetStore(), clock: { now: () => Date.now() }, rng: seededRng(3) });
+  let ahead = 0;
+  const game = new PokerService({ store: new MemoryStore(), presets: new MemoryPresetStore(), clock: { now: () => Date.now() + ahead }, rng: seededRng(3) });
   const sent: (ApiRequest & Built)[] = [];
   let gate = new BuildGate(game, PAGE_BUILD);
 
@@ -33,7 +36,18 @@ function server() {
     deploy: () => {
       gate = new BuildGate(game, NEWER_BUILD);
     },
+    /** Time passes with nobody at any table, and then someone makes a new one. */
+    leaveFor: (ms: number) => {
+      ahead += ms;
+      game.handle({ op: 'create', name: 'Someone else' });
+    },
   };
+}
+
+function withoutBuild(answer: ApiError): ApiError {
+  const { build: _build, ...rest } = answer as ApiError & Built;
+
+  return rest;
 }
 
 /** Whether a promise has come to anything a little later: an answer that is withheld never does. */
@@ -191,4 +205,84 @@ test('an offer to chop or its answer that got no answer is looked up with a fres
   }
 
   connection.close();
+});
+
+test('a page left open on a table that is then put away is told so once, by the poll that finds out, and asks no more', async () => {
+  const { transport, sent, leaveFor } = server();
+  const line = new ServerLine(transport, PAGE_BUILD, () => undefined);
+  const { tableId, auth, view } = await tableOf(line);
+  const refused: ApiError[] = [];
+  const told: string[] = [];
+  const listener: TableListener = {
+    view: () => undefined,
+    move: () => undefined,
+    status: () => undefined,
+    refused: (error) => refused.push(error),
+    notice: (message) => told.push(message),
+  };
+
+  const connection = new TableConnection(line, { tableId, auth }, new ServerClock(), listener);
+  connection.take(view);
+
+  leaveFor(PUT_AWAY_AFTER_MS);
+  sent.length = 0;
+
+  connection.refresh();
+  await sleep(30);
+
+  assert.deepEqual(refused.map(withoutBuild), [{ ok: false, code: 'not_found', error: PUT_AWAY_MESSAGE, putAway: true }]);
+  assert.deepEqual(sent.map((request) => request.op), ['poll'], 'one poll, and none after it: an answer like this is not one to try again');
+  assert.equal(told.length, 0);
+
+  // A move pressed in a tab that had not yet heard gets the same answer, to the same listener
+  const pressed = new TableConnection(line, { tableId, auth }, new ServerClock(), listener);
+  pressed.take(view);
+
+  assert.equal(await pressed.send({ type: 'start' }), 'refused');
+  assert.equal(refused.length, 2);
+  assert.equal(refused[1]!.putAway, true);
+  assert.equal(told.length, 0, 'said by the screen it leads to, not in a toast over a table that is gone');
+});
+
+test('a reaction sent to a table that was put away says nothing and takes no seat, and the poll that is out hears the same, tells it once and ends', async () => {
+  const { transport, sent, leaveFor } = server();
+
+  // The poll that is out is kept waiting, as the server keeps one, until the test lets it be answered
+  let answerPolls = (): void => undefined;
+  const waited = new Promise<void>((resolve) => (answerPolls = resolve));
+  const held: Transport = {
+    send: async (request) => {
+      if (request.op === 'poll') {
+        await waited;
+      }
+
+      return transport.send(request);
+    },
+  };
+
+  const line = new ServerLine(held, PAGE_BUILD, () => undefined);
+  const { tableId, auth, view } = await tableOf(line);
+  const refused: ApiError[] = [];
+  const told: string[] = [];
+  const connection = new TableConnection(line, { tableId, auth }, new ServerClock(), {
+    view: () => undefined,
+    move: () => undefined,
+    status: () => undefined,
+    refused: (error) => refused.push(error),
+    notice: (message) => told.push(message),
+  });
+  connection.take(view);
+  connection.refresh();
+
+  leaveFor(PUT_AWAY_AFTER_MS);
+  sent.length = 0;
+
+  assert.equal(await connection.send({ type: 'react', kind: 'laugh' }), 'refused');
+  assert.equal(refused.length + told.length, 0, 'the answer to a reaction touches nothing, though it said the table was put away');
+
+  answerPolls();
+  await sleep(30);
+
+  assert.deepEqual(refused.map(withoutBuild), [{ ok: false, code: 'not_found', error: PUT_AWAY_MESSAGE, putAway: true }]);
+  assert.deepEqual(sent.map((request) => request.op), ['act', 'poll'], 'the poll was answered once and no other went out after it');
 });

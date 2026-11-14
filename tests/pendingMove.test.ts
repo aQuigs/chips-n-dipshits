@@ -116,7 +116,7 @@ class Server {
   }
 
   restore(saved: TableState): void {
-    this.store.transact(this.tableId, () => ({ save: structuredClone(saved), effects: [], result: null }));
+    this.store.transact(this.tableId, () => ({ save: structuredClone(saved), at: this.now, effects: [], result: null }));
   }
 
   /** The game is updated under the pages that are open. */
@@ -129,7 +129,7 @@ class Server {
       change(state!);
       state!.version += 1;
 
-      return { save: state!, effects: [], result: null };
+      return { save: state!, at: this.now, effects: [], result: null };
     });
   }
 }

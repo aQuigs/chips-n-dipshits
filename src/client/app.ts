@@ -25,7 +25,7 @@ import { dialogAllowed, dialogEl, dialogShows } from './render/dialogs/index.ts'
 import type { Dialog, DialogHandlers } from './render/dialogs/index.ts';
 import { createFeed } from './render/feed.ts';
 import type { Feed } from './render/feed.ts';
-import { joinScreen, lobbyEl, noticeEl, welcomeBackEl } from './render/lobby.ts';
+import { joinScreen, lobbyEl, noticeEl, putAwayEl, welcomeBackEl } from './render/lobby.ts';
 import type { LobbyScreen } from './render/lobby.ts';
 import { nightOver } from './render/night.ts';
 import { outdatedEl } from './render/outdated.ts';
@@ -304,6 +304,11 @@ export class App {
       }
 
       if (isRefusal(response)) {
+        if (response.putAway) {
+          this.showPutAway(tableId, response);
+          return;
+        }
+
         // A personal link that no longer works is still a link to the table
         void this.showJoin(tableId);
 
@@ -368,8 +373,13 @@ export class App {
       }
 
       if (isRefusal(response)) {
-        this.showLobby();
-        this.toast(`There is no table with the code ${tableId}.`);
+        if (response.putAway) {
+          this.showPutAway(tableId, response);
+        } else {
+          this.showLobby();
+          this.toast(`There is no table with the code ${tableId}.`);
+        }
+
         return;
       }
 
@@ -402,7 +412,23 @@ export class App {
       return;
     }
 
+    if (response && !response.ok && response.putAway) {
+      this.showPutAway(tableId, response);
+      return;
+    }
+
     this.toast(response && !response.ok ? response.error : 'Could not join the table. Check your connection and try again.');
+  }
+
+  /**
+   * The server has said the table was put away. Nothing of it is kept here, neither in the address nor
+   * in the browser's memory, and the visitor is told why and offered a new one.
+   */
+  private showPutAway(tableId: string, error: ApiError): void {
+    this.leaveTableScreen();
+    this.platform.memory.remove(seatKey(tableId));
+    this.pointAddress(null);
+    this.mount(putAwayEl(tableId, error.error, () => this.showLobby()));
   }
 
   private enterTable(session: Session, view: TableView | null): void {
@@ -561,6 +587,11 @@ export class App {
   /** The server no longer knows this browser at the table, so start over from the join screen or the lobby. */
   private dropSession(error: ApiError): void {
     const tableId = this.table?.session.tableId;
+
+    if (tableId && error.putAway) {
+      this.showPutAway(tableId, error);
+      return;
+    }
 
     if (tableId) {
       this.platform.memory.remove(seatKey(tableId));

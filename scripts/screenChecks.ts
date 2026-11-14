@@ -24,6 +24,7 @@ import { THEMES } from '../src/client/themes.ts';
 import { shortAmount, signedAmount } from '../src/engine/amounts.ts';
 import { BADGES, badgeOf, DEFAULT_CONFIG, LIMITS, onTheClock, presetSettings, REACTION_GAP_MS, REACTION_LIFE_MS } from '../src/engine/index.ts';
 import type { Command, Straddle, TableConfig, TableView } from '../src/engine/index.ts';
+import { PUT_AWAY_AFTER_MS, PUT_AWAY_MESSAGE } from '../src/server/putAway.ts';
 import { contrast } from '../tests/colorVision.ts';
 import { boxes, Gate, overlap, Rig, RigTable, SCREENS, setStageHeight, squeezed, textBoxes } from './rig.ts';
 import type { Box, RigDeal, RigPlayer, ScreenName } from './rig.ts';
@@ -9368,6 +9369,51 @@ const CHECKS: Check[] = [
         assert.equal(table.view('Quigs').config.rabbitHunting, true);
         assert.equal(table.view('Quigs').feed.at(-1)!.text, 'Rabbit hunting is on: after a hand ends early, anyone dealt in can see the cards that would have come');
         await host.context().close();
+      }
+    },
+  ],
+  [
+    'a table that was put away is a screen of its own on the smallest phone and a desktop: why, and a way to a new table, all of it whole, and nothing of the seat kept',
+    async (rig) => {
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        const table = rig.table([{ name: 'Quigs', stack: 1000 }, { name: 'Stu', stack: 1000 }]);
+        const page = await table.open('Quigs', screen);
+        const press = pressOn(page, screen);
+        const seat = () => page.evaluate(`localStorage.getItem('cnd.seat.${table.id}')`);
+        const screenOf = '[data-screen="put-away"]';
+        assert.ok(await seat(), 'the browser remembers the seat while the table is there');
+
+        // Two weeks with the page left open and nobody playing, and then someone starts another table
+        rig.advance(PUT_AWAY_AFTER_MS);
+        assert.equal(rig.ask({ op: 'create', name: 'Pam' }).ok, true);
+
+        await page.waitForSelector(screenOf);
+        assert.equal(await text(page, `${screenOf} h2`), `Table ${table.id}`);
+        assert.deepEqual(await page.locator(`${screenOf} p`).allInnerTexts(), [PUT_AWAY_MESSAGE, 'Whoever runs the game can still find its ledger and its hands in the game’s Sheet.']);
+        assert.equal(await text(page, `${screenOf} button`), 'Start a new table');
+        assert.equal(await page.locator('.stage, .toast:visible').count(), 0, 'the table or a toast is still showing');
+
+        await shot(page, `put-away-${screen}`);
+        assert.deepEqual(await squeezed(page, `${screenOf} h2, ${screenOf} p, ${screenOf} button`), [], 'part of what it says is cut off');
+        assertOnScreen(await boxes(page, `.brand, ${screenOf}, ${screenOf} p, ${screenOf} button`), screen, 'the screen for a table that was put away');
+        await assertNoSidewaysScroll(page);
+
+        const said = await textBoxes(page, `${screenOf} h2, ${screenOf} p`);
+        const [button] = await boxes(page, `${screenOf} button`);
+        assertApart([button!], said, 'the button and what the screen says');
+
+        assert.equal(new URL(page.url()).search, '', 'the address still names the table or the seat');
+        assert.equal(await seat(), null, 'the browser still remembers the seat');
+
+        // The button leads to the lobby, and the table's code typed there back to this screen
+        await press('[data-action="start-new-table"]');
+        await page.waitForSelector('#host-name');
+        await page.fill('#table-code', table.id);
+        await press('button:has-text("Find table")');
+        await page.waitForSelector(screenOf);
+        assert.equal(await toastShown(page), 0);
+
+        await page.context().close();
       }
     },
   ],

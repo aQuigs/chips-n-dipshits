@@ -148,7 +148,7 @@ export class RigTable {
       change(state);
       state.version += 1;
 
-      return { save: state, effects: [], result: null };
+      return { save: state, at: this.rig.now(), effects: [], result: null };
     });
   }
 

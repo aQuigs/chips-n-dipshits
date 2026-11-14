@@ -40,10 +40,14 @@ export const FIRST_DATA_ROW = 2;
 
 const LOCK_WAIT_MS = 20_000;
 
-/** Runs `work` holding the script lock, which every write to the spreadsheet needs. `busy` is what a caller who couldn't get it is told. */
-export function underLock<T>(lock: LockLike, busy: string, work: () => T): T {
+/**
+ * Runs `work` holding the script lock, which every write to the spreadsheet needs. `busy` is what a
+ * caller who couldn't get it is told. `waitMs` is how long to wait for it: less than usual for work
+ * that can as well be left for another time.
+ */
+export function underLock<T>(lock: LockLike, busy: string, work: () => T, waitMs = LOCK_WAIT_MS): T {
   try {
-    lock.waitLock(LOCK_WAIT_MS);
+    lock.waitLock(waitMs);
   } catch {
     throw new StoreBusyError(busy);
   }
@@ -53,6 +57,13 @@ export function underLock<T>(lock: LockLike, busy: string, work: () => T): T {
   } finally {
     lock.releaseLock();
   }
+}
+
+/** The first `columns` cells of every row of a tab below its headers. */
+export function dataRows(sheet: SheetLike, columns: number): unknown[][] {
+  const last = sheet.getLastRow();
+
+  return last < FIRST_DATA_ROW ? [] : sheet.getRange(FIRST_DATA_ROW, 1, last - FIRST_DATA_ROW + 1, columns).getValues();
 }
 
 /**

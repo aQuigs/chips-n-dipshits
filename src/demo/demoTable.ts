@@ -151,7 +151,7 @@ export function createDemoTable(options: DemoOptions = {}): DemoTable {
     // The button moves one seat on when the hand starts, which puts it on Hero
     state!.buttonSeat = BOTS[BOTS.length - 1]!.seat;
 
-    return { save: state, effects: [], result: null };
+    return { save: state!, at: realNow() + ahead, effects: [], result: null };
   });
 
   act(YOU.name, { type: 'start' });
@@ -169,7 +169,7 @@ export function createDemoTable(options: DemoOptions = {}): DemoTable {
     // The next card is taken from the end of the deck
     hand.deck = [...freshDeck().filter((card) => !fixed.has(card)), ...[...OPENING_BOARD].reverse()];
 
-    return { save: state, effects: [], result: null };
+    return { save: state!, at: realNow() + ahead, effects: [], result: null };
   });
 
   for (const [name, command] of OPENING_ACTIONS) {

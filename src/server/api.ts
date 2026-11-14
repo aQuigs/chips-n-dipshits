@@ -36,7 +36,7 @@ export type ApiRequest =
 
 /**
  * invalid: the request broke a rule; the message is for the player.
- * not_found: no such table.
+ * not_found: no such table, either because there never was one or, with `putAway`, because it was put away.
  * unauthorized: the id and token don't match a member.
  * busy: the table could not be locked in time; try again.
  * stale: the page is from another build of the game than the server, and has to be loaded again.
@@ -48,6 +48,8 @@ export interface ApiError {
   ok: false;
   code: ErrorCode;
   error: string;
+  /** On `not_found` only: there was such a table, and it was put away after going too long without play. */
+  putAway?: true;
 }
 
 /** What someone sees of a table before they have joined it. */

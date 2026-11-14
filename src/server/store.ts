@@ -1,5 +1,6 @@
 import { nextDeadline, upgradeState } from '../engine/index.ts';
 import type { Effect, HandRecord, TableState } from '../engine/index.ts';
+import type { LastWords } from './putAway.ts';
 
 /** Enough about a table to tell whether a waiting player has anything new to fetch. */
 export interface TablePeek {
@@ -8,14 +9,16 @@ export interface TablePeek {
   wakeAt: number | null;
 }
 
-/** The outcome of one exclusive read-modify-write. */
-export interface Txn<T> {
-  /** The state to persist, or null to leave the table as it was. */
-  save: TableState | null;
+/**
+ * The outcome of one exclusive read-modify-write: the state to persist, or null to leave the table as
+ * it was. A save says when it was made, by the clock the game is played on, which is what a table's
+ * age is counted from.
+ */
+export type Txn<T> = {
   /** Ledger entries and finished hands to append to the permanent record. */
   effects: Effect[];
   result: T;
-}
+} & ({ save: TableState; at: number } | { save: null });
 
 /** Where tables live. Implementations decide the database, the locking and any caching. */
 export interface TableStore {
@@ -33,6 +36,17 @@ export interface TableStore {
 
   /** The latest finished hands of a table, oldest first. */
   recentHands(tableId: string, limit: number): HandRecord[];
+
+  /**
+   * Puts away up to `PUT_AWAY_AT_ONCE` of the tables `dueToLookAt` gives at `now`: from then on the
+   * store has no such table, only the knowledge that it was put away. Each is asked its `lastWords`
+   * before it goes, and their effects are kept like a transaction's. Housekeeping: it never throws,
+   * and what it could not do waits for the next call.
+   */
+  putAwayOld(now: number, lastWords: LastWords): void;
+
+  /** Whether a table the store does not have was put away, rather than never having been there. */
+  wasPutAway(tableId: string): boolean;
 }
 
 /** The store could not get exclusive access to a table in time. The request is safe to retry. */

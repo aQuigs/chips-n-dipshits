@@ -22,14 +22,17 @@ class WebAudioSounds implements SoundMaker {
     touch.onTouch(() => this.wake());
   }
 
-  play(sound: SoundName, volume: number, delay: number): void {
+  now(): number | null {
+    return this.audio?.state === 'running' ? this.audio.currentTime : null;
+  }
+
+  play(sound: SoundName, volume: number, start: number): void {
     const audio = this.audio;
     if (audio?.state !== 'running') {
       return;
     }
 
     try {
-      const start = audio.currentTime + delay;
       const out = audio.createGain();
 
       // Heard loudness grows much more slowly than the signal, so the slider's middle is half as loud, not a whisper

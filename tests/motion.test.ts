@@ -143,7 +143,7 @@ const seen = (had: HandEvent[], news: HandEvent[], viewer: number | null = 0) =>
 /** When each sound of a view is heard by the viewer at `seat`, in milliseconds from the view, played as the page plays them. */
 function heardAt(change: TableChange, seat: number | null): { sound: string; event: number; at: number }[] {
   const delays: number[] = [];
-  const sounds = new Sounds({ play: (_sound, _volume, delay) => void delays.push(delay * 1000) }, new Preferences(PREFERENCES, mapMemory()), { now: () => 0, inView: () => true });
+  const sounds = new Sounds({ now: () => 0, play: (_sound, _volume, at) => void delays.push(at * 1000) }, new Preferences(PREFERENCES, mapMemory()), { inView: () => true });
   const placed = soundsPlaced(change.events, seat, boardsDealt(change.view.hand?.bombPot ?? null));
 
   placed.forEach(({ sound }) => sounds.play(sound));

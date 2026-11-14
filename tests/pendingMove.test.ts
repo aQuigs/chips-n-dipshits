@@ -272,7 +272,7 @@ class Page {
       seen: () => this.moving,
     };
     // Each sound asked for a long while after the last, so none is dropped for coming in a burst
-    const sounds = new Sounds({ play: (sound) => void this.heard.push(sound) }, prefs, { now: () => (this.soundClock += 60_000), inView: () => true });
+    const sounds = new Sounds({ now: () => (this.soundClock += 60), play: (sound) => void this.heard.push(sound) }, prefs, { inView: () => true });
     const turns = new YourTurn(new Attention(prefs, { ...ways, flash: this.flash }));
 
     this.wire = new Wire(server);

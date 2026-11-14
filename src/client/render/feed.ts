@@ -30,9 +30,10 @@ function latestText(entry: FeedEntry, deck: string): (string | HTMLElement)[] {
 
 /**
  * The dealer's play-by-play and the table chat in one list. Built once and updated in place, so what
- * someone is typing and where they have scrolled to both survive new entries arriving.
+ * someone is typing and where they have scrolled to both survive new entries arriving. `beside` stands at
+ * the end of its bar, which is there in every shape of the page.
  */
-export function createFeed(onChat: (text: string) => void, deck: string): Feed {
+export function createFeed(onChat: (text: string) => void, deck: string, beside: HTMLElement | null = null): Feed {
   const list = h('ol.entries', { 'aria-live': 'polite' });
   const input = h('input', { type: 'text', id: 'chat-input', maxlength: CHAT_LENGTH, placeholder: 'Say something', autocomplete: 'off', 'aria-label': 'Chat message' });
   const latest = h('span.latest');
@@ -55,7 +56,7 @@ export function createFeed(onChat: (text: string) => void, deck: string): Feed {
     h('button.btn.small', { type: 'submit' }, 'Send'),
   );
 
-  const element = h('aside.feed', null, toggle, h('div.feed-body', { id: 'feed-body' }, list, form));
+  const element = h('aside.feed', null, h('div.feed-bar', null, toggle, beside), h('div.feed-body', { id: 'feed-body' }, list, form));
 
   toggle.addEventListener('click', () => {
     const open = element.classList.toggle('open');

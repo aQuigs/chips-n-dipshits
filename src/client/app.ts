@@ -418,14 +418,14 @@ export class App {
     });
     this.table = table;
 
-    const feed = createFeed((text) => void this.send({ type: 'chat', text }), this.prefs.get('deck'));
+    const picker = new ReactionPicker({ react: (kind, to) => this.react(kind, to) });
+    const feed = createFeed((text) => void this.send({ type: 'chat', text }), this.prefs.get('deck'), picker.toggleElement);
     const stage = new Slot(h('div.stage'));
     const overlay = new Slot(h('div.overlay', { hidden: true }));
     const motion = new Motion(pageMotion(stage.element), this.prefs, this.watching);
     const above = h('div.above');
     const marks = new ReactionMarks(above, stage.element);
-    const picker = new ReactionPicker({ react: (kind, to) => this.react(kind, to) });
-    above.append(picker.element);
+    above.append(picker.panelElement);
     const effects = new TableEffects({
       prefs: this.prefs,
       stage: stage.element,

@@ -22,7 +22,7 @@ import { RECIPES } from '../src/client/soundRecipes.ts';
 import { spotsOf } from '../src/client/tableChances.ts';
 import { THEMES } from '../src/client/themes.ts';
 import { shortAmount, signedAmount } from '../src/engine/amounts.ts';
-import { BADGES, badgeOf, DEFAULT_CONFIG, LIMITS, onTheClock, presetSettings } from '../src/engine/index.ts';
+import { BADGES, badgeOf, DEFAULT_CONFIG, LIMITS, onTheClock, presetSettings, REACTION_GAP_MS, REACTION_LIFE_MS } from '../src/engine/index.ts';
 import type { Command, Straddle, TableConfig, TableView } from '../src/engine/index.ts';
 import { contrast } from '../tests/colorVision.ts';
 import { boxes, Gate, overlap, Rig, RigTable, SCREENS, setStageHeight, squeezed, textBoxes } from './rig.ts';
@@ -555,6 +555,45 @@ const BUZZ = `(() => {
 
 const middle = (box: Box) => ({ x: (box.left + box.right) / 2, y: (box.top + box.bottom) / 2 });
 
+/** Nine at the table, each named for a check to throw at by name: Quigs in seat 0, Pam 2, Lu 3, Sam 4, Al 5, Dot 6. */
+const NINE_REACTING: RigPlayer[] = ['Quigs', 'Stu', 'Pam', 'Lu', 'Sam', 'Al', 'Dot', 'Bo', 'Kai'].map((name) => ({ name, stack: 1000 }));
+
+// How far a button that does not bet must be from one that does, so that a finger meant for one never lands on the other
+const MIS_TAP_PX = 24;
+
+/** The space between two boxes, along whichever way they are apart; 0 or less when they touch or overlap. */
+const gap = (a: Box, b: Box) => Math.max(a.left - b.right, b.left - a.right, a.top - b.bottom, b.top - a.bottom);
+
+// Run in the page: whether a tap in the middle of the fold button reaches it
+const FOLD_ON_TOP = `(() => {
+  const fold = document.querySelector('.turn [data-action="fold"]');
+  const box = fold.getBoundingClientRect();
+
+  return fold.contains(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2));
+})()`;
+
+/** That `box`'s middle is inside `around`. */
+function assertInside(box: Box, around: Box, what: string): void {
+  const { x, y } = middle(box);
+
+  assert.ok(x >= around.left && x <= around.right && y >= around.top && y <= around.bottom, `${what}: ${JSON.stringify(box)} is not over ${JSON.stringify(around)}`);
+}
+
+/** That the page shows reaction `kind` over the seat `seat`, named `label`, standing on the top of its plate. */
+async function assertMarkOn(page: Page, kind: string, seat: number, label: string): Promise<void> {
+  const mark = page.locator(`.seat-reaction[data-reaction="${kind}"]`).last();
+
+  assert.equal(await mark.getAttribute('data-seat'), String(seat), `${kind} is over the wrong seat`);
+  assert.equal(await mark.getAttribute('aria-label'), label);
+
+  const [shown] = await boxes(page, `.seat-reaction[data-reaction="${kind}"]`);
+  const [plate] = await boxes(page, `.seat[data-seat="${seat}"] .plate`);
+  const x = middle(shown!).x;
+
+  assert.ok(x >= plate!.left && x <= plate!.right, `${kind} is not over seat ${seat}'s plate: ${JSON.stringify(shown)} and ${JSON.stringify(plate)}`);
+  assert.ok(shown!.top < plate!.top && shown!.bottom > plate!.top - (shown!.bottom - shown!.top), `${kind} does not stand on seat ${seat}'s plate: ${JSON.stringify(shown)} and ${JSON.stringify(plate)}`);
+}
+
 /** Whether one thing lies with its middle on the middle of another. */
 const over = (a: Box, b: Box) => Math.hypot(middle(a).x - middle(b).x, middle(a).y - middle(b).y) <= 1.5;
 
@@ -589,10 +628,11 @@ const inTheAir = (page: Page) =>
 
 /**
  * How long after its view a celebration's move may still be moving: a last card held and turned over is
- * bounded by the sweat, and confetti by its own flight thrown as the pot lands. Every other move is the
+ * bounded by the sweat, confetti by its own flight thrown as the pot lands, and a throw, set off the moment
+ * its view arrives, by its own flight. Every other move is the
  * hand's own, bound by its budgets.
  */
-const CELEBRATION_MS: Partial<Record<MoveName, number>> = { facedown: MOST_SWEAT_MS, reveal: MOST_SWEAT_MS, confetti: MOST_VIEW_MS + MOVE_MS.confetti };
+const CELEBRATION_MS: Partial<Record<MoveName, number>> = { facedown: MOST_SWEAT_MS, reveal: MOST_SWEAT_MS, confetti: MOST_VIEW_MS + MOVE_MS.confetti, throw: MOVE_MS.throw };
 
 /** What the page has set moving since it was last asked, once all of it has landed. Moves held in the air are let go first. */
 async function flown(page: Page): Promise<Flight[]> {
@@ -1609,6 +1649,219 @@ const CHECKS: Check[] = [
 
       assertOnScreen(await boxes(page, '.say button'), 'phone', 'Send');
       await shot(page, 'chat-open-phone');
+    },
+  ],
+  [
+    'the reactions button is in the chat’s bar, well away from every bet, and its picker opens over the top of the table and never over the moves: a 360 phone standing and lying, the phone sideways and the desktop, in a turn and out of one',
+    async (rig) => {
+      const table = rig.table(NINE_REACTING);
+      const width = SCREENS.smallPhone.width;
+      const layouts: { screen: ScreenName; height?: number; shape: string }[] = [
+        { screen: 'smallPhone', height: Math.ceil(width / WIDE_ASPECT) + 1, shape: 'tall' },
+        { screen: 'smallPhone', height: Math.floor(width / WIDE_ASPECT) - 1, shape: 'wide' },
+        { screen: 'phoneSideways', shape: 'wide' },
+        { screen: 'desktop', shape: 'wide' },
+      ];
+
+      // With the button on seat 6 the first to act is Quigs, in seat 0, who then calls and waits for the others
+      table.deal({ button: 6 });
+
+      for (const state of ['turn', 'waiting'] as const) {
+        if (state === 'waiting') {
+          table.act('Quigs', { type: 'call' });
+        }
+
+        for (const { screen, height, shape } of layouts) {
+          const page = await table.open('Quigs', screen);
+          const press = pressOn(page, screen);
+          const said = `${screen} ${shape}, ${state}`;
+
+          if (height !== undefined) {
+            await setStageHeight(page, height);
+          }
+
+          await page.waitForSelector(`.table.${shape}`);
+          await page.waitForSelector(state === 'turn' ? '.turn [data-action="fold"]:enabled' : '.controls .waiting');
+
+          const [stage] = await boxes(page, '.stage');
+          const controls = await boxes(page, '.controls-slot');
+          const within = (found: Box[], what: string) => {
+            assert.ok(found.length > 0, `${what}: nothing to look at (${said})`);
+            for (const box of found) {
+              assert.ok(box.left >= stage!.left - 1 && box.right <= stage!.right + 1 && box.top >= stage!.top - 1 && box.bottom <= stage!.bottom + 1, `${what} reaches outside the table (${said}): ${JSON.stringify(box)} in ${JSON.stringify(stage)}`);
+            }
+          };
+
+          const toggle = await boxes(page, '.feed [data-action="reactions"]');
+          // A table held to a height of the check's choosing can push the page past the screen's foot, but never sideways
+          if (height === undefined) {
+            assertOnScreen(toggle, screen, 'the reactions button');
+          } else {
+            assert.ok(toggle[0]!.left >= 0 && toggle[0]!.right <= SCREENS[screen].width, `the reactions button runs off the side (${said})`);
+          }
+          for (const button of await boxes(page, '.turn button, .turn input')) {
+            assert.ok(gap(toggle[0]!, button) >= MIS_TAP_PX, `the reactions button is ${gap(toggle[0]!, button)}px from a bet (${said})`);
+          }
+
+          await press('[data-action="reactions"]');
+          const panel = await boxes(page, '.react-panel');
+          within(panel, 'the picker');
+          within(await boxes(page, '.react-choice'), 'a reaction to pick');
+          assertApart(panel, controls, `the picker and the bar of moves (${said})`);
+          assert.equal(await page.locator('.react-choice:enabled').count(), 12, said);
+          assert.deepEqual(await squeezed(page, '.react-heading'), [], said);
+
+          // The moves are still there to tap, uncovered
+          if (state === 'turn') {
+            assert.ok(await page.evaluate(FOLD_ON_TOP), `the fold button is covered with the picker open (${said})`);
+          }
+
+          await shot(page, `reactions-picker-${screen}-${shape}-${state}`);
+
+          await press('[data-react="tomato"]');
+          const targets = await boxes(page, '.react-targets .btn');
+          assert.equal(targets.length, NINE_REACTING.length - 1, said);
+          within(targets, 'a player to throw at');
+          within(await boxes(page, '.react-back'), 'Back');
+          assertApart(await boxes(page, '.react-panel'), controls, `the players to throw at and the bar of moves (${said})`);
+          assert.deepEqual(await squeezed(page, '.react-targets .btn'), [], `a name to throw at is cut short (${said})`);
+          await shot(page, `reactions-targets-${screen}-${shape}-${state}`);
+
+          await press('[data-action="reactions"]');
+          await page.waitForSelector('.react-panel', { state: 'detached' });
+        }
+      }
+    },
+  ],
+  [
+    'a reaction pops up over its sender’s seat and a throw lands on its target’s, at nine seats, on the sender’s page at the tap and on another player’s from the table',
+    async (rig) => {
+      const table = rig.table(NINE_REACTING);
+      table.deal({ button: 0 });
+
+      const quigs = await table.open('Quigs', 'smallPhone');
+      const stu = await table.open('Stu', 'desktop');
+      const gate = await Gate.on(quigs, 'reactions');
+
+      // Quigs's own, shown before the server has it
+      await gate.close('requests');
+      await quigs.tap('[data-action="reactions"]');
+      await quigs.tap('[data-react="clap"]');
+      await quigs.waitForSelector('.seat-reaction[data-reaction="clap"]');
+      await gate.holding();
+      assert.equal(await stu.locator('.seat-reaction').count(), 0, 'another page shows what the server has not heard');
+      await assertMarkOn(quigs, 'clap', 0, 'Quigs is clapping');
+      await gate.open();
+
+      await stu.waitForSelector('.seat-reaction[data-reaction="clap"]');
+      await assertMarkOn(stu, 'clap', 0, 'Quigs is clapping');
+
+      // Two from the table at once, one of them thrown across it, seen on both pages
+      table.act('Pam', { type: 'react', kind: 'laugh' });
+      table.act('Al', { type: 'react', kind: 'chicken', to: table.auth('Dot').id });
+
+      for (const [page, screen] of [
+        [quigs, 'smallPhone'],
+        [stu, 'desktop'],
+      ] as const) {
+        await page.waitForSelector('.seat-reaction[data-reaction="chicken"]');
+        await assertMarkOn(page, 'laugh', 2, 'Pam is laughing');
+        await assertMarkOn(page, 'chicken', 6, 'Al threw a chicken at Dot');
+        assert.equal(await page.locator('.stand-in').count(), 0, 'something flew with motion off');
+        assertOnScreen(await boxes(page, '.seat-reaction'), screen, 'a reaction');
+        await shot(page, `reactions-nine-seats-${screen}`);
+      }
+
+      // Each goes by itself after its few seconds, on the page's own timer
+      await quigs.waitForSelector('.seat-reaction', { state: 'detached', timeout: 10_000 });
+
+      // Three at one seat stand side by side, all on the screen
+      rig.advance(REACTION_LIFE_MS);
+      table.act('Pam', { type: 'react', kind: 'tomato', to: table.auth('Dot').id });
+      table.act('Lu', { type: 'react', kind: 'rose', to: table.auth('Dot').id });
+      table.act('Bo', { type: 'react', kind: 'beer', to: table.auth('Dot').id });
+      await quigs.waitForSelector('.seat-reaction[data-reaction="beer"]');
+      const onDot = await boxes(quigs, '.seat-reaction[data-seat="6"]');
+      assert.equal(onDot.length, 3);
+      onDot.forEach((mark, index) => assertApart([mark], onDot.slice(index + 1), 'two things thrown at one seat'));
+      assertOnScreen(onDot, 'smallPhone', 'three things on one seat');
+      await shot(quigs, 'reactions-three-on-a-seat-smallPhone');
+    },
+  ],
+  [
+    'with motion on a throw flies from the thrower’s seat to the target’s and lands there, and one thrown as a hand is dealt leaves the deal as it is',
+    async (rig) => {
+      const table = rig.table(NINE_REACTING);
+      table.deal({ button: 0 });
+
+      const page = await table.open('Quigs', 'smallPhone', MOTION, { moving: true });
+      await dealt(page);
+      await page.evaluate('window.flights.splice(0)');
+
+      table.act('Sam', { type: 'react', kind: 'tomato', to: table.auth('Pam').id });
+      await page.waitForSelector('.seat-reaction[data-reaction="tomato"]');
+      const [flight, ...others] = await flown(page);
+
+      assert.deepEqual(others, [], 'more moved than the throw');
+      assert.ok(flight && flight.name === 'throw' && flight.what === 'mark' && flight.standIn && flight.text === '🍅', JSON.stringify(flight));
+      assertInside(flight.from, (await boxes(page, '.seat[data-seat="4"] .plate'))[0]!, 'the throw leaves from Sam');
+      assertInside(flight.to, (await boxes(page, '.seat[data-seat="2"] .plate'))[0]!, 'the throw lands on Pam');
+      await assertMarkOn(page, 'tomato', 2, 'Sam threw a tomato at Pam');
+      assert.equal(await page.locator('.stand-in').count(), 0, 'what flew is gone once it landed');
+      await shot(page, 'reactions-throw-landed-smallPhone');
+
+      // The next hand dealt and a throw, both brought by one view: every card is dealt as without it, and the table comes to rest
+      playOut(table);
+      await page.waitForSelector('.seat-reaction', { state: 'detached', timeout: 10_000 });
+      await dealt(page);
+      await page.evaluate('window.flights.splice(0)');
+
+      rig.advance(REACTION_GAP_MS);
+      table.dealNext();
+      table.act('Lu', { type: 'react', kind: 'beer', to: table.auth('Quigs').id });
+      await page.waitForSelector('.seat-reaction[data-reaction="beer"]');
+
+      const flights = await flown(page);
+      assert.equal(flights.filter((flight) => flight.name === 'deal').length, 2 * NINE_REACTING.length, 'a card was not dealt around');
+      assert.equal(flights.filter((flight) => flight.name === 'throw').length, 1);
+      await assertMarkOn(page, 'beer', 0, 'Lu threw a beer at Quigs');
+    },
+  ],
+  [
+    'with motion off a throw is simply there on its target’s seat, and with others’ reactions switched off only the player’s own show',
+    async (rig) => {
+      const table = rig.table(NINE_REACTING);
+      table.deal({ button: 0 });
+
+      const page = await table.open('Quigs', 'phone', MOTION);
+      table.act('Sam', { type: 'react', kind: 'fish', to: table.auth('Quigs').id });
+      await page.waitForSelector('.seat-reaction[data-reaction="fish"]');
+      assert.equal(await page.evaluate('window.flights.length'), 0, 'something moved with motion off');
+      await assertMarkOn(page, 'fish', 0, 'Sam threw a fish at Quigs');
+
+      await page.tap('[data-action="menu"]');
+      await page.tap('.menu [data-action="preferences"]');
+      await page.tap('[data-pref="reactions"]');
+      assert.equal(await page.getAttribute('[data-pref="reactions"]', 'aria-checked'), 'false');
+      await shot(page, 'reactions-preference-phone');
+      await page.tap('.dialog [data-action="close"]');
+
+      // Everyone else's are hidden, at the tap and from the table alike; the chat line after them says they have arrived
+      rig.advance(REACTION_GAP_MS);
+      table.act('Pam', { type: 'react', kind: 'laugh' });
+      table.act('Al', { type: 'react', kind: 'poop', to: table.auth('Quigs').id });
+      table.act('Al', { type: 'chat', text: 'take that' });
+      await page.waitForSelector('.feed li:has-text("take that")', { state: 'attached' });
+      assert.equal(await page.locator('.seat-reaction:not([data-reaction="fish"])').count(), 0, 'another player’s reaction shows with them switched off');
+
+      // A tap anywhere else puts the picker away
+      await page.tap('[data-action="reactions"]');
+      await page.tap('.seat.me .plate');
+      await page.waitForSelector('.react-panel', { state: 'detached' });
+
+      await page.tap('[data-action="reactions"]');
+      await page.tap('[data-react="cry"]');
+      await assertMarkOn(page, 'cry', 0, 'Quigs is crying');
     },
   ],
   [
@@ -3648,7 +3901,7 @@ const CHECKS: Check[] = [
       await page.tap('.menu [data-action="preferences"]');
       await page.tap('#pref-handHint');
       await page.waitForSelector('#pref-handHint[aria-checked="false"]');
-      await page.tap('[data-action="close"]');
+      await page.tap('.dialog [data-action="close"]');
 
       assert.deepEqual(await boxes(page, HINT), [], 'the hint is still shown');
       assert.equal(await page.evaluate(`[...document.querySelectorAll('.table .card')].every((card) => getComputedStyle(card).transform === 'none' && getComputedStyle(card).opacity === '1')`), true, 'a card is still lifted or faded');

@@ -51,8 +51,11 @@ export const RECIPES: Record<SoundName, Voice[]> = {
     ...[523, 659, 784].map((tone, index) => ({ tone, at: 0.14 + index * 0.08, length: 0.25, level: 0.18 })),
     { tone: 1047, at: 0.38, length: 0.6, level: 0.18 },
   ],
-  // Something thrown across the table: a breath of air falling away, quieter than the cards, since a pile-on of them is not the game
-  whoosh: [{ noise: 2600, slideTo: 700, width: 1.2, at: 0, length: 0.3, level: 0.3 }],
+  // Something thrown across the table: a breath of air falling away, and a soft thud about when it lands. Quieter than the cards, since a pile-on of them is not the game
+  whoosh: [
+    { noise: 2600, slideTo: 700, width: 1.2, at: 0, length: 0.3, level: 0.3 },
+    { tone: 140, slideTo: 90, at: 0.5, length: 0.12, level: 0.25 },
+  ],
   // Two short rising notes when the action reaches the viewer
   turn: [
     { tone: 660, at: 0, length: 0.12, level: 0.32 },

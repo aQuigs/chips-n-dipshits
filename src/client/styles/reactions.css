@@ -1,4 +1,4 @@
-/* ---- Reactions and throws: shown over the seats, and the picker for them in the table's top corner ---- */
+/* ---- Reactions and throws: shown over the seats, and the picker for them, opened from the chat's bar ---- */
 
 /* Lies exactly over the table, in the same part of the screen, and is never drawn into by it. Only what is on it takes a tap */
 .above {
@@ -97,19 +97,19 @@
   pointer-events: auto;
 }
 
-/* The corner farthest from the moves under the table */
+.react-button {
+  display: flex;
+  padding-right: 8px;
+}
+
 .react-toggle {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  width: 40px;
-  height: 40px;
+  width: 36px;
+  height: 36px;
   border: 1px solid var(--line);
   border-radius: 999px;
   background: var(--panel-raised);
-  font-size: 20px;
+  font-size: 18px;
   line-height: 1;
-  box-shadow: 0 2px 8px rgb(0 0 0 / 35%);
 }
 
 .react-toggle[aria-expanded='true'] {
@@ -119,12 +119,12 @@
 /* Over the top of the table, never past its bottom: the bar of moves is below it, out of reach */
 .react-panel {
   position: absolute;
-  top: 52px;
+  top: 6px;
   right: 6px;
   display: grid;
   gap: 6px;
   width: min(312px, calc(100% - 12px));
-  max-height: calc(100% - 58px);
+  max-height: calc(100% - 12px);
   padding: 8px 10px 10px;
   overflow-y: auto;
   border: 1px solid var(--line);

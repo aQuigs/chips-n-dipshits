@@ -1,7 +1,8 @@
 /*
- * The picker for reactions and throws: a button in the top corner of the table, as far from the bar of
- * moves under it as the table goes, which opens a panel over the top of the table. A reaction is one
- * tap there; a throw is the thing, then who to throw it at, by name. Seats themselves take no new tap.
+ * The picker for reactions and throws: a button at the end of the chat's bar, which is in the same place
+ * in every shape of the page and never beside a bet, and a panel it opens over the top of the table. A
+ * reaction is one tap there; a throw is the thing, then who to throw it at, by name. Seats themselves
+ * take no new tap.
  */
 import { REACTIONS } from '../../engine/reactions.ts';
 import type { ReactionKind } from '../../engine/reactions.ts';
@@ -20,6 +21,7 @@ const capitalized = (words: string) => words.charAt(0).toUpperCase() + words.sli
 export const reactionLabel = (kind: ReactionKind): string => (kind.thrown ? `Throw ${kind.name}` : capitalized(kind.name));
 
 export class ReactionPicker {
+  private readonly button = new Slot(h('div.react-button'));
   private readonly slot = new Slot(h('div.react-picker'));
   private readonly host: PickerHost;
   private open = false;
@@ -29,7 +31,9 @@ export class ReactionPicker {
 
   // A tap anywhere else puts the panel away, and still does what it was for
   private readonly onPointer = (event: PointerEvent) => {
-    if (this.open && !this.slot.element.contains(event.target as Node)) {
+    const target = event.target as Node;
+
+    if (this.open && !this.slot.element.contains(target) && !this.button.element.contains(target)) {
       this.close();
     }
   };
@@ -39,7 +43,13 @@ export class ReactionPicker {
     document.addEventListener('pointerdown', this.onPointer, true);
   }
 
-  get element(): HTMLElement {
+  /** The button that opens the picker, for the chat's bar. */
+  get toggleElement(): HTMLElement {
+    return this.button.element;
+  }
+
+  /** The panel, for the layer over the table. */
+  get panelElement(): HTMLElement {
     return this.slot.element;
   }
 
@@ -59,19 +69,16 @@ export class ReactionPicker {
 
     const others = view.seats.flatMap((seat) => (seat && seat.seat !== view.you.seat ? [{ id: seat.playerId, name: seat.name }] : []));
 
-    this.slot.draw([seated, this.open, this.throwing?.id, others, refusal], () => {
-      if (!seated) {
-        return null;
-      }
-
-      const toggle = h(
-        'button.react-toggle',
-        { type: 'button', 'aria-label': 'Reactions', 'aria-expanded': String(this.open), 'data-action': 'reactions', onclick: () => this.toggle() },
-        PICKER_MARK,
-      );
-
-      return [toggle, this.open ? this.panel(others, refusal) : null];
-    });
+    this.button.draw([seated, this.open], () =>
+      seated
+        ? h(
+            'button.react-toggle',
+            { type: 'button', 'aria-label': 'Reactions', 'aria-expanded': String(this.open), 'aria-controls': 'react-panel', 'data-action': 'reactions', onclick: () => this.toggle() },
+            PICKER_MARK,
+          )
+        : null,
+    );
+    this.slot.draw([this.open, this.throwing?.id, others, refusal], () => (this.open ? this.panel(others, refusal) : null));
   }
 
   close(): void {
@@ -105,7 +112,7 @@ export class ReactionPicker {
     if (throwing) {
       return h(
         'div.react-panel',
-        { role: 'group', 'aria-label': `${reactionLabel(throwing)} at` },
+        { id: 'react-panel', role: 'group', 'aria-label': `${reactionLabel(throwing)} at` },
         h('div.react-heading', null, `Throw ${throwing.mark} at…`),
         h(
           'div.react-targets',
@@ -126,7 +133,7 @@ export class ReactionPicker {
 
     return h(
       'div.react-panel',
-      { role: 'group', 'aria-label': 'Reactions' },
+      { id: 'react-panel', role: 'group', 'aria-label': 'Reactions' },
       h('div.react-heading', null, 'React'),
       h('div.react-row', null, REACTIONS.filter((kind) => !kind.thrown).map((kind) => choice(kind, still))),
       h('div.react-heading', null, others.length > 0 ? 'Throw at someone' : 'Throw at someone, once someone else sits down'),

@@ -2,18 +2,15 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { addMember, createTable, DEFAULT_CONFIG, ledgerOf, STATE_SCHEMA, viewFor } from '../src/engine/index.ts';
-import type { Ctx, Effect } from '../src/engine/index.ts';
+import type { Ctx } from '../src/engine/index.ts';
 import { restoreState } from '../src/server/store.ts';
-import { seededRng, TestTable } from './helpers.ts';
+import { ledgerEntries, seededRng, TestTable } from './helpers.ts';
 import { assertChipsConserved, assertViewsKeepSecrets } from './invariants.ts';
 
 function freshCtx(): Ctx {
   return { now: 5000, rng: seededRng(7), effects: [] };
 }
 
-function ledgerEntries(effects: Effect[]) {
-  return effects.flatMap((effect) => (effect.type === 'ledger' ? [effect.entry] : []));
-}
 
 test('a new table fills in default settings and makes its creator the host', () => {
   const { state, host } = createTable('ABC123', '  Quigs  ', { smallBlind: 1, bigBlind: 2 }, freshCtx());

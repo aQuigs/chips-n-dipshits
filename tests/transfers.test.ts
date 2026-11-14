@@ -2,13 +2,10 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { addMember, ledgerOf } from '../src/engine/index.ts';
-import type { Command, Effect, LedgerEntry } from '../src/engine/index.ts';
+import type { Command } from '../src/engine/index.ts';
 import { settleUp } from '../src/client/settle.ts';
-import { restoreState } from '../src/server/store.ts';
-import { TestTable } from './helpers.ts';
+import { ledgerEntries, TestTable } from './helpers.ts';
 import { assertChipsConserved, assertLedgerAgrees } from './invariants.ts';
-
-const ledgerEntries = (effects: Effect[]): LedgerEntry[] => effects.flatMap((effect) => (effect.type === 'ledger' ? [effect.entry] : []));
 
 const transfer = (t: TestTable, sender: number, from: number, to: number, amount: unknown) =>
   t.cmd(sender, { type: 'transferChips', from: t.ids[from]!, to: t.ids[to]!, amount } as Command);
@@ -184,14 +181,4 @@ test('on a table that plays dollars and cents, the amount is in cents and a frac
   assert.equal(t.feedText().at(-1), 'The host moved 12.34 from Dana to Sam');
   assert.deepEqual(nets(t), { Dana: -1234, Sam: 1234 });
   assert.deepEqual(ledgerEntries(t.effects).slice(-2).map((entry) => entry.amount), [-1234, 1234]);
-});
-
-test('a table saved before transfers existed loads with nothing moved for anyone', () => {
-  const t = new TestTable({ stacks: [1000, 1000] });
-  const saved = JSON.parse(JSON.stringify(t.state)) as { members: { transferred?: number }[] };
-  for (const member of saved.members) {
-    delete member.transferred;
-  }
-
-  assert.deepEqual(restoreState(JSON.stringify(saved)), t.state);
 });

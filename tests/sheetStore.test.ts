@@ -53,7 +53,8 @@ function records(spreadsheet: FakeSpreadsheet) {
     tables,
     ledger,
     held: () => tables.cells[1]!.slice(9, 12).join(''),
-    ledgerAmounts: () => ledger.cells.slice(1).map((row) => row[4]),
+    // A transfer's chips are in their own column
+    ledgerAmounts: () => ledger.cells.slice(1).map((row) => row[4] || row[7]),
   };
 }
 
@@ -391,8 +392,7 @@ test('a transfer reaches the Ledger tab as a line for each player, each naming t
 test('a transfer whose copy reported failure after the table was saved is copied once, both lines together', () => {
   const { store, spreadsheet, failFlush } = setup();
   save(store, table('ABC234', 1), [buyIn(1000)]);
-  const { held } = records(spreadsheet);
-  const ledgerAmounts = () => spreadsheet.getSheetByName('Ledger')!.cells.slice(1).map((row) => row[4] || row[7]);
+  const { ledger, held, ledgerAmounts } = records(spreadsheet);
 
   failFlush(2);
   save(store, table('ABC234', 2), transfer(300));
@@ -403,7 +403,6 @@ test('a transfer whose copy reported failure after the table was saved is copied
   assert.equal(held(), '');
 
   // And when the tab refuses the write altogether, both lines wait in the row and go out with the next save
-  const ledger = spreadsheet.getSheetByName('Ledger')!;
   ledger.refuseWritesAfter(0);
   save(store, table('ABC234', 4), transfer(200));
   assert.deepEqual(ledgerAmounts(), [1000, -300, 300]);
@@ -422,8 +421,7 @@ test('a Ledger tab made before transfers is given the transfer columns\' headers
 
   // A buy-in whose copy reported failure although it landed, written the way older code wrote it
   save(store, table('ABC234', 2), [buyIn(200)]);
-  const { tables } = records(spreadsheet);
-  const ledgerAmounts = () => old.cells.slice(1).map((row) => row[4] || row[7]);
+  const { tables, ledgerAmounts } = records(spreadsheet);
   tables.cells[1]![9] = `~${JSON.stringify([{ id: 'ABC234:1:0', record: buyIn(100) }])}`;
 
   save(anotherRun(), table('ABC234', 3), transfer(50));

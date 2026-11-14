@@ -5,19 +5,14 @@
  */
 import { formatAmount, validAmount } from './amounts.ts';
 import { isDealtIn } from './seating.ts';
-import { addFeed, memberNamed, recordTransfer, seatIndexOf } from './seats.ts';
+import { addFeed, recordTransfer, seatedMember } from './seats.ts';
 import { GameError } from './types.ts';
-import type { Ctx, Member, Seat, TableState } from './types.ts';
+import type { Ctx, TableState } from './types.ts';
 
 /** One side of a transfer, who must be sitting at the table with chips nobody is playing for. */
-function partyTo(state: TableState, playerId: string): { member: Member; seat: Seat } {
-  const member = memberNamed(state, playerId);
-  const index = seatIndexOf(state, member.id);
-  const seat = state.seats[index];
-
-  if (!seat) {
-    throw new GameError(`${member.name} doesn't have a seat`);
-  }
+function partyTo(state: TableState, playerId: string): ReturnType<typeof seatedMember> {
+  const party = seatedMember(state, playerId);
+  const { member, index, seat } = party;
 
   if (seat.leaving) {
     throw new GameError(`${member.name} is leaving the table`);
@@ -29,7 +24,7 @@ function partyTo(state: TableState, playerId: string): { member: Member; seat: S
     throw new GameError(`${member.name} is in the current hand. Pause the game, and once this hand is over the chips can move`);
   }
 
-  return { member, seat };
+  return party;
 }
 
 /**

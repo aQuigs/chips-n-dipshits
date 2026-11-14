@@ -89,9 +89,6 @@ const RECORD_SHEETS: { type: Effect['type']; sheet: SheetKey; idColumn: number; 
   { type: 'hand', sheet: 'hands', idColumn: 6, formats: () => [TIMESTAMP, TEXT, WHOLE_NUMBER, TEXT, TEXT, TEXT] },
 ];
 
-// The Ledger tab gained the transfer columns after Sheets were in use, and a tab made before then has no headers for them
-const GROWN_SHEETS: readonly SheetKey[] = ['ledger'];
-
 // The engine keeps a hand's log shorter than this. Should a longer one ever arrive, its end is kept
 // rather than the hand being refused: the record must fit a cell, and it holds the summary.
 const SUMMARY_LENGTH = 30_000;
@@ -400,8 +397,6 @@ export class SheetStore implements TableStore {
     if (!sheet) {
       sheet = spreadsheet.insertSheet(SHEET_NAMES[key]);
       sheet.getRange(1, 1, 1, HEADERS[key].length).setValues([HEADERS[key]]);
-    } else if (GROWN_SHEETS.includes(key)) {
-      headBlankColumns(sheet, HEADERS[key]);
     }
 
     this.sheets.set(key, sheet);
@@ -506,9 +501,15 @@ export class SheetStore implements TableStore {
 
       try {
         const arrived = retrying ? this.recentIds(sheet, idColumn) : new Set<string>();
-        const rows = mine.filter((item) => !arrived.has(item.id)).map((item) => recordRow(item, table));
+        const fresh = mine.filter((item) => !arrived.has(item.id));
 
-        this.appendRows(sheet, rows, rowFormats);
+        // The Ledger tab gained the transfer columns after Sheets were in use. Only a transfer fills them, so only
+        // then is a tab made before checked for their headers, which keeps that read off every other copy
+        if (fresh.some(({ record }) => record.type === 'ledger' && record.entry.kind === 'transfer')) {
+          headBlankColumns(this.sheet(sheet), HEADERS[sheet]);
+        }
+
+        this.appendRows(sheet, fresh.map((item) => recordRow(item, table)), rowFormats);
         this.deps.flush();
       } catch (error) {
         console.error(error);

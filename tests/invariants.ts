@@ -8,7 +8,7 @@ import { evaluateHand, FEED_LIMIT, LIMITS, PLAYING_THE_BOARD, reaches, replayHan
 import type { Effect, FeedEntry, HandPlayer, HandRecord, TableState } from '../src/engine/index.ts';
 import { CACHE_VALUE_BYTES, utf8Bytes } from '../src/gas/sheetStore.ts';
 import { restoreState } from '../src/server/store.ts';
-import { handRecords } from './helpers.ts';
+import { handRecords, ledgerEntries } from './helpers.ts';
 
 /**
  * Everywhere a chip that has been bought can be. A feature that gives chips somewhere new to sit adds
@@ -290,13 +290,16 @@ export function assertHandRecordsHold(effects: Effect[]): number {
  * had moved to them, and a transfer's two lines always come as a pair that gives and takes the same chips.
  */
 export function assertLedgerAgrees(state: TableState, effects: Effect[]): void {
-  const entries = effects.flatMap((effect) => (effect.type === 'ledger' ? [effect.entry] : []));
-  const sum = (playerId: string, transfers: boolean) =>
-    entries.filter((entry) => entry.playerId === playerId && (entry.kind === 'transfer') === transfers).reduce((total, entry) => total + entry.amount, 0);
+  const entries = ledgerEntries(effects);
 
   for (const member of state.members) {
-    assert.equal(sum(member.id, false), member.buyIn - member.cashOut, `the ledger entries and ${member.name}'s chips bought and cashed out disagree`);
-    assert.equal(sum(member.id, true), member.transferred, `the ledger entries and the chips moved to ${member.name} disagree`);
+    const totals = { paid: 0, moved: 0 };
+    for (const entry of entries.filter((e) => e.playerId === member.id)) {
+      totals[entry.kind === 'transfer' ? 'moved' : 'paid'] += entry.amount;
+    }
+
+    assert.equal(totals.paid, member.buyIn - member.cashOut, `the ledger entries and ${member.name}'s chips bought and cashed out disagree`);
+    assert.equal(totals.moved, member.transferred, `the ledger entries and the chips moved to ${member.name} disagree`);
   }
 
   entries.forEach((entry, index) => {

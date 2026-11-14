@@ -47,7 +47,7 @@ export interface Member {
   cashOut: number;
   /**
    * Chips the host moved to this member from other players, less those moved away. They change hands
-   * on the table, so they are already in the stack and are never counted as bought or cashed out.
+   * on the table, so they show up in the stack and in what is cashed out, never as bought.
    */
   transferred: number;
 }
@@ -236,25 +236,14 @@ export interface TableState {
 /** Chips bought or cashed out, which money is paid for: what the settle-up counts. */
 export type MoneyKind = 'buy-in' | 'cash-out' | 'adjustment';
 
-/** Chips the host moved from one player's stack to another's. No money changes hands with the bank. */
-export type TransferKind = 'transfer';
-
-export type LedgerKind = MoneyKind | TransferKind;
-
-interface LedgerLine {
-  at: number;
-  tableId: string;
-  playerId: string;
-  name: string;
-  /** Chips onto the player's stack are positive, chips off it negative. */
-  amount: number;
-}
-
 /**
- * One line of the ledger. A transfer is booked as two lines made together, chips off the giver's stack
- * and onto the receiver's, each naming the other player.
+ * What a ledger line records. `amount` is chips onto the player's stack, positive, or off it, negative.
+ * A transfer is chips the host moved from one stack to another, with no money paid to or by the bank:
+ * it is booked as two lines made together, off the giver's stack and onto the receiver's, each naming the other player.
  */
-export type LedgerEntry = LedgerLine & ({ kind: MoneyKind } | { kind: TransferKind; otherId: string; otherName: string });
+export type LedgerDetail = { kind: MoneyKind; amount: number } | { kind: 'transfer'; amount: number; otherId: string; otherName: string };
+
+export type LedgerEntry = { at: number; tableId: string; playerId: string; name: string } & LedgerDetail;
 
 export interface HandRecordPlayer {
   seat: number;

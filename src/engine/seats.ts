@@ -1,6 +1,6 @@
 import { formatAmount } from './amounts.ts';
 import { GameError, SEAT_COUNT } from './types.ts';
-import type { Ctx, FeedKind, LedgerEntry, Member, MoneyKind, TableState } from './types.ts';
+import type { Ctx, FeedKind, LedgerDetail, Member, MoneyKind, Seat, TableState } from './types.ts';
 
 export const FEED_LIMIT = 60;
 
@@ -61,6 +61,18 @@ export function seatIndexOf(state: TableState, playerId: string): number {
   return state.seats.findIndex((seat) => seat?.playerId === playerId);
 }
 
+/** The member a host's command is about, who must have a seat. */
+export function seatedMember(state: TableState, playerId: string): { member: Member; index: number; seat: Seat } {
+  const member = memberNamed(state, playerId);
+  const index = seatIndexOf(state, member.id);
+  const seat = state.seats[index];
+  if (!seat) {
+    throw new GameError(`${member.name} doesn't have a seat`);
+  }
+
+  return { member, index, seat };
+}
+
 export function addFeed(state: TableState, now: number, kind: FeedKind, from: string | null, text: string): void {
   state.feedSeq += 1;
   state.feed.push({ seq: state.feedSeq, at: now, kind, from, text });
@@ -70,10 +82,7 @@ export function addFeed(state: TableState, now: number, kind: FeedKind, from: st
   }
 }
 
-/** What sets one kind of ledger line apart from another. */
-type EntryDetail<E = LedgerEntry> = E extends LedgerEntry ? Omit<E, 'at' | 'tableId' | 'playerId' | 'name'> : never;
-
-function book(state: TableState, ctx: Ctx, member: Member, detail: EntryDetail): void {
+function book(state: TableState, ctx: Ctx, member: Member, detail: LedgerDetail): void {
   ctx.effects.push({
     type: 'ledger',
     entry: { at: ctx.now, tableId: state.id, playerId: member.id, name: member.name, ...detail },

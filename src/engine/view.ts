@@ -93,7 +93,7 @@ export interface LedgerRow {
   name: string;
   buyIn: number;
   cashOut: number;
-  /** Chips the host moved to this player from others, less those moved away; part of `stack`, so part of `net`. */
+  /** Chips the host moved to this player from others, less those moved away. Already counted in `stack` or `cashOut`, so shown here but never added to `net` again. */
   transferred: number;
   /** Chips on the table right now. */
   stack: number;

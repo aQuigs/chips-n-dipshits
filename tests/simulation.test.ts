@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { SEAT_COUNT } from '../src/engine/index.ts';
-import { handRecords, seededRng, TestTable } from './helpers.ts';
+import { handRecords, ledgerEntries, seededRng, TestTable } from './helpers.ts';
 import { assertChipsConserved, assertHandRecordsHold, assertInvariants, assertLedgerAgrees } from './invariants.ts';
 import { fixedSettings, randomConfig } from './randomConfig.ts';
 import { chance, randomStep } from './randomPlay.ts';
@@ -52,7 +52,7 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
     assertLedgerAgrees(t.state, t.effects);
     assert.deepEqual(fixedSettings(t.state.config), fixedSettings(config), 'a setting chosen for good was changed along the way');
     handsPlayed += assertHandRecordsHold(t.effects);
-    transfersIn[config.unit] += t.effects.filter((effect) => effect.type === 'ledger' && effect.entry.kind === 'transfer' && effect.entry.amount > 0).length;
+    transfersIn[config.unit] += ledgerEntries(t.effects).filter((entry) => entry.kind === 'transfer' && entry.amount > 0).length;
 
     for (const record of handRecords(t.effects)) {
       showdowns += record.result.uncontested ? 0 : 1;
@@ -82,5 +82,5 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
   assert.ok(handsWithAnteIn.chips >= TABLES * 5 && handsWithAnteIn.cents >= TABLES * 5, antes);
   assert.ok(shortAntes >= TABLES / 4, antes);
 
-  assert.ok(transfersIn.chips >= TABLES && transfersIn.cents >= TABLES, `${transfersIn.chips} chips moved between players in whole chips and ${transfersIn.cents} in dollars and cents`);
+  assert.ok(transfersIn.chips >= TABLES && transfersIn.cents >= TABLES, `${transfersIn.chips} transfers at whole-chip tables and ${transfersIn.cents} at tables of dollars and cents`);
 });

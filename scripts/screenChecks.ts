@@ -3311,8 +3311,12 @@ const CHECKS: Check[] = [
           }
 
           keep('Tuesday cents', { unit: 'cents', smallBlind: 25, bigBlind: 50, ante: 10, minBuyIn: 2000, maxBuyIn: 10_000, actionSeconds: 20, allowStraddle: false, sevenDeuceBounty: 100 });
-          keep('From before', { smallBlind: 5, bigBlind: 10 }, { actionSeconds: 900, rabbitHunting: true });
-          keep('Bombs in chips', { bombPotAmount: 300, bombPotEvery: 5 });
+
+          // Saved when the clock could be set higher, with a setting the game has since dropped, and before a bomb pot could have two boards
+          const { bombPotBoards: _boards, ...fromBefore } = { ...presetSettings({ ...DEFAULT_CONFIG, smallBlind: 5, bigBlind: 10 }), actionSeconds: 900, rabbitHunting: true };
+          rig.presets.save({ name: 'From before', settings: fromBefore, savedAt: 0, savedBy: 'Quigs' }, false);
+
+          keep('Bombs in chips', { bombPotAmount: 300, bombPotEvery: 5, bombPotBoards: 'two' });
           keep('Bombs in cents', { unit: 'cents', smallBlind: 25, bigBlind: 50, minBuyIn: 2000, maxBuyIn: 10_000, bombPotAmount: 500 });
 
           const page = await rig.lobby(screen);
@@ -3343,7 +3347,6 @@ const CHECKS: Check[] = [
           await assertNoSidewaysScroll(page);
           await shot(page, `presets-picked-${screen}`);
 
-          // A preset saved when the clock could be set higher, with a setting the game has since dropped
           await page.selectOption('#new-table-preset', { label: 'From before' });
           assert.deepEqual(await stakes(page), ['chips', '5', '10', '400', '2000']);
           assert.deepEqual(await texts(page, '.preset-notes p.warn'), ['Seconds to act is back to 30: the preset’s is no longer allowed.']);
@@ -3371,6 +3374,20 @@ const CHECKS: Check[] = [
           assert.equal(await page.inputValue('#new-table-bomb-pot-amount'), '5.00');
           await press('#new-table-unit label:has-text("Whole chips")');
           assert.equal(await page.inputValue('#new-table-bomb-pot-amount'), '100');
+
+          // One board or two is marked like any field a preset changes, and a preset from before there were two says one
+          const boardsMarked = () => page.locator('#new-table-bomb-pot-boards.changed input:checked').inputValue();
+
+          await page.selectOption('#new-table-preset', { label: 'Bombs in chips' });
+          assert.equal(await boardsMarked(), 'two');
+          assert.match(await text(page, '.preset-notes p'), /^Changed here: .*A bomb pot is played on\.$/);
+
+          await page.locator('#new-table-bomb-pot-boards').scrollIntoViewIfNeeded();
+          assertOnScreen(await boxes(page, '#new-table-bomb-pot-boards'), screen, 'the boards of a bomb pot, marked as changed');
+          await shot(page, `presets-boards-${screen}`);
+
+          await page.selectOption('#new-table-preset', { label: 'From before' });
+          assert.equal(await boardsMarked(), 'one');
 
           // Edited after picking, before the table is made
           await page.selectOption('#new-table-preset', { label: 'Tuesday cents' });
@@ -3810,10 +3827,54 @@ const CHECKS: Check[] = [
     },
   ],
   [
+    'a double-board bomb pot plays the deal and one flop for the two on another player’s page, and one street for the turn of both',
+    async (rig) => {
+      const table = rig.table(
+        [
+          { name: 'Quigs', stack: 1000 },
+          { name: 'Stu', stack: 1000 },
+          { name: 'Pam', stack: 1000 },
+        ],
+        { bombPotBoards: 'two' },
+      );
+      const page = await table.open('Pam', 'phone', LISTEN);
+
+      table.act('Quigs', { type: 'setBombPot', on: true });
+      table.deal({ button: 0, board: '3s 4c Jd 9h Qd', secondBoard: 'Kd 5c 8h Ts 2s' });
+      await page.waitForSelector('.board[data-run="1"] .card[data-card]:nth-child(3)');
+      await page.waitForFunction('window.played.length >= 2');
+      await page.waitForTimeout(300);
+
+      assert.deepEqual(await playedNames(page), ['deal', 'street'], 'the deal and one flop for the two boards');
+
+      const [deal, flop] = await playedAt(page);
+      const dealLasts = Math.max(...RECIPES.deal.map((voice) => voice.at + voice.length));
+      assert.ok(flop! - deal! >= dealLasts, `the flops start ${(flop! - deal!).toFixed(3)} s after the deal, which lasts ${dealLasts} s`);
+
+      // Stu, left of the button, checks to Pam, whose own check is silent to her; the button's check brings the turn
+      table.act('Stu', { type: 'check' });
+      await page.waitForSelector('.turn [data-action="check"]:enabled');
+      await page.waitForFunction('window.played.length >= 4');
+      await page.waitForTimeout(300);
+      assert.deepEqual(await playedNames(page, 2), ['knock', 'turn']);
+
+      table.act('Pam', { type: 'check' });
+      table.act('Quigs', { type: 'check' });
+      await page.waitForSelector('.board[data-run="1"] .card[data-card]:nth-child(4)');
+      await page.waitForFunction('window.played.length >= 6');
+      await page.waitForTimeout(300);
+
+      assert.deepEqual(await playedNames(page, 4), ['knock', 'street'], 'the button’s check, and one street for the turn of both boards');
+
+      await page.context().close();
+    },
+  ],
+  [
     'the table settings take one board or two for a bomb pot, and the menu and the bar under the table say which is coming',
     async (rig) => {
       for (const kind of BOMB_POT_TABLES) {
-        for (const screen of PHONE_AND_DESKTOP) {
+        // The settings are a long list now, and the narrowest phone is where a row of it runs out of room first
+        for (const screen of ['smallPhone', 'desktop'] as const) {
           const table = rig.table(
             [
               { name: 'Quigs', stack: kind.stack },

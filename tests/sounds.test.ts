@@ -9,6 +9,7 @@ import { RECIPES } from '../src/client/soundRecipes.ts';
 import type { SoundMaker, SoundName } from '../src/client/sound.ts';
 import { tableChange } from '../src/client/tableChange.ts';
 import type { TableChange } from '../src/client/tableChange.ts';
+import { boardsDealt } from '../src/engine/index.ts';
 import type { HandEvent, TableView } from '../src/engine/index.ts';
 import { mapMemory, TestTable } from './helpers.ts';
 
@@ -30,7 +31,7 @@ class Ears {
   hear(change: TableChange, seat: number | null): SoundName[] {
     const from = this.played.length;
 
-    for (const sound of soundsHeard(change.events, seat)) {
+    for (const sound of soundsHeard(change.events, seat, boardsDealt(change.view.hand?.bombPot ?? null))) {
       this.sounds.play(sound);
     }
 
@@ -182,6 +183,37 @@ test('a bomb pot, dealt straight to the flop, plays the deal and then the flop, 
   const [deal, flop] = page.ears.played;
   const dealEnds = Math.max(...RECIPES.deal.map((voice) => voice.at + voice.length));
   assert.ok(dealEnds < flop!.delay - deal!.delay, `the deal is still playing when the flop comes: ${dealEnds} s against ${flop!.delay - deal!.delay} s`);
+});
+
+test('a double-board bomb pot plays the deal and then one flop for the two, and one street for each street after, however the boards\' events arrive', () => {
+  const table = new TestTable({ stacks: [1000, 1000, 1000], config: { bombPotBoards: 'two' } });
+  const page = new Page(table, 2);
+
+  page.arrive();
+  table.cmd(0, { type: 'setBombPot', on: true });
+  table.deal({ button: 0 });
+
+  assert.deepEqual(table.view(2).hand!.events.slice(-3).map((event) => event.slice(0, 2)), [['deal'], ['street', 0], ['street', 1]], 'a double-board bomb pot’s events');
+  assert.deepEqual(page.arrive(), ['deal', 'street']);
+
+  const [deal, flop] = page.ears.played;
+  const dealEnds = Math.max(...RECIPES.deal.map((voice) => voice.at + voice.length));
+  assert.ok(dealEnds < flop!.delay - deal!.delay, `the deal is still playing when the flops come: ${dealEnds} s against ${flop!.delay - deal!.delay} s`);
+
+  table.check(1);
+  assert.deepEqual(page.arrive(), ['knock']);
+  table.check(2);
+  page.arrive();
+  table.check(0);
+  assert.deepEqual(page.arrive(), ['knock', 'street'], 'the turn of both boards');
+
+  // The boards' events reaching the page apart, a view each, are still one street
+  const [first, second]: HandEvent[] = [['street', 0, ['9h']], ['street', 1, ['4d']]];
+  assert.deepEqual([soundsHeard([first!], 2, 2), soundsHeard([second!], 2, 2)], [['street'], []]);
+
+  // Run twice, the second board comes after the first and its streets are streets of their own
+  assert.deepEqual(soundsHeard([second!], 2), ['street']);
+  assert.deepEqual(soundsHeard([['street', 2, ['4d']]], 2, 2), ['street'], 'a board laid after the ones the hand was dealt on');
 });
 
 test('a seven-deuce bounty rings up its chips after the pot', () => {

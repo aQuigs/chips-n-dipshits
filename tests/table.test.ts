@@ -29,7 +29,7 @@ test('table settings that make no sense are rejected', () => {
   assert.throws(create({ smallBlind: 1.5 }), /whole number/);
   assert.throws(create({ minBuyIn: 500, maxBuyIn: 100 }), /maximum buy-in can't be smaller than the minimum/);
   assert.throws(create({ actionSeconds: 2 }), /action clock/);
-  assert.throws(create({ allowStraddle: 'yes' }), /Straddles/);
+  assert.throws(create({ allowStraddle: 'yes' }), { message: 'The straddle under the gun must be on or off' });
   assert.throws(create({ name: '' }), /table name/);
   assert.throws(create({ sevenDeuceBounty: -5 }), /bounty/);
 });
@@ -351,11 +351,11 @@ test('the voice chat link changes at once, and the chat says who set, changed or
 
 test('turning straddles off clears everyone who had asked to straddle', () => {
   const t = new TestTable({ stacks: [1000, 1000, 1000] });
-  t.cmd(2, { type: 'setStraddle', on: true });
+  t.cmd(2, { type: 'setStraddle', kind: 'straddle', on: true });
 
   t.cmd(0, { type: 'updateConfig', config: { allowStraddle: false } });
 
-  assert.equal(t.state.seats[2]!.straddle, false);
+  assert.deepEqual(t.state.seats[2]!.straddles, []);
 });
 
 test('the host can hand the table to someone else, and stays on as a co-host', () => {

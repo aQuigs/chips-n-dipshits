@@ -14,6 +14,7 @@ import { setStackDialog } from './setStack.ts';
 import { settingsDialog } from './settings.ts';
 import { shuffleSeats } from './shuffle.ts';
 import { sitDialog } from './sit.ts';
+import { straddlesDialog } from './straddles.ts';
 import { themeDialog } from './theme.ts';
 import { transferDialog } from './transfer.ts';
 
@@ -46,6 +47,7 @@ const REGISTERED = [
   setStackDialog,
   transferDialog,
   confirmDialog,
+  straddlesDialog,
 ];
 
 const menu = menuDialog(REGISTERED);

@@ -51,6 +51,26 @@ test('a preset saved before a setting existed gives it the value a new table sta
   assert.deepEqual(newConfig(used.config), used.config);
 });
 
+test('a preset saved when there was one kind of straddle plays as it did: under the gun if it allowed that, and no other kind', () => {
+  for (const allowStraddle of [true, false]) {
+    const { allowDoubleStraddle: _double, allowButtonStraddle: _button, allowMississippiStraddle: _mississippi, ...beforeMoreStraddles } = kept({ allowStraddle });
+
+    // Filled into a table that allows every kind, as a host might who then picks the old preset
+    const used = fromPreset(beforeMoreStraddles, { ...DEFAULT_CONFIG, allowDoubleStraddle: true, allowButtonStraddle: true, allowMississippiStraddle: true });
+
+    assert.deepEqual(used.notes, []);
+    assert.deepEqual(
+      [used.config.allowStraddle, used.config.allowDoubleStraddle, used.config.allowButtonStraddle, used.config.allowMississippiStraddle],
+      [allowStraddle, false, false, false],
+    );
+    assert.deepEqual(newConfig(used.config), used.config);
+  }
+
+  // One saved since keeps each kind as it was set
+  const since = fromPreset(kept({ allowStraddle: false, allowButtonStraddle: true, allowMississippiStraddle: true }));
+  assert.deepEqual([since.config.allowStraddle, since.config.allowDoubleStraddle, since.config.allowButtonStraddle, since.config.allowMississippiStraddle], [false, false, true, true]);
+});
+
 test('a dollars-and-cents preset saved before bomb pots gets the bomb pot a new dollars table starts with', () => {
   const { bombPotAmount: _amount, bombPotEvery: _every, ...beforeBombPots } = kept({ unit: 'cents', smallBlind: 25, bigBlind: 50, minBuyIn: 2000, maxBuyIn: 10_000 });
 
@@ -96,7 +116,7 @@ test('a value no longer allowed goes back to the usual one, and a note names the
   assert.deepEqual(used.notes, [
     'Seconds to act is back to 30: the preset’s is no longer allowed.',
     'Table name is back to Chips n\' Dipshits: the preset’s is no longer allowed.',
-    'Allow straddles is back to on: the preset’s is no longer allowed.',
+    'Straddle under the gun is back to on: the preset’s is no longer allowed.',
   ]);
 
   const clock = fromPreset({ ...kept({}), actionSeconds: 3 });

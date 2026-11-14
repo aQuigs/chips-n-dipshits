@@ -1,7 +1,6 @@
 import { seatsClockwiseAfter } from './seats.ts';
-import type { BombPot, Post, TableState } from './types.ts';
-
-const STRADDLE_BIG_BLINDS = 2;
+import { straddleLine } from './straddles.ts';
+import type { BombPot, PassedOver, Post, StraddlePost, TableState } from './types.ts';
 
 /**
  * Chips a player has to put in before the cards are played. A player short of `amount` posts what
@@ -25,6 +24,8 @@ export interface ForcedBet {
 
 /** Where the seats dealt into a hand sit. */
 export interface Positions {
+  /** The seat the button is on, which nobody need be playing from. */
+  button: number;
   /** Every seat dealt in, clockwise from the button's left, so the button's own seat comes last when someone plays from it. */
   order: readonly number[];
   /** The seat the small blind falls on, which posts it only when it is dealt in. */
@@ -42,21 +43,12 @@ export function positionsOf(dealtIn: readonly number[], button: number): Positio
   const order = seatsClockwiseAfter(dealtIn, button);
   const headsUp = dealtIn.length === 2;
 
-  return { order, sbSeat: headsUp ? button : order[0]!, bbSeat: headsUp ? order[0]! : order[1]! };
+  return { button, order, sbSeat: headsUp ? button : order[0]!, bbSeat: headsUp ? order[0]! : order[1]! };
 }
 
-/**
- * Every forced bet of the hand about to be dealt, in the order they are posted, worked out from the
- * table's settings and its seats before any chips move. `bombPot` says the hand is one, which the
- * caller has settled by then.
- */
-export function forcedBets(state: TableState, { order, sbSeat, bbSeat, posting = [] }: Positions, bombPot: BombPot | null = null): ForcedBet[] {
-  // All a bomb pot asks for: no blinds, no straddle, and it takes the place of the table's ante
-  if (bombPot) {
-    return order.map((seat) => ({ seat, what: 'bomb pot', amount: bombPot.amount, as: 'contribution' }));
-  }
-
-  const { smallBlind, bigBlind, ante, anteFrom, allowStraddle } = state.config;
+/** The antes and the blinds of a hand that has them, missed ones included, in the order they are posted: every forced bet but the straddles. */
+function antesAndBlinds(state: TableState, { order, sbSeat, bbSeat, posting = [] }: Positions): ForcedBet[] {
+  const { smallBlind, bigBlind, ante, anteFrom } = state.config;
   const bets: ForcedBet[] = [];
 
   if (ante > 0 && anteFrom === 'everyone') {
@@ -90,22 +82,42 @@ export function forcedBets(state: TableState, { order, sbSeat, bbSeat, posting =
     bets.push({ seat: bbSeat, what: 'big blind ante', amount: ante, as: 'dead' });
   }
 
-  // Under the gun is the first player after the big blind, who three-handed is the button. Heads-up there is nobody
-  const underTheGun = order.length > 2 ? seatsClockwiseAfter(order, bbSeat)[0] : undefined;
-  const straddle = STRADDLE_BIG_BLINDS * bigBlind;
+  return bets;
+}
 
-  // A player posting what they owe has their blind in front of them already, and does not straddle on top of it
-  if (allowStraddle && underTheGun !== undefined && !posting.includes(underTheGun)) {
-    const seat = state.seats[underTheGun]!;
-    const owedFirst = bets.filter((bet) => bet.seat === underTheGun).reduce((sum, bet) => sum + bet.amount, 0);
+/** What the players of a hand post before the cards, with what is kept of its straddles. */
+export interface HandPosts {
+  /** Every forced bet, in the order they are posted. */
+  bets: ForcedBet[];
+  /** The straddles among them, in the same order. */
+  straddles: StraddlePost[];
+  /** Players who asked to straddle and post none, each with the reason. */
+  passedOver: PassedOver[];
+}
 
-    // A straddle is posted whole or not at all
-    if (seat.straddle && seat.stack - owedFirst >= straddle) {
-      bets.push({ seat: underTheGun, what: 'straddle', amount: straddle, as: 'live' });
-    }
+/**
+ * Everything posted in the hand about to be dealt, worked out from the table's settings and its seats
+ * before any chips move. `bombPot` says the hand is one, which the caller has settled by then.
+ */
+export function handPosts(state: TableState, positions: Positions, bombPot: BombPot | null = null): HandPosts {
+  // All a bomb pot asks for: no blinds, no straddle, and it takes the place of the table's ante
+  if (bombPot) {
+    return { bets: positions.order.map((seat) => ({ seat, what: 'bomb pot', amount: bombPot.amount, as: 'contribution' })), straddles: [], passedOver: [] };
   }
 
-  return bets;
+  const bets = antesAndBlinds(state, positions);
+  const owedFirst = (seat: number) => bets.filter((bet) => bet.seat === seat).reduce((sum, bet) => sum + bet.amount, 0);
+
+  // A straddle has to be covered by what the antes and blinds leave its player
+  const line = straddleLine(state, positions, (seat) => state.seats[seat]!.stack - owedFirst(seat));
+
+  // After the blinds and each bigger than the last, so the last straddle is the bet the betting starts from
+  return { bets: [...bets, ...line.straddles.map((post): ForcedBet => ({ ...post, as: 'live' }))], ...line };
+}
+
+/** Every forced bet of the hand about to be dealt, in the order they are posted: the list a rule that makes players post adds to. */
+export function forcedBets(state: TableState, positions: Positions, bombPot: BombPot | null = null): ForcedBet[] {
+  return handPosts(state, positions, bombPot).bets;
 }
 
 /**

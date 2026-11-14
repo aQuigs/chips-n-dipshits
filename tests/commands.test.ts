@@ -168,15 +168,15 @@ test('what a player does about their seat needs a seat', () => {
   const { t, watcher } = tableWithWatcher();
 
   // Standing up comes last, since it gives up the seat the others need
-  const seatOnly: Command[] = [{ type: 'requestRebuy', amount: 100 }, { type: 'sitOut' }, { type: 'sitIn' }, { type: 'setStraddle', on: true }, { type: 'standUp' }];
+  const seatOnly: Command[] = [{ type: 'requestRebuy', amount: 100 }, { type: 'sitOut' }, { type: 'sitIn' }, { type: 'setStraddle', kind: 'straddle', on: true }, { type: 'standUp' }];
 
   for (const command of seatOnly) {
     assert.throws(send(t, watcher, command), { name: 'GameError', message: 'You need a seat for that' }, command.type);
   }
 
   // The seat is asked about first, then what was sent
-  assert.throws(send(t, watcher, { type: 'setStraddle', on: 'yes' }), { message: 'You need a seat for that' });
-  assert.throws(send(t, 1, { type: 'setStraddle', on: 'yes' }), { message: 'Straddle must be on or off' });
+  assert.throws(send(t, watcher, { type: 'setStraddle', kind: 'straddle', on: 'yes' }), { message: 'You need a seat for that' });
+  assert.throws(send(t, 1, { type: 'setStraddle', kind: 'straddle', on: 'yes' }), { message: 'Straddle must be on or off' });
 
   for (const command of seatOnly) {
     t.cmd(1, command);

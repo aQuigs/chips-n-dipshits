@@ -48,7 +48,7 @@ test('a bomb pot: everyone dealt in posts the amount, no blinds, and the betting
   assert.deepEqual(chipsIn(t), [[0, 100, 0], [0, 100, 0], [0, 100, 0], [0, 100, 0]], 'what is posted is staked, and no bet in front of anyone');
   assert.deepEqual(hand.log, ['Hand #1 · bomb pot 100 · P0 has the button', 'Everyone posts bomb pot 100', FLOP]);
   assert.deepEqual([hand.street, hand.stage, hand.boards], ['flop', 'betting', [['2c', '7d', '9h']]]);
-  assert.equal(hand.straddleSeat, null);
+  assert.deepEqual(hand.straddles, []);
   assert.ok(hand.players.every((p) => p.lastAction === null && !p.hasActed), 'nobody has a blind by their name or has acted');
 
   const view = t.view(3);
@@ -456,20 +456,20 @@ test('a table that plays an ante does not post it in a bomb pot, and posts it ag
 
 test('nobody straddles a bomb pot, and the straddle is back in the hand after', () => {
   const t = new TestTable({ stacks: [1000, 1000, 1000, 1000] });
-  t.cmd(3, { type: 'setStraddle', on: true });
+  t.cmd(3, { type: 'setStraddle', kind: 'straddle', on: true });
   t.cmd(0, { type: 'setBombPot', on: true });
   t.deal({ button: 0 });
 
   assert.deepEqual(t.stacks(), [900, 900, 900, 900]);
-  assert.equal(t.state.hand!.straddleSeat, null);
-  assert.equal(t.state.seats[3]!.straddle, true, 'the player still wants to straddle');
+  assert.deepEqual([t.state.hand!.straddles, t.state.hand!.passedOver], [[], []]);
+  assert.deepEqual(t.state.seats[3]!.straddles, ['straddle'], 'the player still wants to straddle');
 
   // The button moves to seat 1, which puts seat 0 under the gun
-  t.cmd(0, { type: 'setStraddle', on: true });
+  t.cmd(0, { type: 'setStraddle', kind: 'straddle', on: true });
   checkAround(t, [1, 2, 3, 0], 3);
   t.finishHand();
   t.deal();
-  assert.equal(t.state.hand!.straddleSeat, 0);
+  assert.deepEqual(t.state.hand!.straddles, [{ seat: 0, what: 'straddle', amount: 40 }]);
 });
 
 test('a bomb pot that puts everyone all in is run twice when the table plays that and everyone agrees, from the flop', () => {

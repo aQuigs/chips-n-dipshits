@@ -14,7 +14,7 @@ function listed(bets: ForcedBet[]): string[] {
 function forcedAt(stacks: number[], config: Partial<TableConfig> = {}, straddlers: number[] = [], bombPot: BombPot | null = null): string[] {
   const t = new TestTable({ stacks, config });
   for (const seat of straddlers) {
-    t.state.seats[seat]!.straddle = true;
+    t.state.seats[seat]!.straddles = ['straddle'];
   }
 
   return listed(forcedBets(t.state, positionsOf(stacks.map((_stack, seat) => seat), 0), bombPot));
@@ -23,8 +23,8 @@ function forcedAt(stacks: number[], config: Partial<TableConfig> = {}, straddler
 const FOUR = [1000, 1000, 1000, 1000];
 
 test('the blinds fall left of the button, and heads-up the button has the small blind', () => {
-  assert.deepEqual(positionsOf([0, 3, 5, 8], 5), { order: [8, 0, 3, 5], sbSeat: 8, bbSeat: 0 });
-  assert.deepEqual(positionsOf([2, 7], 7), { order: [2, 7], sbSeat: 7, bbSeat: 2 });
+  assert.deepEqual(positionsOf([0, 3, 5, 8], 5), { button: 5, order: [8, 0, 3, 5], sbSeat: 8, bbSeat: 0 });
+  assert.deepEqual(positionsOf([2, 7], 7), { button: 7, order: [2, 7], sbSeat: 7, bbSeat: 2 });
 });
 
 test('with no ante and no straddle the forced bets are the two blinds, both live', () => {
@@ -98,7 +98,7 @@ test('the betting starts from the biggest live bet, and from the later of two th
   const opening = (config: Partial<TableConfig>, straddlers: number[] = []) => {
     const t = new TestTable({ stacks: FOUR, config });
     for (const seat of straddlers) {
-      t.state.seats[seat]!.straddle = true;
+      t.state.seats[seat]!.straddles = ['straddle'];
     }
 
     const { seat, what, amount } = openingBet(forcedBets(t.state, positionsOf([0, 1, 2, 3], 0)));

@@ -22,7 +22,7 @@ import { RECIPES } from '../src/client/soundRecipes.ts';
 import { THEMES } from '../src/client/themes.ts';
 import { shortAmount } from '../src/engine/amounts.ts';
 import { DEFAULT_CONFIG, LIMITS, presetSettings } from '../src/engine/index.ts';
-import type { Command, TableConfig, TableView } from '../src/engine/index.ts';
+import type { Command, Straddle, TableConfig, TableView } from '../src/engine/index.ts';
 import { contrast } from '../tests/colorVision.ts';
 import { boxes, overlap, Rig, SCREENS, setStageHeight, squeezed, textBoxes } from './rig.ts';
 import type { Box, RigPlayer, RigTable, ScreenName } from './rig.ts';
@@ -142,6 +142,10 @@ const playedNames = async (page: Page, from = 0) => (await played(page, from)).m
 
 /** When each sound the page has played starts, in seconds on the page's audio clock. */
 const playedAt = async (page: Page) => ((await page.evaluate('window.played.map((sound) => Math.min(...sound.starts))')) as number[]);
+
+// Two starts worked out from one reading of the audio clock are apart by the delay between them only as nearly as
+// the sums round: for one reading in three the difference comes out a hair under it
+const CLOCK_ROUNDING = 1e-9;
 
 /** The color a token stands for in the page's theme, as the browser writes a computed color. */
 const tokenColor = (page: Page, token: string) =>
@@ -358,10 +362,10 @@ async function toggleFeed(page: Page, screen: ScreenName): Promise<void> {
   }
 }
 
-/** The bar under the table has room for what it says to a player who owes and for its buttons, and no seat's status is cut off. */
+/** The bar under the table has room for what it says to the player alone, about blinds they owe or a straddle they did not post, and for its buttons, and no seat's status is cut off. */
 async function assertOwedBarFits(page: Page, screen: ScreenName): Promise<void> {
-  assert.deepEqual(await squeezed(page, '.controls .waiting, .controls .owed-note, .controls .extras button, .seat .plate .status'), [], 'what the bar or a seat says is cut off');
-  assertOnScreen(await boxes(page, '.controls .owed-note, .controls .extras button, .controls .extras .toggle, .seat .plate'), screen, 'the table and the bar under it');
+  assert.deepEqual(await squeezed(page, '.controls .waiting, .controls .own-note, .controls .extras button, .seat .plate .status'), [], 'what the bar or a seat says is cut off');
+  assertOnScreen(await boxes(page, '.controls .own-note, .controls .extras button, .controls .extras .toggle, .seat .plate'), screen, 'the table and the bar under it');
   assertApart(await boxes(page, '.controls .waiting'), await boxes(page, '.stage, .controls .extras'), 'what the bar says and what is around it');
 }
 
@@ -846,6 +850,174 @@ const UNDER_CONFETTI = `[...document.querySelectorAll('.confetti')].filter((piec
   return document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)?.closest('.confetti, .stand-in');
 }).length`;
 
+/**
+ * A table of whole chips and one of dollars and cents for the checks of straddles, with the amounts as
+ * each writes them: the blinds, a straddle and a double, a raise over the double, what each blind has
+ * left to call of a straddle and of a double, and the pot once each of those is posted.
+ */
+const STRADDLE_TABLES = [
+  { name: 'chips', config: {} as Partial<TableConfig>, stack: 1000, blinds: '10/20', small: '10', big: '20', straddle: '40', double: '80', quadruple: '160', smallCalls: ['30', '70'], bigCalls: ['20', '60'], pots: ['70', '150'], called: ['240', '480'] },
+  { name: 'cents', config: { ...CENTS } as Partial<TableConfig>, stack: 10_000, blinds: '0.25/0.50', small: '0.25', big: '0.50', straddle: '1.00', double: '2.00', quadruple: '4.00', smallCalls: ['0.75', '1.75'], bigCalls: ['0.50', '1.50'], pots: ['1.75', '3.75'], called: ['6.00', '12.00'] },
+];
+
+type StraddleTable = (typeof STRADDLE_TABLES)[number];
+
+const WIDEST = 'WWWWWWWWWWWWWWWW';
+const STRADDLE_LABELS = ['Straddle under the gun', 'Double straddle', 'Button straddle', 'Mississippi straddle'];
+const EVERY_STRADDLE = { allowStraddle: true, allowDoubleStraddle: true, allowButtonStraddle: true, allowMississippiStraddle: true };
+
+/** Six players, Quigs in seat 0 and the host, before the first hand. Dealt with the button on Quigs, the blinds are on seats 1 and 2, Marge in seat 3 is under the gun, Stu sits next to her and Big Al is the cutoff. */
+const sixFor = (rig: Rig, kind: StraddleTable, config: Partial<TableConfig> = {}) =>
+  rig.table(
+    LONG_NAMES.slice(0, 6).map((name) => ({ name, stack: kind.stack })),
+    { ...kind.config, ...config },
+  );
+
+/** A hand of those six with one kind of straddle in it. */
+interface StraddledHand {
+  slug: string;
+  says: string;
+  allow: Partial<TableConfig>;
+  asks: [name: string, what: Straddle][];
+  /** What the play-by-play says of the straddles, after the blinds. */
+  posts(kind: StraddleTable): string[];
+  /** What the straddlers' seats say. */
+  statuses: Record<number, string>;
+  /** The first to act, by seat, and the last, who posted the biggest straddle. */
+  first: number;
+  last: number;
+  /** Whether the biggest is a double. */
+  doubled: boolean;
+}
+
+const STRADDLED_HANDS: StraddledHand[] = [
+  {
+    slug: 'double',
+    says: 'a straddle and a double straddle',
+    allow: { allowDoubleStraddle: true },
+    asks: [[MARGE, 'straddle'], ['Stu', 'double straddle']],
+    posts: (kind) => [`${MARGE} posts straddle ${kind.straddle}`, `Stu posts double straddle ${kind.double}`],
+    statuses: { 3: 'Straddle', 4: 'Double straddle' },
+    first: 5,
+    last: 4,
+    doubled: true,
+  },
+  {
+    slug: 'button',
+    says: 'a button straddle',
+    allow: { allowButtonStraddle: true },
+    asks: [['Quigs', 'button straddle']],
+    posts: (kind) => [`Quigs posts button straddle ${kind.straddle}`],
+    statuses: { 0: 'Straddle' },
+    first: 1,
+    last: 0,
+    doubled: false,
+  },
+  {
+    slug: 'mississippi',
+    says: 'a Mississippi straddle from the cutoff',
+    allow: { allowMississippiStraddle: true },
+    asks: [['Big Al', 'Mississippi straddle']],
+    posts: (kind) => [`Big Al posts Mississippi straddle ${kind.straddle}`],
+    statuses: { 5: 'Straddle' },
+    first: 0,
+    last: 5,
+    doubled: false,
+  },
+];
+
+/** The table, the bets and the turn's buttons all have room, in every shape the screen gives the table. */
+async function assertStraddledTableFits(page: Page, screen: ScreenName, name: string): Promise<void> {
+  await inShapesOf(page, screen, async (shape) => {
+    assert.deepEqual(await squeezed(page, '.pot, .bet, .plate .stack, .plate .status, .turn .buttons button'), [], 'an amount, a status or a button is cut off');
+    assertOnScreen(await boxes(page, '.seat .plate, .bet, .pot, .turn .buttons button'), screen, 'a seat, a bet, the pot or a button of the turn');
+    await assertBetsApart(page);
+    await assertNoSidewaysScroll(page);
+    await shot(page, `${name}-${screen}-${shape}`);
+  });
+}
+
+/** One hand with a kind of straddle, on a table of chips or of cents, looked at on a phone and a desktop. */
+const straddledHandCheck = (hand: StraddledHand, kind: StraddleTable): Check => [
+  `${hand.says} at a table of ${kind.name}: each is in front of its seat and in the play-by-play, the first to act, both blinds and the straddler with the option are asked for the right amounts, and the history tells it`,
+  async (rig) => {
+    const nth = hand.doubled ? 1 : 0;
+    const biggest = hand.doubled ? kind.double : kind.straddle;
+    const raiseTo = hand.doubled ? kind.quadruple : kind.double;
+    const toCall = (seat: number) => (seat === 1 ? kind.smallCalls[nth]! : seat === 2 ? kind.bigCalls[nth]! : seat === 3 && hand.doubled ? kind.straddle : biggest);
+    const names = LONG_NAMES.slice(0, 6);
+
+    for (const screen of PHONE_AND_DESKTOP) {
+      const table = sixFor(rig, kind, hand.allow);
+      for (const [name, what] of hand.asks) {
+        table.act(name, { type: 'setStraddle', kind: what, on: true });
+      }
+
+      table.deal({ button: 0, holes: { 0: 'Ks Kh', 3: 'As Ah' }, board: '2c 7d 9h Jc 3s' });
+
+      const lines = [`Hand #1 · blinds ${kind.blinds} · Quigs has the button`, `${WIDEST} posts small blind ${kind.small}`, `${names[2]} posts big blind ${kind.big}`, ...hand.posts(kind)];
+
+      // The first to act: every straddle is a bet in front of its seat, named on the seat, and the price to call is the biggest
+      const page = await table.open(names[hand.first]!, screen);
+      const press = pressOn(page, screen);
+
+      assert.deepEqual((await texts(page, '.bet')).sort(), [kind.small, kind.big, kind.straddle, ...(hand.doubled ? [kind.double] : [])].sort());
+      assert.equal(await text(page, '.pot'), `Pot${kind.pots[nth]}`);
+      assert.equal(await page.locator('.seat.acting').getAttribute('data-seat'), String(hand.first));
+
+      for (const [seat, status] of Object.entries(hand.statuses)) {
+        assert.equal(await text(page, `.seat[data-seat="${seat}"] .status`), status);
+      }
+
+      assert.equal(await text(page, '.turn [data-action="call"]'), `Call ${toCall(hand.first)}`);
+      assert.equal(await text(page, '.turn [data-action="raise"]'), `Raise to ${raiseTo}`);
+      await assertStraddledTableFits(page, screen, `straddles-${hand.slug}-first-${kind.name}`);
+
+      await toggleFeed(page, screen);
+      const said = await texts(page, '.entries li');
+      const from = said.indexOf(lines[0]!);
+      assert.deepEqual(said.slice(from, from + lines.length), lines);
+      assert.deepEqual(await squeezed(page, '.entries li'), [], 'a line of the play-by-play is cut off');
+      await assertNoSidewaysScroll(page);
+      await shot(page, `straddles-${hand.slug}-play-by-play-${kind.name}-${screen}`);
+      await toggleFeed(page, screen);
+
+      // Each blind is asked for what is left of the biggest straddle, and may raise to the same as anyone
+      for (const blind of [1, 2].filter((seat) => seat !== hand.first)) {
+        table.play(passive, (view) => view.hand!.toAct === blind);
+
+        const theirs = await table.open(names[blind]!, screen);
+        assert.equal(await text(theirs, '.turn [data-action="call"]'), `Call ${toCall(blind)}`);
+        assert.equal(await text(theirs, '.turn [data-action="raise"]'), `Raise to ${raiseTo}`);
+        await theirs.context().close();
+      }
+
+      // Everyone calls, and the player who posted the biggest straddle acts last with nothing to call
+      table.play(passive, (view) => view.hand!.toAct === hand.last);
+
+      const last = await table.open(names[hand.last]!, screen);
+      assert.equal(await text(last, '.turn [data-action="check"]'), 'Check');
+      assert.equal(await text(last, '.turn [data-action="raise"]'), `Raise to ${raiseTo}`);
+      assert.equal(await last.locator('.turn [data-action="call"]').count(), 0);
+      assert.equal(await text(last, '.pot'), `Pot${kind.called[nth]}`);
+      await assertStraddledTableFits(last, screen, `straddles-${hand.slug}-option-${kind.name}`);
+      await last.context().close();
+
+      playOut(table);
+      await press('[data-action="menu"]');
+      await press('.menu [data-action="history"]');
+      await page.waitForSelector('.history summary');
+      assert.match(await text(page, '.history summary'), /^Hand #1/);
+      await press('.history summary');
+      assert.deepEqual((await text(page, '.history pre')).split('\n').slice(0, lines.length), lines);
+      assert.deepEqual(await squeezed(page, '.history summary'), [], 'the hand\'s line in the history is cut off');
+      await shot(page, `straddles-${hand.slug}-history-${kind.name}-${screen}`);
+
+      await page.context().close();
+    }
+  },
+];
+
 type Check = [name: string, run: (rig: Rig) => Promise<void>];
 
 /** For a check that looks at the presets more than once, as in a round for each screen: the lobby of the next round would offer the ones the last saved. */
@@ -1287,7 +1459,7 @@ const CHECKS: Check[] = [
 
       const [deal, flop] = await playedAt(page);
       const dealLasts = Math.max(...RECIPES.deal.map((voice) => voice.at + voice.length));
-      assert.ok(flop! - deal! >= dealLasts, `the flop starts ${(flop! - deal!).toFixed(3)} s after the deal, which lasts ${dealLasts} s`);
+      assert.ok(flop! - deal! >= dealLasts - CLOCK_ROUNDING, `the flop starts ${(flop! - deal!).toFixed(3)} s after the deal, which lasts ${dealLasts} s`);
 
       await page.context().close();
     },
@@ -3718,7 +3890,7 @@ const CHECKS: Check[] = [
           assert.equal(await page.inputValue('#new-table-voice-link'), 'https://discord.gg/abc', 'the call typed in was thrown away');
           assert.deepEqual(await texts(page, '.preset-notes p'), [
             'Changed here: Table name, Play with, Small blind, Big blind, Ante, Minimum buy-in, Maximum buy-in.',
-            'Also set, in the table settings: Seconds to act 20, Allow straddles off, Seven-deuce bounty 1.00.',
+            'Also set, in the table settings: Seconds to act 20, Straddle under the gun off, Seven-deuce bounty 1.00.',
           ]);
           assert.equal(await page.locator('.changed').count(), 7);
           assert.equal(await page.locator('#new-table-unit.changed, label[for="new-table-small-blind"].changed').count(), 2);
@@ -3743,7 +3915,7 @@ const CHECKS: Check[] = [
           await page.selectOption('#new-table-preset', { label: 'Tuesday cents' });
           await press('#new-table-unit label:has-text("Whole chips")');
           assert.deepEqual(await stakes(page), ['chips', '10', '20', '400', '2000']);
-          assert.deepEqual(await texts(page, '.preset-notes p'), ['Also set, in the table settings: Seconds to act 20, Allow straddles off.']);
+          assert.deepEqual(await texts(page, '.preset-notes p'), ['Also set, in the table settings: Seconds to act 20, Straddle under the gun off.']);
           await press('#new-table-unit label:has-text("Dollars and cents")');
 
           // Every amount starts over with what the table plays with, the bomb pot's as much as the blinds
@@ -4233,7 +4405,7 @@ const CHECKS: Check[] = [
 
       const [deal, flop] = await playedAt(page);
       const dealLasts = Math.max(...RECIPES.deal.map((voice) => voice.at + voice.length));
-      assert.ok(flop! - deal! >= dealLasts, `the flops start ${(flop! - deal!).toFixed(3)} s after the deal, which lasts ${dealLasts} s`);
+      assert.ok(flop! - deal! >= dealLasts - CLOCK_ROUNDING, `the flops start ${(flop! - deal!).toFixed(3)} s after the deal, which lasts ${dealLasts} s`);
 
       // Stu, left of the button, checks to Pam, whose own check is silent to her; the button's check brings the turn
       table.act('Stu', { type: 'check' });
@@ -5725,6 +5897,167 @@ const CHECKS: Check[] = [
       }
     },
   ]),
+  [
+    'the table settings have a switch for each kind of straddle, a change to them is told to the table, and a preset carries them to the form for a new table',
+    async (rig) => {
+      const ids = ['#table-allow-straddle', '#table-allow-double-straddle', '#table-allow-button-straddle', '#table-allow-mississippi-straddle'];
+      const switches = ids.map((id) => `label[for="${id.slice(1)}"]`).join(', ');
+      const ticked = (page: Page) => Promise.all(ids.map((id) => page.isChecked(id)));
+
+      for (const screen of PHONE_AND_DESKTOP) {
+        const table = sixFor(rig, STRADDLE_TABLES[0]!);
+        table.act('Stu', { type: 'setStraddle', kind: 'straddle', on: true });
+
+        const page = await table.open('Quigs', screen);
+        const press = pressOn(page, screen);
+
+        await press('[data-action="menu"]');
+        await press('.menu [data-action="settings"]');
+        await page.waitForSelector(ids[0]!);
+
+        // As a table always was: under the gun and nothing else
+        assert.deepEqual(await ticked(page), [true, false, false, false]);
+        assert.deepEqual(await texts(page, switches), STRADDLE_LABELS);
+
+        await page.locator(ids[3]!).scrollIntoViewIfNeeded();
+        assertOnScreen(await boxes(page, switches), screen, 'the switches for the kinds of straddle');
+        assert.deepEqual(await squeezed(page, `:is(${switches}) span`), [], 'the name of a switch is cut off');
+        await assertNoSidewaysScroll(page);
+        await shot(page, `straddles-settings-${screen}`);
+
+        await press(`label[for="${ids[0]!.slice(1)}"]`);
+        await press(`label[for="${ids[2]!.slice(1)}"]`);
+        await press(`label[for="${ids[3]!.slice(1)}"]`);
+        await press('[data-action="save-settings"]');
+        await page.waitForSelector('.dialog', { state: 'detached' });
+
+        const { config } = table.view('Quigs');
+        assert.deepEqual([config.allowStraddle, config.allowDoubleStraddle, config.allowButtonStraddle, config.allowMississippiStraddle], [false, false, true, true]);
+        assert.deepEqual(table.view('Stu').seats[4]!.straddles, [], 'a kind switched off is still asked for');
+
+        await toggleFeed(page, screen);
+        await page.waitForSelector('.entries li:has-text("Straddles allowed")');
+        assert.equal((await texts(page, '.entries li')).at(-1), 'Straddles allowed: Button straddle, Mississippi straddle');
+        assert.deepEqual(await squeezed(page, '.entries li'), [], 'a line of the play-by-play is cut off');
+        await shot(page, `straddles-settings-told-${screen}`);
+        await page.context().close();
+
+        // Kept in a preset, the kinds go to a new table, though the form for one has no field for them
+        const kept = presetSettings({ ...DEFAULT_CONFIG, allowStraddle: config.allowStraddle, allowButtonStraddle: config.allowButtonStraddle, allowMississippiStraddle: config.allowMississippiStraddle });
+        rig.presets.save({ name: 'Button and Mississippi', settings: kept, savedAt: 0, savedBy: 'Quigs' }, true);
+
+        const { allowDoubleStraddle: _double, allowButtonStraddle: _button, allowMississippiStraddle: _mississippi, ...before } = presetSettings({ ...DEFAULT_CONFIG, allowStraddle: false });
+        rig.presets.save({ name: 'From before the kinds', settings: before, savedAt: 0, savedBy: 'Quigs' }, true);
+
+        const lobby = await rig.lobby(screen);
+        await lobby.waitForSelector('#new-table-preset');
+        assert.equal(await lobby.locator('[id^="new-table-allow-"]').count(), 0, 'the form for a new table asks about straddles');
+
+        await lobby.selectOption('#new-table-preset', { label: 'Button and Mississippi' });
+        assert.equal((await texts(lobby, '.preset-notes p')).at(-1), 'Also set, in the table settings: Straddle under the gun off, Button straddle on, Mississippi straddle on.');
+        await lobby.locator('.preset-notes').scrollIntoViewIfNeeded();
+        assert.deepEqual(await squeezed(lobby, '.preset-notes p'), [], 'part of what the picker says is cut off');
+        await assertNoSidewaysScroll(lobby);
+        await shot(lobby, `straddles-preset-${screen}`);
+
+        // One saved when there was a single kind says what it always said, and nothing of the others
+        await lobby.selectOption('#new-table-preset', { label: 'From before the kinds' });
+        assert.equal((await texts(lobby, '.preset-notes p')).at(-1), 'Also set, in the table settings: Straddle under the gun off.');
+        await lobby.context().close();
+
+        forgetPresets(rig);
+      }
+    },
+  ],
+  [
+    'a player turns a straddle on with one switch where the table allows one kind and in a dialog where it allows several, and is told under the table why a hand passed them over',
+    async (rig) => {
+      for (const kind of STRADDLE_TABLES) {
+        for (const screen of ['smallPhone', 'desktop'] as const) {
+          const table = sixFor(rig, kind);
+          const page = await table.open('Stu', screen);
+          const press = pressOn(page, screen);
+
+          // One kind: the switch there always was
+          assert.deepEqual(await texts(page, '.controls .extras button'), ['Sit out next hand', 'Straddle', 'Add chips']);
+          await press('.controls [data-action="straddle"]');
+          await page.waitForSelector('.controls [data-action="straddle"][aria-checked="true"]');
+          assert.deepEqual(table.view('Stu').seats[4]!.straddles, ['straddle']);
+
+          // Several: a button that says how many are on, and a switch for each with what it costs
+          table.act('Quigs', { type: 'updateConfig', config: EVERY_STRADDLE });
+          await page.waitForSelector('.controls [data-action="straddles"]');
+          assert.deepEqual(await texts(page, '.controls .extras button'), ['Sit out next hand', 'Straddles: 1 on', 'Add chips']);
+          await assertOwedBarFits(page, screen);
+          await shot(page, `straddles-bar-${kind.name}-${screen}`);
+
+          await press('.controls [data-action="straddles"]');
+          await page.waitForSelector('.dialog [data-straddle]');
+          assert.deepEqual((await texts(page, '.dialog [data-straddle]')).map((label) => label.split('\n')[0]), STRADDLE_LABELS);
+          assert.deepEqual(await page.locator('.dialog [data-straddle]').evaluateAll((switches) => switches.map((one) => one.getAttribute('aria-checked'))), ['true', 'false', 'false', 'false']);
+
+          await press('.dialog [data-straddle="button straddle"]');
+          await page.waitForSelector('.dialog [data-straddle="button straddle"][aria-checked="true"]');
+          assert.deepEqual(table.view('Stu').seats[4]!.straddles, ['straddle', 'button straddle']);
+
+          assert.deepEqual(await squeezed(page, '.dialog [data-straddle] span, .dialog .note'), [], 'what a switch says is cut off');
+          assertOnScreen(await boxes(page, '.dialog [data-straddle], .dialog [data-action="close"]'), screen, 'the switches of the dialog');
+          const switches = await boxes(page, '.dialog [data-straddle]');
+          switches.forEach((one, index) => assertApart([one], switches.slice(index + 1), 'two switches of the dialog'));
+          await assertNoSidewaysScroll(page);
+          await shot(page, `straddles-dialog-${kind.name}-${screen}`);
+
+          await press('.dialog [data-action="close"]');
+          await page.waitForSelector('.dialog', { state: 'detached' });
+          assert.deepEqual(await texts(page, '.controls .extras button'), ['Sit out next hand', 'Straddles: 2 on', 'Add chips']);
+
+          // The button is on the widest name there is, whose player straddles from it: Stu, under the gun, is passed over
+          table.act(WIDEST, { type: 'setStraddle', kind: 'button straddle', on: true });
+          table.deal({ button: 1 });
+          await page.waitForSelector('.controls .straddle-note');
+          assert.equal(await text(page, '.controls .straddle-note'), `No straddle this hand: ${WIDEST} had the right before you`);
+          assert.equal(await text(page, '.seat[data-seat="1"] .status'), 'Straddle');
+          assert.equal(await page.locator('.seat.me .status').count(), 0, 'the seat of a player who did not straddle says they did');
+
+          await inShapesOf(
+            page,
+            screen,
+            async (shape) => {
+              await assertOwedBarFits(page, screen);
+              await assertNoSidewaysScroll(page);
+              await shot(page, `straddles-passed-over-${kind.name}-${screen}-${shape}`);
+            },
+            { buttonsUp: false },
+          );
+
+          // The next time round the button cannot cover it, so Stu straddles, and it is the button who is told
+          playOut(table);
+          table.act('Quigs', { type: 'setStack', playerId: table.auth(WIDEST).id, stack: 2 * table.view('Quigs').config.bigBlind - 1 });
+          table.deal({ button: 1 });
+
+          const short = await table.open(WIDEST, screen);
+          await short.waitForSelector('.controls .straddle-note');
+          assert.equal(await text(short, '.controls .straddle-note'), `No straddle this hand: you could not cover the ${kind.straddle}`);
+          assert.equal(await text(short, '.seat[data-seat="4"] .status'), 'Straddle');
+          await assertNoSidewaysScroll(short);
+          await shot(short, `straddles-short-${kind.name}-${screen}`);
+          await short.context().close();
+
+          // Stu straddled, so the bar has nothing to tell him
+          await page.waitForSelector('.controls .straddle-note', { state: 'detached' });
+
+          // One kind again, and not the one every table starts with: the switch says which it is, and is on for him as he left it
+          table.act('Quigs', { type: 'updateConfig', config: { allowStraddle: false, allowDoubleStraddle: false, allowMississippiStraddle: false } });
+          await page.waitForSelector('.controls [data-action="straddle"][aria-checked="true"]');
+          assert.deepEqual(await texts(page, '.controls .extras button'), ['Sit out next hand', 'Button straddle', 'Add chips']);
+          assert.deepEqual(table.view('Stu').seats[4]!.straddles, ['button straddle']);
+          await assertOwedBarFits(page, screen);
+          await page.context().close();
+        }
+      }
+    },
+  ],
+  ...STRADDLED_HANDS.flatMap((hand) => STRADDLE_TABLES.map((kind) => straddledHandCheck(hand, kind))),
 ];
 
 await mkdir(OUT, { recursive: true });

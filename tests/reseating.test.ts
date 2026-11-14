@@ -27,7 +27,7 @@ const copy = (seat: Seat | null): Seat => structuredClone(seat!);
 
 test('a player who is not in a hand moves at once, taking everything about their seat with them', () => {
   const t = new TestTable({ stacks: [1000, 700, 500], config: { allowStraddle: true } });
-  t.cmd(1, { type: 'setStraddle', on: true });
+  t.cmd(1, { type: 'setStraddle', kind: 'straddle', on: true });
   t.cmd(1, { type: 'sitOut' });
   const before = copy(t.state.seats[1]!);
 
@@ -153,7 +153,7 @@ test('a player in a run-it-twice vote still votes, and moves once the boards are
 test('a shuffle keeps every seated player seated once, with the same chips and the same everything else, in the seats already taken', () => {
   const t = new TestTable({ stacks: [1000, 250, 3000, 40, 777, 1200], config: { allowStraddle: true } });
   t.cmd(1, { type: 'sitOut' });
-  t.cmd(2, { type: 'setStraddle', on: true });
+  t.cmd(2, { type: 'setStraddle', kind: 'straddle', on: true });
   move(t, 0, 3, 8);
 
   const taken = (seats: (Seat | null)[]) => seats.flatMap((seat, index) => (seat ? [index] : []));

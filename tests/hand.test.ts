@@ -562,11 +562,11 @@ test('seven-deuce bounty: nothing for a split pot or a losing hand', () => {
 
 test('a straddle is a third blind: action starts to its left and the straddler acts last', () => {
   const t = new TestTable({ stacks: [1000, 1000, 1000, 1000] });
-  t.cmd(3, { type: 'setStraddle', on: true });
+  t.cmd(3, { type: 'setStraddle', kind: 'straddle', on: true });
   t.deal({ button: 0 });
   const hand = t.state.hand!;
 
-  assert.equal(hand.straddleSeat, 3);
+  assert.deepEqual(hand.straddles, [{ seat: 3, what: 'straddle', amount: 40 }]);
   assert.equal(hand.currentBet, 40);
   assert.deepEqual(t.stacks(), [1000, 990, 980, 960]);
   assert.equal(t.toAct, 0);
@@ -585,26 +585,26 @@ test('a straddle is a third blind: action starts to its left and the straddler a
 
 test('three-handed the button is under the gun and may straddle; heads-up nobody can', () => {
   const three = new TestTable({ stacks: [1000, 1000, 1000] });
-  three.cmd(0, { type: 'setStraddle', on: true });
+  three.cmd(0, { type: 'setStraddle', kind: 'straddle', on: true });
   three.deal({ button: 0 });
-  assert.equal(three.state.hand!.straddleSeat, 0);
+  assert.deepEqual(three.state.hand!.straddles, [{ seat: 0, what: 'straddle', amount: 40 }]);
   assert.equal(three.toAct, 1);
 
   const two = new TestTable({ stacks: [1000, 1000] });
-  two.cmd(0, { type: 'setStraddle', on: true });
-  two.cmd(1, { type: 'setStraddle', on: true });
+  two.cmd(0, { type: 'setStraddle', kind: 'straddle', on: true });
+  two.cmd(1, { type: 'setStraddle', kind: 'straddle', on: true });
   two.deal({ button: 0 });
-  assert.equal(two.state.hand!.straddleSeat, null);
+  assert.deepEqual(two.state.hand!.straddles, []);
 });
 
 test('a straddle is skipped when the player cannot cover it or the table turned it off', () => {
   const short = new TestTable({ stacks: [1000, 1000, 1000, 39] });
-  short.cmd(3, { type: 'setStraddle', on: true });
+  short.cmd(3, { type: 'setStraddle', kind: 'straddle', on: true });
   short.deal({ button: 0 });
-  assert.equal(short.state.hand!.straddleSeat, null);
+  assert.deepEqual(short.state.hand!.straddles, []);
 
   const off = new TestTable({ stacks: [1000, 1000, 1000, 1000], config: { allowStraddle: false } });
-  assert.throws(() => off.cmd(3, { type: 'setStraddle', on: true }), /turned off/);
+  assert.throws(() => off.cmd(3, { type: 'setStraddle', kind: 'straddle', on: true }), /turned off/);
 });
 
 test('running out of time folds a player facing a bet and marks them away', () => {
@@ -1321,12 +1321,12 @@ test('run it twice with a big-blind ante: the ante is split between the boards w
 
 test('a straddle with an ante: the antes go in first, and the straddle is still the bet to call', () => {
   const t = new TestTable({ stacks: [1000, 1000, 1000, 1000], config: EVERYONE_ANTES });
-  t.cmd(3, { type: 'setStraddle', on: true });
+  t.cmd(3, { type: 'setStraddle', kind: 'straddle', on: true });
   t.deal({ button: 0 });
   const hand = t.state.hand!;
 
   assert.deepEqual(hand.log.slice(1), ['Everyone posts ante 5', 'P1 posts small blind 10', 'P2 posts big blind 20', 'P3 posts straddle 40']);
-  assert.equal(hand.straddleSeat, 3);
+  assert.deepEqual(hand.straddles, [{ seat: 3, what: 'straddle', amount: 40 }]);
   assert.deepEqual(t.stacks(), [995, 985, 975, 955]);
   assert.equal(t.toAct, 0);
   assert.deepEqual({ call: options(t, 0).callAmount, raise: options(t, 0).minRaiseTo }, { call: 40, raise: 80 });
@@ -1338,16 +1338,16 @@ test('a straddle with an ante: the antes go in first, and the straddle is still 
   assert.equal(options(t, 3).canCheck, true);
 
   const bigBlind = new TestTable({ stacks: [1000, 1000, 1000, 1000], config: BIG_BLIND_ANTE });
-  bigBlind.cmd(3, { type: 'setStraddle', on: true });
+  bigBlind.cmd(3, { type: 'setStraddle', kind: 'straddle', on: true });
   bigBlind.deal({ button: 0 });
   assert.deepEqual(bigBlind.state.hand!.log.slice(1), ['P1 posts small blind 10', 'P2 posts big blind 20', 'P2 posts big blind ante 20', 'P3 posts straddle 40']);
   assert.deepEqual(bigBlind.stacks(), [1000, 990, 960, 960]);
 
   // 44 covers the straddle but not the straddle and the ante, and a straddle is posted whole or not at all
   const short = new TestTable({ stacks: [1000, 1000, 1000, 44], config: EVERYONE_ANTES });
-  short.cmd(3, { type: 'setStraddle', on: true });
+  short.cmd(3, { type: 'setStraddle', kind: 'straddle', on: true });
   short.deal({ button: 0 });
-  assert.equal(short.state.hand!.straddleSeat, null);
+  assert.deepEqual(short.state.hand!.straddles, []);
   assert.deepEqual(short.stacks(), [995, 985, 975, 39]);
   assert.equal(short.toAct, 3);
 });

@@ -2,6 +2,12 @@ import { startingConfig } from './config.ts';
 import { STATE_SCHEMA } from './types.ts';
 import type { Hand, HandPlayer, HandRecord, Member, Seat, TableState } from './types.ts';
 
+/** What schema 3 kept of straddles: whether a player posts one under the gun, the only kind there was, and the one seat that did in a hand. */
+interface SchemaThree {
+  seats: ((Partial<Seat> & { straddle?: boolean }) | null)[];
+  hand: (Partial<Hand> & { straddleSeat?: number | null }) | null;
+}
+
 /**
  * One step per schema number, taking a table saved with that schema to the next one. A step is for a
  * change of shape: a field renamed, retyped or removed. It can treat what it is given as a table.
@@ -10,6 +16,24 @@ const STEPS: Record<number, (state: TableState) => void> = {
   2: (state) => {
     if (state.hand) {
       state.hand.bounty = state.config.sevenDeuceBounty;
+    }
+  },
+  3: (state) => {
+    const { seats, hand } = state as SchemaThree;
+
+    for (const seat of seats) {
+      if (seat) {
+        seat.straddles = seat.straddle ? ['straddle'] : [];
+        delete seat.straddle;
+      }
+    }
+
+    if (hand) {
+      const straddler = hand.straddleSeat ?? null;
+
+      // It was posted whole or not at all, at twice the big blind the hand was dealt under
+      hand.straddles = straddler === null ? [] : [{ seat: straddler, what: 'straddle', amount: 2 * hand.bigBlind! }];
+      delete hand.straddleSeat;
     }
   },
 };
@@ -33,7 +57,7 @@ export const SAVED_DEFAULTS: SavedDefaults = {
   table: () => ({ cohostIds: [], shuffleAfterHand: false, bombPotCalled: false, handsSinceBombPot: 0, lastHand: null, nightEndedAt: null, blinds: null }),
   member: () => ({ transferred: 0 }),
   seat: () => ({ moveTo: null, owesBigBlind: false, owesSmallBlind: false, postsOwed: false }),
-  hand: () => ({ events: [], bombPot: null }),
+  hand: () => ({ events: [], bombPot: null, passedOver: [] }),
   handPlayer: () => ({ dead: 0 }),
   record: () => ({ events: [], bombPot: null }),
 };

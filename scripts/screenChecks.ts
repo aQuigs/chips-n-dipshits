@@ -4986,6 +4986,84 @@ const CHECKS: Check[] = [
     },
   ],
   [
+    'what a player owes shares the bar with the count of the last hands and word of a bomb pot, each at its longest and whole, on the smallest phone',
+    async (rig) => {
+      const longest = {
+        ...MISSED_BLIND_TABLES[1]!,
+        config: { ...CENTS, smallBlind: 50_000, bigBlind: 100_000, bombPotAmount: 999_999, bombPotBoards: 'two' } as Partial<TableConfig>,
+        stack: 10_000_000,
+      };
+      const owed = '1,500.00';
+      const bombPot = 'Next hand is a double-board bomb pot: 9,999.99 each';
+      const screen = 'smallPhone';
+
+      const table = blindsOwed(rig, longest);
+      table.act('Quigs', { type: 'setLastHands', hands: LIMITS.lastHands });
+      table.act('Quigs', { type: 'setBombPot', on: true });
+
+      const page = await table.open(MARGE, screen);
+      const press = pressOn(page, screen);
+
+      const look = async (name: string, says: { hands: string; note: string; buttons: string[] }) => {
+        await page.waitForSelector(`.controls .owed-note:has-text("${says.note}")`);
+        assert.deepEqual(await texts(page, '.controls .next-hand span'), [says.hands, bombPot]);
+        assert.equal(await text(page, '.controls .owed-note'), says.note);
+        assert.deepEqual(await texts(page, '.controls .extras button'), says.buttons);
+
+        await inShapesOf(
+          page,
+          screen,
+          async (shape) => {
+            await assertNextHandsFit(page, screen, 'player who owes');
+            await assertOwedBarFits(page, screen);
+            assertApart(await boxes(page, '.controls .owed-note'), await boxes(page, '.controls .next-hand span'), 'what is owed and word of the hands to come');
+
+            const buttons = await boxes(page, '.controls .extras button');
+            buttons.forEach((button, index) => assertApart([button], buttons.slice(index + 1), 'two buttons under the table'));
+            await assertNoSidewaysScroll(page);
+            await shot(page, `missed-blinds-with-last-hands-${name}-${shape}`);
+          },
+          { buttonsUp: false },
+        );
+      };
+
+      // Back from sitting out, with the choice to make
+      await look('choice', { hands: `${LIMITS.lastHands} more hands to play`, note: `You owe ${owed} for the blinds you missed`, buttons: ['Wait for big blind', `Post ${owed} and play`, 'Straddle', 'Add chips'] });
+
+      // Set to post from where the button has yet to pass: the longest thing the bar says about blinds
+      await press('.controls [data-action="post-blinds"]');
+      await look('after-the-button', { hands: `${LIMITS.lastHands} more hands to play`, note: `You post ${owed} and are dealt in once the button has passed you`, buttons: ['Sit out next hand', 'Wait for big blind', 'Straddle', 'Add chips'] });
+
+      // A hand is on without her, and the one after it is the bomb pot, which has no blinds for her to post
+      table.act('Quigs', { type: 'setBombPot', on: false });
+      table.dealNext();
+      table.act('Quigs', { type: 'setLastHands', hands: LIMITS.lastHands });
+      table.act('Quigs', { type: 'setBombPot', on: true });
+      await page.waitForSelector('.controls .waiting:has-text("Waiting for ")');
+      await look('during-a-hand', { hands: `${LIMITS.lastHands} more hands after this one`, note: `You post ${owed} in the hand after the bomb pot`, buttons: ['Sit out next hand', 'Wait for big blind', 'Straddle', 'Add chips'] });
+
+      // The night ends with her still owing. Nothing is charged or forgiven: the bar has no hand to speak of, and her seat still says she is waiting
+      playOut(table);
+      table.act('Quigs', { type: 'endNight' });
+      await page.waitForSelector('.message.night-over');
+      await page.waitForSelector('.controls .owed-note', { state: 'detached' });
+      assert.equal(await text(page, '.controls .waiting'), 'The night is over');
+      assert.equal(await page.locator('.controls .extras button').count(), 0);
+      assert.equal(await text(page, '.seat.me .status'), 'Waiting to post');
+      assert.deepEqual([table.view(MARGE).seats[3]!.owesBigBlind, table.view(MARGE).seats[3]!.owesSmallBlind], [true, true]);
+      await shot(page, 'missed-blinds-night-over');
+
+      // Play starts again where it stopped, for her too
+      table.act('Quigs', { type: 'playOn' });
+      await page.waitForSelector(`.controls .owed-note:has-text("You post ${owed} and are dealt in next hand")`);
+      assert.deepEqual(await texts(page, '.controls .extras button'), ['Sit out next hand', 'Wait for big blind', 'Straddle', 'Add chips']);
+      assert.equal(await text(page, '.seat.me .status'), 'Waiting to post');
+      await assertOwedBarFits(page, screen);
+
+      await page.context().close();
+    },
+  ],
+  [
     'a hand with a missed big blind and a dead small blind shows both on the felt, in the play-by-play and in the hand history, and gives their player the option',
     async (rig) => {
       for (const kind of MISSED_BLIND_TABLES) {

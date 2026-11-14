@@ -228,7 +228,8 @@ function settlingOf(view: TableView, seat: SeatView, handlers: ControlHandlers):
       return { note: `You post ${owed} and are dealt in once the button has passed you`, buttons: [wait('button.chip-btn')] };
 
     case 'posting':
-      return { note: `You post ${owed} and are dealt in next hand`, buttons: [wait('button.chip-btn')] };
+      // A bomb pot has no blinds to post, so it is dealt to them like anyone and the posting waits for the hand after
+      return { note: view.nextBombPot ? `You post ${owed} in the hand after the bomb pot` : `You post ${owed} and are dealt in next hand`, buttons: [wait('button.chip-btn')] };
 
     default:
       return { note: null, buttons: [] };
@@ -245,7 +246,8 @@ function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandle
   const hand = view.hand;
   const myRequest = view.requests.find((request) => request.playerId === view.you.id);
   const room = view.config.maxBuyIn - seat.stack - seat.pendingAdd;
-  const settling = settlingOf(view, seat, handlers);
+  // With the night over no hand is coming to settle anything in; the seat still says who is waiting
+  const settling = nightOver(view) ? { note: null, buttons: [] } : settlingOf(view, seat, handlers);
 
   let main: HTMLElement;
   if (hand?.options) {

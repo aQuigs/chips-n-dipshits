@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { addMember, endNight, LIMITS, nightIsOver, TIMING } from '../src/engine/index.ts';
+import { addMember, endNight, LIMITS, nightIsOver, owes, TIMING } from '../src/engine/index.ts';
 import type { Command, NightEnd } from '../src/engine/index.ts';
 import { restoreState } from '../src/server/store.ts';
 import { ACES, BOARD, handRecords, KINGS, options, TestTable } from './helpers.ts';
@@ -435,4 +435,93 @@ test('a table saved mid-countdown, or with the night over, comes back as it was'
   assert.throws(() => reloaded.cmd(HOST, { type: 'endNight' }), { message: 'The night is already over' });
   reloaded.cmd(HOST, { type: 'playOn' });
   assert.ok(!nightIsOver(reloaded.state));
+});
+
+/** Six players at a table not yet started, after two hands: seat 3 owes both blinds and waits for the big blind, seat 4 owes both and has said they post. */
+function withBlindsOwed(): TestTable {
+  const t = new TestTable({ stacks: [1000, 1000, 1000, 1000, 1000, 1000] });
+
+  t.deal({ button: 0 });
+  t.foldOut();
+  t.cmd(3, { type: 'sitOut' });
+  t.cmd(4, { type: 'sitOut' });
+  t.deal();
+  t.foldOut();
+  t.cmd(3, { type: 'comeIn', post: false });
+  t.cmd(4, { type: 'comeIn', post: true });
+
+  return t;
+}
+
+/** Where the button and the blinds are, what each seat owes and has chosen, and when each who owes comes in. */
+const blindsAndDebts = (t: TestTable) =>
+  JSON.stringify([t.state.buttonSeat, t.state.blinds, t.state.seats.map((seat) => seat && [seat.sittingOut, seat.owesBigBlind, seat.owesSmallBlind, seat.postsOwed]), t.view(HOST).seats.map((seat) => seat?.comesIn ?? null)]);
+
+/** The hand on the table: its button and blinds, who is in it, and every forced bet. */
+const dealt = (t: TestTable) => {
+  const hand = t.state.hand!;
+
+  return [hand.button, hand.sbSeat, hand.bbSeat, hand.players.map((player) => player.seat), hand.events.flatMap((event) => (event[0] === 'post' ? [`${event[1]} ${event[2]}`] : []))];
+};
+
+test('the end of a night and playing on charge nobody and forgive nobody: the button, the blinds and what is owed stay where they were, and a player waiting for the big blind is still seated and waiting', () => {
+  const t = withBlindsOwed();
+  const before = blindsAndDebts(t);
+
+  assert.deepEqual([t.view(3).seats[3]!.comesIn, t.view(4).seats[4]!.comesIn], ['big blind', 'button']);
+
+  t.cmd(HOST, { type: 'endNight' });
+  assert.ok(nightIsOver(t.state));
+  assert.equal(blindsAndDebts(t), before, 'ending the night moved the button or the blinds, or changed what is owed');
+
+  // A night that is over deals nothing however long it lasts, and a player can still change how they will settle
+  t.wait(60 * 60 * 1000);
+  assert.equal(t.state.hand, null);
+  t.cmd(4, { type: 'comeIn', post: false });
+  t.cmd(4, { type: 'comeIn', post: true });
+  assert.equal(blindsAndDebts(t), before);
+  assertInvariants(t.state, t.now);
+
+  t.cmd(HOST, { type: 'playOn' });
+  assert.equal(blindsAndDebts(t), before, 'playing on moved the button or the blinds, or changed what is owed');
+
+  // The hand that follows is the one a table that never stopped would deal
+  const neverStopped = withBlindsOwed();
+  neverStopped.cmd(HOST, { type: 'start' });
+  nextHand(neverStopped);
+  nextHand(t);
+  assert.deepEqual(dealt(t), dealt(neverStopped));
+  assert.deepEqual(dealt(t), [2, 5, 0, [0, 1, 2, 5], ['5 small blind', '0 big blind']]);
+  assert.deepEqual([t.view(3).seats[3]!.comesIn, t.view(4).seats[4]!.comesIn], ['big blind', 'posting'], 'the two who owe are still waiting their turn to come in');
+  assertInvariants(t.state, t.now);
+});
+
+test('the last hands run down through a hand everyone but the big blind would have waited out, since such a hand is dealt to them all', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 1000, 1000] });
+
+  // Two play heads-up while the big blind passes the two who sit out; then one of the two steps out and the others come back to wait
+  t.cmd(2, { type: 'sitOut' });
+  t.cmd(3, { type: 'sitOut' });
+  t.deal({ button: 0 });
+  t.foldOut();
+  t.deal();
+  t.foldOut();
+  t.cmd(0, { type: 'sitOut' });
+  t.cmd(2, { type: 'comeIn', post: false });
+  t.cmd(3, { type: 'comeIn', post: false });
+  assert.deepEqual([t.view(HOST).seats[2]!.comesIn, t.view(HOST).seats[3]!.comesIn], ['next hand', 'next hand'], 'with only the big blind to play against, the two who wait are dealt in');
+
+  t.cmd(HOST, { type: 'start' });
+  t.cmd(HOST, { type: 'setLastHands', hands: 2 });
+
+  nextHand(t);
+  assert.deepEqual(dealt(t), [3, 0, 1, [1, 2, 3], ['1 big blind']]);
+  assert.equal(t.view(HOST).handsLeft, 1);
+  assert.ok([1, 2, 3].every((seat) => !owes(t.state.seats[seat]!)), 'what the players dealt in owed was not dropped');
+
+  foldAround(t);
+  assert.equal(t.view(HOST).handsLeft, 0);
+  foldAround(t);
+  assert.ok(nightIsOver(t.state), 'the count did not run out');
+  assert.equal(lastLine(t), 'That was the last hand. The night is over');
 });

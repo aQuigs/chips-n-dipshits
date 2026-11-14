@@ -126,6 +126,8 @@ function assertHandFollowsTheRule(t: TestTable, before: Before, last: LastBlinds
   const posts = postsOf(t);
   const where = `hand ${hand.number}`;
 
+  assert.ok(dealtIn.length >= 2, `${where}: dealt to fewer than two players`);
+
   if (hand.bombPot) {
     assert.deepEqual(dealtIn, before.ready, `${where}: a bomb pot left out someone there to play`);
     assert.deepEqual(t.state.blinds, before.blinds, `${where}: a bomb pot moved the blinds`);

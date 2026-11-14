@@ -160,9 +160,13 @@ function carriedOn(state: TableState, ready: readonly number[], last: BlindSeats
 }
 
 /**
- * Plans the next hand for a table with at least two players there to play. `bombPot` says the hand is
- * one, which the caller has settled by then. Reads the table and changes nothing; `rng` is drawn from
- * only when there is no button to move on from.
+ * Plans the next hand for a table with at least two players there to play, and always has one to plan:
+ * whoever is waiting, two players or more are dealt in. Whether a hand is dealt at all is asked before
+ * this and not here: the game is on, the night is not over, and two players are there. A pause and the
+ * end of a night change nothing a plan reads, so play goes on from them as if they had not been.
+ *
+ * `bombPot` says the hand is one, which the caller has settled by then. Reads the table and changes
+ * nothing; `rng` is drawn from only when there is no button to move on from.
  */
 export function planHand(state: TableState, bombPot: BombPot | null, rng: Rng): HandPlan {
   const ready = eligibleSeats(state);

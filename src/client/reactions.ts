@@ -6,6 +6,9 @@ import { MOVE_MS } from './motion.ts';
 import type { Sounds } from './sound.ts';
 import type { TableChange } from './tableChange.ts';
 
+/** What the button that opens the picker shows: an emoji every phone draws, as the reactions' own marks are. */
+export const PICKER_MARK = '😃';
+
 /** How long a reaction stays up over its sender's seat. */
 export const POPPED_MS = 3000;
 

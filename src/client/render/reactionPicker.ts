@@ -6,6 +6,7 @@
 import { REACTIONS } from '../../engine/reactions.ts';
 import type { ReactionKind } from '../../engine/reactions.ts';
 import type { TableView } from '../../engine/view.ts';
+import { PICKER_MARK } from '../reactions.ts';
 import { h, Slot } from '../ui.ts';
 
 export interface PickerHost {
@@ -66,7 +67,7 @@ export class ReactionPicker {
       const toggle = h(
         'button.react-toggle',
         { type: 'button', 'aria-label': 'Reactions', 'aria-expanded': String(this.open), 'data-action': 'reactions', onclick: () => this.toggle() },
-        '😃',
+        PICKER_MARK,
       );
 
       return [toggle, this.open ? this.panel(others, refusal) : null];

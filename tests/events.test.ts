@@ -93,9 +93,14 @@ test('a hand can be followed one event at a time from its events alone', () => {
     smallBlind: 10,
     bigBlind: 20,
     bombPot: null,
-    seats: [0, 1, 2, 3].map((seat) => ({ seat, name: `P${seat}`, stack: 1000, bet: 0, folded: false, cards: [null, null] })),
+    sbSeat: -1,
+    bbSeat: -1,
+    stage: 'betting',
+    street: 'preflop',
+    seats: [0, 1, 2, 3].map((seat) => ({ seat, name: `P${seat}`, stack: 1000, bet: 0, committed: 0, dead: 0, folded: false, allIn: false, lastAction: null, ritVote: null, cards: [null, null] })),
     pot: 0,
     boards: [[]],
+    runs: 1,
     awards: [],
     hunted: null,
   });
@@ -135,7 +140,7 @@ test('side pots, both boards of a hand run twice and every vote are in the event
     ['vote', 0, 2],
     ['vote', 1, 2],
     ['vote', 2, 2],
-    ['runs', 2],
+    ['runs', 2, 'settled'],
     ['street', 0, ['Ks', '7s', '2h']],
     ['street', 0, ['3c']],
     ['street', 0, ['4d']],
@@ -157,7 +162,7 @@ test('a vote against, a timeout, a muck and a bounty each leave their event', ()
   declined.raise(0, 500);
   declined.call(1);
   declined.cmd(1, { type: 'ritVote', runs: 1 });
-  assert.deepEqual(declined.state.hand!.events.slice(-2), [['vote', 1, 1], ['runs', 1]]);
+  assert.deepEqual(declined.state.hand!.events.slice(-2), [['vote', 1, 1], ['runs', 1, 'settled']]);
   assertEventsRetellTheHand(recordOf(declined));
 
   const slow = new TestTable({ stacks: [500, 500, 500], config: { actionSeconds: 10 } });

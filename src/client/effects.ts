@@ -1,18 +1,22 @@
 import type { TableView } from '../engine/view.ts';
 import type { Attention } from './attention.ts';
+import type { DealtMemory } from './dealtCards.ts';
 import { celebrations } from './effects/celebrations.ts';
+import { dealtCards } from './effects/dealtCards.ts';
 import { handMoves } from './effects/handMoves.ts';
 import { handSounds } from './effects/handSounds.ts';
 import { honorToasts } from './effects/honorToasts.ts';
 import { nightRecap } from './effects/nightRecap.ts';
 import { chatNudges } from './effects/nudges.ts';
 import { reactions } from './effects/reactions.ts';
+import { replayMakesWay } from './effects/replayMakesWay.ts';
 import { yourTurn } from './effects/yourTurn.ts';
 import type { TableMotion } from './motion.ts';
 import type { MuteList } from './mutes.ts';
 import type { AppPreferences } from './prefs.ts';
 import type { SeatMarks } from './reactions.ts';
 import type { Dialog } from './render/dialogs/index.ts';
+import type { ReplaySetAside } from './replayTurn.ts';
 import type { Sounds } from './sound.ts';
 import type { TableChange } from './tableChange.ts';
 
@@ -44,6 +48,10 @@ export interface EffectContext {
   /** What shows something over a seat for a few seconds, which the table being drawn again leaves where it is. */
   marks: SeatMarks;
   dialogs: DialogOffers;
+  /** The viewer's own cards in the hands this browser saw dealt, for playing a hand back with them face up. */
+  dealt: DealtMemory;
+  /** A hand being played back over the table, which the game can have put aside when it needs the viewer. */
+  replay: ReplaySetAside;
   /** Shows the viewer a line at the top of the screen for a few seconds. */
   toast(message: string): void;
 }
@@ -73,6 +81,8 @@ const TABLE_EFFECTS: (() => TableEffect)[] = [
   honorToasts,
   reactions,
   chatNudges,
+  dealtCards,
+  replayMakesWay,
 ];
 
 /** The effects of one table screen. */

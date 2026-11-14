@@ -1,5 +1,6 @@
 import { addMember, applyCommand, createTable, GameError, listedLike, playerName, presetName, presetSettings, randomId, requireLevel, setIdentity, sharedPreset, tick, viewFor } from '../engine/index.ts';
 import type { Arriving, Command, Ctx, Member, Preset, Rng, TableState } from '../engine/index.ts';
+import { HISTORY_LIMIT } from './api.ts';
 import type { ApiResponse, Auth, ErrorCode, Joined, Who } from './api.ts';
 import { NOWHERE } from './errorLog.ts';
 import type { ErrorLog, Failure } from './errorLog.ts';
@@ -30,7 +31,6 @@ const TABLE_ID_LENGTH = 6;
 // Checked before an id goes anywhere near storage, which has limits on what a key may be
 const TABLE_ID_PATTERN = new RegExp(`^[A-Z0-9]{${TABLE_ID_LENGTH}}$`);
 const CREATE_ATTEMPTS = 5;
-const HISTORY_LIMIT = 30;
 
 /** A poll that may be kept open: until the table moves on from `since`, or for `ms` at most. */
 export interface PollWait {

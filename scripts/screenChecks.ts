@@ -18,6 +18,7 @@ import { MOST_MOVE_MS, MOST_VIEW_MS, STEP_GAP_MS } from '../src/client/handMoves
 import { MOVE_MS } from '../src/client/motion.ts';
 import type { MoveName } from '../src/client/motion.ts';
 import { KEYS_SETTLE_MS } from '../src/client/hotkeys.ts';
+import { STEP_MS } from '../src/client/replayPlayer.ts';
 import { RECIPES } from '../src/client/soundRecipes.ts';
 import { spotsOf } from '../src/client/tableChances.ts';
 import { THEMES } from '../src/client/themes.ts';
@@ -184,7 +185,7 @@ const FACE_DOWN = '.seat:not(.me) .card.back';
 const CENTS = { unit: 'cents', smallBlind: 25, bigBlind: 50 } as const;
 const PHONE_AND_DESKTOP = ['phone', 'desktop'] as const;
 
-// How much wider than tall a table must be to lie down: WIDE_ASPECT in src/client/app.ts
+// How much wider than tall a table must be to lie down: WIDE_ASPECT in src/client/render/table.ts
 const WIDE_ASPECT = 1.15;
 
 // The least height at which a phone's table stands up
@@ -1837,6 +1838,159 @@ const CHAT_BOX = `(() => {
     names: list.hidden ? [] : [...list.querySelectorAll('li')].map((option) => option.textContent + (option.getAttribute('aria-selected') === 'true' ? ' (picked)' : '')),
   };
 })()`;
+
+// ---- A hand played back ----
+
+const REPLAY_HOLES = { 0: 'As Ah', 1: 'Kd Kh', 2: 'Qc Qs' };
+const REPLAY_BOARD = '9s 7s 2h 3c 4d';
+const REPLAY_SECOND = 'Ac Qd 8h 5c 6s';
+const REPLAY_PLAYERS: RigPlayer[] = ['Quigs', 'Pam', 'Sam'].map((name) => ({ name, stack: 1000 }));
+
+/** The sizes a replay is looked at in: a 360 phone standing and lying, and a desktop. */
+const REPLAY_SIZES = [
+  { name: 'phone-standing', width: 360, height: 640 },
+  { name: 'phone-lying', width: 640, height: 360 },
+  { name: 'desktop', width: 1280, height: 800 },
+];
+
+/** What a replay shows of where it is: its count of steps and the part of the hand, as its header says them. */
+const replayCount = (page: Page) => text(page, '.replay-count');
+
+/** The lines the replay says for the step it is at. */
+const replayLines = (page: Page) => texts(page, '.replay-line > div');
+
+/** The replay's table at rest: drawn, with the chances of hands face up worked out for the cards on it. */
+const replayDrawn = (page: Page) => page.waitForSelector('.replay:not([hidden]) .replay-stage:not([data-chances-pending]) .table');
+
+/** What the replay's table shows, read off the page: each seat's stack, cards and line, the boards, the bets, the pot and the result. */
+const replayTable = (page: Page) =>
+  page.evaluate(`(() => {
+    const table = document.querySelector('.replay .table');
+    const cards = (within) => [...within.querySelectorAll('.card:not(.slot)')].map((card) => card.dataset.card ?? '??').join(' ');
+
+    return {
+      seats: Object.fromEntries([...table.querySelectorAll('.seat[data-seat]')].map((seat) => [seat.querySelector('.plate .name span').textContent, [seat.querySelector('.stack').textContent, cards(seat), seat.querySelector('.status')?.textContent ?? ''].join(' | ')])),
+      boards: [...table.querySelectorAll('.board:not(.later)')].map(cards),
+      bets: [...table.querySelectorAll('.bet')].map((bet) => bet.textContent).join(' '),
+      pot: table.querySelector('.pot')?.textContent ?? '',
+      result: [...table.querySelectorAll('.message.result > div')].map((line) => line.textContent),
+    };
+  })()`) as Promise<{ seats: Record<string, string>; boards: string[]; bets: string; pot: string; result: string[] }>;
+
+/** The chances the replay's seats say, as `chancesShown` reads the live table's. */
+const replayChances = (page: Page) =>
+  page.evaluate(`Object.fromEntries([...document.querySelectorAll('.replay .seat[data-seat] .status.chance')].map((line) => [
+    line.closest('.seat').dataset.seat,
+    [...line.children].map((figure) => figure.textContent + (figure.classList.contains('favorite') ? '*' : '')).join(' '),
+  ]))`) as Promise<Record<string, string>>;
+
+/** Opens the history from the table and the replay of hand `number` from there. */
+async function openReplay(page: Page, screen: ScreenName, number: number): Promise<void> {
+  const press = pressOn(page, screen);
+
+  await press('[data-action="menu"]');
+  await press('.menu [data-action="history"]');
+  await page.waitForSelector(`.history details[data-hand="${number}"]`);
+  await press(`.history details[data-hand="${number}"] summary`);
+  await press(`.history details[data-hand="${number}"] [data-action="replay"]`);
+  await replayDrawn(page);
+}
+
+/** A table whose first hand was checked down to a showdown and cleared away, with the game paused: hand 1 is in the history, eighteen steps long. */
+function replayTableOf(rig: Rig, config: Partial<TableConfig> = {}): RigTable {
+  const table = rig.table(REPLAY_PLAYERS, config);
+
+  table.deal({ button: 0, holes: REPLAY_HOLES, board: REPLAY_BOARD });
+  table.play(passive, (view) => view.hand?.stage === 'done');
+  playOut(table);
+
+  return table;
+}
+
+/** Whether the replay's table is the very one marked by `markReplay`, which a redraw of it would have replaced. */
+const markReplay = (page: Page) => page.evaluate(`void (document.querySelector('.replay .table').marked = document.querySelector('.replay [data-replay="scrub"]').marked = true)`);
+const replayMarked = (page: Page) => page.evaluate(`document.querySelector('.replay .table').marked === true && document.querySelector('.replay [data-replay="scrub"]').marked === true`) as Promise<boolean>;
+
+/** Steps the replay forward until one of the step's lines matches, and says how many steps that took. */
+async function forwardTo(page: Page, screen: ScreenName, line: RegExp): Promise<number> {
+  for (let steps = 0; steps < 60; steps++) {
+    if ((await replayLines(page)).some((said) => line.test(said))) {
+      await replayDrawn(page);
+
+      return steps;
+    }
+
+    await pressOn(page, screen)('.replay [data-replay="forward"]');
+  }
+
+  throw new Error(`no step of the replay says ${line}`);
+}
+
+/**
+ * Holds the open replay to fitting at each of the sizes, once its table has taken the shape the size gives it, and to
+ * whatever `also` asks of it there, leaves a picture of each, and puts the page back as it was.
+ */
+async function replayFitsEverySize(page: Page, what: string, also: (named: string) => Promise<void> = async () => undefined): Promise<void> {
+  const before = page.viewportSize()!;
+
+  for (const { name, ...size } of [...REPLAY_SIZES, { name: '', ...before }]) {
+    await page.setViewportSize(size);
+    await page.waitForFunction(`(() => {
+      const stage = document.querySelector('.replay-stage').getBoundingClientRect();
+
+      return document.querySelector('.replay .table').classList.contains(stage.height > 0 && stage.width / stage.height >= ${WIDE_ASPECT} ? 'wide' : 'tall');
+    })()`);
+
+    if (name) {
+      await assertReplayFits(page, `${what}-${name}`);
+      await also(`${what}-${name}`);
+      await shot(page, `${what}-${name}`);
+    }
+  }
+}
+
+/**
+ * The replay can be read and worked at the size the page has: its controls are on the screen, clear of each other and of the
+ * table, with their labels whole and room for a finger; its table is whole inside its own part of the screen, the seats
+ * clear of the boards; and the step's lines can all be read, by scrolling them only once the hand so far has given
+ * them all of its room.
+ */
+async function assertReplayFits(page: Page, what: string): Promise<void> {
+  const { width, height } = page.viewportSize()!;
+  const controls = await boxes(page, '.replay button, .replay input');
+  const [stage] = await boxes(page, '.replay-stage');
+  const inside = (found: Box[], around: Box, which: string) => {
+    assert.ok(found.length > 0, `${what}: no ${which} to look at`);
+    for (const box of found) {
+      assert.ok(box.left >= around.left - 1 && box.right <= around.right + 1 && box.top >= around.top - 1 && box.bottom <= around.bottom + 1, `${what}: ${which} at ${JSON.stringify(box)} runs out of ${JSON.stringify(around)}`);
+    }
+  };
+
+  assert.equal(controls.length, 8, `${what}: the replay has ${controls.length} controls to be seen`);
+  inside([...controls, ...(await boxes(page, '.replay-line, .replay-count, .replay-head h2, .replay-marks span'))], { left: 0, top: 0, right: width, bottom: height }, 'part of the controls');
+  inside(await boxes(page, '.replay .seat[data-seat] .plate, .replay .seat[data-seat] .card, .replay .board .card, .replay .pot, .replay .message, .replay .bet'), stage!, 'part of the table');
+  assert.deepEqual(await squeezed(page, '.replay button, .replay-count, .replay-head h2'), [], `${what}: a label of the replay is cut off`);
+
+  controls.forEach((control, nth) => {
+    assert.ok(control.bottom - control.top >= 32 && control.right - control.left >= 44, `${what}: a control of the replay is too small for a finger: ${JSON.stringify(control)}`);
+    assertApart([control], controls.slice(nth + 1), `${what}: two controls of the replay`);
+  });
+  assertApart(controls, [stage!], `${what}: a control of the replay and its table`);
+  assertApart(await boxes(page, '.replay .seat[data-seat] .plate'), await boxes(page, '.replay .board .card, .replay .pot, .replay .message'), `${what}: a seat of the replay and the middle of its table`);
+
+  const lines = (await page.evaluate(`(() => {
+    const line = document.querySelector('.replay-line');
+    const fits = line.scrollHeight <= line.clientHeight + 1;
+
+    line.scrollTop = line.scrollHeight;
+    const reached = line.scrollTop + line.clientHeight >= line.scrollHeight - 1;
+    line.scrollTop = 0;
+
+    return { fits, reached, log: document.querySelector('.replay-log').clientHeight };
+  })()`)) as { fits: boolean; reached: boolean; log: number };
+  assert.ok(lines.fits || (lines.reached && lines.log <= 1), `${what}: not all of the step's lines can be read, or the hand so far takes room they need (${JSON.stringify(lines)})`);
+  await assertNoSidewaysScroll(page);
+}
 
 const CHECKS: Check[] = [
   [
@@ -10908,6 +11062,556 @@ const CHECKS: Check[] = [
       assert.equal((await texts(page, '.message.result > div')).at(-1), 'Quigs collects 50 for the 72 bounty');
 
       await page.context().close();
+    },
+  ],
+  ...REPLAY_SIZES.map(
+    (size): Check => [
+      `a finished hand opens from the history as a replay, a table with its controls, on a ${size.name.replace('-', ' ')}: it starts as dealt with the viewer's own cards up, steps to its end, and closes back onto the history where it was`,
+      async (rig) => {
+        const screen = size.name === 'desktop' ? 'desktop' : 'smallPhone';
+        const table = rig.table(REPLAY_PLAYERS);
+        const page = await table.open('Quigs', screen);
+        const press = pressOn(page, screen);
+
+        await page.setViewportSize(size);
+        table.deal({ button: 0, holes: REPLAY_HOLES, board: REPLAY_BOARD });
+        await page.waitForSelector('.seat.me .card[data-card="As"]');
+        table.play(passive, (view) => view.hand?.stage === 'done');
+        playOut(table);
+        await page.waitForSelector('.center .message:not(.result)');
+
+        await openReplay(page, screen, 1);
+        assert.equal(await replayCount(page), 'Step 1 of 18 · Preflop');
+        assert.deepEqual(await replayLines(page), ['Hand #1 · blinds 10/20 · Quigs has the button', 'Pam posts small blind 10', 'Sam posts big blind 20']);
+        assert.deepEqual(await replayTable(page), {
+          seats: { Quigs: '1,000 | As Ah | ', Pam: '990 | ?? ?? | SB', Sam: '980 | ?? ?? | BB' },
+          boards: [''],
+          bets: '10 20',
+          pot: 'Pot30',
+          result: [],
+        });
+        assert.ok(await page.locator('.replay [data-replay="back"]').isDisabled(), 'there is a step before the first');
+        assert.ok(await page.locator('.replay [data-replay="previous-street"]').isDisabled());
+        assert.ok(await page.evaluate(`document.activeElement?.matches('.replay [data-replay="play"]')`), 'the keyboard is not on the replay');
+        assert.ok(await page.evaluate(`document.querySelector('.app').inert`), 'the page under the replay can still be reached');
+        await assertReplayFits(page, `replay-open-${size.name}`);
+        await shot(page, `replay-open-${size.name}`);
+
+        await press('.replay [data-replay="forward"]');
+        assert.equal(await replayCount(page), 'Step 2 of 18 · Preflop');
+        assert.deepEqual(await replayLines(page), ['Quigs calls 20']);
+
+        await press('.replay [data-replay="next-street"]');
+        assert.equal(await replayCount(page), 'Step 5 of 18 · Flop');
+        assert.deepEqual((await replayTable(page)).boards, ['9s 7s 2h']);
+        await assertReplayFits(page, `replay-flop-${size.name}`);
+        await shot(page, `replay-flop-${size.name}`);
+
+        for (let street = 0; street < 3; street++) {
+          await press('.replay [data-replay="next-street"]');
+        }
+        assert.equal(await replayCount(page), 'Step 17 of 18 · Showdown');
+        await press('.replay [data-replay="next-street"]');
+        assert.equal(await replayCount(page), 'Step 18 of 18 · Showdown');
+        assert.deepEqual(await replayLines(page), ['Quigs wins 60 with pair of aces']);
+        assert.deepEqual(await replayTable(page), {
+          seats: { Quigs: '1,040 | As Ah | +60', Pam: '980 | Kd Kh | ', Sam: '980 | ?? ?? | ' },
+          boards: ['9s 7s 2h 3c 4d'],
+          bets: '',
+          pot: '',
+          result: ['Quigs wins 60 with pair of aces'],
+        });
+        assert.ok(await page.locator('.replay [data-replay="forward"]').isDisabled(), 'there is a step after the last');
+        assert.ok(await page.locator('.replay [data-replay="next-street"]').isDisabled());
+        await assertReplayFits(page, `replay-end-${size.name}`);
+        await shot(page, `replay-end-${size.name}`);
+
+        // Back where it was opened from: the history, with the hand still open in it
+        await press('.replay [data-replay="close"]');
+        await page.waitForSelector('.replay', { state: 'hidden' });
+        assert.ok(await page.locator('.history details[data-hand="1"][open] [data-action="replay"]').isVisible());
+        assert.ok(await page.evaluate(`document.activeElement?.matches('.history [data-action="replay"]')`), 'the keyboard is not back on the button that opened the replay');
+        assert.ok(!(await page.evaluate(`document.querySelector('.app').inert`)), 'the page stayed out of reach once the replay closed');
+      },
+    ],
+  ),
+  [
+    'nine seats all in and run three times replay with each hand\'s chances as the live table said them, through three boards and the side pots, and fit a 360 phone standing and lying and a desktop',
+    async (rig) => {
+      const table = rig.table(THREE_RUNS.names.map((name, seat) => ({ name, stack: THREE_RUNS.stacks[seat]! })), { maxRuns: 3 });
+      const moves = (view: TableView, name: string): Command => (THREE_RUNS.allIn.includes(name) ? allInPicking(3)(view) : { type: 'fold' });
+
+      table.deal(THREE_RUNS.deal);
+      const page = await table.open('Quigs', 'smallPhone');
+
+      // What the live table says of the chances at two moments, for the replay to say again at the same two
+      table.play(moves, (view) => view.hand!.stage === 'runout');
+      const beforeTheFlop = await chancesOn(page, table, 'Quigs');
+      table.play(moves, (view) => view.hand!.boards.length === 2 && view.hand!.boards[1]!.length === 3);
+      const onTheSecondBoard = await chancesOn(page, table, 'Quigs');
+      assert.equal(Object.keys(beforeTheFlop).length, 4);
+      assert.notDeepEqual(onTheSecondBoard, beforeTheFlop);
+
+      table.play(moves, (view) => view.hand!.stage === 'done');
+      playOut(table);
+      await page.waitForSelector('.center .message:not(.result)');
+
+      await openReplay(page, 'smallPhone', 1);
+      assert.match(await replayCount(page), /^Step 1 of \d+ · Preflop$/);
+      assert.equal(await page.locator('.replay .seat[data-seat]').count(), 9);
+      await assertReplayFits(page, 'replay-nine-dealt');
+
+      // The hands turn up, each pick is a step, and then the table says what was picked
+      await forwardTo(page, 'smallPhone', /picks three times/);
+      assert.equal(await page.locator('.replay .tag.vote.picked').count(), 1);
+      await replayFitsEverySize(page, 'replay-nine-picking');
+
+      await forwardTo(page, 'smallPhone', /running it three times/i);
+      assert.deepEqual(await replayChances(page), beforeTheFlop);
+      await assertChancesFit(page, 'replay-nine-before-the-flop');
+      await shot(page, 'replay-nine-chances-phone-standing');
+
+      // Each board run after the first is a part of its own, which the street buttons stop at
+      const tap = pressOn(page, 'smallPhone');
+      for (const part of ['Flop', 'Turn', 'River', 'Second board']) {
+        await tap('.replay [data-replay="next-street"]');
+        assert.match(await replayCount(page), new RegExp(` · ${part}$`));
+      }
+      await replayDrawn(page);
+      assert.deepEqual((await replayTable(page)).boards, ['2c 3d 4c 5d Jc', 'Kd Qc 8d']);
+      assert.deepEqual(await replayChances(page), onTheSecondBoard);
+      await replayFitsEverySize(page, 'replay-nine-second-board', (named) => assertChancesFit(page, named));
+
+      await tap('.replay [data-replay="next-street"]');
+      assert.match(await replayCount(page), / · Third board$/);
+      await tap('.replay [data-replay="next-street"]');
+      assert.match(await replayCount(page), / · Showdown$/);
+
+      // Every step from the first award to the last, with the pots paid one at a time
+      const marks = await texts(page, '.replay-marks span');
+      assert.deepEqual(marks, ['P', 'F', 'T', 'R', '2', '3', 'S']);
+      for (let step = 0; step < 20 && !(await page.locator('.replay [data-replay="forward"]').isDisabled()); step++) {
+        await tap('.replay [data-replay="forward"]');
+        await assertReplayFits(page, `replay-nine-award-${step}`);
+      }
+      await replayDrawn(page);
+
+      const end = await replayTable(page);
+      const live = table.view('Quigs');
+      assert.deepEqual(end.boards, ['2c 3d 4c 5d Jc', 'Kd Qc 8d 7c 2d', 'Ad Tc 9d 4d 3c']);
+      assert.deepEqual(await replayChances(page), {}, 'a chance is still said at the result');
+      assert.ok(end.result.length > 0 && end.result.length <= 3, `the felt carries ${end.result.length} result lines`);
+      // The stacks the hand ended on are the ones the table has now, since no hand was played after it
+      assert.deepEqual(Object.values(end.seats).map((seat) => seat.split(' | ')[0]), live.seats.flatMap((seat) => (seat ? [shortAmount(seat.stack, live.config)] : [])));
+      await replayFitsEverySize(page, 'replay-nine-result');
+    },
+  ],
+  [
+    'a bomb pot on two boards replays with both boards a street at a time from its first step, and a chop of the blinds at a table of cents with the offer, then the answer and the blinds going back in dollars',
+    async (rig) => {
+      const bomb = rig.table(REPLAY_PLAYERS, { bombPotBoards: 'two', bombPotAmount: 50 });
+      bomb.act('Quigs', { type: 'setBombPot', on: true });
+      bomb.deal({ button: 0, holes: REPLAY_HOLES, board: REPLAY_BOARD, secondBoard: REPLAY_SECOND });
+
+      const page = await bomb.open('Quigs', 'smallPhone');
+      const tap = pressOn(page, 'smallPhone');
+
+      bomb.play(passive, (view) => view.hand?.stage === 'done');
+      playOut(bomb);
+      await page.waitForSelector('.center .message:not(.result)');
+
+      await openReplay(page, 'smallPhone', 1);
+      assert.equal(await replayCount(page), 'Step 1 of 15 · Preflop');
+      assert.deepEqual(await replayLines(page), ['Hand #1 · double-board bomb pot 50 · Quigs has the button', 'Everyone posts bomb pot 50']);
+
+      // The flop of a bomb pot comes with the deal, on both boards at once, and so does every street after it
+      await tap('.replay [data-replay="forward"]');
+      assert.equal(await replayCount(page), 'Step 2 of 15 · Flop');
+      assert.deepEqual(await replayLines(page), ['First board, Flop: 9♠ 7♠ 2♥', 'Second board, Flop: A♣ Q♦ 8♥']);
+      assert.deepEqual(await replayTable(page), {
+        seats: { Quigs: '950 | As Ah | ', Pam: '950 | ?? ?? | ', Sam: '950 | ?? ?? | ' },
+        boards: ['9s 7s 2h', 'Ac Qd 8h'],
+        bets: '',
+        pot: 'Bomb pot150',
+        result: [],
+      });
+      await replayFitsEverySize(page, 'replay-bomb-pot-flop');
+
+      await tap('.replay [data-replay="next-street"]');
+      assert.match(await replayCount(page), / · Turn$/);
+      assert.deepEqual((await replayTable(page)).boards, ['9s 7s 2h 3c', 'Ac Qd 8h 5c']);
+      assert.deepEqual(await replayLines(page), ['First board, Turn: 9♠ 7♠ 2♥ 3♣', 'Second board, Turn: A♣ Q♦ 8♥ 5♣']);
+
+      await tap('.replay [data-replay="next-street"]');
+      await tap('.replay [data-replay="next-street"]');
+      assert.match(await replayCount(page), / · Showdown$/);
+      await page.locator('.replay [data-replay="scrub"]').fill(await page.getAttribute('.replay [data-replay="scrub"]', 'max') ?? '');
+
+      const end = await replayTable(page);
+      assert.deepEqual(end.boards, ['9s 7s 2h 3c 4d', 'Ac Qd 8h 5c 6s']);
+      assert.deepEqual(end.seats, { Quigs: '1,100 | As Ah | +150', Pam: '950 | Kd Kh | ', Sam: '950 | Qc Qs | ' });
+      await replayFitsEverySize(page, 'replay-bomb-pot-result');
+      await page.context().close();
+
+      // A table playing dollars and cents, so every amount the replay writes is read in dollars
+      const chop = rig.table(REPLAY_PLAYERS.map((player) => ({ ...player, stack: 10_000 })), { ...CENTS, allowChop: true });
+      chop.deal({ button: 0, holes: REPLAY_HOLES, board: REPLAY_BOARD });
+
+      const watching = await chop.open('Pam', 'smallPhone');
+      chop.act('Quigs', { type: 'fold' });
+      chop.act('Pam', { type: 'offerChop' });
+      chop.act('Sam', { type: 'answerChop', agree: true });
+      playOut(chop);
+      await watching.waitForSelector('.center .message:not(.result)');
+
+      await openReplay(watching, 'smallPhone', 1);
+      assert.equal(await replayCount(watching), 'Step 1 of 4 · Preflop');
+
+      const told: string[][] = [];
+      const seen: Awaited<ReturnType<typeof replayTable>>[] = [];
+      for (let step = 0; step < 4; step++) {
+        told.push(await replayLines(watching));
+        seen.push(await replayTable(watching));
+        await assertReplayFits(watching, `replay-chop-step-${step}`);
+        if (step === 2) {
+          await shot(watching, 'replay-chop-offered-phone-standing');
+        }
+        if (step < 3) {
+          await pressOn(watching, 'smallPhone')('.replay [data-replay="forward"]');
+        }
+      }
+
+      assert.deepEqual(told, [
+        ['Hand #1 · blinds 0.25/0.50 · Quigs has the button', 'Pam posts small blind 0.25', 'Sam posts big blind 0.50'],
+        ['Quigs folds'],
+        ['Pam offers to chop the blinds'],
+        ['Sam agrees to chop', 'Pam and Sam chop the blinds: each takes back their own'],
+      ]);
+      assert.deepEqual(seen[2]!.seats, { Quigs: '100.00 |  | Fold', Pam: '99.75 | Kd Kh | Chop?', Sam: '99.50 | ?? ?? | ' });
+      assert.deepEqual([seen[2]!.bets, seen[2]!.pot], ['0.25 0.50', 'Pot0.75']);
+      assert.deepEqual(seen[3]!.seats, { Quigs: '100.00 |  | Fold', Pam: '100.00 | Kd Kh | ', Sam: '100.00 | ?? ?? | ' });
+      assert.equal(await replayCount(watching), 'Step 4 of 4 · End');
+      await shot(watching, 'replay-chop-result-phone-standing');
+    },
+  ],
+  [
+    'a hand won with nothing shown replays with the viewer\'s own cards from this browser alone, a card shown after it one at a time and the rabbit hunted; another browser has them face down, and no request carries them',
+    async (rig) => {
+      const table = rig.table(REPLAY_PLAYERS, { rabbitHunting: true });
+      const page = await table.open('Quigs', 'smallPhone');
+      const bodies: string[] = [];
+      page.on('request', (request) => bodies.push(request.postData() ?? ''));
+
+      table.deal({ button: 0, holes: { 0: 'Ac 8d', 1: 'Kd Kh', 2: 'Qc Qs' }, board: REPLAY_BOARD });
+      await page.waitForSelector('.seat.me .card[data-card="Ac"]');
+      table.act('Quigs', { type: 'raise', to: 60 });
+      table.act('Pam', { type: 'fold' });
+      table.act('Sam', { type: 'fold' });
+      table.act('Pam', { type: 'showCards', hand: 1, cards: [1] });
+      table.act('Pam', { type: 'showCards', hand: 1, cards: [0] });
+      table.act('Sam', { type: 'huntRabbit', hand: 1 });
+      playOut(table);
+      await page.waitForSelector('.center .message:not(.result)');
+
+      const sent = opsSent(page);
+      await openReplay(page, 'smallPhone', 1);
+      assert.deepEqual((await replayTable(page)).seats, { Quigs: '1,000 | Ac 8d | ', Pam: '990 | ?? ?? | SB', Sam: '980 | ?? ?? | BB' });
+
+      await forwardTo(page, 'smallPhone', /^Quigs wins 50$/);
+      assert.equal(await replayCount(page), 'Step 5 of 8 · End');
+      await forwardTo(page, 'smallPhone', /^Pam shows one card, K♥$/);
+      assert.equal((await replayTable(page)).seats.Pam!.split(' | ')[1], '?? Kh');
+      await assertReplayFits(page, 'replay-one-card-shown');
+      await shot(page, 'replay-one-card-shown-phone-standing');
+
+      await forwardTo(page, 'smallPhone', /^Pam shows the other card, K♦$/);
+      assert.equal((await replayTable(page)).seats.Pam!.split(' | ')[1], 'Kd Kh');
+      assert.deepEqual((await replayTable(page)).boards, ['']);
+
+      await forwardTo(page, 'smallPhone', /^Rabbit hunt/);
+      assert.deepEqual(await replayLines(page), ['Rabbit hunt, cards that did not count: 9♠ 7♠ 2♥ 3♣ 4♦']);
+      assert.deepEqual((await replayTable(page)).boards, ['9s 7s 2h 3c 4d']);
+      assert.equal(await page.locator('.replay .board .card.hunted').count(), 5, 'the hunted cards are drawn as cards that counted');
+      assert.ok(await page.locator('.replay [data-replay="forward"]').isDisabled());
+      // The winner never showed, so the record has no card of his: what the replay shows the browser kept
+      assert.equal((await replayTable(page)).seats.Quigs!.split(' | ')[1], 'Ac 8d');
+      assert.equal((await replayTable(page)).seats.Sam!.split(' | ')[1], '', 'a hand folded and never shown is drawn');
+      await replayFitsEverySize(page, 'replay-hunted');
+
+      assert.deepEqual(sent.filter((op) => op !== 'poll'), ['history'], 'a replay asked the server for more than the history');
+      assert.deepEqual(bodies.filter((body) => /"(Ac|8d)"/.test(body)), [], 'the cards the browser kept were sent');
+      assert.match(await page.evaluate(`localStorage.getItem('cnd.dealt.${table.id}')`) as string, /"Ac","8d"/);
+
+      // Sam, on a browser that was not there for the hand: her own cards are as face down as the winner's
+      const other = await table.open('Sam', 'smallPhone');
+      await openReplay(other, 'smallPhone', 1);
+      assert.deepEqual((await replayTable(other)).seats, { Quigs: '1,000 | ?? ?? | ', Pam: '990 | ?? ?? | SB', Sam: '980 | ?? ?? | BB' });
+      await other.locator('.replay [data-replay="scrub"]').fill(await other.getAttribute('.replay [data-replay="scrub"]', 'max') ?? '');
+      // Her own folded hand has its place at her seat, as on the live table, with nothing on it to see
+      assert.deepEqual(Object.values((await replayTable(other)).seats).map((seat) => seat.split(' | ')[1]), ['?? ??', 'Kd Kh', '?? ??']);
+      await shot(other, 'replay-not-seen-phone-standing');
+    },
+  ],
+  [
+    'a replay is scrubbed to any step by a drag that an update of the live table under it does not break, and is worked from the keyboard: the arrows, Home and End, the space bar, and Escape to close',
+    async (rig) => {
+      const table = replayTableOf(rig);
+      const page = await table.open('Quigs', 'desktop');
+      const moves = movesSent(page);
+
+      // The next hand, with the action on Pam: the game the replay lies over
+      table.dealNext();
+      await page.waitForSelector('.app .seat[data-seat="1"].acting');
+      await openReplay(page, 'desktop', 1);
+
+      const [bar] = await boxes(page, '.replay [data-replay="scrub"]');
+      const [thumb] = await boxes(page, '.replay-marks');
+      const at = (step: number) => thumb!.left + ((thumb!.right - thumb!.left) * step) / 17;
+      const y = (bar!.top + bar!.bottom) / 2;
+
+      await page.mouse.move(at(0), y);
+      await page.mouse.down();
+      await page.mouse.move(at(9), y, { steps: 5 });
+      assert.equal(await replayCount(page), 'Step 10 of 18 · Turn');
+      await markReplay(page);
+
+      // The live table moves on under a drag that is still held
+      table.act('Pam', { type: 'call' });
+      await page.waitForSelector('.app .bet[data-bet="1"]', { state: 'attached' });
+      assert.equal(await replayCount(page), 'Step 10 of 18 · Turn');
+      assert.ok(await replayMarked(page), 'the live table\'s update drew the replay again under the finger');
+
+      await page.mouse.move(at(13), y, { steps: 5 });
+      assert.equal(await replayCount(page), 'Step 14 of 18 · River');
+      await page.mouse.move(at(17), y, { steps: 5 });
+      await page.mouse.up();
+      assert.equal(await replayCount(page), 'Step 18 of 18 · Showdown');
+      assert.deepEqual((await replayTable(page)).result, ['Quigs wins 60 with pair of aces']);
+      assert.equal(await page.getAttribute('.replay [data-replay="scrub"]', 'aria-valuetext'), 'Step 18 of 18, Showdown');
+      await shot(page, 'replay-scrubbed-desktop');
+
+      // On the bar the arrows are the bar's own, and on a button the space bar is the button's
+      await page.keyboard.press('ArrowLeft');
+      assert.equal(await replayCount(page), 'Step 17 of 18 · Showdown');
+      await page.focus('.replay [data-replay="previous-street"]');
+      await page.keyboard.press(' ');
+      assert.equal(await replayCount(page), 'Step 13 of 18 · River');
+
+      // Anywhere else they are the replay's
+      await page.focus('.replay');
+      const pressed = async (key: string) => {
+        await page.keyboard.press(key);
+
+        return replayCount(page);
+      };
+      assert.equal(await pressed('ArrowRight'), 'Step 14 of 18 · River');
+      assert.equal(await pressed('ArrowLeft'), 'Step 13 of 18 · River');
+      assert.equal(await pressed('Shift+ArrowLeft'), 'Step 9 of 18 · Turn');
+      assert.equal(await pressed('Shift+ArrowRight'), 'Step 13 of 18 · River');
+      assert.equal(await pressed('Home'), 'Step 1 of 18 · Preflop');
+      assert.equal(await pressed('End'), 'Step 18 of 18 · Showdown');
+      await page.keyboard.press(' ');
+      assert.equal(await text(page, '.replay [data-replay="play"]'), 'Pause');
+      assert.equal(await replayCount(page), 'Step 1 of 18 · Preflop', 'played from its end, a hand starts over');
+      await page.keyboard.press(' ');
+      assert.equal(await text(page, '.replay [data-replay="play"]'), 'Play');
+
+      // Escape closes the replay and leaves the history it was opened from, which the next one closes
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('.replay', { state: 'hidden' });
+      assert.ok(await page.locator('.history details[data-hand="1"][open]').isVisible());
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('.history', { state: 'detached' });
+      assert.deepEqual(moves, [], 'a key meant for the replay made a move in the hand');
+    },
+  ],
+  [
+    'a replay plays a step at a time at the pace picked, stops for a step taken by hand and at the end, and starts over from there, with no sound and nothing set moving',
+    async (rig) => {
+      const table = replayTableOf(rig);
+      const page = await table.open('Quigs', 'smallPhone', LISTEN, { moving: true });
+      const tap = pressOn(page, 'smallPhone');
+      const playing = () => text(page, '.replay [data-replay="play"]');
+
+      await dealt(page);
+      await openReplay(page, 'smallPhone', 1);
+      const sounds = (await played(page)).length;
+
+      // The page's own clock, which stands still but for what the check lets pass
+      await page.clock.install();
+      await page.clock.pauseAt(Date.now() + 1000);
+
+      await tap('.replay [data-replay="play"]');
+      assert.equal(await playing(), 'Pause');
+      await page.clock.runFor(STEP_MS - 50);
+      assert.equal(await replayCount(page), 'Step 1 of 18 · Preflop');
+      await page.clock.runFor(50);
+      assert.equal(await replayCount(page), 'Step 2 of 18 · Preflop');
+      await shot(page, 'replay-playing-phone-standing');
+
+      await tap('.replay [data-replay="speed"]');
+      assert.equal(await text(page, '.replay [data-replay="speed"]'), 'Speed 2×');
+      await page.clock.runFor(STEP_MS / 2);
+      assert.equal(await replayCount(page), 'Step 3 of 18 · Preflop');
+      await page.clock.runFor(STEP_MS);
+      assert.equal(await replayCount(page), 'Step 5 of 18 · Flop');
+
+      await tap('.replay [data-replay="speed"]');
+      await tap('.replay [data-replay="speed"]');
+      assert.equal(await text(page, '.replay [data-replay="speed"]'), 'Speed 0.5×');
+      assert.equal(await page.getAttribute('.replay [data-replay="speed"]', 'aria-label'), 'Speed 0.5×, press to change');
+      await page.clock.runFor(STEP_MS * 2 - 50);
+      assert.equal(await replayCount(page), 'Step 5 of 18 · Flop');
+      await page.clock.runFor(50);
+      assert.equal(await replayCount(page), 'Step 6 of 18 · Flop');
+      await tap('.replay [data-replay="speed"]');
+      assert.equal(await text(page, '.replay [data-replay="speed"]'), 'Speed 1×');
+
+      // A step taken by hand stops the playing
+      await tap('.replay [data-replay="forward"]');
+      assert.deepEqual([await replayCount(page), await playing()], ['Step 7 of 18 · Flop', 'Play']);
+      await page.clock.runFor(STEP_MS * 3);
+      assert.equal(await replayCount(page), 'Step 7 of 18 · Flop');
+
+      await tap('.replay [data-replay="play"]');
+      await page.clock.runFor(STEP_MS * 30);
+      assert.deepEqual([await replayCount(page), await playing()], ['Step 18 of 18 · Showdown', 'Play']);
+      assert.deepEqual((await replayTable(page)).result, ['Quigs wins 60 with pair of aces']);
+
+      await tap('.replay [data-replay="play"]');
+      assert.deepEqual([await replayCount(page), await playing()], ['Step 1 of 18 · Preflop', 'Pause']);
+      await tap('.replay [data-replay="play"]');
+      assert.equal(await playing(), 'Play');
+
+      // A whole hand played back, the winner's result with it: not a sound, not a thing in the air, and the live table at rest all along
+      assert.equal((await played(page)).length, sounds, 'the replay made a sound');
+      assert.equal(await page.evaluate(`document.querySelector('.replay').getAnimations({ subtree: true }).length`), 0, 'something of the replay is moving');
+      assert.equal(await page.locator('.replay [data-moving], .replay .confetti, .cnd > .confetti').count(), 0);
+      await dealt(page);
+    },
+  ],
+  [
+    'the game goes on under a replay, which stays where it is until the action reaches the viewer: then it closes by itself with the history, the turn is called, what was typed is still there, and the hand opens again at the step it was left at; opened on the viewer\'s own turn it keeps the keys from the hand and its way out goes to the table',
+    async (rig) => {
+      const table = replayTableOf(rig);
+      const page = await table.open('Quigs', 'desktop', LISTEN);
+      // A turn is called only for a view the page judges fresh by its own clock, which runs while the rig's stands still
+      await page.clock.setFixedTime(Date.now());
+      const moves = movesSent(page);
+      const chimes = async () => (await playedNames(page)).filter((sound) => sound === 'turn').length;
+
+      // Hand 2: Pam has the button and acts first, Sam is the small blind, and the viewer the big blind
+      table.dealNext();
+      await page.waitForSelector('.app .seat[data-seat="1"].acting');
+      await page.fill('#chat-input', 'half a thou');
+
+      const sent = opsSent(page);
+      await openReplay(page, 'desktop', 1);
+      for (let step = 0; step < 3; step++) {
+        await page.click('.replay [data-replay="forward"]');
+      }
+      assert.equal(await replayCount(page), 'Step 4 of 18 · Preflop');
+      assert.equal(await text(page, '.replay [data-replay="close"]'), 'Close');
+      await markReplay(page);
+
+      table.act('Pam', { type: 'call' });
+      await page.waitForSelector('.app .bet[data-bet="1"]', { state: 'attached' });
+      assert.equal(await replayCount(page), 'Step 4 of 18 · Preflop');
+      assert.ok(await replayMarked(page), 'the live table\'s update drew the replay again');
+      assert.equal(await chimes(), 0);
+      await shot(page, 'replay-over-live-desktop');
+
+      // The action reaches the viewer
+      table.act('Sam', { type: 'call' });
+      await page.waitForSelector('.replay', { state: 'hidden' });
+      await page.waitForSelector('.turn [data-action="check"]:enabled');
+      assert.equal(await page.locator('.history').count(), 0, 'the history the replay was opened from still hides the buttons');
+      assert.equal(await text(page, '.toast:not([hidden])'), 'Your turn. The replay will pick up where you left it.');
+      assert.ok(await page.evaluate(`(() => {
+        const box = document.querySelector('.turn [data-action="check"]').getBoundingClientRect();
+
+        return document.elementFromPoint((box.left + box.right) / 2, (box.top + box.bottom) / 2)?.closest('[data-action="check"]') !== null && !document.querySelector('.app').inert;
+      })()`), 'the buttons of the turn cannot be reached');
+      assert.equal(await page.inputValue('#chat-input'), 'half a thou', 'what was typed on the live table is gone');
+      assert.equal(await chimes(), 1, 'the turn was not called');
+      assert.deepEqual(sent.filter((op) => op !== 'poll'), ['history'], 'a replay sent something other than the request for the history');
+      await shot(page, 'replay-made-way-desktop');
+
+      // Opened again, on the viewer's own turn: it goes on from the step it was left at, and says whose turn it is where its way out is
+      await openReplay(page, 'desktop', 1);
+      assert.equal(await replayCount(page), 'Step 4 of 18 · Preflop');
+      assert.equal(await text(page, '.replay [data-replay="close"]'), 'Your turn');
+      await assertReplayFits(page, 'replay-on-own-turn-desktop');
+      await page.setViewportSize(REPLAY_SIZES[0]!);
+      await assertReplayFits(page, 'replay-on-own-turn-phone-standing');
+      await shot(page, 'replay-on-own-turn-phone-standing');
+      await page.setViewportSize(SCREENS.desktop);
+
+      // The keys that would play the turn are the replay's while it is open
+      await settle(page);
+      for (const key of ['c', 'f', 'r', '1', 'Enter']) {
+        await page.keyboard.press(key);
+      }
+      await page.waitForTimeout(300);
+      assert.deepEqual(moves, [], 'a key made a move in the hand under the replay');
+      assert.equal(table.view('Quigs').hand!.toAct, 0);
+
+      await page.click('.replay [data-replay="close"]');
+      await page.waitForSelector('.replay', { state: 'hidden' });
+      assert.equal(await page.locator('.history').count(), 0, 'the way out on the viewer\'s turn stopped at the history');
+      assert.equal(await chimes(), 1, 'the same turn was called again');
+
+      // And the hand is the viewer's to play again, by key as before
+      await settle(page);
+      await answeredAfter(page, () => page.keyboard.press('c'));
+      assert.deepEqual(moves, ['check']);
+
+      // The place is kept for a replay the game took the viewer from, once: one they close themselves starts at the start
+      await openReplay(page, 'desktop', 1);
+      assert.equal(await replayCount(page), 'Step 4 of 18 · Preflop', 'the place the viewer went back to the table from was not kept');
+      assert.equal(await text(page, '.replay [data-replay="close"]'), 'Close');
+      await page.click('.replay [data-replay="close"]');
+      await page.click('.history details[data-hand="1"] [data-action="replay"]');
+      await replayDrawn(page);
+      assert.equal(await replayCount(page), 'Step 1 of 18 · Preflop');
+    },
+  ],
+  [
+    'a hand recorded before replays, and one whose record no longer tells it, are in the history as text with a line saying why, and no way to replay them',
+    async (rig) => {
+      const table = replayTableOf(rig);
+
+      table.dealNext();
+      table.play(passive, (view) => view.hand?.stage === 'done');
+      playOut(table);
+
+      // As the Hands tab holds them: one from before events were recorded, which has no blinds either, and one cut short since
+      const [before, since] = rig.store.hands;
+      Object.assign(before!, { events: [], bigBlind: 0, smallBlind: 0 });
+      since!.events.length = 4;
+
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        const page = await table.open('Quigs', screen);
+        const press = pressOn(page, screen);
+
+        await press('[data-action="menu"]');
+        await press('.menu [data-action="history"]');
+        await page.waitForSelector('.history details[data-hand="2"]');
+        assert.equal(await page.locator('.history [data-action="replay"]').count(), 0);
+
+        await press('.history details[data-hand="1"] summary');
+        assert.equal(await text(page, '.history details[data-hand="1"] .no-replay'), 'This hand was recorded before hands could be replayed, so here it is as text.');
+        assert.match(await text(page, '.history details[data-hand="1"] pre'), /^Hand #1 · blinds 10\/20 · Quigs has the button\n/);
+        await press('.history details[data-hand="2"] summary');
+        assert.equal(await text(page, '.history details[data-hand="2"] .no-replay'), 'This hand cannot be replayed, so here it is as text.');
+        assert.match(await text(page, '.history details[data-hand="2"] pre'), /^Hand #2 · /);
+        assert.deepEqual(await squeezed(page, '.history .no-replay'), []);
+        await page.locator('.history details[data-hand="1"] .no-replay').scrollIntoViewIfNeeded();
+        assertOnScreen(await boxes(page, '.history details[data-hand="1"] .no-replay'), screen, 'why the hand cannot be replayed');
+        await shot(page, `replay-not-possible-${screen}`);
+
+        await page.context().close();
+      }
     },
   ],
 ];

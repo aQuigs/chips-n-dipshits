@@ -15,6 +15,8 @@ export interface DialogHandlers {
   close(): void;
   copy(text: string): Promise<boolean>;
   loadHistory(): Promise<HandRecord[]>;
+  /** Plays a finished hand back, over the table and whatever is open on it. */
+  replay(record: HandRecord): void;
   presets: PresetHandlers;
   players: PlayerHandlers;
   tableLink(): string;

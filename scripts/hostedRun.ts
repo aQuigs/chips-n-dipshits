@@ -940,7 +940,7 @@ try {
     google.close();
   }
 
-  console.log('A table that was put away says so once, stops asking, and is in neither the address nor the browser afterwards, its mutes included, while who the browser is stays');
+  console.log('A table that was put away says so once, stops asking, and is in neither the address nor the browser afterwards, its mutes and the cards kept for its replays included, while who the browser is stays');
   {
     // A game of its own, whose clock can be moved on two weeks
     let ahead = 0;
@@ -953,6 +953,7 @@ try {
       const member = inAddress(page, 'me')!;
       assert.equal(await remembered(page, old), member);
       await page.evaluate(`localStorage.setItem('cnd.mute.${old}', '["someone"]')`);
+      await page.evaluate(`localStorage.setItem('cnd.dealt.${old}', '{"player":"someone","hands":[[1,["As","Ah"]]]}')`);
 
       const whoItIs = `localStorage.getItem('cnd.player')`;
       const marge = await page.evaluate(whoItIs);
@@ -977,6 +978,7 @@ try {
       assert.deepEqual([inAddress(page, 'table'), inAddress(page, 'me')], [null, null], 'the address still names the table that is gone');
       assert.equal(await remembered(page, old), null, 'the browser still remembers a seat at it');
       assert.equal(await page.evaluate(`localStorage.getItem('cnd.mute.${old}')`), null, 'the browser still keeps who was muted at it');
+      assert.equal(await page.evaluate(`localStorage.getItem('cnd.dealt.${old}')`), null, 'the browser still keeps the cards dealt at it');
       assert.equal(await page.evaluate(whoItIs), marge, 'who the browser is went with a table, though it is not about any one table');
 
       // The answer was a plain one, not a failure to be tried again

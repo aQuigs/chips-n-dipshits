@@ -1,5 +1,6 @@
 import { formatAmount } from '../engine/amounts.ts';
 import { liveReactions, REACTION_TOO_SOON, reactionRefusal } from '../engine/reactions.ts';
+import { replaySteps } from '../engine/replay.ts';
 import { anteText, blindsText } from '../engine/stakes.ts';
 import type { Preset } from '../engine/presets.ts';
 import type { Command, HandRecord, TableConfig } from '../engine/types.ts';
@@ -14,11 +15,14 @@ import type { Answer } from './knownPlayers.ts';
 import { Modal } from './modal.ts';
 import { browserOf } from './pageErrors.ts';
 import type { PageFailure } from './pageErrors.ts';
+import { DealtCards, forgetDealt } from './dealtCards.ts';
 import { forgetMutes, Mutes } from './mutes.ts';
 import { sendersShown } from './senders.ts';
 import { Motion, motionAbility } from './motion.ts';
 import { pageMotion, pageWatching } from './pageMotion.ts';
 import { pagePace } from './pagePace.ts';
+import { pageTicker } from './replayPlayer.ts';
+import { ReplayScreen } from './replayScreen.ts';
 import { ReactionMarks } from './reactionMarks.ts';
 import { ReactionPicker } from './render/reactionPicker.ts';
 import type { Platform } from './platform.ts';
@@ -36,7 +40,7 @@ import type { AsksWho, LobbyScreen, Visitor } from './render/lobby.ts';
 import { nightOver } from './render/night.ts';
 import { outdatedEl } from './render/outdated.ts';
 import { hostOrCohost } from './render/roles.ts';
-import { handDrawn, tableEl } from './render/table.ts';
+import { handDrawn, shapeFor, tableEl } from './render/table.ts';
 import { createThemePicker } from './render/themePicker.ts';
 import { voiceLinkEl } from './render/voiceLink.ts';
 import type { Listed } from './render/whoField.ts';
@@ -53,9 +57,6 @@ import { pageSounds } from './webAudioSounds.ts';
 
 const COUNTDOWN_TICK_MS = 250;
 const TOAST_MS = 4500;
-
-// Wider than this and the table lies down; narrower and it stands up, as on a phone
-const WIDE_ASPECT = 1.15;
 
 const NAME_KEY = 'cnd.name';
 const seatKey = (tableId: string) => `cnd.seat.${tableId}`;
@@ -74,6 +75,9 @@ interface TableScreen {
   /** Who the viewer has muted at this table, and the way to stop following it. */
   mutes: Mutes;
   stopMutes: () => void;
+  /** A finished hand played back, lying over everything else of the table. */
+  replay: ReplayScreen;
+  dealt: DealtCards;
   motion: Motion;
   /** Reactions over the seats, and the picker for them, on a layer over the table that drawing the table leaves alone. */
   marks: ReactionMarks;
@@ -211,6 +215,17 @@ export class App {
       this.tickCountdowns();
       this.showOffered();
     }, COUNTDOWN_TICK_MS);
+
+    // Ahead of the listeners below: while a hand is played back the keys are its own, and neither the dialog under it nor the turn hears them
+    document.addEventListener('keydown', (event) => {
+      const replay = this.screen?.replay;
+      if (!replay?.isOpen) {
+        return;
+      }
+
+      replay.key(event);
+      event.stopImmediatePropagation();
+    });
 
     document.addEventListener('keydown', (event) => {
       if (event.key !== 'Escape' || this.server.outdated) {
@@ -506,6 +521,7 @@ export class App {
     this.leaveTableScreen();
     this.platform.memory.remove(seatKey(tableId));
     forgetMutes(this.platform.memory, tableId);
+    forgetDealt(this.platform.memory, tableId);
     this.pointAddress(null);
     this.mount(putAwayEl(tableId, error.error, () => this.showLobby()));
   }
@@ -525,6 +541,17 @@ export class App {
 
     const picker = new ReactionPicker({ react: (kind, to) => this.react(kind, to), refusal: (view) => this.reactionRefusal(view) });
     const mutes = new Mutes(this.platform.memory, session.tableId);
+    const dealt = new DealtCards(this.platform.memory, session.tableId);
+    const page = h('div.app');
+    const replay = new ReplayScreen({
+      under: page,
+      ticker: pageTicker,
+      pace: pagePace(),
+      deck: () => this.prefs.get('deck'),
+      // The buttons the replay covered are new to the player again
+      closed: () => this.hotkeys.shown(),
+      toTable: () => void this.setReplayAside(),
+    });
     const feed = createFeed(
       (text) => void this.send({ type: 'chat', text }),
       () => ({ deck: this.prefs.get('deck'), pictures: this.prefs.get('gifs'), shown: sendersShown(this.prefs, mutes, table.session.auth.id, 'chat') }),
@@ -545,6 +572,8 @@ export class App {
       motion,
       marks,
       dialogs: { offer: (dialog, still) => this.offerDialog(dialog, still) },
+      dealt,
+      replay: { setAside: () => this.setReplayAside(), turn: (mine) => replay.turn(mine) },
       toast: (message) => this.toast(message),
     });
     const screen: TableScreen = {
@@ -560,6 +589,8 @@ export class App {
         feed.redraw();
         this.drawTable();
       }),
+      replay,
+      dealt,
       motion,
       marks,
       picker,
@@ -586,7 +617,10 @@ export class App {
     });
 
     this.screen = screen;
-    this.mount(h('div.app', null, screen.topbar.element, screen.banners.element, stage.element, above, screen.controls.element, feed.element, screen.overlay.element));
+    page.append(screen.topbar.element, screen.banners.element, stage.element, above, screen.controls.element, feed.element, screen.overlay.element);
+    this.mount(page);
+    // Beside the page, not in it: a dialog shuts everything else in the page off from the keyboard, and a replay opens over one
+    page.after(replay.element);
     screen.resizeObserver.observe(stage.element);
 
     if (view) {
@@ -610,6 +644,7 @@ export class App {
     this.screen?.picker.dispose();
     this.screen?.seatMoves.dispose();
     this.screen?.stopMutes();
+    this.screen?.replay.close();
     this.screen = null;
     this.dialog = null;
     this.offered = null;
@@ -631,6 +666,7 @@ export class App {
    * player what a reload brings them back to.
    */
   private showOutdated(): void {
+    this.screen?.replay.close();
     this.closeDialog();
 
     // A move this page was showing as made may never be played, or was and its answer is now left unread:
@@ -904,8 +940,7 @@ export class App {
       return;
     }
 
-    const { width, height } = screen.stage.element.getBoundingClientRect();
-    const shape: Shape = height > 0 && width / height >= WIDE_ASPECT ? 'wide' : 'tall';
+    const shape = shapeFor(screen.stage.element.getBoundingClientRect());
 
     if (shape !== screen.shape) {
       screen.shape = shape;
@@ -965,7 +1000,7 @@ export class App {
 
   /** Whether something is in front of the table: a dialog, a seat being picked, or word that the page is out of date. */
   private tableCovered(): boolean {
-    return this.server.outdated || this.dialog !== null || (this.screen?.seatMoves.active ?? false);
+    return this.server.outdated || this.dialog !== null || (this.screen?.seatMoves.active ?? false) || (this.screen?.replay.isOpen ?? false);
   }
 
   /**
@@ -1041,6 +1076,7 @@ export class App {
       close: () => this.closeDialog(),
       copy: (text) => this.copy(text),
       loadHistory: () => this.loadHistory(),
+      replay: (record) => this.openReplay(record),
       presets: {
         list: () => this.listPresets(),
         save: (name, settings, replace) => this.changePresets({ op: 'savePreset', tableId: session.tableId, auth: session.auth, name, settings, replace }),
@@ -1062,6 +1098,31 @@ export class App {
         this.screen?.seatMoves.pick(playerId);
       },
     };
+  }
+
+  // ---- A hand played back ----
+
+  /** Plays a finished hand back over the table. */
+  private openReplay(record: HandRecord): void {
+    const screen = this.screen;
+    const view = this.shownView();
+    const steps = view && replaySteps(record, view.config);
+    if (!screen || !view || !steps) {
+      return;
+    }
+
+    screen.replay.show({ record, steps, table: view, kept: screen.dealt.of(view.you.id, record.number) });
+  }
+
+  /** Takes a hand being played back off the table, and the history it was opened from, for the game to have the viewer (`ReplaySetAside`). */
+  private setReplayAside(): boolean {
+    if (!this.screen?.replay.setAside()) {
+      return false;
+    }
+
+    this.closeDialog();
+
+    return true;
   }
 
   private async loadHistory(): Promise<HandRecord[]> {

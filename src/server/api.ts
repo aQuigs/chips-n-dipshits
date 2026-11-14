@@ -14,6 +14,9 @@ export interface Auth {
   token: string;
 }
 
+/** How many of a table's latest hands its history holds: what a page can open, and so all it has any use remembering of them. */
+export const HISTORY_LIMIT = 30;
+
 /** The most a page sends of a failure's message and of its trace. */
 export const REPORTED_MESSAGE_LENGTH = 500;
 export const REPORTED_TRACE_LENGTH = 3000;

@@ -13,6 +13,13 @@ export function turnOf(view: TableView | null, seat: number | null): number | nu
   return seat !== null && hand && onTheClock(hand) === seat ? hand.turn : null;
 }
 
+/** Whether `view` puts its viewer on the clock for a decision that the view before it did not show as theirs. */
+export function turnArrived(before: TableView | null, view: TableView): boolean {
+  const turn = turnOf(view, view.you.seat);
+
+  return turn !== null && turn !== turnOf(before, before?.you.seat ?? null);
+}
+
 /**
  * Gets the viewer's attention when the action reaches them, and lets it go when they act or the turn
  * passes. A turn is known by its decision's number, so two views of one turn call once, and the action

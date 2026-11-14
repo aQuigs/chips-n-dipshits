@@ -20,6 +20,14 @@ import { hostOrCohost, roleMark } from './roles.ts';
 /** Whether the table is drawn lying down (desktop, landscape) or standing up (a phone held upright). */
 export type Shape = 'wide' | 'tall';
 
+// Narrower than this for its height, the room a table has is taken standing up
+const WIDE_ASPECT = 1.15;
+
+/** The shape a table takes in the room it is given. */
+export function shapeFor({ width, height }: { width: number; height: number }): Shape {
+  return height > 0 && width / height >= WIDE_ASPECT ? 'wide' : 'tall';
+}
+
 /** Which edge of a seat sits at its spot, so seats along the top and bottom grow inward instead of off the screen. */
 type Anchor = 'top' | 'middle' | 'bottom';
 
@@ -79,7 +87,8 @@ const ACTION_LABELS: Record<string, string> = {
 };
 
 export interface TableHandlers {
-  onSit(seat: number): void;
+  /** Left out where no seat can be taken: a table that shows a hand being played back. */
+  onSit?(seat: number): void;
   onStart(): void;
   onPlayOn(): void;
   /** Asks to see the cards hand number `hand` would have dealt (rabbit hunting). */
@@ -369,11 +378,13 @@ function openSeatEl(view: TableView, seat: number, slot: number, shape: Shape, h
     return open('requested', h('div.plate', null, 'Waiting for the host…'));
   }
 
-  if (view.you.seat !== null || myRequest || nightOver(view)) {
+  const { onSit } = handlers;
+
+  if (!onSit || view.you.seat !== null || myRequest || nightOver(view)) {
     return open('idle', h('div.plate', { 'aria-hidden': 'true' }, 'Open'));
   }
 
-  return open('', h('button.plate', { type: 'button', 'data-sit': seat, onclick: () => handlers.onSit(seat) }, 'Sit here'));
+  return open('', h('button.plate', { type: 'button', 'data-sit': seat, onclick: () => onSit(seat) }, 'Sit here'));
 }
 
 function boardEl(hand: HandView, turning: readonly BoardCard[]): HTMLElement {

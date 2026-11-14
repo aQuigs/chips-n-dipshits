@@ -1,6 +1,7 @@
 import { formatAmount } from '../../../engine/amounts.ts';
 import type { Denominated } from '../../../engine/amounts.ts';
 import { bombPotName } from '../../../engine/bombPots.ts';
+import { noReplayLine } from '../../replayPlayer.ts';
 import { cardText, h } from '../../ui.ts';
 import { everyone, frame } from './dialog.ts';
 import type { DialogHandlers, DialogKind } from './dialog.ts';
@@ -26,7 +27,10 @@ function history(table: Denominated, handlers: DialogHandlers): HTMLElement {
               const title = `Hand #${hand.number}${hand.bombPot ? ` · ${bombPotName(hand.bombPot)}` : ''}`;
               const outcome = hand.result.chopped ? 'Blinds chopped' : winners.join(', ');
 
-              return h('details', null, h('summary', null, title, h('small', null, outcome)), h('pre', null, cardText(hand.summary, handlers.prefs.get('deck'))));
+              const noReplay = noReplayLine(hand, table);
+              const replay = noReplay === null ? h('button.btn.small.replay-open', { type: 'button', 'data-action': 'replay', onclick: () => handlers.replay(hand) }, 'Replay this hand') : h('p.note.no-replay', null, noReplay);
+
+              return h('details', { 'data-hand': hand.number }, h('summary', null, title, h('small', null, outcome)), replay, h('pre', null, cardText(hand.summary, handlers.prefs.get('deck'))));
             })),
       );
     },

@@ -1,6 +1,8 @@
 /* ---- The table ---- */
 
-.stage {
+/* Where a table is drawn: the live one, and the one of a hand being played back */
+.stage,
+.replay-stage {
   grid-area: stage;
   position: relative;
   min-height: 0;

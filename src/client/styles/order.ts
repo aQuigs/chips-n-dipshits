@@ -50,4 +50,5 @@ export const STYLESHEETS = [
   'show-one.css',
   'who.css',
   'bounty-list.css',
+  'replay.css',
 ];

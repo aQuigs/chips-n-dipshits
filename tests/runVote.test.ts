@@ -58,13 +58,16 @@ test('every mix of picks and silence for two, three and four players under each 
           }
         });
 
-        if (hand.stage === 'ritVote') {
+        const stillOpen = hand.stage === 'ritVote';
+        if (stillOpen) {
           assert.ok(mix.includes(null), `${where}: everyone picked and it is still open`);
           t.wait(TIMING.ritVoteMs);
         }
 
+        // The event says how the picking ended, and nothing of it when nobody was asked
         const expected = Math.min(...mix.map((pick) => pick ?? 1));
-        assert.deepEqual([hand.stage, hand.runs, hand.events.at(-1)], ['runout', expected, ['runs', expected]], where);
+        const picking = cap === 1 ? [] : [stillOpen ? 'time' : 'settled'];
+        assert.deepEqual([hand.stage, hand.runs, hand.events.at(-1)], ['runout', expected, ['runs', expected, ...picking]], where);
 
         t.runToResult();
         assert.equal(hand.boards.length, expected, where);

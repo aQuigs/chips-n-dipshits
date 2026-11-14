@@ -8,10 +8,11 @@ import { HOLE_CARDS, prettyCards, shuffledDeck } from './cards.ts';
 import type { Card } from './cards.ts';
 import { answerUnasked, chopsUnasked, mayOfferChop } from './chop.ts';
 import { takesEvent } from './events.ts';
-import type { HandEvent } from './events.ts';
+import type { ChopUngiven, HandEvent, RunsPicked } from './events.ts';
 import { openingBet } from './forcedBets.ts';
 import type { ForcedBet } from './forcedBets.ts';
 import { madeHandName, midSentence } from './handNames.ts';
+import { BOARD_NAMES, huntedText, potLabel, STREET_TITLES } from './handWords.ts';
 import { planHand, takeUp } from './handPlan.ts';
 import { playerHand } from './handRank.ts';
 import type { HandValue } from './handRank.ts';
@@ -47,11 +48,6 @@ export const TIMING = {
 const LOG_LIMIT = 240;
 const LOG_HEAD = 40;
 const LOG_GAP = '… a long stretch of the action is left out …';
-
-const STREET_TITLES: Record<Street, string> = { preflop: 'Preflop', flop: 'Flop', turn: 'Turn', river: 'River' };
-
-/** What the play-by-play calls each board of a hand played on several. */
-const BOARD_NAMES = ['First board', 'Second board', 'Third board'];
 
 function narrate(state: TableState, ctx: Ctx, text: string): void {
   addFeed(state, ctx.now, 'dealer', null, text);
@@ -371,7 +367,7 @@ function advance(state: TableState, ctx: Ctx, afterSeat: number): void {
     }
 
     if (seat.away || seat.leaving) {
-      checkOrFold(state, ctx, next);
+      checkOrFold(state, ctx, next, true);
       from = next.seat;
       continue;
     }
@@ -445,7 +441,8 @@ function collectBets(hand: Hand): void {
   }
 }
 
-function perform(state: TableState, ctx: Ctx, player: HandPlayer, action: BettingAction): void {
+/** `unasked` says the move is made for a player who was never on the clock for it, which the hand's events keep. */
+function perform(state: TableState, ctx: Ctx, player: HandPlayer, action: BettingAction, unasked = false): void {
   const hand = state.hand!;
   const options = bettingOptions(state, hand, player);
   const objection = objectionTo(action, options, hand.currentBet, state.config);
@@ -460,14 +457,14 @@ function perform(state: TableState, ctx: Ctx, player: HandPlayer, action: Bettin
     case 'fold': {
       player.folded = true;
       player.lastAction = 'fold';
-      record(hand, ['fold', player.seat]);
+      record(hand, unasked ? ['fold', player.seat, true] : ['fold', player.seat]);
       narrate(state, ctx, `${player.name} folds`);
       break;
     }
 
     case 'check': {
       player.lastAction = 'check';
-      record(hand, ['check', player.seat]);
+      record(hand, unasked ? ['check', player.seat, true] : ['check', player.seat]);
       narrate(state, ctx, `${player.name} checks`);
       break;
     }
@@ -504,10 +501,10 @@ function perform(state: TableState, ctx: Ctx, player: HandPlayer, action: Bettin
   player.hasActed = true;
 }
 
-function checkOrFold(state: TableState, ctx: Ctx, player: HandPlayer): void {
+function checkOrFold(state: TableState, ctx: Ctx, player: HandPlayer, unasked = false): void {
   const canCheck = bettingOptions(state, state.hand!, player).canCheck;
 
-  perform(state, ctx, player, { type: canCheck ? 'check' : 'fold' });
+  perform(state, ctx, player, { type: canCheck ? 'check' : 'fold' }, unasked);
 }
 
 /**
@@ -573,7 +570,7 @@ export function offerChop(state: TableState, ctx: Ctx, seatIndex: number, turn?:
 
   const unasked = answerUnasked(state.seats[big.seat]!);
   if (unasked !== null) {
-    settleChop(state, ctx, big, unasked, false);
+    settleChop(state, ctx, big, unasked, 'unasked');
     return;
   }
 
@@ -591,18 +588,18 @@ export function answerChop(state: TableState, ctx: Ctx, seatIndex: number, agree
   }
 
   requireTurn(state, turn);
-  settleChop(state, ctx, playerAt(hand, seatIndex)!, agree, true);
+  settleChop(state, ctx, playerAt(hand, seatIndex)!, agree);
 }
 
 /**
- * The offer to chop is answered: by the big blind (`given`), or for them by their standing choice, the
- * clock or their leaving. Yes chops the blinds. No takes the offer off for the hand and puts the small
- * blind back on a fresh clock with the usual choices, or folds for them if they are away or leaving.
+ * The offer to chop is answered: by the big blind, or for them (`ungiven`) by their standing choice,
+ * the clock or their leaving. Yes chops the blinds. No takes the offer off for the hand and puts the
+ * small blind back on a fresh clock with the usual choices, or folds for them if they are away or leaving.
  */
-function settleChop(state: TableState, ctx: Ctx, big: HandPlayer, agree: boolean, given: boolean): void {
+function settleChop(state: TableState, ctx: Ctx, big: HandPlayer, agree: boolean, ungiven?: ChopUngiven): void {
   const hand = state.hand!;
 
-  record(hand, ['chopAnswer', big.seat, agree]);
+  record(hand, ungiven ? ['chopAnswer', big.seat, agree, ungiven] : ['chopAnswer', big.seat, agree]);
 
   if (agree) {
     narrate(state, ctx, `${big.name} agrees to chop`);
@@ -610,7 +607,7 @@ function settleChop(state: TableState, ctx: Ctx, big: HandPlayer, agree: boolean
     return;
   }
 
-  narrate(state, ctx, given ? `${big.name} says no to the chop` : `${big.name} did not answer, so there is no chop`);
+  narrate(state, ctx, ungiven ? `${big.name} did not answer, so there is no chop` : `${big.name} says no to the chop`);
   hand.stage = 'betting';
 
   // The small blind is the one player after the big blind still to act
@@ -648,7 +645,7 @@ function timeOut(state: TableState, ctx: Ctx): void {
   narrate(state, ctx, `${player.name} ran out of time`);
 
   if (hand.stage === 'chop') {
-    settleChop(state, ctx, player, seat.alwaysChop, false);
+    settleChop(state, ctx, player, seat.alwaysChop, 'unanswered');
     return;
   }
 
@@ -668,9 +665,9 @@ export function stopWaitingFor(state: TableState, ctx: Ctx, seatIndex: number): 
     checkOrFold(state, ctx, player);
     advance(state, ctx, seatIndex);
   } else if (hand.stage === 'chop' && hand.toAct === seatIndex) {
-    settleChop(state, ctx, player, state.seats[seatIndex]!.alwaysChop, false);
+    settleChop(state, ctx, player, state.seats[seatIndex]!.alwaysChop, 'unanswered');
   } else if (hand.stage === 'ritVote' && !player.folded && player.ritVote === null) {
-    endVote(state, ctx, { why: 'left', name: player.name });
+    endVote(state, ctx, { why: 'left', name: player.name }, player.seat);
   }
 }
 
@@ -695,13 +692,14 @@ function beginRunout(state: TableState, ctx: Ctx): void {
   startRunout(state, ctx, hand.runs);
 }
 
-function startRunout(state: TableState, ctx: Ctx, runs: number): void {
+/** `picked` is how the picking ended and, when a player left without picking, their seat; nothing when nobody was asked. */
+function startRunout(state: TableState, ctx: Ctx, runs: number, picked: [how?: RunsPicked, leaver?: number] = []): void {
   const hand = state.hand!;
 
   hand.stage = 'runout';
   runOut(hand, runs);
   hand.deadline = ctx.now + TIMING.runoutStepMs;
-  record(hand, ['runs', runs]);
+  record(hand, ['runs', runs, ...picked]);
 }
 
 /** A player still in picks how many times the rest is run, which settles it once nobody can pick fewer. */
@@ -732,12 +730,12 @@ export function pickRuns(state: TableState, ctx: Ctx, seatIndex: number, runs: n
 }
 
 /** The picking is over: the rest is run as many times as the picks come to, a player who never picked having picked once. */
-function endVote(state: TableState, ctx: Ctx, unpicked?: Unpicked): void {
+function endVote(state: TableState, ctx: Ctx, unpicked?: Unpicked, leaver?: number): void {
   const live = livePlayers(state.hand!);
   const runs = timesToRun(live.map((p) => p.ritVote ?? 1), state.hand!.maxRuns)!;
 
   narrate(state, ctx, voteStory(live, runs, unpicked));
-  startRunout(state, ctx, runs);
+  startRunout(state, ctx, runs, leaver === undefined ? [unpicked?.why ?? 'settled'] : ['left', leaver]);
 }
 
 /** Deals the next street of an all-in runout, and settles the hand once every board is complete. */
@@ -800,14 +798,6 @@ function revealAtShowdown(state: TableState, ctx: Ctx): void {
       narrate(state, ctx, `${player.name} mucks`);
     }
   }
-}
-
-function potLabel(index: number, count: number): string {
-  if (count === 1) {
-    return '';
-  }
-
-  return index === 0 ? ' from the main pot' : ` from side pot ${index}`;
 }
 
 function settleShowdown(state: TableState, ctx: Ctx): void {
@@ -1065,15 +1055,6 @@ function huntRefusal(state: TableState, hand: Hand, dealtIn: boolean): string {
   }
 
   return boardsComplete(hand) ? 'Every card of that hand is already out' : 'Nobody won that hand, so there is no rabbit to hunt';
-}
-
-/** The hunted cards as the play-by-play says them, a board at a time when there are more. */
-function huntedText(hunted: readonly Card[][]): string {
-  if (hunted.length === 1) {
-    return prettyCards(hunted[0]!);
-  }
-
-  return hunted.flatMap((cards, board) => (cards.length === 0 ? [] : [`${midSentence(BOARD_NAMES[board]!)} ${prettyCards(cards)}`])).join(', ');
 }
 
 /**

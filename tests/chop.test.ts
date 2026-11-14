@@ -298,7 +298,7 @@ test('the big blind running out of time is a no: they sit out, and the small bli
   assert.equal(t.state.hand!.deadline, t.now + CLOCK_MS);
   assert.ok(t.state.seats[BB]!.away && t.state.seats[BB]!.sittingOut);
   assert.deepEqual(kinds(t).slice(-3), ['chopOffer', 'timeout', 'chopAnswer']);
-  assert.deepEqual(t.state.hand!.events.at(-1), ['chopAnswer', BB, false]);
+  assert.deepEqual(t.state.hand!.events.at(-1), ['chopAnswer', BB, false, 'unanswered']);
   assert.deepEqual(lastLines(t, 2), ['P2 ran out of time', 'P2 did not answer, so there is no chop']);
 
   // Away, the big blind's option is a check made for them
@@ -375,7 +375,7 @@ test('a big blind who sits out while answering is still asked; one who leaves or
   leaving.cmd(BB, { type: 'standUp' });
   assert.equal(leaving.state.hand!.stage, 'betting');
   assert.equal(leaving.toAct, SB);
-  assert.deepEqual(leaving.state.hand!.events.at(-1), ['chopAnswer', BB, false]);
+  assert.deepEqual(leaving.state.hand!.events.at(-1), ['chopAnswer', BB, false, 'unanswered']);
   assert.deepEqual(lastLines(leaving, 1), ['P2 did not answer, so there is no chop']);
 
   // Removed by the host, the same as leaving: the small blind takes the pot by folding, or plays a big blind who checks to the end

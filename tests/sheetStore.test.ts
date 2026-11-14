@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { addMember, BADGES, createTable, DEFAULT_CONFIG, LIMITS, prettyCards, presetSettings, REACTIONS, REACTIONS_LIVE } from '../src/engine/index.ts';
+import { addMember, AUTO_SHOWS, BADGES, createTable, DEFAULT_CONFIG, LIMITS, prettyCards, presetSettings, REACTIONS, REACTIONS_LIVE } from '../src/engine/index.ts';
 import type { Effect, HandRecord, KnownPlayer, Rng, TableConfig, TableState } from '../src/engine/index.ts';
 import { ERRORS_TAB, REPORTS_PER_RUN, SheetErrorLog } from '../src/gas/sheetErrorLog.ts';
 import { SheetPlayerStore } from '../src/gas/sheetPlayerStore.ts';
@@ -965,6 +965,11 @@ test('after the longest night the fullest table still fits its row and the cache
 
   // Every one of them a player the game knows
   t.state.members.forEach((member, index) => (member.identity = `KNOWN${10 + index}`));
+
+  // Every seat showing what it can without being asked
+  for (const seat of t.state.seats) {
+    seat?.autoShow.push(...AUTO_SHOWS);
+  }
 
   // A hand that all ten are in, with some betting behind it
   t.deal({ button: 0 });

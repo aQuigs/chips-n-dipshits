@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { HANDLERS } from '../src/engine/commands/index.ts';
-import { eligibleSeats, fullyShown, handFacts, isStraddle, nightIsOver, REACTIONS_LIVE, SEAT_COUNT } from '../src/engine/index.ts';
+import { eligibleSeats, fullyShown, handFacts, isStraddle, playerHand, nightIsOver, REACTIONS_LIVE, SEAT_COUNT } from '../src/engine/index.ts';
 import type { CommandType } from '../src/engine/commands/handler.ts';
 import type { AutoShow, Command, Rng, Straddle, TableConfig, TableState } from '../src/engine/index.ts';
 import { handRecords, ledgerEntries, seededRng, TestTable } from './helpers.ts';
@@ -56,23 +56,51 @@ function randomTable(seed: number): { t: Recording; rng: Rng; config: TableConfi
 }
 
 /**
- * Which standing choices to show the hand just ended carried out, holding it to them: a player who
- * chose to show losers never mucks, and one everyone folded to who chose to show has both cards up.
+ * Holds the hand just ended to the choices to show as the engine read them, and says which it carried
+ * out. A player everyone folded to who chose to show has both cards up. At a showdown that was not run
+ * out the hands are taken in the order they were turned up or mucked: one that could still win a pot it
+ * is in for, on some board, against those before it that could too, is shown whatever was chosen, and
+ * one that could not is shown exactly when its player chose to show losers.
  */
 function autoShowsApplied(state: TableState): Record<AutoShow, boolean> {
   const hand = state.hand!;
+  const result = hand.result!;
   const chose = (seat: number, when: AutoShow) => state.seats[seat]!.autoShow.includes(when);
-  const mucked = new Set(hand.events.flatMap((event) => (event[0] === 'muck' ? [event[1]] : [])));
-  const live = hand.players.filter((player) => !player.folded);
-  const showdown = !hand.result!.uncontested && !hand.events.some((event) => event[0] === 'runs');
-  const winner = hand.result!.uncontested && !hand.result!.chopped ? live[0] : undefined;
+  const applied = { lost: false, foldedTo: false };
 
-  assert.ok(live.every((player) => !mucked.has(player.seat) || !chose(player.seat, 'lost')), `hand ${hand.number}: a player who shows losers mucked`);
-  assert.ok(!winner || !chose(winner.seat, 'foldedTo') || fullyShown(winner.shown), `hand ${hand.number}: a player who shows when folded to did not`);
+  if (result.uncontested) {
+    const winner = result.chopped ? undefined : hand.players.find((player) => !player.folded)!;
+    applied.foldedTo = winner !== undefined && chose(winner.seat, 'foldedTo');
+    assert.ok(!applied.foldedTo || fullyShown(winner!.shown), `hand ${hand.number}: a player who shows when folded to did not`);
 
-  const lost = live.filter((player) => !hand.result!.winnings.some((win) => win.seat === player.seat && win.amount > 0));
+    return applied;
+  }
 
-  return { lost: showdown && lost.some((player) => chose(player.seat, 'lost')), foldedTo: winner !== undefined && chose(winner.seat, 'foldedTo') };
+  if (hand.events.some((event) => event[0] === 'runs')) {
+    return applied;
+  }
+
+  const score = (seat: number, board: number) => playerHand(hand.players.find((player) => player.seat === seat)!.cards, hand.boards[board]!).score;
+  const contenders: number[] = [];
+
+  for (const event of hand.events.slice(0, hand.events.findIndex((event) => event[0] === 'win'))) {
+    if (event[0] !== 'show' && event[0] !== 'muck') {
+      continue;
+    }
+
+    const seat = event[1];
+    const canWin = result.pots.some((pot) => pot.eligible.includes(seat) && hand.boards.some((_board, board) => contenders.filter((other) => pot.eligible.includes(other)).every((other) => score(seat, board) >= score(other, board))));
+
+    if (canWin) {
+      assert.equal(event[0], 'show', `hand ${hand.number}: a hand that could still win was mucked`);
+      contenders.push(seat);
+    } else {
+      assert.equal(event[0] === 'show', chose(seat, 'lost'), `hand ${hand.number}: seat ${seat} ${event[0]}s a hand that could win nothing, having chosen otherwise`);
+      applied.lost ||= event[0] === 'show';
+    }
+  }
+
+  return applied;
 }
 
 test('random play never breaks the rules of chip accounting, secrecy or turn order', () => {
@@ -98,7 +126,7 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
   const hunts = { hunted: 0, onTwoBoards: 0 };
   // Hands in which a player showed by choice one card, the other one after it, or both at once
   const shownByChoice = { oneCard: 0, otherAfter: 0, both: 0 };
-  // Hands that ended with a player whose standing choice to show applied: a loser at a showdown that was not run out, and a player everyone folded to
+  // Hands where a standing choice to show turned cards up: a loser at a showdown who could win nothing, and a player everyone folded to
   const autoShown = { lost: 0, foldedTo: 0 };
   const straddles: Record<Straddle | 'passedOver' | 'overAnAnte' | 'shownDown', number> = { straddle: 0, 'double straddle': 0, 'button straddle': 0, 'Mississippi straddle': 0, passedOver: 0, overAnAnte: 0, shownDown: 0 };
 
@@ -284,7 +312,7 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
   assert.ok(shownByChoice.oneCard >= TABLES * 2 && shownByChoice.otherAfter >= TABLES / 4 && shownByChoice.both >= TABLES * 2, showing);
 
   const choosing = `hands where a choice to show applied: ${JSON.stringify(autoShown)}`;
-  assert.ok(autoShown.lost >= TABLES && autoShown.foldedTo >= TABLES, choosing);
+  assert.ok(autoShown.lost >= TABLES / 2 && autoShown.foldedTo >= TABLES, choosing);
 
   const doubles = `double-board bomb pots: ${JSON.stringify(doubleBoards)}`;
   assert.ok(doubleBoards.chips >= TABLES / 2 && doubleBoards.cents >= TABLES / 2, doubles);

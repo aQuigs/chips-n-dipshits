@@ -789,13 +789,12 @@ function revealAtShowdown(state: TableState, ctx: Ctx): void {
       return values.some((onBoard) => against.every((seat) => onBoard.get(player.seat)!.score >= onBoard.get(seat)!.score));
     });
 
-    const made = ` (${values.map((onBoard) => madeHandName(onBoard.get(player.seat)!)).join(' / ')})`;
-
     if (canStillWin) {
       shown.push(player.seat);
-      show(state, ctx, player, made);
-    } else if (showsAt(state, player.seat, 'lost')) {
-      show(state, ctx, player, made);
+    }
+
+    if (canStillWin || showsAt(state, player.seat, 'lost')) {
+      show(state, ctx, player, ` (${values.map((onBoard) => madeHandName(onBoard.get(player.seat)!)).join(' / ')})`);
     } else {
       record(hand, ['muck', player.seat]);
       narrate(state, ctx, `${player.name} mucks`);

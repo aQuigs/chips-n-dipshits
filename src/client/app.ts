@@ -101,6 +101,15 @@ export class App {
   private dialog: Dialog | null = null;
   private dialogOpens = 0;
 
+  /** The opening that the dialog on screen was drawn for. */
+  private dialogDrawn = 0;
+
+  /** A dialog the page means to open by itself, waiting for the viewer to be free for it. */
+  private offered: { dialog: Dialog; still(view: TableView): boolean } | null = null;
+
+  /** How many commands are on their way to the table with no answer yet. */
+  private sending = 0;
+
   /**
    * A member the address names whom this browser hasn't taken up as its own. The address may be the
    * only place that seat is kept, so until it is confirmed, declined or refused, nothing else is put there.
@@ -126,7 +135,7 @@ export class App {
     this.attention = new Attention(this.prefs, pageWays({ sounds: this.sounds, touch: pageTouch(), root, ownsTab: platform.ownsTab }));
     this.abilities = { of: (key) => (key === 'motion' ? motionAbility(this.watching) : this.attention.of(key)), ask: (key) => this.attention.ask(key) };
     this.server = new ServerLine(platform.transport, platform.build, () => this.showOutdated());
-    this.hotkeys = new HotkeyPresser(this.prefs, { root, controls: () => this.screen?.controls.element ?? null, dialogOpen: () => this.server.outdated || this.dialog !== null || (this.screen?.seatMoves.active ?? false) });
+    this.hotkeys = new HotkeyPresser(this.prefs, { root, controls: () => this.screen?.controls.element ?? null, dialogOpen: () => this.tableCovered() });
 
     root.classList.add('cnd');
   }
@@ -161,7 +170,10 @@ export class App {
 
   private begin(): void {
     this.applyTheme(this.prefs.get('theme'));
-    setInterval(() => this.tickCountdowns(), COUNTDOWN_TICK_MS);
+    setInterval(() => {
+      this.tickCountdowns();
+      this.showOffered();
+    }, COUNTDOWN_TICK_MS);
 
     document.addEventListener('keydown', (event) => {
       if (event.key !== 'Escape' || this.server.outdated) {
@@ -410,7 +422,7 @@ export class App {
       modal: new Modal(overlay.element),
       feed,
       motion,
-      effects: new TableEffects(this.prefs, stage.element, this.sounds, this.attention, motion),
+      effects: new TableEffects(this.prefs, stage.element, this.sounds, this.attention, motion, { offer: (dialog, still) => this.offerDialog(dialog, still) }),
       news: new TableNews(),
       suspense: new Suspense(motion, (later) => this.showHeld(later)),
       seatMoves: new SeatMoves(stage.element, {
@@ -453,6 +465,7 @@ export class App {
     this.screen = null;
     this.view = null;
     this.dialog = null;
+    this.offered = null;
   }
 
   private mount(content: HTMLElement): void {
@@ -485,7 +498,13 @@ export class App {
   }
 
   private async send(command: Command): Promise<SendOutcome> {
-    return (await this.table?.send(command)) ?? 'refused';
+    this.sending += 1;
+
+    try {
+      return (await this.table?.send(command)) ?? 'refused';
+    } finally {
+      this.sending -= 1;
+    }
   }
 
   /** The server no longer knows this browser at the table, so start over from the join screen or the lobby. */
@@ -719,6 +738,44 @@ export class App {
     this.drawDialog();
   }
 
+  private offerDialog(dialog: Dialog, still: (view: TableView) => boolean): void {
+    // Open already, it is in front of them, and offering it would bring it back when they close it
+    if (this.dialog?.kind === dialog.kind) {
+      return;
+    }
+
+    this.offered = { dialog, still };
+    this.showOffered();
+  }
+
+  /** Whether something is in front of the table: a dialog, a seat being picked, or word that the page is out of date. */
+  private tableCovered(): boolean {
+    return this.server.outdated || this.dialog !== null || (this.screen?.seatMoves.active ?? false);
+  }
+
+  /**
+   * Opens the dialog that is waiting, once the viewer is free for it (`DialogOffers`). An answer the
+   * table still owes them counts as busy: it may be what makes the dialog moot. Tried on every tick.
+   */
+  private showOffered(): void {
+    const offered = this.offered;
+    const view = this.shownView();
+    if (!offered || !view || this.tableCovered() || this.sending > 0) {
+      return;
+    }
+
+    const field = document.activeElement;
+    if (field instanceof HTMLInputElement && field.type === 'text' && field.value !== '') {
+      return;
+    }
+
+    this.offered = null;
+
+    if (offered.still(view)) {
+      this.openDialog(offered.dialog);
+    }
+  }
+
   private drawDialog(): void {
     const screen = this.screen;
     if (!screen) {
@@ -748,7 +805,15 @@ export class App {
 
     // Opening a dialog always draws it; after that only a change in what it shows does
     const handlers = this.dialogHandlers();
-    screen.overlay.draw([this.dialogOpens, dialogShows(dialog, view, handlers)], () => dialogEl(dialog, view, handlers));
+    const body = () => screen.overlay.element.querySelector('.dialog-body');
+    const scrolled = this.dialogDrawn === this.dialogOpens ? (body()?.scrollTop ?? 0) : 0;
+
+    // Drawn again for what changed at the table, a dialog stays where its reader had scrolled to
+    if (screen.overlay.draw([this.dialogOpens, dialogShows(dialog, view, handlers)], () => dialogEl(dialog, view, handlers)) && scrolled > 0) {
+      body()!.scrollTop = scrolled;
+    }
+
+    this.dialogDrawn = this.dialogOpens;
     screen.modal.update(true);
   }
 

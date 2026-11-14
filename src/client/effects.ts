@@ -1,12 +1,26 @@
+import type { TableView } from '../engine/view.ts';
 import type { Attention } from './attention.ts';
 import { celebrations } from './effects/celebrations.ts';
 import { handMoves } from './effects/handMoves.ts';
 import { handSounds } from './effects/handSounds.ts';
+import { nightRecap } from './effects/nightRecap.ts';
 import { yourTurn } from './effects/yourTurn.ts';
 import type { TableMotion } from './motion.ts';
 import type { AppPreferences } from './prefs.ts';
+import type { Dialog } from './render/dialogs/index.ts';
 import type { Sounds } from './sound.ts';
 import type { TableChange } from './tableChange.ts';
+
+/** The way to put a dialog in front of the viewer that they did not ask for. */
+export interface DialogOffers {
+  /**
+   * Opens the dialog without taking anything from the viewer: at once when they are doing nothing
+   * else, and otherwise once they have closed the dialog they had open, placed the player they were
+   * moving, or sent or left what they were typing. `still` is asked at that moment, and a dialog
+   * whose time has passed stays shut. One that is open already is left as it is.
+   */
+  offer(dialog: Dialog, still: (view: TableView) => boolean): void;
+}
 
 export interface EffectContext {
   prefs: AppPreferences;
@@ -20,6 +34,7 @@ export interface EffectContext {
   attention: Attention;
   /** The way to move something across the table, held to the viewer's switch and to a device that asks for less motion. */
   motion: TableMotion;
+  dialogs: DialogOffers;
 }
 
 /** Something that happens on the page when the table changes: a sound, an animation, an alert. */
@@ -43,6 +58,7 @@ const TABLE_EFFECTS: (() => TableEffect)[] = [
   // After the hand's own moves, so the turn it gives a board's last card takes the place of the drop they give it
   celebrations,
   yourTurn,
+  nightRecap,
 ];
 
 /** The effects of one table screen. */
@@ -52,19 +68,21 @@ export class TableEffects {
   private readonly sounds: Sounds;
   private readonly attention: Attention;
   private readonly motion: TableMotion;
+  private readonly dialogs: DialogOffers;
   private readonly effects = TABLE_EFFECTS.map((make) => make());
 
-  constructor(prefs: AppPreferences, stage: HTMLElement, sounds: Sounds, attention: Attention, motion: TableMotion) {
+  constructor(prefs: AppPreferences, stage: HTMLElement, sounds: Sounds, attention: Attention, motion: TableMotion, dialogs: DialogOffers) {
     this.prefs = prefs;
     this.stage = stage;
     this.sounds = sounds;
     this.attention = attention;
     this.motion = motion;
+    this.dialogs = dialogs;
   }
 
   /** Call once for every view put on screen, with what it brought. */
   run(change: TableChange): void {
-    const context: EffectContext = { prefs: this.prefs, seat: change.view.you.seat, stage: this.stage, sounds: this.sounds, attention: this.attention, motion: this.motion };
+    const context: EffectContext = { prefs: this.prefs, seat: change.view.you.seat, stage: this.stage, sounds: this.sounds, attention: this.attention, motion: this.motion, dialogs: this.dialogs };
 
     for (const effect of this.effects) {
       // An effect that fails must not be what stops the table from updating, or the other effects from happening

@@ -20,12 +20,12 @@ import type { MoveName } from '../src/client/motion.ts';
 import { KEYS_SETTLE_MS } from '../src/client/hotkeys.ts';
 import { RECIPES } from '../src/client/soundRecipes.ts';
 import { THEMES } from '../src/client/themes.ts';
-import { shortAmount } from '../src/engine/amounts.ts';
+import { shortAmount, signedAmount } from '../src/engine/amounts.ts';
 import { DEFAULT_CONFIG, LIMITS, presetSettings } from '../src/engine/index.ts';
 import type { Command, Straddle, TableConfig, TableView } from '../src/engine/index.ts';
 import { contrast } from '../tests/colorVision.ts';
-import { boxes, overlap, Rig, SCREENS, setStageHeight, squeezed, textBoxes } from './rig.ts';
-import type { Box, RigPlayer, RigTable, ScreenName } from './rig.ts';
+import { boxes, overlap, Rig, RigTable, SCREENS, setStageHeight, squeezed, textBoxes } from './rig.ts';
+import type { Box, RigPlayer, ScreenName } from './rig.ts';
 import { complaints, MOTION, NOTICES, SPOTS, TITLES } from './pageSpies.ts';
 import type { Flight, Spots } from './pageSpies.ts';
 import { STAND_IN_HOST } from './standInHost.ts';
@@ -1017,6 +1017,98 @@ const straddledHandCheck = (hand: StraddledHand, kind: StraddleTable): Check => 
     }
   },
 ];
+
+/** What the table of `tonightTable` comes to in whole chips and in dollars and cents, as its dialog writes it. */
+const TONIGHT_TABLES = [
+  { name: 'chips', config: {} as Partial<TableConfig>, first: '200', up: '+999,999,990', pot: '1,999,999,990', down: '1,000,000,000', afterTransfer: '-13' },
+  { name: 'cents', config: CENTS as Partial<TableConfig>, first: '5.00', up: '+9,999,999.75', pot: '19,999,999.75', down: '10,000,000.00', afterTransfer: '-0.43' },
+];
+
+/**
+ * Ten players two hands into a night, between hands with the game paused. Quigs won the first with
+ * aces, everyone having called; in the second the two who sat down with the most chips a player can
+ * hold put them all in, and Zed lost his and bought more. Stu has left since, and Lurker has only watched.
+ */
+function tonightTable(rig: Rig, config: Partial<TableConfig>): RigTable {
+  const table = rig.table(LONG_NAMES.map((name, index) => ({ name, stack: name === 'Zed' ? LIMITS.chips : MIXED_STACKS[index]! })), { ...config, allowRunItTwice: false });
+  const board = '2c 7d 9h Jc 3s';
+
+  table.deal({ button: 0, holes: { 0: 'As Ah', 1: 'Ks Kh', 2: 'Qs Qh', 3: 'Ts Th', 4: '8s 8h', 5: '6s 6h', 6: '5s 5h', 7: '4s 4h', 8: 'Ad Kd', 9: 'Qd Td' }, board });
+  table.act('Quigs', { type: 'pause' });
+  table.play(passive, (view) => view.hand === null);
+
+  table.dealNext({ holes: { 1: 'Jd Js', 8: 'Ks Kh' }, board });
+  table.act('Quigs', { type: 'pause' });
+  table.play((view, name) => (name === WIDEST || name === 'Zed' ? allIn(view) : { type: 'fold' }), (view) => view.hand === null);
+
+  table.act('Zed', { type: 'requestRebuy', amount: 500 });
+  table.act('Quigs', { type: 'approve', playerId: table.auth('Zed').id });
+  table.act('Stu', { type: 'standUp' });
+  table.join('Lurker');
+
+  return table;
+}
+
+// Run in the page before anything of its own: a browser that lets the page copy nothing, neither way it knows
+const NO_COPYING = `(() => {
+  Object.defineProperty(navigator, 'clipboard', { value: { writeText: () => Promise.reject(new Error('refused')) } });
+  document.execCommand = () => false;
+})()`;
+
+/** Opens the Tonight dialog from the menu, and waits for what it should show. */
+async function openTonight(page: Page, screen: ScreenName, shows = '.tonight-players'): Promise<void> {
+  const press = pressOn(page, screen);
+
+  await press('[data-action="menu"]');
+  await press('.menu [data-action="tonight"]');
+  await page.waitForSelector(`.dialog[aria-label="Tonight"] ${shows}`);
+}
+
+const RECAP = '.dialog[aria-label="Tonight"] .tonight-crown';
+
+// How often the page looks whether a dialog it means to open may come up now: COUNTDOWN_TICK_MS in src/client/app.ts
+const OFFER_TICK_MS = 250;
+
+/** Quigs, Stu and Big Al one hand into a night that Quigs is up in and the other two are level in, with Zed watching, between hands and paused. */
+function nightOfOneHand(rig: Rig): RigTable {
+  const table = rig.table([{ name: 'Quigs', stack: 1000 }, { name: 'Stu', stack: 1000 }, { name: 'Big Al', stack: 1000 }], { allowRunItTwice: false });
+
+  table.join('Zed');
+  table.deal({ button: 0, holes: { 0: 'As Ah', 1: 'Ks Kh', 2: 'Qs Qh' }, board: '2c 7d 9h Jc 3s' });
+  table.act('Quigs', { type: 'pause' });
+  table.play(passive, (view) => view.hand === null);
+
+  return table;
+}
+
+/** That no dialog opens by itself, given longer than the page takes to open one that is waiting. With `open`, that the dialog of that title stays as it is. */
+async function assertNoDialogComes(page: Page, otherwise: string, open?: string): Promise<void> {
+  await page.waitForTimeout(3 * OFFER_TICK_MS);
+  assert.deepEqual(await texts(page, '.dialog h2'), open ? [open] : [], otherwise);
+}
+
+/** Closes the recap that comes up by itself when the night ends, for a check of what lies under it. */
+async function closeRecap(page: Page): Promise<void> {
+  await page.click('.dialog[aria-label="Tonight"] [data-action="close"]');
+  await page.waitForSelector('.dialog', { state: 'detached' });
+}
+
+/** The Tonight dialog can be read whole: it is on the screen, nothing in it is cut off or runs out sideways, and no name is drawn over what its player is up or down. */
+async function assertTonightFits(page: Page, screen: ScreenName): Promise<void> {
+  assertOnScreen(await boxes(page, '.dialog'), screen, 'the Tonight dialog');
+  assert.deepEqual(await squeezed(page, '.dialog :is(h2, h3, p, dt, dd, strong, button, textarea, .who, .net, .counts), .dialog-body'), [], 'part of the Tonight dialog is cut off');
+
+  const rows = await page.locator('.tonight-players li').count();
+  for (let row = 1; row <= rows; row++) {
+    const line = `.tonight-players li:nth-child(${row}) summary`;
+
+    assertApart(await textBoxes(page, `${line} .who`), await boxes(page, `${line} .net, ${line} .fold`), 'a name and what its player is up or down');
+  }
+}
+
+/** Every player with what they are up or down, by name, as the Tonight dialog and as the ledger write it. */
+const tonightNets = (page: Page) => page.evaluate(`[...document.querySelectorAll('.tonight-players li')].map((row) => [row.dataset.player, row.querySelector('.net').textContent]).sort()`) as Promise<string[][]>;
+const ledgerNets = (page: Page) => page.evaluate(`[...document.querySelectorAll('.ledger tbody tr')].map((row) => [row.firstElementChild.textContent, row.lastElementChild.textContent]).sort()`) as Promise<string[][]>;
 
 type Check = [name: string, run: (rig: Rig) => Promise<void>];
 
@@ -4647,6 +4739,10 @@ const CHECKS: Check[] = [
           await host.waitForSelector('.message.night-over');
           assert.equal(table.view('Zed').feed.at(-1)!.text, 'The host ended the night');
 
+          for (const page of Object.values(pages)) {
+            await closeRecap(page);
+          }
+
           // A co-host plays on from the felt, and the next hand is the last
           await pages.cohost.waitForSelector('.message.night-over [data-action="play-on"]');
           await pressOn(pages.cohost, screen)('.message.night-over [data-action="play-on"]');
@@ -4666,6 +4762,7 @@ const CHECKS: Check[] = [
 
           for (const [who, page] of Object.entries(pages)) {
             await page.waitForSelector('.message.night-over');
+            await closeRecap(page);
             assert.equal(await text(page, '.message.night-over > div'), 'The night is over', who);
             assert.equal(await page.locator('.message.night-over [data-action="play-on"]').count(), runs(who) ? 1 : 0, `${who} is offered to play on`);
             assert.equal(await text(page, '.topbar .pill'), 'Night over', who);
@@ -4890,6 +4987,7 @@ const CHECKS: Check[] = [
         assert.deepEqual(seen.flights, [], where('the end of the night moves nothing'));
         assert.equal(await text(moving, '.message.night-over > div'), 'The night is over', where('the felt'));
         assert.equal(await moving.locator('.stand-in').count(), 0, where('something is left on the felt when the night is over'));
+        await closeRecap(moving);
         await shot(moving, `motion-night-over-${layout.name}`);
 
         await shot(moving, `motion-landed-${layout.name}`);
@@ -5001,6 +5099,7 @@ const CHECKS: Check[] = [
         rig.advance(done.hand!.deadline! - rig.now());
         for (const page of [moving, unmoved]) {
           await page.waitForSelector('.message.night-over');
+          await closeRecap(page);
         }
         assert.deepEqual(await inTheAir(moving), still, where('the night over'));
         await assertAsStill(moving, unmoved, where('the night over'));
@@ -5327,6 +5426,7 @@ const CHECKS: Check[] = [
       playOut(table);
       table.act('Quigs', { type: 'endNight' });
       await page.waitForSelector('.message.night-over');
+      await closeRecap(page);
       await page.waitForSelector('.controls .owed-note', { state: 'detached' });
       assert.equal(await text(page, '.controls .waiting'), 'The night is over');
       assert.equal(await page.locator('.controls .extras button').count(), 0);
@@ -6058,6 +6158,381 @@ const CHECKS: Check[] = [
     },
   ],
   ...STRADDLED_HANDS.flatMap((hand) => STRADDLE_TABLES.map((kind) => straddledHandCheck(hand, kind))),
+  [
+    'the Tonight dialog has the night so far and, once it is over, its dipshit, for ten players with the longest names and the most chips, on the smallest phone and the desktop, in chips and in cents, and agrees with the ledger',
+    async (rig) => {
+      for (const kind of TONIGHT_TABLES) {
+        for (const screen of ['smallPhone', 'desktop'] as const) {
+          const table = tonightTable(rig, kind.config);
+          const host = await table.open('Quigs', screen);
+          const watcher = await table.open('Lurker', screen, NO_COPYING);
+          const press = pressOn(host, screen);
+
+          // The night so far, opened by hand
+          await openTonight(host, screen);
+          assert.equal(await host.locator('.tonight-crown, .tonight-missed').count(), 0, 'someone is crowned before the night is over, or a table that counted from its first hand says it missed some');
+          assert.equal(await text(host, '.tonight-standing'), 'So far tonight, after 2 hands. The dipshit of the night is crowned when the night ends.');
+          assert.deepEqual(await texts(host, '.tonight-leaders div'), [`Up the most\n${WIDEST} ${kind.up}`, `Most pots won\n${WIDEST} and Quigs 1 each`, `Biggest pot\n${WIDEST} ${kind.pot}`, `Best hand\n${WIDEST} Three jacks J♣ J♦ J♠ 9♥ 7♦`]);
+          assert.deepEqual(await texts(host, '.tonight-players .who'), [WIDEST, 'Quigs', 'Big Al', 'Pocket Pam', 'Stu left', 'iiiiiiiiiiiiiiii', '你好你好你好你好', 'Ünïcödé Ñandú Ø!', 'Marge Simpson-Jr', 'Zed'], 'the best night first and the worst last');
+          assert.equal(await text(host, '.tonight-players li[data-player="Zed"] .counts'), '2 hands · 0 pots won · 1 rebuy');
+          assert.equal(await text(host, '.tonight-players li.me .who'), 'Quigs');
+          await assertTonightFits(host, screen);
+          await shot(host, `tonight-so-far-${kind.name}-${screen}`);
+
+          // What is folded away under a player, which stays unfolded when a change at the table draws the dialog again
+          await press(`.tonight-players li[data-player="${WIDEST}"] summary`);
+          assert.deepEqual(await texts(host, '.tonight-players details[open] dl div'), [`Biggest pot\n${kind.pot}`, 'Best hand shown\nThree jacks J♣ J♦ J♠ 9♥ 7♦']);
+          await press('.tonight-players li[data-player="Quigs"] summary');
+          assert.deepEqual(await texts(host, '.tonight-players li[data-player="Quigs"] dl div'), [`Biggest pot\n${kind.first}`, 'Best hand shown\nPair of aces A♠ A♥ J♣ 9♥ 7♦']);
+          await press('.tonight-players li[data-player="Big Al"] summary');
+          assert.deepEqual(await texts(host, '.tonight-players li[data-player="Big Al"] dl div'), ['Biggest pot\nNone yet', 'Best hand shown\nNone yet'], 'a player who won nothing and mucked what they had');
+
+          // Scrolled to the last player, as someone reading down the list would be
+          const scrolledTo = () => host.evaluate(`document.querySelector('.dialog-body').scrollTop`) as Promise<number>;
+          await host.evaluate(`document.querySelector('.tonight-players li:last-child').scrollIntoView()`);
+          const scrolled = await scrolledTo();
+          assert.ok(scrolled > 0, 'ten players fit the dialog without scrolling, so this proves nothing');
+
+          table.act('Quigs', { type: 'transferChips', from: table.auth('Quigs').id, to: table.auth('Big Al').id, amount: 7 });
+          await host.waitForSelector(`.tonight-players li[data-player="Big Al"] .net:has-text("${kind.afterTransfer}")`);
+          assert.deepEqual(await texts(host, '.tonight-players details[open] .who'), [WIDEST, 'Quigs', 'Big Al'], 'a line someone had unfolded folded shut when the dialog was drawn again');
+          assert.equal(await scrolledTo(), scrolled, 'the dialog jumped from where its reader had scrolled to when it was drawn again');
+          await host.evaluate(`document.querySelector('.dialog-body').scrollTop = 0`);
+          await assertTonightFits(host, screen);
+          await shot(host, `tonight-unfolded-${kind.name}-${screen}`);
+
+          // The money is the ledger's, line for line
+          const night = await tonightNets(host);
+          await press('.dialog [data-action="close"]');
+          await openLedger(host, screen);
+          assert.deepEqual(night, await ledgerNets(host), 'the night and the ledger disagree about what someone is up or down');
+          assert.deepEqual(night, table.view('Quigs').ledger.map((row) => [row.name, signedAmount(row.net, table.view('Quigs').config)]).sort(), 'the page and the table disagree');
+          await press('.dialog [data-action="close"]');
+
+          // The night ends, and the dialog comes up by itself for the player and for someone only watching, with the crown
+          table.act('Quigs', { type: 'endNight' });
+
+          for (const [who, page] of [['host', host], ['watcher', watcher]] as const) {
+            await page.waitForSelector(RECAP);
+            assert.deepEqual(await texts(page, '.tonight-crown > *'), ['DIPSHIT OF THE NIGHT', 'Zed', `Down ${kind.down}, more than anyone.`], who);
+            assert.equal(await text(page, '.tonight-standing'), 'The night is over, after 2 hands.', who);
+            assert.equal(await text(page, '.tonight-players li.dipshit:last-child .who'), 'Zed', who);
+            assert.equal(await page.locator('.tonight-players li.me').count(), who === 'host' ? 1 : 0, `the ${who}'s own line`);
+            assert.deepEqual(await tonightNets(page), night, `${who}: the night is not the same for everyone`);
+            await assertTonightFits(page, screen);
+            await shot(page, `tonight-over-${who}-${kind.name}-${screen}`);
+          }
+
+          // The night as text, for the group chat: copied where the browser lets the page copy
+          await host.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+          await press('[data-action="copy-tonight"]');
+          await host.waitForSelector('[data-action="copy-tonight"]:has-text("Copied")');
+          const copied = (await host.evaluate('navigator.clipboard.readText()')) as string;
+          assert.deepEqual(copied.split('\n').slice(0, 3), [`${DEFAULT_CONFIG.name}: the night is over, 2 hands`, `Dipshit of the night: Zed. Down ${kind.down}, more than anyone.`, `Up the most: ${WIDEST}, ${kind.up}`]);
+          assert.equal(await host.locator('#tonight-text:visible').count(), 0, 'the box to copy from is shown though the text was copied');
+
+          // And where it does not, put in a box with all of it selected, to copy by hand
+          await pressOn(watcher, screen)('[data-action="copy-tonight"]');
+          await watcher.waitForSelector('[data-action="copy-tonight"]:has-text("Copy it from the box")');
+          assert.deepEqual(await watcher.evaluate(`(() => { const box = document.querySelector('#tonight-text'); return [box.value, box.value.slice(box.selectionStart, box.selectionEnd), document.activeElement === box]; })()`), [copied, copied, true]);
+          assertOnScreen(await boxes(watcher, '#tonight-text, [data-action="copy-tonight"]'), screen, 'the box to copy the night from');
+          await assertTonightFits(watcher, screen);
+          await shot(watcher, `tonight-copy-from-the-box-${kind.name}-${screen}`);
+
+          await host.context().close();
+          await watcher.context().close();
+        }
+      }
+    },
+  ],
+  [
+    'players level for the worst night share the crown until rebuys or pots won part them, each ending of the night crowns again from the numbers as they stand, and two of the longest names fit the crown on the smallest phone',
+    async (rig) => {
+      const screen = 'smallPhone';
+      const table = rig.table([{ name: 'Quigs', stack: 1000 }, { name: WIDEST, stack: 1000 }, { name: 'Marge Simpson-Jr', stack: 1000 }], { allowRunItTwice: false });
+      const id = (name: string) => table.auth(name).id;
+      const page = await table.open('Marge Simpson-Jr', screen);
+      const press = pressOn(page, screen);
+
+      const crowned = async (name: string, says: string[]) => {
+        // A night that ends a second time ends at another time, which is how the page knows it for news
+        rig.advance(1000);
+        table.act('Quigs', { type: 'endNight' });
+        await page.waitForSelector(RECAP);
+        assert.deepEqual(await texts(page, '.tonight-crown > *'), says);
+        assert.deepEqual(await squeezed(page, '.tonight-crown > *'), [], 'the crown is cut off');
+        await assertTonightFits(page, screen);
+        await shot(page, `tonight-crown-${name}`);
+
+        await press('.dialog [data-action="close"]');
+        table.act('Quigs', { type: 'playOn' });
+        table.act('Quigs', { type: 'pause' });
+        await page.waitForSelector('.message.night-over', { state: 'detached' });
+      };
+
+      // Both give the host a hundred, and nothing else has happened
+      table.act('Quigs', { type: 'transferChips', from: id(WIDEST), to: id('Quigs'), amount: 100 });
+      table.act('Quigs', { type: 'transferChips', from: id('Marge Simpson-Jr'), to: id('Quigs'), amount: 100 });
+      await crowned('shared', ['DIPSHITS OF THE NIGHT', `Marge Simpson-Jr and ${WIDEST}`, 'Each down 100, with the same rebuys and the same pots won.']);
+
+      // One of them buys more chips, which costs nothing and settles it
+      table.act(WIDEST, { type: 'requestRebuy', amount: 300 });
+      table.act('Quigs', { type: 'approve', playerId: id(WIDEST) });
+      await crowned('by-rebuys', ['DIPSHIT OF THE NIGHT', WIDEST, 'Down 100, tied for the worst night, and bought back in the most.']);
+
+      // The other buys too, then wins a pot from the host and hands it back: level on money and rebuys, and one pot ahead
+      table.act('Marge Simpson-Jr', { type: 'requestRebuy', amount: 300 });
+      table.act('Quigs', { type: 'approve', playerId: id('Marge Simpson-Jr') });
+      table.deal({ button: 1, holes: { 0: 'Ks Kh', 1: '2s 3h', 2: 'As Ah' }, board: '2c 7d 9h Jc 4s' });
+      table.act('Quigs', { type: 'pause' });
+      table.play((view, name) => (name === WIDEST ? { type: 'fold' } : passive(view)), (view) => view.hand === null);
+      table.act('Quigs', { type: 'transferChips', from: id('Marge Simpson-Jr'), to: id('Quigs'), amount: 20 });
+      await crowned('by-pots', ['DIPSHIT OF THE NIGHT', WIDEST, 'Down 100, tied for the worst night and on rebuys, and won the fewest pots.']);
+
+      await page.context().close();
+    },
+  ],
+  [
+    'when the night ends its recap opens once on every page at the table, waits for whoever is typing or has a dialog open rather than take either from them, and is not shown again by later news or to a page opened afterwards',
+    async (rig) => {
+      const table = nightOfOneHand(rig);
+      const idle = await table.open('Quigs', 'desktop');
+      const looking = await table.open('Zed', 'phone');
+      const typing = await table.open('Stu', 'desktop');
+      const reading = await table.open('Big Al', 'phone');
+
+      // One is halfway through a chat message, another is reading the ledger, and one who only watches has the night so far open already
+      await typing.click('#chat-input');
+      await typing.keyboard.type('gg every');
+      await reading.tap('[data-action="menu"]');
+      await reading.tap('.menu [data-action="ledger"]');
+      await reading.waitForSelector('.ledger');
+      await openTonight(looking, 'phone');
+
+      table.act('Quigs', { type: 'endNight' });
+
+      // Whoever is doing nothing gets it at once
+      await idle.waitForSelector(RECAP);
+      assert.equal(await text(idle, '.tonight-crown strong'), 'Big Al and Stu');
+      await shot(idle, 'tonight-opens-by-itself');
+
+      // Open already, it gains the crown where it is, and closing it does not bring it back
+      await looking.waitForSelector(RECAP);
+      await looking.tap('.dialog [data-action="close"]');
+      await assertNoDialogComes(looking, 'the recap came back when the viewer closed the one they had open');
+
+      // The one typing keeps the keyboard and every letter, and gets it when the message is sent
+      await typing.waitForSelector('.message.night-over');
+      await assertNoDialogComes(typing, 'the recap opened over someone who was typing');
+      assert.deepEqual(await typing.evaluate('[document.activeElement.id, document.activeElement.value]'), ['chat-input', 'gg every']);
+      await typing.keyboard.type('one');
+      await typing.keyboard.press('Enter');
+      await typing.waitForSelector(RECAP);
+      assert.equal(table.view('Quigs').feed.at(-1)!.text, 'gg everyone');
+
+      // The one reading keeps the ledger, and gets it on closing that
+      await reading.waitForSelector('.message.night-over', { state: 'attached' });
+      await assertNoDialogComes(reading, 'the recap took the place of a dialog someone had open', 'Ledger');
+      await reading.tap('.dialog [data-action="close"]');
+      await reading.waitForSelector(RECAP);
+
+      // Closed, it stays closed whatever the table says next
+      await idle.click('.dialog [data-action="close"]');
+      table.act('Zed', { type: 'chat', text: 'good game' });
+      await idle.waitForSelector('.feed li:has-text("good game")');
+      await looking.waitForSelector('.feed li:has-text("good game")', { state: 'attached' });
+      await assertNoDialogComes(idle, 'the recap came up a second time');
+      await assertNoDialogComes(looking, 'the recap came up a second time');
+
+      // A page opened after the end finds the night over and is shown nothing unasked; the recap is in the menu
+      const late = await table.open('Big Al', 'phone');
+      await late.waitForSelector('.message.night-over');
+      table.act('Zed', { type: 'chat', text: 'same time next week' });
+      await late.waitForSelector('.feed li:has-text("same time next week")', { state: 'attached' });
+      await assertNoDialogComes(late, 'a page opened after the night ended was shown the recap unasked');
+      await openTonight(late, 'phone');
+      assert.equal(await text(late, '.tonight-crown strong'), 'Big Al and Stu');
+
+      for (const page of [idle, looking, typing, reading, late]) {
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'a recap that had to wait keeps out of the way of what the viewer does next: it stays off a seat being picked, comes when a message is given up, and never comes once the night has been started again',
+    async (rig) => {
+      const table = nightOfOneHand(rig);
+      const host = await table.open('Quigs', 'desktop');
+      const typing = await table.open('Stu', 'desktop');
+
+      // The answer to starting play again takes its time, as it does from Apps Script
+      await host.route('**/api', async (route) => {
+        if ((JSON.parse(route.request().postData() ?? '{}') as { command?: Command }).command?.type === 'playOn') {
+          await new Promise((resolve) => setTimeout(resolve, 3 * OFFER_TICK_MS));
+        }
+
+        await route.continue();
+      });
+
+      // The host is in the Players dialog and a player is typing when the night ends
+      await host.click('[data-action="menu"]');
+      await host.click('.menu [data-action="players"]');
+      await host.waitForSelector('.dialog li:has-text("Stu") [data-action="move"]');
+      await typing.click('#chat-input');
+      await typing.keyboard.type('gg');
+      table.act('Quigs', { type: 'endNight' });
+      await host.waitForSelector('.message.night-over', { state: 'attached' });
+      await typing.waitForSelector('.message.night-over');
+
+      // Moving a player closes the dialog to pick a seat on the felt, which the recap leaves alone until the pick is over
+      await host.click('.dialog li:has-text("Stu") [data-action="move"]');
+      await host.waitForSelector('.banner.move-prompt');
+      await assertNoDialogComes(host, 'the recap opened over a seat being picked');
+      await host.click('[data-action="cancel-move"]');
+      await host.waitForSelector(RECAP);
+
+      // A message given up, with nothing sent and no news from the table, frees its player for it too
+      await assertNoDialogComes(typing, 'the recap opened over someone who was typing');
+      await typing.keyboard.press('Backspace');
+      await typing.keyboard.press('Backspace');
+      await typing.waitForSelector(RECAP);
+
+      await host.click('.dialog [data-action="close"]');
+      await typing.click('.dialog [data-action="close"]');
+      table.act('Quigs', { type: 'playOn' });
+      table.act('Quigs', { type: 'pause' });
+      await host.waitForSelector('.message.night-over', { state: 'detached' });
+      await typing.waitForSelector('.message.night-over', { state: 'detached' });
+
+      // The night ends again under the host's open menu and a half-typed message, and the host plays on from that menu
+      await host.click('[data-action="menu"]');
+      await host.waitForSelector('.menu');
+      await typing.click('#chat-input');
+      await typing.keyboard.type('one more');
+      rig.advance(1000);
+      table.act('Quigs', { type: 'endNight' });
+      await typing.waitForSelector('.message.night-over');
+      await host.click('.menu [data-action="keep-playing"]');
+      await assertNoDialogComes(host, 'the recap opened on the host while the table had yet to answer that play goes on');
+      await host.waitForSelector('.message.night-over', { state: 'detached' });
+      await assertNoDialogComes(host, 'the recap of a night that was started again came up after all');
+
+      await typing.waitForSelector('.message.night-over', { state: 'detached' });
+      await typing.keyboard.press('Enter');
+      await typing.waitForSelector('.feed li:has-text("one more")');
+      await assertNoDialogComes(typing, 'the recap of a night that was started again came up after all');
+
+      await host.context().close();
+      await typing.context().close();
+    },
+  ],
+  [
+    'while an all-in hand’s last card lies face down the Tonight dialog says nothing the cards have not, for a player and for a watcher, and has the result once the card is up; when that hand is the night’s last, the recap comes only once the hand is off the table, to a page that saw the card turned and to one still waiting on it',
+    async (rig) => {
+      const { screen } = MOTION_LAYOUTS[0]!;
+      const table = rig.table([{ name: 'Quigs', stack: 10_000 }, { name: 'Stu', stack: 10_000 }, { name: 'Pam', stack: 10_000 }], { allowRunItTwice: false });
+
+      table.join('Kibitz');
+
+      // A first hand, so that the night has a leader for the next one to unseat: Pam is given the small blind
+      table.deal({ button: 0, holes: { 0: '9c 4d', 1: '7h 2d', 2: '8c 3d' }, board: '2c 7d 9h Jc 6s' });
+      playOut(table);
+
+      // The night's last: Quigs and Stu put everything in, and Stu catches a king on the river
+      table.dealNext({ holes: { 0: 'Ah Ad', 1: 'Kh Kd', 2: '8c 3d' }, board: '2c 7d 9h Jc Ks' });
+      table.act('Quigs', { type: 'setLastHands', hands: 0 });
+      table.play((view, name) => (name === 'Pam' ? { type: 'fold' } : allIn(view)), (view) => view.hand!.stage !== 'betting');
+      table.play(() => null, (view) => view.hand!.boards[0]!.length === 4);
+
+      // Every move is held where it starts until the check lets it go, so the river lies face down for as long as the check looks
+      const open = async (name: string) => {
+        const page = await table.open(name, screen, MOTION, { moving: true });
+        await page.evaluate('window.holdAt = 0');
+
+        return page;
+      };
+      const turnUp = (page: Page) => page.evaluate('window.holdAt = null; window.land()');
+      const [stu, kibitz, pam, quigs] = [await open('Stu'), await open('Kibitz'), await open('Pam'), await open('Quigs')];
+      const reading = [['a player', stu], ['a watcher', kibitz]] as const;
+      const read = async (page: Page) => ({ text: await text(page, '.dialog-body'), nets: await tonightNets(page), leaders: await texts(page, '.tonight-leaders div') });
+      const before = new Map<Page, Awaited<ReturnType<typeof read>>>();
+
+      for (const [who, page] of reading) {
+        await openTonight(page, screen);
+        before.set(page, await read(page));
+        assert.match(before.get(page)!.leaders[0]!, /^Up the most\s+Pam\b/, `${who}: the night’s leader before the river`);
+      }
+
+      rig.advance(table.view('Quigs').hand!.deadline! - rig.now());
+
+      const settled = table.view('Quigs');
+      const nets = settled.tonight.players.map((row) => [row.name, signedAmount(row.net, settled.config)]).sort();
+      assert.deepEqual([settled.hand!.stage, settled.nightEndedAt], ['done', null]);
+
+      for (const page of [stu, kibitz, pam, quigs]) {
+        await page.waitForSelector('.board-card.stand-in', { state: 'attached' });
+      }
+
+      for (const [who, page] of reading) {
+        assert.deepEqual(await read(page), before.get(page), `${who}: the Tonight dialog gives the result away while the river is face down`);
+      }
+
+      for (const [who, page] of reading) {
+        await turnUp(page);
+        await page.waitForFunction(`/^Up the most\\s+Stu\\b/.test(document.querySelector('.tonight-leaders div').innerText)`);
+        assert.deepEqual(await tonightNets(page), nets, `${who}: the Tonight dialog does not have the result once the river is up`);
+        await pressOn(page, screen)('.dialog [data-action="close"]');
+      }
+
+      // The result is not the end of the night: that comes when the hand is taken off the table
+      assert.equal(await pam.locator('.dialog').count(), 0, 'a recap came while the river was face down');
+      await turnUp(pam);
+      await pam.waitForSelector('.message.result');
+      await assertNoDialogComes(pam, 'the recap came with the result of the night’s last hand, before the hand was off the table');
+      assert.equal(await quigs.locator('.dialog, .message.result').count(), 0, 'a page whose river is still face down shows the result or a recap');
+
+      rig.advance(settled.hand!.deadline! - rig.now());
+      assert.notEqual(table.view('Quigs').nightEndedAt, null);
+
+      // To Quigs the night ends with the river still face down: the wait ends there, and the recap is of the night as it ended
+      for (const [who, page] of [...reading, ['a player with nothing open', pam], ['a page still waiting on the river', quigs]] as const) {
+        await page.waitForSelector(RECAP);
+        assert.deepEqual([await text(page, '.tonight-crown strong'), await tonightNets(page)], ['Quigs', nets], `${who}: the recap of a night that ended on an all-in hand`);
+        assert.equal(await page.locator('.board-card.stand-in').count(), 0, `${who}: a card lies face down on the table under the recap`);
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'a table that was going before the numbers were kept says how many hands they leave out, and with nobody bought in the dialog says so',
+    async (rig) => {
+      const screen = 'smallPhone';
+      const table = rig.table([{ name: 'Quigs', stack: 1000 }, { name: 'Stu', stack: 1000 }], CENTS);
+
+      // As a table saved by the game before this one: three hands dealt and none of them counted
+      table.alter((state) => {
+        state.handCount = 3;
+      });
+
+      const page = await table.open('Quigs', screen);
+      await openTonight(page, screen);
+      assert.equal(await text(page, '.tonight-missed'), 'These numbers start partway through the night: 3 hands were played before the count began. The money is all there.');
+      assert.equal(await text(page, '.tonight-standing'), 'So far tonight, after 0 hands. The dipshit of the night is crowned when the night ends.');
+      assert.equal(await page.locator('.tonight-leaders').count(), 0, 'someone leads a night in which nothing has happened');
+      await assertTonightFits(page, screen);
+      await shot(page, 'tonight-count-began-late');
+      await page.context().close();
+
+      // A table nobody has sat down at yet
+      const created = rig.ask({ op: 'create', name: 'Quigs', config: {} });
+      assert.ok(created.ok && created.kind === 'joined', JSON.stringify(created));
+
+      const alone = await new RigTable(rig, created.view.id, 'Quigs', created.auth).open('Quigs', screen);
+      await openTonight(alone, screen, '.note');
+      assert.deepEqual(await texts(alone, '.dialog-body > *'), ['Nobody has bought in yet.']);
+      await alone.context().close();
+    },
+  ],
 ];
 
 await mkdir(OUT, { recursive: true });

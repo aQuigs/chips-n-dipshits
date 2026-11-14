@@ -1,4 +1,5 @@
 import { formatAmount } from './amounts.ts';
+import { countRebuy } from './tonight.ts';
 import { GameError, SEAT_COUNT } from './types.ts';
 import type { Ctx, FeedKind, LedgerDetail, Member, MoneyKind, Seat, TableState } from './types.ts';
 
@@ -91,6 +92,10 @@ function book(state: TableState, ctx: Ctx, member: Member, detail: LedgerDetail)
 
 /** Chips bought (a positive amount) or cashed out (a negative one). */
 export function recordLedger(state: TableState, ctx: Ctx, member: Member, kind: MoneyKind, amount: number): void {
+  if (kind === 'buy-in' && member.buyIn > 0) {
+    countRebuy(state.tonight, member.id);
+  }
+
   if (amount > 0) {
     member.buyIn += amount;
   } else {

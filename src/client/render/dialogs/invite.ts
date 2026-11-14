@@ -1,29 +1,13 @@
 import type { TableView } from '../../../engine/view.ts';
 import { h } from '../../ui.ts';
-import { everyone, frame } from './dialog.ts';
+import { copyOnClick, everyone, frame } from './dialog.ts';
 import type { DialogHandlers, DialogKind } from './dialog.ts';
 
 function copyRow(id: string, label: string, value: string, handlers: DialogHandlers, warning?: string): HTMLElement {
   const input = h('input', { type: 'text', id, readonly: true, value, onfocus: (event: Event) => (event.target as HTMLInputElement).select() });
   const button = h('button.btn.small.primary', { type: 'button' }, 'Copy');
 
-  button.addEventListener('click', async () => {
-    let copied = await handlers.copy(value);
-
-    // A page inside someone else's frame is often refused the clipboard; copying the selection still works there
-    if (!copied) {
-      input.focus();
-      input.select();
-
-      try {
-        copied = document.execCommand('copy');
-      } catch {
-        copied = false;
-      }
-    }
-
-    button.textContent = copied ? 'Copied' : 'Copy it from the box';
-  });
+  copyOnClick(button, input, () => value, handlers);
 
   return h('div.field', null, h('label', { for: id }, label), h('div.copy', null, input, button), warning ? h('small', null, warning) : null);
 }

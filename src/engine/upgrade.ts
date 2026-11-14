@@ -1,6 +1,7 @@
 import { startingConfig } from './config.ts';
+import { newTonight } from './tonight.ts';
 import { STATE_SCHEMA } from './types.ts';
-import type { Hand, HandPlayer, HandRecord, Member, Seat, TableState } from './types.ts';
+import type { Hand, HandPlayer, HandRecord, HandRecordPlayer, Member, Seat, TableState } from './types.ts';
 
 /** What schema 3 kept of straddles: whether a player posts one under the gun, the only kind there was, and the one seat that did in a hand. */
 interface SchemaThree {
@@ -45,6 +46,7 @@ interface SavedDefaults {
   hand(): Partial<Hand>;
   handPlayer(): Partial<HandPlayer>;
   record(): Partial<HandRecord>;
+  recordPlayer(): Partial<HandRecordPlayer>;
 }
 
 /**
@@ -54,12 +56,13 @@ interface SavedDefaults {
  * the config registry. Each entry is a function so that no two tables are handed the same list.
  */
 export const SAVED_DEFAULTS: SavedDefaults = {
-  table: () => ({ cohostIds: [], shuffleAfterHand: false, bombPotCalled: false, handsSinceBombPot: 0, lastHand: null, nightEndedAt: null, blinds: null }),
+  table: () => ({ cohostIds: [], shuffleAfterHand: false, bombPotCalled: false, handsSinceBombPot: 0, lastHand: null, nightEndedAt: null, blinds: null, tonight: newTonight() }),
   member: () => ({ transferred: 0 }),
   seat: () => ({ moveTo: null, owesBigBlind: false, owesSmallBlind: false, postsOwed: false }),
   hand: () => ({ events: [], bombPot: null, passedOver: [] }),
   handPlayer: () => ({ dead: 0 }),
-  record: () => ({ events: [], bombPot: null }),
+  record: () => ({ events: [], bombPot: null, bigBlind: 0 }),
+  recordPlayer: () => ({ playerId: '' }),
 };
 
 function fillMissing<T extends object>(saved: T, defaults: Partial<T>): void {
@@ -117,6 +120,10 @@ export function upgradeState(saved: TableState): TableState {
 /** Gives a hand record saved by older code the fields added since. */
 export function upgradeRecord(saved: HandRecord): HandRecord {
   fillMissing(saved, SAVED_DEFAULTS.record());
+
+  for (const player of saved.players) {
+    fillMissing(player, SAVED_DEFAULTS.recordPlayer());
+  }
 
   return saved;
 }

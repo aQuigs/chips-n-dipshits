@@ -586,6 +586,24 @@ try {
     assert.equal(await frame.locator('#pref-notify, #pref-tabTitle').count(), 0);
     assert.deepEqual(said, [], 'the frame complained in the console');
 
+    console.log("In Apps Script's frame, which is refused the clipboard, the night as text is put in a box, selected, to be copied from there");
+    await frame.click('.dialog [data-action="close"]');
+    await frame.click('[data-action="menu"]');
+    await frame.click('.menu [data-action="tonight"]');
+    await frame.click('[data-action="copy-tonight"]');
+    await frame.waitForSelector('#tonight-text:visible');
+
+    const box = (await frame.evaluate(`(() => {
+      const box = document.querySelector('#tonight-text');
+
+      return { text: box.value, selected: box.value.slice(box.selectionStart, box.selectionEnd), focused: document.activeElement === box, says: document.querySelector('[data-action="copy-tonight"]').textContent };
+    })()`)) as { text: string; selected: string; focused: boolean; says: string };
+
+    assert.equal(box.text, 'Chips n’ Dipshits: the night so far, 0 hands\n\nHomer 0 · 0 hands · 0 pots won\nMarge 0 · 0 hands · 0 pots won');
+    assert.deepEqual([box.selected, box.focused], [box.text, true], 'the text is not ready to be copied by hand');
+    // Copying a selection is still allowed in such a frame by the browsers that allow it at all, and where it is not, the button sends the player to the box
+    assert.ok(['Copied', 'Copy it from the box'].includes(box.says), box.says);
+
     await context.close();
     await dealer.context().close();
     google.close();

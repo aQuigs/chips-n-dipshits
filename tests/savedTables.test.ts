@@ -289,6 +289,31 @@ test('a table saved when a hand had one straddle, kept as its seat, has it as a 
   assertInvariants(t.state, t.now);
 });
 
+test('a table saved before the night’s numbers were kept loads with nothing counted and says how many hands it missed, and a hand it was saved in the middle of is the first one counted', () => {
+  for (const file of FILES) {
+    const state = load(file);
+    const { tonight, ledger } = TestTable.adopt(state).view(0);
+
+    assert.deepEqual(state.tonight, { hands: 0, players: {} }, file);
+    assert.deepEqual([tonight.hands, tonight.missed], [0, state.handCount - (state.hand ? 1 : 0)], file);
+    assert.deepEqual(tonight.players.map((row) => [row.playerId, row.net, row.hands]).sort(), ledger.map((row) => [row.playerId, row.net, 0]).sort(), file);
+  }
+
+  const t = TestTable.adopt(load(LAST_OF_SCHEMA_3));
+  const dealtIn = t.state.hand!.players.map((player) => player.playerId).sort();
+  const missed = t.state.handCount - 1;
+  assert.ok(missed > 0 && dealtIn.length > 0);
+
+  t.cmd(0, { type: 'pause' });
+  t.foldOut();
+
+  assert.deepEqual([t.view(0).tonight.hands, t.view(0).tonight.missed], [1, missed]);
+  assert.deepEqual(Object.keys(t.state.tonight.players).sort(), dealtIn);
+  assert.ok(Object.values(t.state.tonight.players).every((numbers) => numbers.hands === 1));
+  assert.equal(Object.values(t.state.tonight.players).filter((numbers) => numbers.won === 1).length, 1, 'the hand it was saved in had one winner');
+  assertInvariants(t.state, t.now);
+});
+
 test('a table saved before the last hands could be called has none called, and its night goes on', () => {
   for (const file of OLDEST) {
     const state = load(file);

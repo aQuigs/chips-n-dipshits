@@ -473,7 +473,7 @@ test('more of the same hand during the hold, as a player showing their cards, en
   assert.deepEqual(page.told[1]!.feed, [...result.feed, ...shown.feed]);
 });
 
-test('while held the whole page is drawn from the hand as it stood: no result, nobody offered to show, the stacks, the ledger and the hint as before the river', async () => {
+test('while held the whole page is drawn from the hand as it stood: no result, nobody offered to show, the stacks, the ledger, the night’s numbers and the hint as before the river', async () => {
   const { t, page: seat } = dealt([1000, 1000, 1000], { 0: ACES, 1: KINGS, 2: QUEENS });
   t.fold(0);
   t.raise(1, 1000);
@@ -488,12 +488,55 @@ test('while held the whole page is drawn from the hand as it stood: no result, n
   assert.deepEqual([shown.hand!.stage, shown.hand!.result, shown.hand!.canShow], ['runout', null, false]);
   assert.deepEqual(shown.seats.map((seat) => seat?.stack), turn.view.seats.map((seat) => seat?.stack));
   assert.deepEqual(shown.ledger, turn.view.ledger);
+  assert.deepEqual(shown.tonight, turn.view.tonight);
+  assert.deepEqual([shown.tonight.upMost, result.view.tonight.upMost], [[], [t.ids[1]]], 'the night’s numbers name the winner while the result is held');
   assert.deepEqual(shown.hand!.holding, turn.view.hand!.holding);
   assert.deepEqual(shown.hand!.boards, result.view.hand!.boards, 'the river is not drawn, for its turn to show');
 
   page.moves.land();
   await settle();
   assert.equal(page.suspense.shown(result.view), result.view);
+});
+
+test('a night that ends on an all-in runout is told to be over only once nothing is held: its end comes in a view with no hand, which ends the hold before any of it is told', async () => {
+  const lastHand = () => {
+    const { t, page: seat } = dealt([1000, 1000], { 0: ACES, 1: KINGS });
+    t.cmd(0, { type: 'setLastHands', hands: 0 });
+    t.raise(0, 1000);
+    t.call(1);
+
+    const result = runOut(t, seat).at(-1)!;
+    const page = holdingPage();
+    page.show(result);
+    assert.ok(page.suspense.turning.length > 0);
+
+    return { t, seat, page };
+  };
+
+  const over = ({ t, seat, page }: ReturnType<typeof lastHand>) => {
+    t.wait(t.state.hand!.deadline! - t.now);
+    const change = seat.change();
+    page.show(change);
+
+    assert.equal(change.nightEnded, true);
+    assert.deepEqual(page.suspense.turning, []);
+    assert.equal(page.suspense.shown(change.view), change.view, 'the night’s end is drawn from a held view');
+    assert.equal(page.told.at(-1), change);
+  };
+
+  // The card comes up and the result is told with the night still going; the hand is cleared after that, and the night ends
+  const inTime = lastHand();
+  inTime.page.moves.land();
+  await settle();
+  assert.deepEqual(inTime.page.told.map((change) => [winsIn(change) > 0, change.nightEnded, change.view.nightEndedAt]), [[false, false, null], [true, false, null]]);
+  over(inTime);
+
+  // The hand is cleared with the card still down, as on a page that stalled: the hold ends there, untold
+  const stalled = lastHand();
+  over(stalled);
+  stalled.page.moves.land();
+  await settle();
+  assert.equal(stalled.page.told.length, 2, 'the held result was told after the night ended');
 });
 
 test('with animations off, or on a device that asks for less motion, nothing is held and nothing is celebrated', () => {

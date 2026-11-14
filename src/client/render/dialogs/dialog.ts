@@ -72,6 +72,33 @@ export function frame(title: string, handlers: DialogHandlers, ...body: (HTMLEle
 }
 
 /**
+ * Makes `button` copy `text`, and say how that went. A page inside someone else's frame is often
+ * refused the clipboard: there the text is put in `field` and selected, where copying the selection
+ * still works in most browsers, and where the viewer can copy it by hand in the rest.
+ */
+export function copyOnClick(button: HTMLButtonElement, field: HTMLInputElement | HTMLTextAreaElement, text: () => string, handlers: DialogHandlers): void {
+  button.addEventListener('click', async () => {
+    const value = text();
+    let copied = await handlers.copy(value);
+
+    if (!copied) {
+      field.value = value;
+      field.hidden = false;
+      field.focus();
+      field.select();
+
+      try {
+        copied = document.execCommand('copy');
+      } catch {
+        copied = false;
+      }
+    }
+
+    button.textContent = copied ? 'Copied' : 'Copy it from the box';
+  });
+}
+
+/**
  * Sends what a form asks for. A refusal leaves the form as it was typed, with the reason in a toast,
  * instead of costing the player their entries. With no answer the table may have taken it all the
  * same, so the form moves on rather than invite a second try: the host adding chips twice would get them twice.

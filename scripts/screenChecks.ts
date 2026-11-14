@@ -272,8 +272,6 @@ async function assertNextHandsFit(page: Page, screen: ScreenName, who: string): 
   assertApart(await boxes(page, '.controls .next-hand span'), await boxes(page, '.stage, .controls .extras'), 'word of the hands to come and what is around it');
 }
 
-
-
 /*
  * Three double-board bomb pots at a table of BOMB_POT_TABLES, every card fixed, played one after the
  * other with a bet on the first flop and checks from there. Each is named for how its pots are won.

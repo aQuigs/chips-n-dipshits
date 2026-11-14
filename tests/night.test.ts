@@ -145,6 +145,16 @@ test('no bomb pot can be called during the last hand, since no hand comes after 
   t.cmd(HOST, { type: 'setLastHands', hands: 0 });
   t.cmd(HOST, { type: 'setBombPot', on: false });
   assert.throws(() => t.cmd(COHOST, { type: 'setBombPot', on: true }), { name: 'GameError', message: 'This is the last hand, so there is no next hand to be a bomb pot' });
+
+  // Nor is one promised by the table's count, during the last hand or after it
+  t.cmd(HOST, { type: 'updateConfig', config: { bombPotEvery: 1 } });
+  assert.equal(t.view(PLAYER).nextBombPot, null);
+  foldAround(t);
+  assert.ok(nightIsOver(t.state));
+  assert.equal(t.view(PLAYER).nextBombPot, null);
+
+  t.cmd(HOST, { type: 'playOn' });
+  assert.notEqual(t.view(PLAYER).nextBombPot, null);
 });
 
 test('only the host or a co-host calls the last hands or ends the night: a seated player and a watcher are refused', () => {

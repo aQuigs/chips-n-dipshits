@@ -4,7 +4,7 @@ import { bombPotName, bombPotOf } from '../bombPots.ts';
 import { validatedConfig } from '../config.ts';
 import { restartActionClock } from '../hand.ts';
 import { actorName, dropCohost, requireMayRemove } from '../hosts.ts';
-import { callLastHands, endNight, handsLeft, nightIsOver, restartNight } from '../night.ts';
+import { callLastHands, endNight, nightIsOver, onLastHand, restartNight } from '../night.ts';
 import { movePlayer, shuffleEveryone } from '../reseating.ts';
 import { grant, isDealtIn, leaveSeat, turnAway } from '../seating.ts';
 import { addFeed, memberNamed, recordLedger, seatedMember, seatIndexOf } from '../seats.ts';
@@ -128,7 +128,7 @@ export const setBombPot: Handler<'setBombPot'> = {
       return;
     }
 
-    if (on && state.hand && handsLeft(state) === 0) {
+    if (on && onLastHand(state)) {
       throw new GameError('This is the last hand, so there is no next hand to be a bomb pot');
     }
 

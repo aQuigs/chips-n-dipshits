@@ -279,7 +279,6 @@ function openSeatEl(view: TableView, seat: number, slot: number, shape: Shape, h
     return open('requested', h('div.plate', null, 'Waiting for the host…'));
   }
 
-  // Nobody sits down once the night is over, with no more hands to play
   if (view.you.seat !== null || myRequest || nightOver(view)) {
     return open('idle', h('div.plate', { 'aria-hidden': 'true' }, 'Open'));
   }

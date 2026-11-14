@@ -17,6 +17,11 @@ export function handsLeft(state: TableState): number | null {
   return state.lastHand === null ? null : state.lastHand - state.handCount;
 }
 
+/** The hand on the table is the last of the night, so no hand comes after it. */
+export function onLastHand(state: TableState): boolean {
+  return state.hand !== null && handsLeft(state) === 0;
+}
+
 /** How the chat puts when the night ends, with `count` hands still to come and a hand on the table or not. */
 function endsAfter(count: number, duringHand: boolean): string {
   if (!duringHand) {
@@ -102,7 +107,7 @@ export function endNight(state: TableState, ctx: Ctx, saying: string): void {
   ctx.effects.push({ type: 'nightEnded', night: { at: ctx.now, tableId: state.id } });
 }
 
-/** Starts play again after the night ended, which makes it not over. `by` is how the chat names whoever did. */
+/** `by` is how the chat names whoever started play again. */
 export function restartNight(state: TableState, ctx: Ctx, by: string): void {
   if (!nightIsOver(state)) {
     return;

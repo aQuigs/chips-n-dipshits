@@ -5,7 +5,7 @@ import type { Command } from '../../engine/types.ts';
 import type { HandView, SeatView, TableView } from '../../engine/view.ts';
 import { HOTKEYS } from '../hotkeys.ts';
 import { h, holdWhile } from '../ui.ts';
-import { lastHandsText, nightOver } from './night.ts';
+import { lastHandsText, nightOver, onLastHand } from './night.ts';
 
 export interface ControlHandlers {
   /** Resolves once the server has answered, or failed to. */
@@ -154,7 +154,7 @@ function waitingText(view: TableView, hand: HandView | null): string {
   }
 
   if (!hand || hand.stage === 'done') {
-    if (hand && view.handsLeft === 0) {
+    if (onLastHand(view)) {
       return 'That was the last hand';
     }
 
@@ -187,14 +187,13 @@ function waitingText(view: TableView, hand: HandView | null): string {
  */
 function nextHandNote(view: TableView): string[] {
   const deciding = view.hand?.options || view.hand?.canVote;
-  if (deciding || nightOver(view)) {
+  if (deciding) {
     return [];
   }
 
-  // The last hand has no hand after it to be a bomb pot, and once it is over the line above says so
-  const lastHand = view.hand !== null && view.handsLeft === 0;
-  const countdown = lastHand && view.hand!.stage === 'done' ? null : lastHandsText(view);
-  const bombPot = view.nextBombPot && !lastHand ? `Next hand is a ${bombPotName(view.nextBombPot)}: ${formatAmount(view.nextBombPot.amount, view.config)} each` : null;
+  // Once the last hand is over, the line above says so
+  const countdown = onLastHand(view) && view.hand!.stage === 'done' ? null : lastHandsText(view);
+  const bombPot = view.nextBombPot ? `Next hand is a ${bombPotName(view.nextBombPot)}: ${formatAmount(view.nextBombPot.amount, view.config)} each` : null;
 
   return [countdown, bombPot].filter((part) => part !== null);
 }
@@ -307,7 +306,7 @@ export function controlsSignature(view: TableView): string {
   return JSON.stringify([
     seat && [seat.stack, seat.pendingAdd, seat.sittingOut, seat.away, seat.straddle, seat.leaving],
     hand && [hand.number, hand.stage, hand.street, hand.toAct, hand.turn, hand.currentBet, hand.pot, hand.options, hand.canVote, hand.canShow],
-    [view.running, view.nextHandAt !== null, view.handCount === 0, view.nightEndedAt, hand?.stage === 'done' && view.handsLeft === 0],
+    [view.running, view.nextHandAt !== null, view.handCount === 0, nightOver(view), hand?.stage === 'done' && onLastHand(view)],
     view.requests.filter((request) => request.playerId === view.you.id),
     [view.config.allowStraddle, view.config.maxBuyIn],
     nextHandNote(view),

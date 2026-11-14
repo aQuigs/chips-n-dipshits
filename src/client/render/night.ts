@@ -2,6 +2,8 @@ import type { TableView } from '../../engine/view.ts';
 
 export const nightOver = (view: TableView): boolean => view.nightEndedAt !== null;
 
+export const onLastHand = (view: TableView): boolean => view.hand !== null && view.handsLeft === 0;
+
 const hands = (count: number) => `${count} more hand${count === 1 ? '' : 's'}`;
 
 /**

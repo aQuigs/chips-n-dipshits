@@ -2,8 +2,7 @@ import type { Rng } from './cards.ts';
 import { dispatch } from './commands/index.ts';
 import { newConfig } from './config.ts';
 import { startHand, stepHand, TIMING } from './hand.ts';
-import { countHandPlayed } from './night.ts';
-import { reseatAfterHand } from './reseating.ts';
+import { handEnded } from './handEnd.ts';
 import { addFeed, eligibleSeats } from './seats.ts';
 import { GameError, SEAT_COUNT, STATE_SCHEMA } from './types.ts';
 import type { Command, Ctx, Member, TableState } from './types.ts';
@@ -185,8 +184,7 @@ export function tick(state: TableState, ctx: Ctx): boolean {
       stepHand(state, ctx);
 
       if (!state.hand) {
-        reseatAfterHand(state, ctx);
-        countHandPlayed(state, ctx);
+        handEnded(state, ctx);
       }
     } else {
       state.nextHandAt = null;

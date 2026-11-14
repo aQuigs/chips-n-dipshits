@@ -7,6 +7,7 @@ export * from './config.ts';
 export * from './events.ts';
 export * from './forcedBets.ts';
 export * from './hand.ts';
+export * from './handEnd.ts';
 export * from './handNames.ts';
 export * from './handPlan.ts';
 export * from './handRank.ts';

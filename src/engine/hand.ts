@@ -11,7 +11,7 @@ import { planHand, takeUp } from './handPlan.ts';
 import { playerHand } from './handRank.ts';
 import type { HandValue } from './handRank.ts';
 import { buildPots, splitAmount } from './pots.ts';
-import { addFeed, addPendingChips, clockwiseAfter, clockwiseFrom, eligibleSeats, seatsClockwiseAfter, vacateSeat } from './seats.ts';
+import { addFeed, clockwiseAfter, clockwiseFrom, eligibleSeats, seatsClockwiseAfter } from './seats.ts';
 import { stakesText } from './stakes.ts';
 import { GameError } from './types.ts';
 import type { AnteFrom, BombPot, BountyResult, Ctx, Hand, HandPlayer, HandResult, PotAward, PotResult, ShownHand, Street, TableState } from './types.ts';
@@ -861,7 +861,7 @@ export function showCards(state: TableState, ctx: Ctx, seatIndex: number): void 
   show(state, ctx, player);
 }
 
-/** Takes the finished hand off the table, writes it to the record and applies everything that was waiting for it. */
+/** Takes the finished hand off the table and writes it to the record. What its end sets off is `handEnded`'s to do. */
 function clearHand(state: TableState, ctx: Ctx): void {
   const hand = state.hand!;
 
@@ -887,21 +887,12 @@ function clearHand(state: TableState, ctx: Ctx): void {
   });
 
   state.hand = null;
-
-  state.seats.forEach((seat, index) => {
-    if (!seat) {
-      return;
-    }
-
-    if (seat.leaving) {
-      vacateSeat(state, ctx, index);
-    } else {
-      addPendingChips(state, ctx, index);
-    }
-  });
 }
 
-/** Does whatever the hand's deadline was waiting for. Only call once the deadline has passed. */
+/**
+ * Does whatever the hand's deadline was waiting for. Only call once the deadline has passed. A step
+ * that leaves no hand on the table has ended one, and `handEnded` is to be called for it.
+ */
 export function stepHand(state: TableState, ctx: Ctx): void {
   const hand = state.hand!;
 

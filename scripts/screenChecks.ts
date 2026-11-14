@@ -555,6 +555,21 @@ const BUZZ = `(() => {
 
 const middle = (box: Box) => ({ x: (box.left + box.right) / 2, y: (box.top + box.bottom) / 2 });
 
+/**
+ * Run in a page: every emoji of the reactions drawn half as wide again as their own size, as no font here
+ * draws them but some phones' fonts come near. A check run with it shows no layout of theirs depends on
+ * how wide this machine's emoji are.
+ */
+const WIDE_EMOJI = '.seat-reaction, .thrown, .react-choice, .react-toggle { letter-spacing: 0.25em; text-indent: 0.25em; }';
+
+/** That every box in `found` is inside `frame`. */
+function within(found: Box[], [frame]: Box[], what: string): void {
+  assert.ok(found.length > 0 && frame, `${what}: nothing to look at`);
+  for (const box of found) {
+    assert.ok(box.left >= frame.left - 1 && box.right <= frame.right + 1 && box.top >= frame.top - 1 && box.bottom <= frame.bottom + 1, `${what} reaches outside ${JSON.stringify(frame)}: ${JSON.stringify(box)}`);
+  }
+}
+
 /** Nine at the table, each named for a check to throw at by name: Quigs in seat 0, Pam 2, Lu 3, Sam 4, Al 5, Dot 6. */
 const NINE_REACTING: RigPlayer[] = ['Quigs', 'Stu', 'Pam', 'Lu', 'Sam', 'Al', 'Dot', 'Bo', 'Kai'].map((name) => ({ name, stack: 1000 }));
 
@@ -1775,22 +1790,36 @@ const CHECKS: Check[] = [
       // Each goes by itself after its few seconds, on the page's own timer
       await quigs.waitForSelector('.seat-reaction', { state: 'detached', timeout: 10_000 });
 
-      // Three at one seat stand side by side, all on the screen
-      rig.advance(REACTION_LIFE_MS);
-      table.act('Pam', { type: 'react', kind: 'tomato', to: table.auth('Dot').id });
-      table.act('Lu', { type: 'react', kind: 'rose', to: table.auth('Dot').id });
-      table.act('Bo', { type: 'react', kind: 'beer', to: table.auth('Dot').id });
-      await quigs.waitForSelector('.seat-reaction[data-reaction="beer"]');
-      const onDot = await boxes(quigs, '.seat-reaction[data-seat="6"]');
-      assert.equal(onDot.length, 3);
-      onDot.forEach((mark, index) => assertApart([mark], onDot.slice(index + 1), 'two things thrown at one seat'));
-      // At a seat by the table's edge they are moved in together, none cut off by the edge
-      const [table9] = await boxes(quigs, '.stage');
-      for (const mark of onDot) {
-        assert.ok(mark.left >= table9!.left && mark.right <= table9!.right, `a thing thrown at a seat by the edge is cut off: ${JSON.stringify(mark)} in ${JSON.stringify(table9)}`);
-      }
-      assertOnScreen(onDot, 'smallPhone', 'three things on one seat');
-      await shot(quigs, 'reactions-three-on-a-seat-smallPhone');
+      // As many as the table takes, all on one seat by the table's edge: three thrown at Dot and Dot's own, side by side
+      const pileOn = async (glyph: string) => {
+        await quigs.waitForSelector('.seat-reaction', { state: 'detached', timeout: 10_000 });
+        rig.advance(REACTION_LIFE_MS);
+        table.act('Pam', { type: 'react', kind: 'tomato', to: table.auth('Dot').id });
+        table.act('Lu', { type: 'react', kind: 'rose', to: table.auth('Dot').id });
+        table.act('Bo', { type: 'react', kind: 'beer', to: table.auth('Dot').id });
+        table.act('Dot', { type: 'react', kind: 'fume' });
+        await quigs.waitForSelector('.seat-reaction[data-reaction="fume"]');
+
+        const onDot = await boxes(quigs, '.seat-reaction[data-seat="6"]');
+        const [stage] = await boxes(quigs, '.stage');
+        assert.equal(onDot.length, 4, glyph);
+        onDot.forEach((mark, index) => assertApart([mark], onDot.slice(index + 1), `two things on one seat (${glyph})`));
+        for (const mark of onDot) {
+          assert.ok(mark.left >= stage!.left && mark.right <= stage!.right, `a thing on a seat by the edge is cut off (${glyph}): ${JSON.stringify(mark)} in ${JSON.stringify(stage)}`);
+        }
+        assertOnScreen(onDot, 'smallPhone', `four things on one seat (${glyph})`);
+        await shot(quigs, `reactions-four-on-a-seat-${glyph}-smallPhone`);
+      };
+
+      await pileOn('own-emoji');
+
+      // The same with every emoji drawn far wider than this machine draws them, as some phones' are: nothing is laid out by a width it assumed
+      await quigs.addStyleTag({ content: WIDE_EMOJI });
+      await pileOn('wide-emoji');
+
+      await quigs.tap('[data-action="reactions"]');
+      assert.deepEqual(await squeezed(quigs, '.react-choice, .react-toggle'), [], 'a wide emoji does not fit its button in the picker');
+      within(await boxes(quigs, '.react-panel'), await boxes(quigs, '.stage'), 'the picker with wide emoji');
     },
   ],
   [
@@ -1803,17 +1832,26 @@ const CHECKS: Check[] = [
       await dealt(page);
       await page.evaluate('window.flights.splice(0)');
 
-      table.act('Sam', { type: 'react', kind: 'tomato', to: table.auth('Pam').id });
-      await page.waitForSelector('.seat-reaction[data-reaction="tomato"]');
-      const [flight, ...others] = await flown(page);
+      // Thrown as this machine draws its emoji, and again with them drawn far wider: it leaves and lands on the same seats
+      for (const glyph of ['own-emoji', 'wide-emoji']) {
+        if (glyph === 'wide-emoji') {
+          await page.waitForSelector('.seat-reaction', { state: 'detached', timeout: 10_000 });
+          await page.addStyleTag({ content: WIDE_EMOJI });
+          rig.advance(REACTION_LIFE_MS);
+        }
 
-      assert.deepEqual(others, [], 'more moved than the throw');
-      assert.ok(flight && flight.name === 'throw' && flight.what === 'mark' && flight.standIn && flight.text === '🍅', JSON.stringify(flight));
-      assertInside(flight.from, (await boxes(page, '.seat[data-seat="4"] .plate'))[0]!, 'the throw leaves from Sam');
-      assertInside(flight.to, (await boxes(page, '.seat[data-seat="2"] .plate'))[0]!, 'the throw lands on Pam');
-      await assertMarkOn(page, 'tomato', 2, 'Sam threw a tomato at Pam');
-      await page.waitForSelector('.thrown.stand-in', { state: 'detached' });
-      await shot(page, 'reactions-throw-landed-smallPhone');
+        table.act('Sam', { type: 'react', kind: 'tomato', to: table.auth('Pam').id });
+        await page.waitForSelector('.seat-reaction[data-reaction="tomato"]');
+        const [flight, ...others] = await flown(page);
+
+        assert.deepEqual(others, [], `more moved than the throw (${glyph})`);
+        assert.ok(flight && flight.name === 'throw' && flight.what === 'mark' && flight.standIn && flight.text === '🍅', JSON.stringify(flight));
+        assertInside(flight.from, (await boxes(page, '.seat[data-seat="4"] .plate'))[0]!, `the throw leaves from Sam (${glyph})`);
+        assertInside(flight.to, (await boxes(page, '.seat[data-seat="2"] .plate'))[0]!, `the throw lands on Pam (${glyph})`);
+        await assertMarkOn(page, 'tomato', 2, 'Sam threw a tomato at Pam');
+        await page.waitForSelector('.thrown.stand-in', { state: 'detached' });
+        await shot(page, `reactions-throw-landed-${glyph}-smallPhone`);
+      }
 
       // A hand dealt on a quiet table, then one dealt with a throw in the same moment: every card goes out just as it did
       const deal = async (throwing: boolean) => {

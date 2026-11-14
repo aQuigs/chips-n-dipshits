@@ -17,15 +17,10 @@
   line-height: 1;
 }
 
-/*
- * Held by the middle of its bottom edge at the top of its seat's plate; several on one seat stand side by
- * side (reactionMarks.ts). Each has a box of its own width, wider than any emoji font draws one, so how
- * wide a device's emoji are never decides whether they overlap
- */
+/* Held by the middle of its bottom edge at the top of its seat's plate; several on one seat stand side by side, as wide as each is drawn (reactionMarks.ts) */
 .seat-reaction {
   position: absolute;
-  width: 1.3em;
-  text-align: center;
+  white-space: nowrap;
   transform: translate(-50%, -60%);
   filter: drop-shadow(0 2px 3px rgb(0 0 0 / 45%));
 }
@@ -93,9 +88,13 @@
 }
 
 
+/* Its emoji in the middle of the whole button, padding none, so one drawn wide by a device's font still fits */
 .react-toggle {
   flex: none;
+  display: grid;
+  place-items: center;
   margin-right: 8px;
+  padding: 0;
   width: 36px;
   height: 36px;
   border: 1px solid var(--line);
@@ -141,6 +140,7 @@
 }
 
 .react-choice {
+  padding: 0;
   height: 44px;
   border: 1px solid transparent;
   border-radius: var(--radius);

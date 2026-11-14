@@ -2,8 +2,8 @@ import { LANDED_MS, POPPED_MS } from './reactions.ts';
 import type { SeatMark, SeatMarks } from './reactions.ts';
 import { h } from './ui.ts';
 
-// How far apart marks on one seat stand, middle to middle, in their own size: more than the width of the box each has (reactions.css)
-const STEP_EM = 1.4;
+// The space between marks that stand side by side on one seat, in their own size
+const GAP_EM = 0.15;
 
 interface Showing {
   mark: SeatMark;
@@ -61,23 +61,28 @@ export class ReactionMarks implements SeatMarks {
     // The page may be drawn smaller than life, as the frames of the theme showcase are
     const zoom = frame.width / this.layer.offsetWidth || 1;
     const width = frame.width / zoom;
-    const step = STEP_EM * parseFloat(getComputedStyle(this.showing[0]!.element).fontSize);
+    const gap = GAP_EM * parseFloat(getComputedStyle(this.showing[0]!.element).fontSize);
 
     for (const seat of new Set(this.showing.map(({ mark }) => mark.seat))) {
       const here = this.showing.filter(({ mark }) => mark.seat === seat);
       const plate = this.stage.querySelector(`.table .seat[data-seat="${seat}"] .plate`)?.getBoundingClientRect();
 
-      // Several on a seat at the table's edge are moved in together, so none is cut off
-      const half = (here.length * step) / 2;
-      const middle = plate ? Math.min(Math.max((plate.left + plate.width / 2 - frame.left) / zoom, half), width - half) : 0;
+      here.forEach(({ element }) => (element.hidden = !plate));
+      if (!plate) {
+        continue;
+      }
+
+      // Laid out by the width each is drawn at, which differs from one device's emoji to another's, and
+      // moved in together at the table's edge, so none is cut off
+      const widths = here.map(({ element }) => element.offsetWidth);
+      const total = widths.reduce((sum, each) => sum + each, 0) + gap * (here.length - 1);
+      const middle = (plate.left + plate.width / 2 - frame.left) / zoom;
+      let left = Math.max(0, Math.min(middle - total / 2, width - total));
 
       here.forEach(({ element }, index) => {
-        element.hidden = !plate;
-
-        if (plate) {
-          element.style.setProperty('left', `${middle + (index - (here.length - 1) / 2) * step}px`);
-          element.style.setProperty('top', `${(plate.top - frame.top) / zoom}px`);
-        }
+        element.style.setProperty('left', `${left + widths[index]! / 2}px`);
+        element.style.setProperty('top', `${(plate.top - frame.top) / zoom}px`);
+        left += widths[index]! + gap;
       });
     }
   }

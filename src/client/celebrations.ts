@@ -54,7 +54,7 @@ export interface BigPot {
  * very last card of each board is held, never the turn, and the hold is fitted into the time before
  * the table moves on by itself.
  */
-export function sweatOf({ view, events }: TableChange): Sweat | null {
+export function sweatOf({ view, events, now }: TableChange): Sweat | null {
   const hand = view.hand;
   const all = hand?.events ?? [];
   const runout = all.findIndex((event) => event[0] === 'runs');
@@ -78,7 +78,8 @@ export function sweatOf({ view, events }: TableChange): Sweat | null {
 
   const turning = MOVE_MS.facedown + MOVE_MS.reveal;
   const waits = last.map((_card, nth) => FACE_DOWN_MS + nth * NEXT_BOARD_MS);
-  const room = Math.min(MOST_SWEAT_MS, hand.deadline - view.now - (hand.stage === 'done' ? AFTER_SWEAT_MS : BEFORE_NEXT_STREET_MS)) - turning;
+  // Counted from when the page shows the view, which a slow answer makes later than the server made it
+  const room = Math.min(MOST_SWEAT_MS, hand.deadline - Math.max(now, view.now) - (hand.stage === 'done' ? AFTER_SWEAT_MS : BEFORE_NEXT_STREET_MS)) - turning;
   const shrink = Math.min(1, room / waits.at(-1)!);
   if (shrink * FACE_DOWN_MS < LEAST_FACE_DOWN_MS) {
     return null;

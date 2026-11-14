@@ -548,8 +548,9 @@ export class App {
 
     lockTurn(this.screen.controls.element, this.turnLocked());
 
-    if (this.view) {
-      this.drawBanners(this.screen, this.view);
+    const view = this.shownView();
+    if (view) {
+      this.drawBanners(this.screen, view);
     }
   }
 
@@ -559,9 +560,14 @@ export class App {
 
   // ---- Drawing the table screen ----
 
+  /** The table as the screen shows it: while the last cards of a runout are turned, as it stood before its hand was settled. */
+  private shownView(): TableView | null {
+    return this.view && this.screen ? this.screen.suspense.shown(this.view) : this.view;
+  }
+
   private drawTable(): void {
     const screen = this.screen;
-    const view = this.view;
+    const view = this.shownView();
     if (!screen || !view) {
       return;
     }
@@ -571,15 +577,11 @@ export class App {
     this.drawStage(screen, view);
     this.drawControls(screen, view);
 
-    const held = screen.suspense.held;
-    const line = held?.line ?? null;
+    const line = screen.suspense.held?.line ?? null;
 
     screen.feed.update(line === null ? view.feed : view.feed.filter((entry) => entry.seq < line));
 
-    // An open dialog keeps what it showed, as stacks and the ledger, until the cards are up
-    if (!held) {
-      this.drawDialog();
-    }
+    this.drawDialog();
   }
 
   private drawControls(screen: TableScreen, view: TableView): void {
@@ -653,8 +655,8 @@ export class App {
   private drawStage(screen: TableScreen, view: TableView): void {
     const myRequest = view.requests.find((request) => request.playerId === view.you.id);
     const picking = screen.seatMoves.picking;
-    const held = screen.suspense.held;
-    const shows = [screen.shape, view.you, view.hostId, view.cohostIds, view.running, view.nextHandAt, view.nightEndedAt, view.config.actionSeconds, view.seats, view.hand, myRequest, picking, held];
+    const turning = screen.suspense.held?.cards ?? [];
+    const shows = [screen.shape, view.you, view.hostId, view.cohostIds, view.running, view.nextHandAt, view.nightEndedAt, view.config.actionSeconds, view.seats, view.hand, myRequest, picking, turning];
 
     screen.stage.draw(shows, () => {
       return tableEl(
@@ -667,7 +669,7 @@ export class App {
           onPlayOn: () => void this.send({ type: 'playOn' }),
           moving: screen.seatMoves.tableHandlers(),
         },
-        held,
+        turning,
       );
     });
 
@@ -688,8 +690,9 @@ export class App {
     if (shape !== screen.shape) {
       screen.shape = shape;
 
-      if (this.view) {
-        this.drawStage(screen, this.view);
+      const view = this.shownView();
+      if (view) {
+        this.drawStage(screen, view);
       }
     }
   }
@@ -723,7 +726,7 @@ export class App {
       return;
     }
 
-    const view = this.view;
+    const view = this.shownView();
     if (this.dialog && view && !dialogAllowed(this.dialog, view)) {
       this.dialog = null;
     }

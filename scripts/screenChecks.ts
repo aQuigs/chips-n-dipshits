@@ -773,14 +773,15 @@ function assertDrops(card: Flight, what: string): void {
 const flightsOf = (seen: Seen, what: Flight['what'], standIn: boolean) => seen.flights.filter((flight) => flight.what === what && flight.standIn === standIn);
 
 /**
- * Run in the page once a hand is all in, before its river: notes how the felt, the seats, the hint and the
- * play-by-play stand, then writes down when the last card is face up and the first moment each of them
+ * Run in the page once a hand is all in, before its river: notes how the felt, the seats, the hint, the
+ * play-by-play and the bar under the table stand, then writes down when the last card is face up and the first moment each of them
  * says more, so a check on a page moving in its own time can tell which came first.
  */
 const SWEAT = `(() => {
   const stacks = () => [...document.querySelectorAll('.seat .stack')].map((stack) => stack.textContent).join();
   const hint = () => document.querySelector('.seat.me .hint')?.textContent ?? '';
   // The play-by-play and the chat, as the list has them and as the line a phone shows of them while it is closed
+  const bar = () => document.querySelector('.controls-slot').innerHTML;
   const feed = () => [...document.querySelectorAll('.feed li')].map((line) => line.textContent).join('|') + document.querySelector('.feed .latest').textContent;
   const telling = () => [
     document.querySelector('.message.result') && 'the result on the felt',
@@ -788,9 +789,10 @@ const SWEAT = `(() => {
     stacks() !== window.sweat.stacks && 'a stack',
     hint() !== window.sweat.hint && 'the hint',
     feed() !== window.sweat.feed && 'the play-by-play or the chat',
+    bar() !== window.sweat.bar && 'the bar under the table',
   ].filter(Boolean);
 
-  window.sweat = { stacks: stacks(), hint: hint(), feed: feed(), up: [], said: {}, telling };
+  window.sweat = { stacks: stacks(), hint: hint(), feed: feed(), bar: bar(), up: [], said: {}, telling };
 
   if (window.sweatSeen) {
     return;

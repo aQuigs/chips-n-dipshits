@@ -5,7 +5,6 @@ import { midSentence } from '../../engine/handNames.ts';
 import type { HandRead } from '../../engine/handNames.ts';
 import type { HandView, Holding, SeatView, TableView } from '../../engine/view.ts';
 import type { BoardCard, Place } from '../motion.ts';
-import type { Held } from '../suspense.ts';
 import { cardEl, h } from '../ui.ts';
 import { nightOver } from './night.ts';
 import { hostOrCohost, roleMark } from './roles.ts';
@@ -455,38 +454,11 @@ function potEl(table: Denominated, hand: HandView): HTMLElement | null {
 }
 
 /**
- * The view as it stood before its hand was settled, which is how the table is drawn while the last
- * cards of a runout are turned over: no result, the pot in the middle and every stack as it was, so
- * nothing on the felt says who won before the cards do. `holding` is what the viewer held before them.
+ * The poker table as one viewer sees it, with their own seat at the bottom. `turning` are the last cards
+ * of a runout being turned over: they are drawn, for the turn to show, but say nothing yet of the
+ * viewer's hand.
  */
-function unsettled(view: TableView, hand: HandView, holding: Holding | null): TableView {
-  const gained = new Map<number, number>();
-  const gain = (seat: number, amount: number) => gained.set(seat, (gained.get(seat) ?? 0) + amount);
-  const bounty = hand.result?.bounty;
-
-  for (const win of hand.result?.winnings ?? []) {
-    gain(win.seat, win.amount);
-  }
-
-  for (const payment of bounty?.payments ?? []) {
-    gain(bounty!.seat, payment.amount);
-    gain(payment.seat, -payment.amount);
-  }
-
-  return {
-    ...view,
-    hand: { ...hand, stage: 'runout', result: null, holding },
-    seats: view.seats.map((seat) => seat && { ...seat, stack: seat.stack - (gained.get(seat.seat) ?? 0) }),
-  };
-}
-
-/**
- * The poker table as one viewer sees it, with their own seat at the bottom. `held` is what is held back
- * while the last cards of a runout are turned: they are drawn, for the turn to show, but say nothing
- * yet of the viewer's hand.
- */
-export function tableEl(shown: TableView, shape: Shape, clockOffset: number, handlers: TableHandlers, held: Held | null = null): HTMLElement {
-  const view = held && shown.hand ? unsettled(shown, shown.hand, held.holding) : shown;
+export function tableEl(view: TableView, shape: Shape, clockOffset: number, handlers: TableHandlers, turning: readonly BoardCard[] = []): HTMLElement {
   const seatCount = view.seats.length;
   const hero = view.you.seat ?? 0;
   const nodes: HTMLElement[] = [];
@@ -511,7 +483,7 @@ export function tableEl(shown: TableView, shape: Shape, clockOffset: number, han
     // How many boards the hand is played on, from its first card: the size of their cards and how far the bets stand off follow it
     { class: `table ${shape}${movable ? ' movable' : ''}`, 'data-boards': hand?.runs ?? 1 },
     h('div.felt'),
-    h('div.center', null, hand ? boardEl(hand, held?.cards ?? []) : null, hand ? potEl(view.config, hand) : null, messageEl(view, handlers)),
+    h('div.center', null, hand ? boardEl(hand, turning) : null, hand ? potEl(view.config, hand) : null, messageEl(view, handlers)),
     nodes,
   );
 

@@ -335,6 +335,10 @@ test('the hold fits the pause before the next hand at its shortest, and shrinks 
   const shrunk = leaving(AFTER_SWEAT_MS + 800)!;
   assert.ok(shrunk.ms <= 800 && shrunk.turns[0]!.at < FACE_DOWN_MS, `a hold of ${shrunk.ms} ms in a pause that leaves 800`);
   assert.equal(leaving(AFTER_SWEAT_MS + TURNING + 100), null, 'a hold with no beat in it');
+
+  // A view that was slow to reach the page has that much less of the pause left
+  const slow = sweatOf({ ...result, now: result.view.now + TIMING.showdownPauseMs - AFTER_SWEAT_MS - 800 })!;
+  assert.ok(slow.ms <= 800, `a hold of ${slow.ms} ms for a view that came with 800 ms of room`);
 });
 
 /** A stand-in for the page's motion: it writes down what is played, and says the table is still when told to. */
@@ -443,6 +447,50 @@ test('a view with news of the hand ends the hold at once and the held result is 
   page.moves.land();
   await settle();
   assert.ok(page.told.every((change) => winsIn(change) === 0), 'the held result was told after the hand moved on');
+});
+
+test('more of the same hand during the hold, as a player showing their cards, ends it and is told after what was held', () => {
+  const { t, page: seat } = dealt([1000, 1000, 1000], { 0: ACES, 1: KINGS, 2: QUEENS });
+  t.fold(0);
+  t.raise(1, 1000);
+  t.call(2);
+  const result = runOut(t, seat).at(-1)!;
+  const page = holdingPage();
+
+  page.show(result);
+  const held = page.told[0]!.events.length;
+
+  t.cmd(0, { type: 'showCards' });
+  const shown = seat.change();
+  page.show(shown);
+
+  assert.equal(page.suspense.held, null);
+  assert.deepEqual(page.told[1]!.events, [...result.events.slice(held), ...shown.events]);
+  assert.deepEqual(page.told[1]!.view.hand!.events.slice(-page.told[1]!.events.length), page.told[1]!.events, 'what is told is not the last of the hand’s events');
+  assert.deepEqual(page.told[1]!.feed, [...result.feed, ...shown.feed]);
+});
+
+test('while held the whole page is drawn from the hand as it stood: no result, nobody offered to show, the stacks, the ledger and the hint as before the river', async () => {
+  const { t, page: seat } = dealt([1000, 1000, 1000], { 0: ACES, 1: KINGS, 2: QUEENS });
+  t.fold(0);
+  t.raise(1, 1000);
+  t.call(2);
+  const changes = runOut(t, seat);
+  const [turn, result] = changes.slice(-2) as [TableChange, TableChange];
+  const page = holdingPage();
+
+  page.show(result);
+  const shown = page.suspense.shown(result.view);
+
+  assert.deepEqual([shown.hand!.stage, shown.hand!.result, shown.hand!.canShow], ['runout', null, false]);
+  assert.deepEqual(shown.seats.map((seat) => seat?.stack), turn.view.seats.map((seat) => seat?.stack));
+  assert.deepEqual(shown.ledger, turn.view.ledger);
+  assert.deepEqual(shown.hand!.holding, turn.view.hand!.holding);
+  assert.deepEqual(shown.hand!.boards, result.view.hand!.boards, 'the river is not drawn, for its turn to show');
+
+  page.moves.land();
+  await settle();
+  assert.equal(page.suspense.shown(result.view), result.view);
 });
 
 test('with animations off, or on a device that asks for less motion, nothing is held and nothing is celebrated', () => {

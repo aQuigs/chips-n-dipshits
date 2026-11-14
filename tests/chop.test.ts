@@ -306,6 +306,16 @@ test('the big blind running out of time is a no: they sit out, and the small bli
   assert.equal(t.state.hand!.street, 'flop');
 });
 
+test('a big blind who switches Always chop on while asked takes the chop when the clock runs out, as when they leave', () => {
+  const t = offered();
+  t.cmd(BB, { type: 'setAlwaysChop', on: true });
+
+  t.wait(CLOCK_MS);
+
+  assert.equal(t.state.hand!.result!.chopped, true);
+  assert.deepEqual(lastLines(t, 3), ['P2 ran out of time', 'P2 agrees to chop', 'P1 and P2 chop the blinds: each takes back their own']);
+});
+
 test('a clock switched on or changed while the big blind answers is theirs, counted from the change', () => {
   const t = offered({ actionSeconds: 0 });
   assert.equal(t.state.hand!.deadline, null);

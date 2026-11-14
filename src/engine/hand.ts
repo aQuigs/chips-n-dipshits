@@ -624,7 +624,7 @@ function timeOut(state: TableState, ctx: Ctx): void {
   narrate(state, ctx, `${player.name} ran out of time`);
 
   if (hand.stage === 'chop') {
-    settleChop(state, ctx, player, false, false);
+    settleChop(state, ctx, player, answerUnasked(seat) ?? false, false);
     return;
   }
 

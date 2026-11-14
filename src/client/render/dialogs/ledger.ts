@@ -1,6 +1,7 @@
+import { formatAmount, signedAmount } from '../../../engine/amounts.ts';
 import type { TableView } from '../../../engine/view.ts';
 import { settleUp } from '../../settle.ts';
-import { chips, h, signedChips } from '../../ui.ts';
+import { h } from '../../ui.ts';
 import { everyone, frame } from './dialog.ts';
 import type { DialogHandlers, DialogKind } from './dialog.ts';
 
@@ -20,10 +21,10 @@ function ledger(view: TableView, handlers: DialogHandlers): HTMLElement {
           'tr',
           null,
           h('td', null, row.name),
-          h('td', null, chips(row.buyIn)),
-          h('td', null, chips(row.cashOut)),
-          h('td', null, chips(row.stack)),
-          h('td', { class: row.net > 0 ? 'up' : row.net < 0 ? 'down' : '' }, signedChips(row.net)),
+          h('td', null, formatAmount(row.buyIn, view.config)),
+          h('td', null, formatAmount(row.cashOut, view.config)),
+          h('td', null, formatAmount(row.stack, view.config)),
+          h('td', { class: row.net > 0 ? 'up' : row.net < 0 ? 'down' : '' }, signedAmount(row.net, view.config)),
         ),
       ),
     ),
@@ -38,7 +39,7 @@ function ledger(view: TableView, handlers: DialogHandlers): HTMLElement {
           'div.settle',
           null,
           h('h3', null, 'To settle up right now'),
-          h('ul', null, payments.map((p) => h('li', null, h('b', null, p.from), ' pays ', h('b', null, p.to), ` ${chips(p.amount)}`))),
+          h('ul', null, payments.map((p) => h('li', null, h('b', null, p.from), ' pays ', h('b', null, p.to), ` ${formatAmount(p.amount, view.config)}`))),
           h('p.note', null, 'Counts chips still on the table as if everyone cashed out now.'),
         )
       : null,

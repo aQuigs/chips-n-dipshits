@@ -1,7 +1,8 @@
 /*
  * Checks, in real browsers, that the screens hold up where play testing found them breaking: on small
  * phones, with long chat, with the largest stacks, with a result too long for the felt, and under the
- * keyboard. Each check sets its table up on the rig, so the cards and the seats are the same every run.
+ * keyboard; and that a table playing dollars and cents shows and takes every amount in dollars.
+ * Each check sets its table up on the rig, so the cards and the seats are the same every run.
  * Pictures of what was checked are left in screenshots/.
  */
 import assert from 'node:assert/strict';
@@ -11,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 import type { Page } from 'playwright';
 
 import type { Command, TableView } from '../src/engine/index.ts';
-import { boxes, overlap, Rig, SCREENS, squeezed } from './rig.ts';
+import { boxes, overlap, Rig, SCREENS, setStageHeight, squeezed, textBoxes } from './rig.ts';
 import type { Box, RigPlayer, ScreenName } from './rig.ts';
 
 const OUT = fileURLToPath(new URL('../screenshots/', import.meta.url));
@@ -53,6 +54,16 @@ function assertApart(these: Box[], those: Box[], what: string): void {
       assert.ok(!overlap(a, b), `${what}: ${JSON.stringify(a)} is drawn over ${JSON.stringify(b)}`);
     }
   }
+}
+
+/** Every bet on the table can be read: none is drawn over the board, the pot, another bet or what a seat says. */
+async function assertBetsApart(page: Page): Promise<void> {
+  const bets = await boxes(page, '.bet');
+
+  assertApart(bets, await textBoxes(page, '.plate .stack, .plate .status'), 'a bet and what a seat says');
+  assertApart(bets, await boxes(page, '.board .card, .pot'), 'a bet and the middle of the table');
+  assertApart(await boxes(page, '.pot'), await boxes(page, '.seat .plate'), 'the pot and a seat');
+  bets.forEach((bet, index) => assertApart([bet], bets.slice(index + 1), 'two bets'));
 }
 
 /** Taps on a touch screen and clicks on the desktop, as the rig opens every screen but the desktop as a touch one. */
@@ -101,6 +112,27 @@ async function suitColors(page: Page): Promise<Record<string, string>> {
 
 const FACE_DOWN = '.seat:not(.me) .card.back';
 
+const CENTS = { unit: 'cents', smallBlind: 25, bigBlind: 50 } as const;
+const PHONE_AND_DESKTOP = ['phone', 'desktop'] as const;
+
+// The least height at which a phone's table stands up: its width over WIDE_ASPECT in src/client/app.ts
+const JUST_STANDING = Math.ceil(SCREENS.phone.width / 1.15) + 1;
+
+const TO_THE_CENT = 'This table plays to the cent, so an amount has at most two decimals';
+
+const texts = (page: Page, selector: string) => page.locator(selector).allInnerTexts();
+
+const stacksBySeat = (page: Page, seats: number) => Promise.all(Array.from({ length: seats }, (_, seat) => text(page, `.seat[data-seat="${seat}"] .stack`)));
+
+const ledgerRows = async (page: Page) => (await texts(page, '.ledger tbody tr')).map((row) => row.split(/\s*\t\s*/));
+
+async function assertNoSidewaysScroll(page: Page): Promise<void> {
+  assert.equal(await page.evaluate('document.documentElement.scrollWidth <= window.innerWidth'), true, 'the page scrolls sideways');
+}
+
+/** What the browser would tell someone about a field it won't accept; empty when the field is fine. */
+const complaintOf = (page: Page, selector: string) => page.evaluate(`document.querySelector(${JSON.stringify(selector)}).validationMessage`) as Promise<string>;
+
 type Check = [name: string, run: (rig: Rig) => Promise<void>];
 
 const CHECKS: Check[] = [
@@ -119,7 +151,7 @@ const CHECKS: Check[] = [
 
       await page.tap('.feed-toggle');
       assertOnScreen(await boxes(page, '.say button, .say input'), 'tallPhone', 'the chat box and Send');
-      assert.equal(await page.evaluate('document.documentElement.scrollWidth <= window.innerWidth'), true, 'the page scrolls sideways');
+      await assertNoSidewaysScroll(page);
       await shot(page, 'long-chat-phone');
     },
   ],
@@ -162,31 +194,37 @@ const CHECKS: Check[] = [
   [
     'the biggest all-in fits its button and its box',
     async (rig) => {
-      const table = rig.table([
-        { name: 'Quigs', stack: 1_000_000_000 },
-        { name: 'Stu', stack: 1_000_000_000 },
-        { name: 'Pam', stack: 5000 },
-      ]);
-      table.deal({ button: 0 });
+      // The raises are a five-figure one, the everyday case, and two that are shortened: what a move costs is rounded up, so the button never says less than it takes
+      const kinds = [
+        { config: {}, name: 'biggest-all-in-phone', allIn: 'All in 1B', box: '1000000000', raises: { '12345': 'Raise to 12,345', '12340001': 'Raise to 12.35M', '999999999': 'Raise to 1B' } },
+        { config: CENTS, name: 'cents-biggest-all-in-phone', allIn: 'All in 10M', box: '10000000.00', raises: { '12,345.67': 'Raise to 12,345.67', '123400.01': 'Raise to 123.41K', '9999999.99': 'Raise to 10M' } },
+      ];
 
-      const page = await table.open('Quigs', 'phone');
-      await page.tap('.presets button:has-text("All in")');
+      for (const { config, name, allIn, box, raises } of kinds) {
+        const table = rig.table(
+          [
+            { name: 'Quigs', stack: 1_000_000_000 },
+            { name: 'Stu', stack: 1_000_000_000 },
+            { name: 'Pam', stack: 5000 },
+          ],
+          config,
+        );
+        table.deal({ button: 0 });
 
-      assert.equal(await text(page, '.turn [data-action="raise"]'), 'All in 1B');
-      assert.deepEqual(await squeezed(page, '.turn .btn, #raise-amount'), [], 'a move button or the amount box is cut off');
-      assert.equal(await page.inputValue('#raise-amount'), '1000000000');
-      await shot(page, 'biggest-all-in-phone');
+        const page = await table.open('Quigs', 'phone');
+        await page.tap('.presets button:has-text("All in")');
 
-      // A five-figure raise is the everyday case: its amount must be whole too
-      await page.fill('#raise-amount', '12345');
-      assert.equal(await text(page, '.turn [data-action="raise"]'), 'Raise to 12,345');
-      assert.deepEqual(await squeezed(page, '.turn .btn'), []);
+        assert.equal(await text(page, '.turn [data-action="raise"]'), allIn);
+        assert.deepEqual(await squeezed(page, '.turn .btn, #raise-amount'), [], 'a move button or the amount box is cut off');
+        assert.equal(await page.inputValue('#raise-amount'), box);
+        await shot(page, name);
 
-      // Shortened, what a move costs is rounded up: the button never says less than it takes
-      await page.fill('#raise-amount', '12340001');
-      assert.equal(await text(page, '.turn [data-action="raise"]'), 'Raise to 12.35M');
-      await page.fill('#raise-amount', '999999999');
-      assert.equal(await text(page, '.turn [data-action="raise"]'), 'Raise to 1B');
+        for (const [typed, button] of Object.entries(raises)) {
+          await page.fill('#raise-amount', typed);
+          assert.equal(await text(page, '.turn [data-action="raise"]'), button);
+          assert.deepEqual(await squeezed(page, '.turn .btn'), []);
+        }
+      }
     },
   ],
   [
@@ -786,6 +824,428 @@ const CHECKS: Check[] = [
       const answer = table.tryAct('Pam', { type: 'updateConfig', config: { voiceLink: 'https://evil.example' } });
       assert.equal(answer.ok, false, 'a plain member changed the voice chat link');
       assert.equal(table.view('Quigs').config.voiceLink, 'https://meet.google.com/abc-defg-hij');
+    },
+  ],
+  [
+    'a table that plays dollars and cents shows its stacks, bets and pot in dollars',
+    async (rig) => {
+      const table = rig.table(
+        [
+          { name: 'Quigs', stack: 10_000 },
+          { name: 'Stu', stack: 25_000 },
+          { name: 'Pocket Pam', stack: 30_000 },
+          { name: 'Big Al', stack: 25_000 },
+          { name: 'Marge Simpson-Jr', stack: 20_000 },
+          { name: 'Zed', stack: 50_000 },
+        ],
+        CENTS,
+      );
+      table.deal({ button: 0 });
+      table.act('Big Al', { type: 'raise', to: 150 });
+      table.act('Marge Simpson-Jr', { type: 'call' });
+      table.act('Zed', { type: 'raise', to: 1250 });
+      table.act('Quigs', { type: 'call' });
+      table.act('Stu', { type: 'call' });
+      table.act('Pocket Pam', { type: 'raise', to: 4500 });
+
+      for (const screen of PHONE_AND_DESKTOP) {
+        const page = await table.open('Quigs', screen);
+
+        assert.equal(await text(page, '.topbar .title span'), '0.25/0.50 hold’em');
+        assert.deepEqual(
+          await stacksBySeat(page, 6),
+          ['87.50', '237.50', '255.00', '248.50', '198.50', '487.50'],
+        );
+        assert.deepEqual((await texts(page, '.bet')).sort(), ['1.50', '1.50', '12.50', '12.50', '12.50', '45.00']);
+        assert.equal(await text(page, '.pot'), 'Pot85.50');
+        assert.match(await text(page, '.feed-toggle .latest'), /Pocket Pam raises to 45\.00$/);
+        await shot(page, `cents-table-${screen}`);
+
+        assert.deepEqual(await squeezed(page, '.plate .stack, .bet, .pot, .topbar .title span'), [], 'an amount is cut off, so it reads wrong');
+        assertOnScreen(await boxes(page, '.seat .plate, .bet, .pot'), screen, 'a seat, a bet or the pot');
+        await assertBetsApart(page);
+
+        await page.context().close();
+      }
+
+      // A table only just taller than it is wide stands up with the least height it will ever have, which is
+      // where the bets beside the middle come nearest the board and the pot.
+      const page = await table.open('Quigs', 'phone');
+      await setStageHeight(page, JUST_STANDING);
+      await page.waitForSelector('.table.tall').catch(() => assert.fail(`a phone's table ${JUST_STANDING} tall is not standing up: has WIDE_ASPECT changed?`));
+      await shot(page, 'cents-table-phone-just-standing');
+
+      const [stage] = await boxes(page, '.stage');
+      for (const bet of await boxes(page, '.bet')) {
+        assert.ok(bet.top >= stage!.top && bet.bottom <= stage!.bottom, `a bet runs off the table: ${JSON.stringify(bet)}`);
+      }
+
+      await assertBetsApart(page);
+      await page.context().close();
+    },
+  ],
+  [
+    'the longest amounts a cents table can show are whole on a small phone and on the desktop',
+    async (rig) => {
+      // 99,999.99 is the longest amount written out; from there up a seat and a bet shorten it, and the pot never does
+      const table = rig.table(
+        [
+          { name: 'Quigs', stack: 10_000 },
+          { name: 'Stu', stack: 9_999_999 },
+          { name: 'Pocket Pam', stack: 1_000_000_000 },
+          { name: 'Big Al', stack: 1_000_000_000 },
+          { name: 'Marge Simpson-Jr', stack: 2000 },
+          { name: 'Zed', stack: 123_456 },
+        ],
+        CENTS,
+      );
+      table.deal({ button: 0 });
+      table.act('Big Al', { type: 'raise', to: 150 });
+      table.act('Marge Simpson-Jr', { type: 'call' });
+      table.act('Zed', { type: 'raise', to: 123_456 });
+      table.act('Quigs', { type: 'call' });
+      table.act('Stu', { type: 'raise', to: 9_999_999 });
+      table.act('Pocket Pam', { type: 'raise', to: 987_654_321 });
+
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        const page = await table.open('Quigs', screen);
+
+        assert.deepEqual(
+          await stacksBySeat(page, 6),
+          ['0.00', '0.00', '123.45K', '9.99M', '18.50', '0.00'],
+        );
+        assert.deepEqual((await texts(page, '.bet')).sort(), ['1,234.56', '1.50', '1.50', '100.00', '9.87M', '99,999.99']);
+        assert.equal(await text(page, '.pot'), 'Pot9,977,880.76');
+        await shot(page, `cents-longest-${screen}`);
+
+        assert.deepEqual(await squeezed(page, '.plate .stack, .bet, .pot'), [], 'an amount is cut off, so it reads wrong');
+        assertOnScreen(await boxes(page, '.seat .plate, .bet, .pot'), screen, 'a seat, a bet or the pot');
+        assertApart(await boxes(page, '.bet'), await boxes(page, '.board .card, .pot'), 'a bet and the middle of the table');
+        assertApart(await boxes(page, '.pot'), await boxes(page, '.seat .plate'), 'the pot and a seat');
+
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'on a cents table the bet box reads dollars, the size buttons land on a cent, and an amount that cannot be read is not played',
+    async (rig) => {
+      for (const screen of PHONE_AND_DESKTOP) {
+        const table = rig.table(
+          [
+            { name: 'Quigs', stack: 10_000 },
+            { name: 'Stu', stack: 10_000 },
+            { name: 'Pam', stack: 10_000 },
+          ],
+          CENTS,
+        );
+        table.deal({ button: 0 });
+
+        const page = await table.open('Quigs', screen);
+        const press = pressOn(page, screen);
+        const raiseButton = '.turn [data-action="raise"]';
+        const typeAmount = (typed: string) => page.fill('#raise-amount', typed);
+
+        assert.equal(await text(page, '.turn [data-action="call"]'), 'Call 0.50');
+        assert.equal(await text(page, raiseButton), 'Raise to 1.00');
+        assert.equal(await page.inputValue('#raise-amount'), '1.00');
+        assert.equal(await page.getAttribute('#raise-amount', 'inputmode'), 'decimal', 'a phone would not offer a decimal point');
+
+        await typeAmount('1.50');
+        assert.equal(await text(page, raiseButton), 'Raise to 1.50');
+        await typeAmount('.5');
+        assert.equal(await text(page, raiseButton), 'Raise to 1.00', 'less than the smallest raise is the smallest raise');
+        await typeAmount('');
+        assert.equal(await text(page, raiseButton), 'Raise to 1.00');
+
+        // 0.75 in the pot and 0.50 to call: no share of that is a round number of cents
+        for (const [preset, expected] of [['½ pot', '1.13'], ['¾ pot', '1.44'], ['Pot', '1.75'], ['Min', '1.00']] as const) {
+          await press(`.presets button:text-is("${preset}")`);
+          assert.equal(await page.inputValue('#raise-amount'), expected, preset);
+          assert.equal(await text(page, raiseButton), `Raise to ${expected}`, preset);
+        }
+
+        await page.locator('#raise-slider').fill('4321');
+        assert.equal(await page.inputValue('#raise-amount'), '43.21');
+        assert.equal(await text(page, raiseButton), 'Raise to 43.21');
+
+        // A third decimal is neither rounded nor swapped for the last amount that could be read
+        await typeAmount('1.555');
+        assert.equal(await text(page, raiseButton), 'Raise');
+        assert.equal(await page.getAttribute(raiseButton, 'aria-disabled'), 'true');
+        assert.equal(await complaintOf(page, '#raise-amount'), TO_THE_CENT);
+
+        // The button takes no part in the browser's own disabling, so a press still lands on it, and gets the reason
+        await page.locator(raiseButton).dispatchEvent('click');
+        await shot(page, `cents-third-decimal-${screen}`);
+
+        // Halfway to an amount, as "1," is to "1,000", nothing is played either
+        await typeAmount('1,');
+        assert.equal(await page.getAttribute(raiseButton, 'aria-disabled'), 'true');
+        await page.locator(raiseButton).dispatchEvent('click');
+
+        await typeAmount('1.50');
+        assert.equal(await page.getAttribute(raiseButton, 'aria-disabled'), null);
+        assert.deepEqual(await squeezed(page, '.turn .btn, #raise-amount'), [], 'a move button or the amount box is cut off');
+        assertOnScreen(await boxes(page, '.turn .btn, #raise-amount, .presets button'), screen, 'the bet controls');
+        await shot(page, `cents-my-turn-${screen}`);
+
+        await press(raiseButton);
+        await page.waitForSelector('.turn', { state: 'detached' });
+
+        const quigs = table.view('Quigs');
+        assert.equal(quigs.seats[0]!.bet, 150);
+        assert.deepEqual(
+          quigs.feed.filter((entry) => entry.text.startsWith('Quigs ')).map((entry) => entry.text),
+          ['Quigs opened the table', 'Quigs sits down with 100.00', 'Quigs raises to 1.50'],
+          'the press on a box that could not be read played something',
+        );
+
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'on a cents table a size button never asks for more than the stack',
+    async (rig) => {
+      const table = rig.table(
+        [
+          { name: 'Quigs', stack: 120 },
+          { name: 'Stu', stack: 10_000 },
+          { name: 'Pam', stack: 10_000 },
+        ],
+        CENTS,
+      );
+      table.deal({ button: 0 });
+
+      const page = await table.open('Quigs', 'phone');
+      await page.tap('.presets button:text-is("Pot")');
+      assert.equal(await page.inputValue('#raise-amount'), '1.20');
+      assert.equal(await text(page, '.turn [data-action="raise"]'), 'All in 1.20');
+      await page.fill('#raise-amount', '1,000,000.00');
+      assert.equal(await text(page, '.turn [data-action="raise"]'), 'All in 1.20', 'more than the stack is the stack');
+    },
+  ],
+  [
+    'the ledger, who pays whom and the hand history of a cents table read in dollars',
+    async (rig) => {
+      const table = rig.table(
+        [
+          { name: 'Quigs', stack: 10_000 },
+          { name: 'Stu', stack: 5000 },
+          { name: 'Pocket Pam', stack: 30_000 },
+        ],
+        CENTS,
+      );
+      table.deal({ button: 0, holes: { 0: 'As Ah', 1: '7c 2d', 2: 'Ks Kh' }, board: '3s 4d 9h Jc Qd' });
+      table.act('Quigs', { type: 'pause' });
+      table.act('Quigs', { type: 'raise', to: 150 });
+      table.act('Stu', { type: 'fold' });
+      table.play(passive, (view) => view.hand === null);
+
+      const openLedger = async (page: Page, screen: ScreenName) => {
+        const press = pressOn(page, screen);
+
+        await press('[data-action="menu"]');
+        await press('.menu [data-action="ledger"]');
+        await page.waitForSelector('.ledger');
+      };
+
+      for (const screen of PHONE_AND_DESKTOP) {
+        const page = await table.open('Quigs', screen);
+        const press = pressOn(page, screen);
+        await openLedger(page, screen);
+
+        assert.deepEqual(await ledgerRows(page), [
+          ['Quigs', '100.00', '0.00', '101.75', '+1.75'],
+          ['Stu', '50.00', '0.00', '49.75', '-0.25'],
+          ['Pocket Pam', '300.00', '0.00', '298.50', '-1.50'],
+        ]);
+        assert.deepEqual(await texts(page, '.settle li'), ['Pocket Pam pays Quigs 1.50', 'Stu pays Quigs 0.25']);
+
+        assert.deepEqual(await squeezed(page, '.ledger th, .ledger td, .settle li, .dialog h2'), [], 'an amount in the ledger is cut off');
+        assertOnScreen(await boxes(page, '.dialog, .ledger th, .ledger td, .settle li'), screen, 'the ledger');
+        await shot(page, `cents-ledger-${screen}`);
+
+        await press('[data-action="close"]');
+        await press('[data-action="menu"]');
+        await press('.menu [data-action="history"]');
+        await page.waitForSelector('.history summary');
+        assert.equal(await text(page, '.history summary small'), 'Quigs +3.25');
+        await press('.history summary');
+        assert.match(await text(page, '.history pre'), /^Hand #1 · blinds 0\.25\/0\.50 · Quigs has the button\n[^]*\nPocket Pam calls 1\.00\n[^]*\nQuigs wins 3\.25 with [^\n]+$/);
+
+        await page.context().close();
+      }
+
+      // Four columns of a million to the cent are wider than a phone: the table scrolls sideways inside the dialog, and nothing else gives
+      const rich = rig.table([{ name: 'Quigs', stack: 100_000_000 }, { name: 'Stu', stack: 100_000_000 }], CENTS);
+      const page = await rich.open('Quigs', 'phone');
+      await openLedger(page, 'phone');
+
+      assert.deepEqual((await ledgerRows(page))[0], ['Quigs', '1,000,000.00', '0.00', '1,000,000.00', '0.00']);
+      assert.deepEqual(await squeezed(page, '.ledger th, .ledger td'), [], 'an amount in the ledger is cut off');
+      assertOnScreen(await boxes(page, '.dialog'), 'phone', 'the ledger');
+      await assertNoSidewaysScroll(page);
+
+      await page.evaluate(`document.querySelector('.ledger td:last-child').scrollIntoView({ inline: 'end' })`);
+      assertOnScreen(await boxes(page, '.ledger tbody tr:first-child td:last-child'), 'phone', 'the last column, scrolled to');
+    },
+  ],
+  [
+    'the form for a new table switches between whole chips and dollars and cents, and the table it makes plays what was picked',
+    async (rig) => {
+      for (const screen of PHONE_AND_DESKTOP) {
+        const page = await rig.lobby(screen);
+        const press = pressOn(page, screen);
+        const stakes = () => Promise.all(['small-blind', 'big-blind', 'min-buy-in', 'max-buy-in'].map((field) => page.inputValue(`#new-table-${field}`)));
+        const pick = (label: string) => press(`#new-table-unit label:has-text("${label}")`);
+
+        assert.equal(await page.isChecked('#new-table-unit input[value="chips"]'), true, 'whole chips is what a table plays unless its host says otherwise');
+        assert.deepEqual(await stakes(), ['10', '20', '400', '2000']);
+        assert.equal(await text(page, '#new-table-unit small'), "Can't be changed once the table is created");
+
+        await page.fill('#host-name', 'Quigs');
+        await page.fill('#new-table-name', 'Friday nickels');
+        await pick('Dollars and cents');
+        assert.deepEqual(await stakes(), ['0.25', '0.50', '20.00', '100.00']);
+        assert.equal(await page.inputValue('#new-table-name'), 'Friday nickels', 'picking what to play with threw away the name that was typed');
+        assert.equal(await page.getAttribute('#new-table-small-blind', 'inputmode'), 'decimal');
+
+        // The front page scrolls, so what matters is that the form keeps to the width of the screen
+        await page.locator('#new-table-max-buy-in').scrollIntoViewIfNeeded();
+        await shot(page, `cents-new-table-${screen}`);
+        assert.deepEqual(await squeezed(page, '#new-table-unit .check span, #new-table-unit > span, #new-table-unit small, .card-panel .field input'), [], 'part of the form is cut off');
+        assertOnScreen(await boxes(page, '#new-table-unit, #new-table-unit .check, #new-table-small-blind, #new-table-max-buy-in'), screen, 'the form for a new table');
+        await assertNoSidewaysScroll(page);
+        const [chips, cents] = await boxes(page, '#new-table-unit .check');
+        assert.ok(chips && cents && !overlap(chips, cents), 'the two choices are drawn over each other');
+
+        await pick('Whole chips');
+        assert.deepEqual(await stakes(), ['10', '20', '400', '2000']);
+        assert.equal(await page.getAttribute('#new-table-small-blind', 'inputmode'), 'numeric');
+        await page.fill('#new-table-small-blind', '0.25');
+        assert.equal(await complaintOf(page, '#new-table-small-blind'), 'This table plays whole chips, so an amount has no decimals');
+
+        await pick('Dollars and cents');
+        assert.deepEqual(await stakes(), ['0.25', '0.50', '20.00', '100.00'], 'the stakes start over with the choice');
+
+        // The browser keeps a form with a field it has a complaint about from being sent
+        await page.fill('#new-table-small-blind', '0.255');
+        assert.equal(await complaintOf(page, '#new-table-small-blind'), TO_THE_CENT);
+        await press('[data-action="create-table"]');
+        assert.equal(await page.locator('#table-link').count(), 0, 'a table was made from a blind that could not be read');
+
+        await page.fill('#new-table-small-blind', '.10');
+        await page.fill('#new-table-big-blind', '0,25');
+        await page.fill('#new-table-max-buy-in', '1,000.00');
+        await press('[data-action="create-table"]');
+        await page.waitForSelector('#table-link');
+
+        const link = await page.inputValue('#table-link');
+        const tableId = new URL(link).searchParams.get('table')!;
+        const { unit, name, smallBlind, bigBlind, minBuyIn, maxBuyIn } = rig.store.read(tableId)!.config;
+        assert.deepEqual({ unit, name, smallBlind, bigBlind, minBuyIn, maxBuyIn }, { unit: 'cents', name: 'Friday nickels', smallBlind: 10, bigBlind: 25, minBuyIn: 2000, maxBuyIn: 100_000 });
+
+        await press('[data-action="close"]');
+        assert.equal(await text(page, '.topbar .title span'), '0.10/0.25 hold’em');
+
+        // Sitting down: the buy-in is offered, bounded and read in dollars
+        await press('[data-sit="0"]');
+        assert.equal(await page.inputValue('#buy-in'), '25.00');
+        assert.equal(await text(page, '.dialog .field small'), 'From 20.00 to 1,000.00');
+        await page.fill('#buy-in', '19.99');
+        assert.equal(await complaintOf(page, '#buy-in'), "This can't be less than 20.00");
+        await page.fill('#buy-in', '1,000.01');
+        assert.equal(await complaintOf(page, '#buy-in'), "This can't be more than 1,000.00");
+        await page.fill('#buy-in', '40.5');
+        assert.equal(await complaintOf(page, '#buy-in'), '');
+        await press('[data-action="confirm-sit"]');
+        await page.waitForSelector('.seat.me');
+        assert.equal(await text(page, '.seat.me .stack'), '40.50');
+        assert.equal(rig.store.read(tableId)!.seats[0]!.stack, 4050);
+
+        // Someone following the link is told the stakes the same way
+        const visitor = await rig.page(screen, 'a visitor');
+        await visitor.goto(link);
+        await visitor.waitForSelector('[data-action="join-table"]:enabled');
+        assert.deepEqual(await texts(visitor, '.about p:not(.note)'), ['Blinds 0.10/0.25']);
+
+        await visitor.context().close();
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'the table settings show what the table plays with as chosen for good, and take their amounts the way the table writes them',
+    async (rig) => {
+      for (const screen of PHONE_AND_DESKTOP) {
+        const table = rig.table(
+          [
+            { name: 'Quigs', stack: 5000 },
+            { name: 'Stu', stack: 10_000 },
+          ],
+          { ...CENTS, minBuyIn: 2000, maxBuyIn: 10_000 },
+        );
+        const page = await table.open('Quigs', screen);
+        const press = pressOn(page, screen);
+
+        await press('[data-action="menu"]');
+        assert.equal(await text(page, '.menu [data-action="settings"] small'), 'Blinds 0.25/0.50');
+        await press('.menu [data-action="settings"]');
+        await page.waitForSelector('#table-unit');
+
+        assert.equal(await page.isChecked('#table-unit input[value="cents"]'), true);
+        assert.deepEqual(await page.evaluate(`[...document.querySelectorAll('#table-unit input')].map((input) => input.disabled)`), [true, true], 'what the table plays with can still be picked');
+        assert.equal(await text(page, '#table-unit small'), "Can't be changed once the table is created");
+        assert.deepEqual(
+          await Promise.all(['small-blind', 'big-blind', 'min-buy-in', 'max-buy-in', 'seven-deuce-bounty'].map((field) => page.inputValue(`#table-${field}`))),
+          ['0.25', '0.50', '20.00', '100.00', '0.00'],
+        );
+        assert.deepEqual(await squeezed(page, '#table-unit .check span, #table-unit small, .dialog .field input'), [], 'part of the settings is cut off');
+        assertOnScreen(await boxes(page, '.dialog, #table-unit, #table-unit .check'), screen, 'the settings');
+        await shot(page, `cents-settings-${screen}`);
+
+        await page.fill('#table-seven-deuce-bounty', '2.5');
+        await page.fill('#table-small-blind', '.5');
+        await page.fill('#table-big-blind', '1');
+        await press('[data-action="save-settings"]');
+        await page.waitForSelector('.dialog', { state: 'detached' });
+
+        const { unit, smallBlind, bigBlind, sevenDeuceBounty } = table.view('Quigs').config;
+        assert.deepEqual({ unit, smallBlind, bigBlind, sevenDeuceBounty }, { unit: 'cents', smallBlind: 50, bigBlind: 100, sevenDeuceBounty: 250 });
+        assert.equal(await text(page, '.topbar .title span'), '0.50/1.00 hold’em');
+
+        // Adding chips and setting a stack are typed in dollars too
+        await press('.controls [data-action="rebuy"]');
+        assert.equal(await page.inputValue('#rebuy-amount'), '50.00');
+        assert.equal(await text(page, '.dialog .field small'), 'Up to 50.00, which brings you to the table maximum');
+        await page.fill('#rebuy-amount', '12.34');
+        await press('[data-action="confirm-rebuy"]');
+        await page.waitForSelector('.dialog', { state: 'detached' });
+        assert.equal(await text(page, '.seat.me .stack'), '62.34');
+
+        await press('[data-action="menu"]');
+        await press('.menu [data-action="players"]');
+        assert.match(await text(page, '.rows li:has-text("Stu") > span'), /^Stu · seat 2 · 100\.00$/);
+        await press('.rows li:has-text("Stu") button:has-text("Set stack")');
+        assert.equal(await page.inputValue('#new-stack'), '100.00');
+        await page.fill('#new-stack', '1,000.5');
+        await press('.dialog button[type="submit"]');
+        await page.waitForSelector('.rows li:has-text("1,000.50")');
+        assert.equal(table.view('Quigs').seats[1]!.stack, 100_050);
+
+        await page.context().close();
+      }
+
+      // A table that plays whole chips says so in the same place
+      const chips = rig.table([{ name: 'Quigs', stack: 1000 }]);
+      const page = await chips.open('Quigs', 'desktop');
+      await page.click('[data-action="menu"]');
+      await page.click('.menu [data-action="settings"]');
+      assert.equal(await page.isChecked('#table-unit input[value="chips"]'), true);
+      assert.equal(await page.isDisabled('#table-unit input[value="cents"]'), true);
+      assert.equal(await page.inputValue('#table-small-blind'), '10');
     },
   ],
 ];

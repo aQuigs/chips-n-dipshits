@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import { SEAT_COUNT } from '../src/engine/index.ts';
 import { handRecords, seededRng, TestTable } from './helpers.ts';
 import { assertChipsConserved, assertHandRecordsHold, assertInvariants, assertLedgerAgrees } from './invariants.ts';
-import { randomConfig } from './randomConfig.ts';
+import { fixedSettings, randomConfig } from './randomConfig.ts';
 import { chance, randomStep } from './randomPlay.ts';
 
 // SIM_TABLES=2000 npm test runs a much longer soak than the default
@@ -19,16 +19,21 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
   let showdowns = 0;
   let runTwice = 0;
   let bounties = 0;
+  const tablesPlaying = { chips: 0, cents: 0 };
 
   for (let seed = 1; seed <= TABLES; seed++) {
     const rng = seededRng(seed * 7919);
     const players = 2 + rng.int(SEAT_COUNT - 1);
     const stacks = Array.from({ length: players }, () => (chance(rng, 15) ? 1 + rng.int(30) : 100 + rng.int(1900)));
 
-    // Seated first and given its settings after, so the stacks are whatever they are, not what the buy-in limits allow
-    const t = new TestTable({ stacks, seed });
-    t.cmd(0, { type: 'updateConfig', config: randomConfig(rng) });
+    const config = randomConfig(rng);
+
+    // Seated first and given its settings after, so the stacks are whatever they are, not what the buy-in limits allow.
+    // Only what can't be changed after has to be there from the start
+    const t = new TestTable({ stacks, seed, config: fixedSettings(config) });
+    t.cmd(0, { type: 'updateConfig', config });
     t.cmd(0, { type: 'start' });
+    tablesPlaying[config.unit] += 1;
 
     for (let step = 0; step < STEPS_PER_TABLE; step++) {
       assertChipsConserved(t.state);
@@ -41,6 +46,7 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
 
     assertChipsConserved(t.state);
     assertLedgerAgrees(t.state, t.effects);
+    assert.deepEqual(fixedSettings(t.state.config), fixedSettings(config), 'a setting chosen for good was changed along the way');
     handsPlayed += assertHandRecordsHold(t.effects);
 
     for (const record of handRecords(t.effects)) {
@@ -56,4 +62,5 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
   assert.ok(showdowns >= TABLES * 10, reached);
   assert.ok(runTwice >= TABLES, reached);
   assert.ok(bounties >= 1, reached);
+  assert.ok(tablesPlaying.chips >= TABLES / 4 && tablesPlaying.cents >= TABLES / 4, `${tablesPlaying.chips} tables played whole chips and ${tablesPlaying.cents} dollars and cents`);
 });

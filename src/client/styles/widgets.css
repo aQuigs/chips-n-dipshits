@@ -124,7 +124,7 @@
   color: var(--muted);
 }
 
-.field input,
+.field input:where(:not([type='radio'])),
 .say input,
 .copy input {
   width: 100%;
@@ -153,6 +153,23 @@
   width: 20px;
   height: 20px;
   accent-color: var(--accent);
+}
+
+.choice .options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 20px;
+}
+
+.choice .check {
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 400;
+}
+
+/* Closed for good, the choice that was not made steps back */
+.choice input:disabled:not(:checked) + span {
+  color: var(--muted);
 }
 
 .pair {

@@ -1,3 +1,4 @@
+import { formatAmount } from './amounts.ts';
 import { bettingIsClosed, bettingOptions, owesAction } from './betting.ts';
 import { prettyCards, rankOf, shuffledDeck } from './cards.ts';
 import type { Card } from './cards.ts';
@@ -5,7 +6,6 @@ import type { HandEvent } from './events.ts';
 import { evaluateHand } from './handRank.ts';
 import type { HandValue } from './handRank.ts';
 import { buildPots, splitAmount } from './pots.ts';
-import { formatChips } from './format.ts';
 import { addFeed, addPendingChips, clockwiseAfter, clockwiseFrom, eligibleSeats, seatsClockwiseAfter, vacateSeat } from './seats.ts';
 import { GameError } from './types.ts';
 import type { BountyResult, Ctx, Hand, HandPlayer, HandResult, PotAward, PotResult, ShownHand, Street, TableState } from './types.ts';
@@ -110,7 +110,7 @@ function postBlind(state: TableState, ctx: Ctx, player: HandPlayer, amount: numb
   pay(state, player, posted);
   player.lastAction = blind;
   record(state.hand!, ['post', player.seat, blind, posted, state.seats[player.seat]!.stack]);
-  narrate(state, ctx, `${player.name} posts ${blind} ${formatChips(posted)}${player.allIn ? ' and is all in' : ''}`);
+  narrate(state, ctx, `${player.name} posts ${blind} ${formatAmount(posted, state.config)}${player.allIn ? ' and is all in' : ''}`);
 }
 
 export function startHand(state: TableState, ctx: Ctx): void {
@@ -189,7 +189,7 @@ export function startHand(state: TableState, ctx: Ctx): void {
   state.hand = hand;
 
   record(hand, ['start', hand.number, button, smallBlind, bigBlind, players.map((p) => [p.seat, p.name, p.startStack])]);
-  narrate(state, ctx, `Hand #${hand.number} · blinds ${formatChips(smallBlind)}/${formatChips(bigBlind)} · ${playerAt(hand, button)!.name} has the button`);
+  narrate(state, ctx, `Hand #${hand.number} · blinds ${formatAmount(smallBlind, state.config)}/${formatAmount(bigBlind, state.config)} · ${playerAt(hand, button)!.name} has the button`);
   postBlind(state, ctx, playerAt(hand, sbSeat)!, smallBlind, 'small blind');
   postBlind(state, ctx, playerAt(hand, bbSeat)!, bigBlind, 'big blind');
 
@@ -296,7 +296,7 @@ function refundUncalledBet(state: TableState, ctx: Ctx): void {
   state.seats[top.seat]!.stack += excess;
 
   record(hand, ['return', top.seat, excess]);
-  narrate(state, ctx, `Uncalled bet of ${formatChips(excess)} returned to ${top.name}`);
+  narrate(state, ctx, `Uncalled bet of ${formatAmount(excess, state.config)} returned to ${top.name}`);
 }
 
 /** Deals the next street onto one of the hand's boards. */
@@ -358,7 +358,7 @@ function perform(state: TableState, ctx: Ctx, player: HandPlayer, action: Bettin
 
     case 'check': {
       if (!options.canCheck) {
-        throw new GameError(`You can't check, there is a bet of ${hand.currentBet} to you`);
+        throw new GameError(`You can't check, there is a bet of ${formatAmount(hand.currentBet, state.config)} to you`);
       }
 
       player.lastAction = 'check';
@@ -375,7 +375,7 @@ function perform(state: TableState, ctx: Ctx, player: HandPlayer, action: Bettin
       pay(state, player, options.callAmount);
       player.lastAction = 'call';
       record(hand, ['call', player.seat, options.callAmount, state.seats[player.seat]!.stack]);
-      narrate(state, ctx, `${player.name} calls ${formatChips(options.callAmount)}${player.allIn ? ' and is all in' : ''}`);
+      narrate(state, ctx, `${player.name} calls ${formatAmount(options.callAmount, state.config)}${player.allIn ? ' and is all in' : ''}`);
       break;
     }
 
@@ -386,7 +386,7 @@ function perform(state: TableState, ctx: Ctx, player: HandPlayer, action: Bettin
 
       const { to } = action;
       if (!Number.isInteger(to) || to < options.minRaiseTo || to > options.maxRaiseTo) {
-        throw new GameError(`A raise here must be between ${options.minRaiseTo} and ${options.maxRaiseTo}`);
+        throw new GameError(`A raise here must be between ${formatAmount(options.minRaiseTo, state.config)} and ${formatAmount(options.maxRaiseTo, state.config)}`);
       }
 
       const opening = hand.currentBet === 0;
@@ -403,7 +403,7 @@ function perform(state: TableState, ctx: Ctx, player: HandPlayer, action: Bettin
       hand.lastAggressor = player.seat;
       player.lastAction = opening ? 'bet' : 'raise';
       record(hand, [opening ? 'bet' : 'raise', player.seat, to, state.seats[player.seat]!.stack]);
-      narrate(state, ctx, `${player.name} ${opening ? 'bets' : 'raises to'} ${formatChips(to)}${player.allIn ? ' and is all in' : ''}`);
+      narrate(state, ctx, `${player.name} ${opening ? 'bets' : 'raises to'} ${formatAmount(to, state.config)}${player.allIn ? ' and is all in' : ''}`);
       break;
     }
   }
@@ -655,7 +655,7 @@ function settleShowdown(state: TableState, ctx: Ctx): void {
 
         const winner = playerAt(hand, seat)!;
         const handName = values[run]!.get(seat)!.name;
-        narrate(state, ctx, `${winner.name} wins ${formatChips(share)}${potLabel(potIndex, pots.length)}${runLabel} with ${handName}`);
+        narrate(state, ctx, `${winner.name} wins ${formatAmount(share, state.config)}${potLabel(potIndex, pots.length)}${runLabel} with ${handName}`);
       }
     });
 
@@ -700,7 +700,7 @@ function finishUncontested(state: TableState, ctx: Ctx, winner: HandPlayer): voi
 
   state.seats[winner.seat]!.stack += total;
   pots.forEach((pot, potIndex) => record(hand, ['win', winner.seat, pot.amount, potIndex, 0]));
-  narrate(state, ctx, `${winner.name} wins ${formatChips(total)}`);
+  narrate(state, ctx, `${winner.name} wins ${formatAmount(total, state.config)}`);
 
   finishHand(state, ctx, {
     uncontested: true,
@@ -759,7 +759,7 @@ function payBounty(state: TableState, ctx: Ctx, winnerSeat: number): BountyResul
 
   state.seats[winnerSeat]!.stack += total;
   record(hand, ['bounty', winnerSeat, payments.map((payment): [number, number] => [payment.seat, payment.amount])]);
-  narrate(state, ctx, `${winner.name} won with seven-deuce and collects a bounty of ${formatChips(total)}`);
+  narrate(state, ctx, `${winner.name} won with seven-deuce and collects a bounty of ${formatAmount(total, state.config)}`);
 
   return { seat: winnerSeat, payments };
 }

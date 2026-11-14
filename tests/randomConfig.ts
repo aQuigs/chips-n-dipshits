@@ -1,4 +1,4 @@
-import { CONFIG_KEYS, CONFIG_RULES, CONFIG_SPECS, LIMITS } from '../src/engine/index.ts';
+import { CONFIG_KEYS, CONFIG_RULES, CONFIG_SPECS, fixedAtCreation, LIMITS } from '../src/engine/index.ts';
 import type { ConfigSpec, Rng, TableConfig } from '../src/engine/index.ts';
 
 const LETTERS = 'abcdefghijklmnopqrstuvwxyz';
@@ -50,10 +50,19 @@ export function randomSetting(spec: ConfigSpec, rng: Rng): string | number | boo
   }
 }
 
-/** A full set of table settings the table would accept, drawn from the registry: a setting added there is drawn here. */
-export function randomConfig(rng: Rng): TableConfig {
+/** The part of a table's settings that has to be given when it is created, since it can't be changed after. */
+export function fixedSettings(config: TableConfig): Partial<TableConfig> {
+  return Object.fromEntries(CONFIG_KEYS.filter(fixedAtCreation).map((key) => [key, config[key]]));
+}
+
+/**
+ * A full set of table settings the table would accept, drawn from the registry: a setting added there
+ * is drawn here. Given the settings of a `table`, they are a change its host could make: what was
+ * chosen for good when it was created stays as it is.
+ */
+export function randomConfig(rng: Rng, table?: TableConfig): TableConfig {
   for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
-    const config = Object.fromEntries(CONFIG_KEYS.map((key) => [key, randomSetting(CONFIG_SPECS[key], rng)])) as unknown as TableConfig;
+    const config = { ...Object.fromEntries(CONFIG_KEYS.map((key) => [key, randomSetting(CONFIG_SPECS[key], rng)])), ...(table && fixedSettings(table)) } as unknown as TableConfig;
 
     if (CONFIG_RULES.every((rule) => rule.complaint(config) === null)) {
       return config;

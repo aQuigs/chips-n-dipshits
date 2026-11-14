@@ -1,7 +1,7 @@
-import { CONFIG_KEYS } from '../../../engine/config.ts';
+import { formatAmount } from '../../../engine/amounts.ts';
 import type { TableConfig } from '../../../engine/types.ts';
 import type { TableView } from '../../../engine/view.ts';
-import { chips, h } from '../../ui.ts';
+import { h } from '../../ui.ts';
 import { configForm } from '../configForm.ts';
 import { hostOrCohost } from '../roles.ts';
 import { frame, submit } from './dialog.ts';
@@ -16,7 +16,7 @@ function changed(opened: TableConfig, held: Partial<TableConfig>): Partial<Table
 }
 
 function settings(view: TableView, handlers: DialogHandlers): HTMLElement {
-  const fields = configForm(CONFIG_KEYS, view.config, 'table-');
+  const fields = configForm(view.config, 'table-', false);
 
   return frame(
     'Table settings',
@@ -35,6 +35,6 @@ function settings(view: TableView, handlers: DialogHandlers): HTMLElement {
 
 export const settingsDialog: DialogKind<'settings'> = {
   kind: 'settings',
-  menu: { label: 'Table settings', who: hostOrCohost, note: (view) => `Blinds ${chips(view.config.smallBlind)}/${chips(view.config.bigBlind)}` },
+  menu: { label: 'Table settings', who: hostOrCohost, note: (view) => `Blinds ${formatAmount(view.config.smallBlind, view.config)}/${formatAmount(view.config.bigBlind, view.config)}` },
   draw: settings,
 };

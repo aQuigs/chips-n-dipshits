@@ -1,4 +1,4 @@
-import { formatChips } from './format.ts';
+import { formatAmount } from './amounts.ts';
 import { GameError, SEAT_COUNT } from './types.ts';
 import type { Ctx, FeedKind, LedgerKind, Member, TableState } from './types.ts';
 
@@ -107,7 +107,7 @@ export function addPendingChips(state: TableState, ctx: Ctx, seatIndex: number):
   if (added === 0) {
     addFeed(state, ctx.now, 'system', null, `${member.name} is over the table maximum, so no chips are added`);
   } else if (added < asked) {
-    addFeed(state, ctx.now, 'system', null, `${member.name} adds ${formatChips(added)}, which brings them to the table maximum`);
+    addFeed(state, ctx.now, 'system', null, `${member.name} adds ${formatAmount(added, state.config)}, which brings them to the table maximum`);
   }
 }
 
@@ -128,5 +128,5 @@ export function vacateSeat(state: TableState, ctx: Ctx, seatIndex: number): void
     recordLedger(state, ctx, member, 'cash-out', -chips);
   }
 
-  addFeed(state, ctx.now, 'system', null, `${member.name} leaves the table with ${formatChips(chips)}`);
+  addFeed(state, ctx.now, 'system', null, `${member.name} leaves the table with ${formatAmount(chips, state.config)}`);
 }

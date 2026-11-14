@@ -1,4 +1,4 @@
-import { formatChips } from './format.ts';
+import { formatAmount } from './amounts.ts';
 import { stopWaitingFor } from './hand.ts';
 import { reaches, roleOf } from './hosts.ts';
 import { addFeed, memberOf, recordLedger, seatIndexOf, vacateSeat } from './seats.ts';
@@ -26,7 +26,7 @@ function grantSeat(state: TableState, ctx: Ctx, request: SeatRequest): void {
   };
 
   recordLedger(state, ctx, member, 'buy-in', request.amount);
-  addFeed(state, ctx.now, 'system', null, `${member.name} sits down with ${formatChips(request.amount)}`);
+  addFeed(state, ctx.now, 'system', null, `${member.name} sits down with ${formatAmount(request.amount, state.config)}`);
 }
 
 function grantRebuy(state: TableState, ctx: Ctx, request: SeatRequest): void {
@@ -48,13 +48,13 @@ function grantRebuy(state: TableState, ctx: Ctx, request: SeatRequest): void {
   // Chips can't join a hand that is already being played, so they wait for its end and are bought then
   if (isDealtIn(state, index)) {
     seat.pendingAdd += amount;
-    addFeed(state, ctx.now, 'system', null, `${member.name} adds ${formatChips(amount)} after this hand`);
+    addFeed(state, ctx.now, 'system', null, `${member.name} adds ${formatAmount(amount, state.config)} after this hand`);
     return;
   }
 
   seat.stack += amount;
   recordLedger(state, ctx, member, 'buy-in', amount);
-  addFeed(state, ctx.now, 'system', null, `${member.name} adds ${formatChips(amount)}`);
+  addFeed(state, ctx.now, 'system', null, `${member.name} adds ${formatAmount(amount, state.config)}`);
 }
 
 export function grant(state: TableState, ctx: Ctx, request: SeatRequest): void {

@@ -98,14 +98,14 @@ test('a raise before the flop must at least double the big blind, and a re-raise
   t.deal({ button: 0 });
 
   assert.equal(options(t, 0).minRaiseTo, 40);
-  assert.throws(() => t.raise(0, 39), /between 40 and 1000/);
+  assert.throws(() => t.raise(0, 39), /between 40 and 1,000/);
   t.raise(0, 60);
 
   assert.deepEqual(
     { call: options(t, 1).callAmount, min: options(t, 1).minRaiseTo, max: options(t, 1).maxRaiseTo },
     { call: 50, min: 100, max: 1000 },
   );
-  assert.throws(() => t.raise(1, 99), /between 100 and 1000/);
+  assert.throws(() => t.raise(1, 99), /between 100 and 1,000/);
   t.raise(1, 100);
 
   assert.equal(options(t, 2).callAmount, 80);
@@ -137,7 +137,7 @@ test('rejects actions that are out of turn or impossible', () => {
   t.call(0);
   t.call(1);
   assert.throws(() => t.call(2), /nothing to call/);
-  assert.throws(() => t.raise(2, 25.5), /between 40 and 1000/);
+  assert.throws(() => t.raise(2, 25.5), /between 40 and 1,000/);
 });
 
 test('an all-in for less than a full raise does not let players who already acted raise again', () => {
@@ -1004,4 +1004,60 @@ test('an action that arrives after its hand is over is not played in the next ha
 
   t.cmd(0, { type: 'call', turn: t.view(0).hand!.turn });
   assert.equal(t.toAct, 1);
+});
+
+test('dollars and cents: the play-by-play, the pots and the result of a split pot with an odd cent all read in dollars', () => {
+  const t = new TestTable({ stacks: [10_000, 10_000, 10_000], config: { unit: 'cents', smallBlind: 25, bigBlind: 50 } });
+  t.deal({ button: 0, holes: { 0: '2c 3d', 2: '4c 5d' }, board: 'As Ks Qs Js Ts' });
+
+  assert.throws(() => t.check(0), { message: "You can't check, there is a bet of 0.50 to you" });
+  assert.throws(() => t.raise(0, 99), { message: 'A raise here must be between 1.00 and 100.00' });
+
+  t.raise(0, 150);
+  t.fold(1);
+  t.call(2);
+  assert.deepEqual(t.view(0).hand!.pots, [{ amount: 325, eligible: [0, 2] }], 'the pot is still a whole number of cents');
+
+  checkAround(t, [2, 0], 3);
+
+  // 3.25 does not split: the odd cent goes to the first winner clockwise from the button
+  const result = t.state.hand!.result!;
+  assert.deepEqual(result.pots[0]!.awards, [
+    { seat: 2, amount: 163, run: 0 },
+    { seat: 0, amount: 162, run: 0 },
+  ]);
+  assert.deepEqual(t.stacks(), [10_012, 9975, 10_013]);
+  assertChipsConserved(t.state);
+
+  const log = t.state.hand!.log;
+  assert.equal(log[0], 'Hand #1 · blinds 0.25/0.50 · P0 has the button');
+  assert.deepEqual(log.slice(1, 6), ['P1 posts small blind 0.25', 'P2 posts big blind 0.50', 'P0 raises to 1.50', 'P1 folds', 'P2 calls 1.00']);
+  assert.deepEqual(log.slice(-2), ['P2 wins 1.63 with Royal Flush', 'P0 wins 1.62 with Royal Flush']);
+
+  t.finishHand();
+  const [record] = handRecords(t.effects);
+  assert.equal(record!.summary, log.join('\n'), 'the hand history keeps the same words');
+  assert.deepEqual(record!.players.map((p) => p.endStack), [10_012, 9975, 10_013]);
+});
+
+test('dollars and cents: an uncalled bet, a short all-in and a seven-deuce bounty read in dollars', () => {
+  const t = new TestTable({ stacks: [10_000, 40, 10_000], config: { unit: 'cents', smallBlind: 25, bigBlind: 50, sevenDeuceBounty: 500 } });
+  t.deal({ button: 0, holes: { 0: '7h 2c', 1: 'As Ah', 2: 'Kd Kh' }, board: '7d 7s 2h 9c 4d' });
+
+  t.raise(0, 150);
+  t.call(1);
+  t.fold(2);
+  t.runToResult();
+
+  // The small blind had 0.40 in all, so the last 0.10 of the big blind and of the raiser's matching 0.50 make a side pot
+  const text = t.feedText();
+  for (const line of ['P1 calls 0.15 and is all in', 'Uncalled bet of 1.00 returned to P0', 'P0 wins 1.20 from the main pot with Full House, Sevens full of Twos', 'P0 wins 0.20 from side pot 1 with Full House, Sevens full of Twos']) {
+    assert.ok(text.includes(line), `"${line}" is missing from: ${text.join(' / ')}`);
+  }
+
+  // The player who lost their last cent in the hand has nothing to pay the bounty with
+  assert.deepEqual(t.state.hand!.result!.bounty, { seat: 0, payments: [{ seat: 2, amount: 500 }] });
+  assert.ok(text.includes('P0 won with seven-deuce and collects a bounty of 5.00'));
+  assert.deepEqual(t.stacks(), [10_000 + 40 + 50 + 500, 0, 10_000 - 50 - 500]);
+  assertChipsConserved(t.state);
 });

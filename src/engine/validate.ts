@@ -13,8 +13,12 @@ export const LIMITS = {
   linkLength: 500,
 };
 
+export function isWholeIn(value: unknown, min: number, max: number): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= min && value <= max;
+}
+
 export function wholeNumber(value: unknown, what: string, min: number, max = LIMITS.chips): number {
-  if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max) {
+  if (!isWholeIn(value, min, max)) {
     throw new GameError(`${what} must be a whole number from ${min} to ${max}`);
   }
 

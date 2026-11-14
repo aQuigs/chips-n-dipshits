@@ -20,6 +20,9 @@ import type { DealOptions } from '../tests/helpers.ts';
 import { assertInvariants } from '../tests/invariants.ts';
 import { clientPage } from './bundle.ts';
 
+// Names a font to draw every screen in. CI's browser has other fonts than the machine a check was written on,
+// and what fails only there usually fails here in a narrower font ('Times New Roman') or a wider one ('Verdana').
+const FONT_OVERRIDE = process.env.RIG_FONT;
 const STEP_TIMEOUT_MS = 15_000;
 
 export const SCREENS = {
@@ -160,13 +163,7 @@ export class RigTable {
   /** The table in a browser, as one of its members, on a screen of the given size. */
   async open(name: string, screen: ScreenName): Promise<Page> {
     const { id, token } = this.auth(name);
-    const size = SCREENS[screen];
-    const touch = screen !== 'desktop';
-    const context = await this.rig.browser.newContext({ viewport: size, ...(touch ? { deviceScaleFactor: 2, isMobile: true, hasTouch: true } : {}) });
-    const page = await context.newPage();
-
-    page.setDefaultTimeout(STEP_TIMEOUT_MS);
-    page.on('pageerror', (error) => this.rig.pageErrors.push(`${name}: ${error.message}`));
+    const page = await this.rig.page(screen, name);
 
     await page.goto(`${this.rig.url}?table=${this.id}&me=${id}.${token}`);
     await page.click('[data-action="confirm-member"]');
@@ -222,6 +219,37 @@ export class Rig {
     return this.service.handle(request);
   }
 
+  /** A browser page on a screen of the given size, with nothing in it yet. `who` names it when it throws. */
+  async page(screen: ScreenName, who: string): Promise<Page> {
+    const touch = screen !== 'desktop';
+    const context = await this.browser.newContext({ viewport: SCREENS[screen], ...(touch ? { deviceScaleFactor: 2, isMobile: true, hasTouch: true } : {}) });
+    const page = await context.newPage();
+
+    if (FONT_OVERRIDE) {
+      await context.addInitScript(`document.addEventListener('DOMContentLoaded', () => {
+        const style = document.createElement('style');
+        style.textContent = '* { font-family: ${FONT_OVERRIDE}, sans-serif !important; }';
+        document.head.append(style);
+      });`);
+    }
+
+    page.setDefaultTimeout(STEP_TIMEOUT_MS);
+    page.on('pageerror', (error) => this.pageErrors.push(`${who}: ${error.message}`));
+
+    return page;
+  }
+
+  /** The front page, as someone who has not joined any table. */
+  async lobby(screen: ScreenName): Promise<Page> {
+    const page = await this.page(screen, 'a visitor');
+
+    await page.goto(this.url);
+    await page.waitForSelector('#host-name');
+    await page.evaluate('document.fonts.ready.then(() => undefined)');
+
+    return page;
+  }
+
   /** A new table with everyone seated and the game not yet started. The first player is the host. */
   table(players: RigPlayer[], config: Partial<TableConfig> = {}): RigTable {
     const [host, ...others] = players;
@@ -263,6 +291,36 @@ export async function boxes(page: Page, selector: string): Promise<Box[]> {
       .filter((box) => box.width > 0 && box.height > 0)
       .map((box) => ({ left: box.left, top: box.top, right: box.right, bottom: box.bottom }))`,
   ) as Promise<Box[]>;
+}
+
+/** Where the text of everything matching a selector is drawn, which is often less than the box of the element holding it. */
+export async function textBoxes(page: Page, selector: string): Promise<Box[]> {
+  return page.evaluate(
+    `[...document.querySelectorAll(${JSON.stringify(selector)})]
+      .map((element) => {
+        const range = document.createRange();
+        range.selectNodeContents(element);
+
+        return range.getBoundingClientRect();
+      })
+      .filter((box) => box.width > 0 && box.height > 0)
+      .map((box) => ({ left: box.left, top: box.top, right: box.right, bottom: box.bottom }))`,
+  ) as Promise<Box[]>;
+}
+
+/**
+ * Makes the table's part of the screen this tall. How much of a phone the table gets depends on how the buttons
+ * under it wrap, and so on the fonts of the machine; a check about the table's shape sets the height itself.
+ */
+export async function setStageHeight(page: Page, height: number): Promise<void> {
+  const viewport = page.viewportSize();
+  const [stage] = await boxes(page, '.stage');
+  assert.ok(viewport && stage, 'no table on the page to resize');
+
+  await page.setViewportSize({ width: viewport.width, height: Math.round(viewport.height + height - (stage.bottom - stage.top)) });
+
+  const [resized] = await boxes(page, '.stage');
+  assert.ok(resized && Math.abs(resized.bottom - resized.top - height) <= 1, `the table's part of the screen is ${resized && resized.bottom - resized.top} tall, not ${height}`);
 }
 
 export function overlap(a: Box, b: Box): boolean {

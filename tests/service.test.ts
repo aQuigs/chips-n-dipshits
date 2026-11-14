@@ -79,7 +79,7 @@ test('anyone with the table id can look it up and join under a free name', () =>
   const tableId = joined(service.handle({ op: 'create', name: 'Quigs' })).view.id;
 
   const info = service.handle({ op: 'info', tableId: tableId.toLowerCase() });
-  assert.deepEqual(info, { ok: true, kind: 'info', table: { id: tableId, name: "Chips n' Dipshits", smallBlind: 10, bigBlind: 20, players: [] } });
+  assert.deepEqual(info, { ok: true, kind: 'info', table: { id: tableId, name: "Chips n' Dipshits", unit: 'chips', smallBlind: 10, bigBlind: 20, players: [] } });
 
   const ann = joined(service.handle({ op: 'join', tableId: ` ${tableId.toLowerCase()} `, name: 'Ann' }));
   assert.equal(ann.view.you.role, 'member');

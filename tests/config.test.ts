@@ -1,13 +1,14 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { CONFIG_KEYS, CONFIG_SPECS, DEFAULT_CONFIG, validatedConfig, validSetting } from '../src/engine/index.ts';
+import { CONFIG_KEYS, CONFIG_SPECS, DEFAULT_CONFIG, newConfig, startingConfig, validatedConfig, validSetting } from '../src/engine/index.ts';
 import type { ChoiceSpec, NumberSpec } from '../src/engine/index.ts';
 import { seededRng, TestTable } from './helpers.ts';
 import { randomConfig, randomSetting } from './randomConfig.ts';
 
 test('the default settings are the registry\'s defaults, and the table accepts them', () => {
   assert.deepEqual(DEFAULT_CONFIG, {
+    unit: 'chips',
     name: "Chips n' Dipshits",
     voiceLink: '',
     smallBlind: 10,
@@ -20,12 +21,13 @@ test('the default settings are the registry\'s defaults, and the table accepts t
     sevenDeuceBounty: 0,
   });
   assert.deepEqual(validatedConfig({}, DEFAULT_CONFIG), DEFAULT_CONFIG);
+  assert.deepEqual(newConfig({}), DEFAULT_CONFIG);
 });
 
 test('a refusal names the setting and says what it may be', () => {
   const settings = (config: object) => () => validatedConfig(config, DEFAULT_CONFIG);
 
-  assert.throws(settings({ smallBlind: 0 }), { name: 'GameError', message: 'The small blind must be a whole number from 1 to 1000000000' });
+  assert.throws(settings({ smallBlind: 0 }), { name: 'GameError', message: 'The small blind must be a whole number from 1 to 1,000,000,000' });
   assert.throws(settings({ actionSeconds: 301 }), { message: 'The action clock must be a whole number from 0 to 300' });
   assert.throws(settings({ actionSeconds: 4 }), { message: 'The action clock must be off or at least 5 seconds' });
   assert.throws(settings({ allowRunItTwice: 1 }), { message: 'Run it twice must be on or off' });
@@ -50,7 +52,7 @@ test('when several things are wrong, the complaint is about the one that was alw
   assert.equal(complaint({ name: '   ', smallBlind: 50, bigBlind: 10 }), "The big blind can't be smaller than the small blind");
   assert.equal(complaint({ name: '   ', actionSeconds: 3 }), 'The action clock must be off or at least 5 seconds');
   assert.equal(complaint({ smallBlind: 50, bigBlind: 10, minBuyIn: 0 }), "The big blind can't be smaller than the small blind");
-  assert.equal(complaint({ smallBlind: 0, bigBlind: 0 }), 'The small blind must be a whole number from 1 to 1000000000');
+  assert.equal(complaint({ smallBlind: 0, bigBlind: 0 }), 'The small blind must be a whole number from 1 to 1,000,000,000');
   assert.equal(complaint({ minBuyIn: 500, maxBuyIn: 100, actionSeconds: 400 }), "The maximum buy-in can't be smaller than the minimum");
   assert.equal(complaint({ bigBlind: 5, allowRunItTwice: 0 }), "The big blind can't be smaller than the small blind");
   assert.equal(complaint({ sevenDeuceBounty: -1, allowRunItTwice: 'x', name: 7 }), 'The table name is missing');
@@ -79,17 +81,17 @@ test('a setting that is a count or one of several choices is checked like the re
     group: 'table',
   };
 
-  assert.equal(validSetting(count, 6), 6);
-  assert.throws(() => validSetting(count, 11), { message: 'The number of seats must be a whole number from 2 to 10' });
-  assert.equal(validSetting(choice, 'two'), 'two');
-  assert.throws(() => validSetting(choice, 'three'), { name: 'GameError', message: 'The number of decks must be one of: One, Two' });
-  assert.throws(() => validSetting(choice, undefined), /must be one of/);
+  assert.equal(validSetting(count, 6, DEFAULT_CONFIG), 6);
+  assert.throws(() => validSetting(count, 11, DEFAULT_CONFIG), { message: 'The number of seats must be a whole number from 2 to 10' });
+  assert.equal(validSetting(choice, 'two', DEFAULT_CONFIG), 'two');
+  assert.throws(() => validSetting(choice, 'three', DEFAULT_CONFIG), { name: 'GameError', message: 'The number of decks must be one of: One, Two' });
+  assert.throws(() => validSetting(choice, undefined, DEFAULT_CONFIG), /must be one of/);
 
   const rng = seededRng(5);
   for (let draw = 0; draw < 200; draw++) {
     const drawn = [randomSetting(count, rng), randomSetting(choice, rng)];
 
-    assert.deepEqual([validSetting(count, drawn[0]), validSetting(choice, drawn[1])], drawn, 'a random draw is one the setting takes');
+    assert.deepEqual([validSetting(count, drawn[0], DEFAULT_CONFIG), validSetting(choice, drawn[1], DEFAULT_CONFIG)], drawn, 'a random draw is one the setting takes');
   }
 });
 
@@ -100,7 +102,7 @@ test('random settings are always ones the table accepts, and between them reach 
   for (let draw = 0; draw < 500; draw++) {
     const config = randomConfig(rng);
 
-    assert.deepEqual(validatedConfig(config, DEFAULT_CONFIG), config);
+    assert.deepEqual(newConfig(config), config);
     for (const key of CONFIG_KEYS) {
       seen.get(key)!.add(config[key]);
     }
@@ -146,4 +148,30 @@ test('changing a setting that waits for the next hand leaves the hand in play as
 
     assert.ok(changed > 10, `${key} was hardly ever changed`);
   }
+});
+
+test('a new table starts from what its choices suggest, and anything sent with them wins', () => {
+  const cents = startingConfig({ unit: 'cents' });
+
+  assert.deepEqual(cents, { ...DEFAULT_CONFIG, unit: 'cents', smallBlind: 25, bigBlind: 50, minBuyIn: 2000, maxBuyIn: 10_000 });
+  assert.deepEqual(newConfig({ unit: 'cents', smallBlind: 5, name: 'Nickels' }), { ...cents, smallBlind: 5, name: 'Nickels' });
+  assert.deepEqual(startingConfig({ unit: 'euros' }), DEFAULT_CONFIG, 'a choice that is not one of the options suggests nothing');
+  assert.deepEqual(startingConfig(), DEFAULT_CONFIG);
+
+  // Every choice has to suggest settings its own table would take
+  for (const key of CONFIG_KEYS) {
+    const spec = CONFIG_SPECS[key];
+
+    for (const option of spec.kind === 'choice' ? spec.options : []) {
+      assert.deepEqual(newConfig({ [key]: option.value }), startingConfig({ [key]: option.value }), `${key}: ${option.label}`);
+    }
+  }
+});
+
+test('a refusal writes amounts the way the table being created or changed does', () => {
+  const cents = startingConfig({ unit: 'cents' });
+
+  assert.throws(() => newConfig({ unit: 'cents', smallBlind: 0 }), { message: 'The small blind must be an amount to the cent from 0.01 to 10,000,000.00' });
+  assert.throws(() => validatedConfig({ sevenDeuceBounty: -1 }, cents), { message: 'The seven-deuce bounty must be an amount to the cent from 0.00 to 10,000,000.00' });
+  assert.throws(() => newConfig({ unit: 'euros', smallBlind: 0 }), { name: 'GameError', message: 'What the table plays with must be one of: Whole chips, Dollars and cents' });
 });

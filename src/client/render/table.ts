@@ -1,6 +1,8 @@
+import { formatAmount, shortAmount } from '../../engine/amounts.ts';
+import type { Denominated } from '../../engine/amounts.ts';
 import { evaluateHand } from '../../engine/handRank.ts';
 import type { HandView, SeatView, TableView } from '../../engine/view.ts';
-import { cardEl, chips, h, shortChips } from '../ui.ts';
+import { cardEl, h } from '../ui.ts';
 import { hostOrCohost, roleMark } from './roles.ts';
 
 /** Whether the table is drawn lying down (desktop, landscape) or standing up (a phone held upright). */
@@ -10,7 +12,7 @@ export type Shape = 'wide' | 'tall';
 type Anchor = 'top' | 'middle' | 'bottom';
 
 type SeatSpot = [x: number, y: number, anchor: Anchor];
-type Spot = [x: number, y: number];
+type Spot = [x: number, y: number, besideTheMiddle?: true];
 
 // Where each seat sits, in percent of the stage, going clockwise from the viewer at the bottom
 const SEAT_SPOTS: Record<Shape, SeatSpot[]> = {
@@ -40,10 +42,11 @@ const SEAT_SPOTS: Record<Shape, SeatSpot[]> = {
   ],
 };
 
-// Where each seat's bet sits: between the seat and the middle, clear of the board
+// Where each seat's bet sits: between the seat and the middle, clear of the board. A standing table has no
+// room for a bet between a side seat and the board, so those bets go just above and below the middle.
 const BET_SPOTS: Record<Shape, Spot[]> = {
   wide: [[50, 70], [33, 70], [22, 59], [22, 41], [33, 30], [50, 30], [67, 30], [78, 41], [78, 59], [67, 70]],
-  tall: [[50, 73], [33, 71], [33, 59], [33, 41], [33, 28], [50, 24], [67, 28], [67, 41], [67, 59], [67, 71]],
+  tall: [[50, 73], [33, 71], [33, 59, true], [33, 41, true], [33, 28], [50, 24], [67, 28], [67, 41, true], [67, 59, true], [67, 71]],
 };
 
 const BOARD_SIZE = 5;
@@ -72,9 +75,16 @@ function seatPlace(shape: Shape, slot: number): { class: string; style: Record<s
 }
 
 function betPlace(shape: Shape, slot: number): Record<string, string> {
-  const [x, y] = BET_SPOTS[shape][slot]!;
+  const [x, y, besideTheMiddle] = BET_SPOTS[shape][slot]!;
 
-  return { left: `${x}%`, top: `${y}%` };
+  if (!besideTheMiddle) {
+    return { left: `${x}%`, top: `${y}%` };
+  }
+
+  // The board and the pot keep their size on a short table, where a share of its height stops clearing them
+  const fromTheMiddle = `max(${Math.abs(y - 50)}%, var(--center-reach))`;
+
+  return { left: `${x}%`, top: `calc(50% ${y < 50 ? '-' : '+'} ${fromTheMiddle})` };
 }
 
 function sum(amounts: number[]): number {
@@ -182,8 +192,8 @@ function seatEl(view: TableView, seat: SeatView, slot: number, shape: Shape, clo
     'div.plate',
     null,
     h('div.name', { title: seat.name }, h('span', null, seat.name), roleMark(view, seat.playerId)),
-    h('div.stack', { title: chips(seat.stack) }, shortChips(seat.stack), seat.pendingAdd > 0 ? h('span.pending', null, ` +${shortChips(seat.pendingAdd)}`) : null),
-    won > 0 ? h('div.status.won', null, `+${shortChips(won + bounty)}`) : status ? h('div.status', { 'data-status': status }, status) : null,
+    h('div.stack', { title: formatAmount(seat.stack, view.config) }, shortAmount(seat.stack, view.config), seat.pendingAdd > 0 ? h('span.pending', null, ` +${shortAmount(seat.pendingAdd, view.config)}`) : null),
+    won > 0 ? h('div.status.won', null, `+${shortAmount(won + bounty, view.config)}`) : status ? h('div.status', { 'data-status': status }, status) : null,
     // The seconds left, for everyone: the bar under the name alone is easy to miss until the time is gone
     timer ? h('div.status.clock', { 'data-countdown': hand!.deadline }, '') : null,
     timer,
@@ -201,7 +211,7 @@ function seatEl(view: TableView, seat: SeatView, slot: number, shape: Shape, clo
 
   const nodes = [seatNode];
   if (seat.bet > 0) {
-    nodes.push(h('div.bet', { style: betPlace(shape, slot) }, h('i.chip'), shortChips(seat.bet)));
+    nodes.push(h('div.bet', { style: betPlace(shape, slot) }, h('i.chip'), shortAmount(seat.bet, view.config)));
   }
 
   return nodes;
@@ -266,18 +276,18 @@ function resultLines(view: TableView, hand: HandView): string[] {
       const made = result.hands.find((shown) => shown.seat === seat && shown.run === run)?.name;
       const board = runs > 1 ? `Board ${run + 1}: ` : '';
 
-      lines.push(`${board}${nameAt(seat)} wins ${chips(amount)}${made ? ` with ${made}` : ''}`);
+      lines.push(`${board}${nameAt(seat)} wins ${formatAmount(amount, view.config)}${made ? ` with ${made}` : ''}`);
     }
   }
 
-  const bountyLine = result.bounty ? [`Seven-deuce! ${nameAt(result.bounty.seat)} collects a ${chips(sum(result.bounty.payments.map((payment) => payment.amount)))} bounty`] : [];
+  const bountyLine = result.bounty ? [`Seven-deuce! ${nameAt(result.bounty.seat)} collects a ${formatAmount(sum(result.bounty.payments.map((payment) => payment.amount)), view.config)} bounty`] : [];
 
   if (lines.length + bountyLine.length <= RESULT_LINES) {
     return [...lines, ...bountyLine];
   }
 
   // Several pots or two boards say more than fits here: each winner gets one line, and the play-by-play has every pot
-  const winners = [...result.winnings].sort((a, b) => b.amount - a.amount).map((win) => `${nameAt(win.seat)} wins ${chips(win.amount)}`);
+  const winners = [...result.winnings].sort((a, b) => b.amount - a.amount).map((win) => `${nameAt(win.seat)} wins ${formatAmount(win.amount, view.config)}`);
   const room = RESULT_LINES - bountyLine.length;
   const shown = winners.length > room ? [...winners.slice(0, room - 1), `and ${winners.length - room + 1} more win a share`] : winners;
 
@@ -321,16 +331,16 @@ function messageEl(view: TableView, handlers: TableHandlers): HTMLElement | null
   return h('div.message', null, 'Waiting for at least two players with chips');
 }
 
-function potEl(hand: HandView): HTMLElement | null {
+function potEl(table: Denominated, hand: HandView): HTMLElement | null {
   // Once the hand is over the pot has gone to the winners, and the result says who got what
   if (hand.pot === 0 || hand.stage === 'done') {
     return null;
   }
 
   const sidePots = hand.pots.length > 1 && hand.stage !== 'betting';
-  const breakdown = sidePots ? hand.pots.map((pot, index) => `${index === 0 ? 'Main' : `Side ${index}`} ${chips(pot.amount)}`).join(' · ') : null;
+  const breakdown = sidePots ? hand.pots.map((pot, index) => `${index === 0 ? 'Main' : `Side ${index}`} ${formatAmount(pot.amount, table)}`).join(' · ') : null;
 
-  return h('div.pot', null, h('span.label', null, 'Pot'), chips(hand.pot), breakdown ? h('div.sidepots', null, breakdown) : null);
+  return h('div.pot', null, h('span.label', null, 'Pot'), formatAmount(hand.pot, table), breakdown ? h('div.sidepots', null, breakdown) : null);
 }
 
 /** The poker table as one viewer sees it, with their own seat at the bottom. */
@@ -355,7 +365,7 @@ export function tableEl(view: TableView, shape: Shape, clockOffset: number, hand
     'div',
     { class: `table ${shape}` },
     h('div.felt'),
-    h('div.center', null, hand ? boardEl(hand) : null, hand ? potEl(hand) : null, messageEl(view, handlers)),
+    h('div.center', null, hand ? boardEl(hand) : null, hand ? potEl(view.config, hand) : null, messageEl(view, handlers)),
     nodes,
   );
 }

@@ -1,4 +1,4 @@
-import type { Command, HandRecord, TableConfig, TableView } from '../engine/index.ts';
+import type { Command, HandRecord, TableConfig, TableView, Unit } from '../engine/index.ts';
 
 /** Proof of which member a request comes from. */
 export interface Auth {
@@ -41,6 +41,8 @@ export interface ApiError {
 export interface TableInfo {
   id: string;
   name: string;
+  /** What the blinds are counted in, so they can be written out. */
+  unit: Unit;
   smallBlind: number;
   bigBlind: number;
   players: string[];

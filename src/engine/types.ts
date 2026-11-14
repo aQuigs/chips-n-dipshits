@@ -9,7 +9,12 @@ export const SEAT_COUNT = 10;
  */
 export const STATE_SCHEMA = 3;
 
+/** What a table's amounts count, since every one of them is kept as a whole number: chips, or the cents of an amount written in dollars. */
+export type Unit = 'chips' | 'cents';
+
 export interface TableConfig {
+  /** Chosen when the table is created and fixed from then on: the chips already on it would change their worth. */
+  unit: Unit;
   name: string;
   /** The group's call, opened from a button on the table; '' for none. */
   voiceLink: string;

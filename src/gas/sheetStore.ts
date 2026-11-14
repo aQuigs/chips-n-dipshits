@@ -1,5 +1,5 @@
-import { upgradeRecord } from '../engine/index.ts';
-import type { Effect, HandRecord, TableState } from '../engine/index.ts';
+import { asNumber, upgradeRecord } from '../engine/index.ts';
+import type { Denominated, Effect, HandRecord, TableState, Unit } from '../engine/index.ts';
 import { peekOf, restoreState, StoreBusyError } from '../server/store.ts';
 import type { TablePeek, TableStore, Txn } from '../server/store.ts';
 
@@ -68,7 +68,7 @@ const HEADERS: Record<SheetKey, string[]> = {
     ...Array.from({ length: STATE_CHUNKS - 1 }, () => ''),
     'Records on their way to the Ledger and Hands tabs (normally empty)',
   ],
-  ledger: ['Time', 'Table', 'Player', 'Type', 'Chips', 'Player ID', 'Record ID'],
+  ledger: ['Time', 'Table', 'Player', 'Type', 'Amount', 'Player ID', 'Record ID'],
   hands: ['Time', 'Table', 'Hand', 'Summary', 'Record', 'Record ID'],
 };
 
@@ -76,10 +76,13 @@ const TEXT = '@';
 const TIMESTAMP = 'yyyy-mm-dd hh:mm:ss';
 const WHOLE_NUMBER = '0';
 
-/** Where each kind of record ends up. The record's id is always the last column. */
-const RECORD_SHEETS: { type: Effect['type']; sheet: SheetKey; formats: string[] }[] = [
-  { type: 'ledger', sheet: 'ledger', formats: [TIMESTAMP, TEXT, TEXT, TEXT, WHOLE_NUMBER, TEXT, TEXT] },
-  { type: 'hand', sheet: 'hands', formats: [TIMESTAMP, TEXT, WHOLE_NUMBER, TEXT, TEXT, TEXT] },
+// An amount is written as its table writes it, 1.50 for 150 cents, and as a number so the column can be added up
+const AMOUNT: Record<Unit, string> = { chips: WHOLE_NUMBER, cents: '0.00' };
+
+/** Where each kind of record ends up, and how the cells of a row are formatted for the table it happened at. The record's id is always the last column. */
+const RECORD_SHEETS: { type: Effect['type']; sheet: SheetKey; formats(table: Denominated): string[] }[] = [
+  { type: 'ledger', sheet: 'ledger', formats: ({ unit }) => [TIMESTAMP, TEXT, TEXT, TEXT, AMOUNT[unit], TEXT, TEXT] },
+  { type: 'hand', sheet: 'hands', formats: () => [TIMESTAMP, TEXT, WHOLE_NUMBER, TEXT, TEXT, TEXT] },
 ];
 
 // The engine keeps a hand's log shorter than this. Should a longer one ever arrive, its end is kept
@@ -221,11 +224,11 @@ function parseRow(values: unknown[]): TableRow {
   };
 }
 
-function recordRow({ id, record }: Held): unknown[] {
+function recordRow({ id, record }: Held, table: Denominated): unknown[] {
   if (record.type === 'ledger') {
     const { at, tableId, name, kind, amount, playerId } = record.entry;
 
-    return [new Date(at), tableId, name, kind, amount, playerId, id];
+    return [new Date(at), tableId, name, kind, asNumber(amount, table), playerId, id];
   }
 
   const hand = record.record;
@@ -267,7 +270,7 @@ export class SheetStore implements TableStore {
 
         this.persist(save, found ? found.row : null, found ? found.held : [], fresh);
       } else if (found && found.held.length > 0) {
-        this.copyOut(found.row, found.held, true);
+        this.copyOut(found.row, found.held, true, found.state.config);
       }
 
       return txn.result;
@@ -352,7 +355,7 @@ export class SheetStore implements TableStore {
         return null;
       }
 
-      const settled = found.held.length === 0 || this.copyOut(found.row, found.held, true);
+      const settled = found.held.length === 0 || this.copyOut(found.row, found.held, true, found.state.config);
       this.remember(found.state, found.row, settled);
 
       return found.state;
@@ -422,7 +425,7 @@ export class SheetStore implements TableStore {
       throw error;
     }
 
-    const settled = held.length === 0 || this.copyOut(row, held, leftOver.length > 0);
+    const settled = held.length === 0 || this.copyOut(row, held, leftOver.length > 0, state.config);
 
     // The save itself succeeded, so a cache that can't be refreshed is only emptied, not treated as a failure
     try {
@@ -462,7 +465,7 @@ export class SheetStore implements TableStore {
    * `retrying` says some of these were tried before. A write that reported failure may have landed all
    * the same, so those are looked for in their tab first and not written twice.
    */
-  private copyOut(row: number, held: Held[], retrying: boolean): boolean {
+  private copyOut(row: number, held: Held[], retrying: boolean, table: Denominated): boolean {
     const waiting: Held[] = [];
 
     for (const { type, sheet, formats } of RECORD_SHEETS) {
@@ -471,10 +474,13 @@ export class SheetStore implements TableStore {
         continue;
       }
 
-      try {
-        const arrived = retrying ? this.recentIds(sheet, formats.length) : new Set<string>();
+      const rowFormats = formats(table);
 
-        this.appendRows(sheet, mine.filter((item) => !arrived.has(item.id)).map(recordRow), formats);
+      try {
+        const arrived = retrying ? this.recentIds(sheet, rowFormats.length) : new Set<string>();
+        const rows = mine.filter((item) => !arrived.has(item.id)).map((item) => recordRow(item, table));
+
+        this.appendRows(sheet, rows, rowFormats);
         this.deps.flush();
       } catch (error) {
         console.error(error);

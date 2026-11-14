@@ -1,6 +1,6 @@
 /* What the host may do, and of that what co-hosts may do too: each handler's `by` says which. */
+import { formatAmount, validAmount } from '../amounts.ts';
 import { validatedConfig } from '../config.ts';
-import { formatChips } from '../format.ts';
 import { restartActionClock } from '../hand.ts';
 import { actorName, dropCohost, requireMayRemove } from '../hosts.ts';
 import { grant, isDealtIn, leaveSeat, turnAway } from '../seating.ts';
@@ -90,12 +90,12 @@ export const setStack: Handler<'setStack'> = {
       throw new GameError(`${target.name} is in the current hand, so wait until it is over`);
     }
 
-    const stack = wholeNumber(command.stack, 'The stack', 0);
+    const stack = validAmount(command.stack, 'The stack', state.config, 0);
     const change = stack - seat.stack;
     if (change !== 0) {
       seat.stack = stack;
       recordLedger(state, ctx, target, 'adjustment', change);
-      addFeed(state, ctx.now, 'system', null, `${actorName(state, member)} set ${target.name}'s stack to ${formatChips(stack)}`);
+      addFeed(state, ctx.now, 'system', null, `${actorName(state, member)} set ${target.name}'s stack to ${formatAmount(stack, state.config)}`);
     }
   },
 };
@@ -109,12 +109,12 @@ export const updateConfig: Handler<'updateConfig'> = {
     const when = state.hand ? ' from the next hand' : '';
 
     if (state.config.smallBlind !== before.smallBlind || state.config.bigBlind !== before.bigBlind) {
-      addFeed(state, ctx.now, 'system', null, `Blinds are ${formatChips(state.config.smallBlind)}/${formatChips(state.config.bigBlind)}${when}`);
+      addFeed(state, ctx.now, 'system', null, `Blinds are ${formatAmount(state.config.smallBlind, state.config)}/${formatAmount(state.config.bigBlind, state.config)}${when}`);
     }
 
     if (state.config.sevenDeuceBounty !== before.sevenDeuceBounty) {
       const bounty = state.config.sevenDeuceBounty;
-      addFeed(state, ctx.now, 'system', null, bounty > 0 ? `The seven-deuce bounty is ${formatChips(bounty)}${when}` : `The seven-deuce bounty is off${when}`);
+      addFeed(state, ctx.now, 'system', null, bounty > 0 ? `The seven-deuce bounty is ${formatAmount(bounty, state.config)}${when}` : `The seven-deuce bounty is off${when}`);
     }
 
     if (state.config.voiceLink !== before.voiceLink) {
@@ -127,7 +127,7 @@ export const updateConfig: Handler<'updateConfig'> = {
       state,
       ctx,
       (r) => r.kind === 'seat' && (r.amount < minBuyIn || r.amount > maxBuyIn),
-      (name, r) => `${name} asked to sit down with ${formatChips(r.amount)}, which the new buy-in limits don't allow`,
+      (name, r) => `${name} asked to sit down with ${formatAmount(r.amount, state.config)}, which the new buy-in limits don't allow`,
     );
 
     if (!state.config.allowStraddle) {

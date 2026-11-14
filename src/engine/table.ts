@@ -1,6 +1,6 @@
 import type { Rng } from './cards.ts';
 import { dispatch } from './commands/index.ts';
-import { DEFAULT_CONFIG, validatedConfig } from './config.ts';
+import { newConfig } from './config.ts';
 import { startHand, stepHand, TIMING } from './hand.ts';
 import { addFeed, eligibleSeats } from './seats.ts';
 import { GameError, SEAT_COUNT, STATE_SCHEMA } from './types.ts';
@@ -103,7 +103,7 @@ export function createTable(id: string, hostName: unknown, configInput: unknown,
     id,
     version: 0,
     createdAt: ctx.now,
-    config: validatedConfig(configInput, DEFAULT_CONFIG),
+    config: newConfig(configInput),
     hostId: '',
     cohostIds: [],
     members: [],

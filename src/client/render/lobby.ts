@@ -1,7 +1,8 @@
-import { CONFIG_KEYS, CONFIG_SPECS, DEFAULT_CONFIG } from '../../engine/config.ts';
+import { formatAmount } from '../../engine/amounts.ts';
+import { startingConfig } from '../../engine/config.ts';
 import type { TableConfig } from '../../engine/types.ts';
 import type { TableInfo } from '../../server/api.ts';
-import { chips, h } from '../ui.ts';
+import { h } from '../ui.ts';
 import { configForm } from './configForm.ts';
 import { inputOf } from './forms.ts';
 
@@ -66,7 +67,7 @@ export function lobbyEl(rememberedName: string, themePicker: HTMLElement, handle
   const createButton = h('button.btn.primary', { type: 'submit', 'data-action': 'create-table' }, 'Create table');
 
   // The table's name starts out with the apostrophe the page's own title has
-  const settings = configForm(CONFIG_KEYS.filter((key) => CONFIG_SPECS[key].atCreate), { ...DEFAULT_CONFIG, name: 'Chips n’ Dipshits' }, 'new-table-');
+  const settings = configForm({ ...startingConfig(), name: 'Chips n’ Dipshits' }, 'new-table-', true);
 
   const create = h(
     'form.card-panel',
@@ -132,7 +133,7 @@ export function joinScreen(tableId: string, rememberedName: string, themePicker:
     showTable(info) {
       about.replaceChildren(
         h('h2', null, info.name),
-        h('p', null, `Blinds ${chips(info.smallBlind)}/${chips(info.bigBlind)}`),
+        h('p', null, `Blinds ${formatAmount(info.smallBlind, info)}/${formatAmount(info.bigBlind, info)}`),
         h('p.note', null, info.players.length > 0 ? `At the table: ${info.players.join(', ')}` : 'Nobody is seated yet.'),
       );
       joinButton.disabled = false;

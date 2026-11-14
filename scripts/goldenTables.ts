@@ -1,17 +1,20 @@
 /*
  * Builds the saved tables in tests/fixtures/tables/: tables stopped at the moments a new version of the
- * game is most likely to trip over, as the code saved them at schema 3, before anything was added to
- * what a table holds. tests/savedTables.test.ts reads each one back and plays it on, which is what
- * shows that a game in progress survives every change made since.
+ * game is most likely to trip over, as older code saved them. tests/savedTables.test.ts reads each one
+ * back and plays it on, which is what shows that a game in progress survives every change made since.
  *
- * The files are what the code just before this script's commit wrote when given this script, byte for
- * byte. The cards and ids are seeded, so at its own commit this script builds the same tables again
- * (in another order of the settings, which is all that commit changed in a saved table) and checks
- * them against the files. Run at any later commit it would build tables holding whatever has been
- * added since, which proves nothing about old ones, so it never changes a file that is already there.
- * To make them again, check out the commit before this script's and run this script there.
+ * A file is what the code of its time wrote when given this script, byte for byte, and is written once:
+ * run at any later commit the script would build a table holding whatever has been added since, which
+ * proves nothing about old ones, so it only writes a table whose file is not there yet and never
+ * touches one that is. The cards and ids are seeded, so run with `--check` at the commit that wrote a
+ * set, it builds those tables again and holds them to their files.
  *
- * A later change of shape adds its own table beside these, saved by the code just before the change.
+ * The first set is schema 3 as it began, before anything was added to what a table holds. To make it
+ * again, check out the commit before this script's and run this script there.
+ *
+ * A change of shape adds its own tables beside these, saved by the code just before the change: add the
+ * set and run the script before changing the shape, and commit the files it writes. The commands in a
+ * set are written as the code of today takes them, so that the script still reads as one.
  */
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -22,12 +25,11 @@ import type { Hand, TableConfig, TableState } from '../src/engine/index.ts';
 import { TestTable } from '../tests/helpers.ts';
 
 const OUT = fileURLToPath(new URL('../tests/fixtures/tables/', import.meta.url));
-const SCHEMA = 3;
 
 const CONFIG: Partial<TableConfig> = { minBuyIn: 400, maxBuyIn: 2000, actionSeconds: 30, allowRunItTwice: true, sevenDeuceBounty: 25 };
 
-function table(stacks: number[], seed: number): TestTable {
-  return new TestTable({ stacks, config: CONFIG, seed });
+function table(stacks: number[], seed: number, config: Partial<TableConfig> = {}): TestTable {
+  return new TestTable({ stacks, config: { ...CONFIG, ...config }, seed });
 }
 
 /** Someone who has joined the table and is watching, as the next player in its list. */
@@ -116,16 +118,75 @@ function doneWithBountyPaid(): TestTable {
   return t;
 }
 
-const TABLES: Record<string, () => TestTable> = {
-  'waiting-requests': waitingRequests,
-  'betting-straddle-side-pot': bettingWithStraddleAndSidePot,
-  'run-it-twice-vote': runItTwiceVote,
-  'runout-two-boards': runoutOnTwoBoards,
-  'done-bounty-paid': doneWithBountyPaid,
-};
+/**
+ * Before the flop of a hand with an ante, a player back from missing both blinds who posted them, and a
+ * straddle under the gun whose player has a raise to answer. Two more players have asked to straddle
+ * when it is their turn to, one of them on the big blind.
+ */
+function bettingWithStraddleAndMissedBlinds(): TestTable {
+  const t = table([2000, 2000, 2000, 2000, 2000, 2000], 36, { ante: 5 });
+  watcher(t);
 
-/** The table as the service would have saved it at schema 3. */
-function saved(t: TestTable, version: number): TableState {
+  // The hands before the one saved are dealt here, not by the table's clock, which is started once they are done
+  t.deal({ button: 0 });
+  t.foldOut();
+  t.cmd(4, { type: 'sitOut' });
+
+  // The big blind passes seat 4 in the second of these, and the button in the third
+  for (let hand = 0; hand < 3; hand++) {
+    t.deal();
+    t.foldOut();
+  }
+
+  t.cmd(4, { type: 'comeIn', post: true });
+  for (const seat of [1, 2, 5]) {
+    t.cmd(seat, { type: 'setStraddle', on: true });
+  }
+
+  // The button on seat 5, the blinds on seats 0 and 1, and seat 2 under the gun
+  t.deal({ holes: { 2: '9s 8s', 3: 'Ad Qd', 4: 'Ks Kc' }, board: 'Jd 7c 2s 5h Tc' });
+  t.cmd(0, { type: 'start' });
+  t.call(3);
+  t.raise(4, 160);
+  t.fold(5);
+  t.fold(0);
+
+  return t;
+}
+
+/** Tables as the code of one time saved them. */
+interface TableSet {
+  /** The schema that code saved. */
+  schema: number;
+  tables: Record<string, () => TestTable>;
+  /** Saved before hands kept their events. */
+  beforeEvents?: boolean;
+}
+
+const SETS: TableSet[] = [
+  // Schema 3 as it began
+  {
+    schema: 3,
+    beforeEvents: true,
+    tables: {
+      'waiting-requests': waitingRequests,
+      'betting-straddle-side-pot': bettingWithStraddleAndSidePot,
+      'run-it-twice-vote': runItTwiceVote,
+      'runout-two-boards': runoutOnTwoBoards,
+      'done-bounty-paid': doneWithBountyPaid,
+    },
+  },
+  // Schema 3 as it ended, with everything added to a table while it lasted: the last code for which a hand had one straddle, kept as its seat
+  {
+    schema: 3,
+    tables: {
+      'with-straddle-and-missed-blinds': bettingWithStraddleAndMissedBlinds,
+    },
+  },
+];
+
+/** The table as the service would have saved it. */
+function saved(t: TestTable, version: number, beforeEvents: boolean): TableState {
   const state = JSON.parse(JSON.stringify(t.state)) as TableState;
 
   state.version = version;
@@ -135,38 +196,50 @@ function saved(t: TestTable, version: number): TableState {
     member.token = `not-a-real-token-${member.name}`;
   }
 
-  // Hands began to keep their events in the commit that added these tables, and a table from before it has none
-  if (state.hand) {
+  if (beforeEvents && state.hand) {
     delete (state.hand as Partial<Hand>).events;
   }
 
   return state;
 }
 
-function write(name: string, state: object): void {
+const check = process.argv.includes('--check');
+
+/** Writes a table that has no file yet. One that has is left alone, or with `--check` held to what this code builds. */
+function write(name: string, schema: number, build: () => object): void {
   const path = `${OUT}${name}.json`;
 
-  if (!existsSync(path)) {
-    writeFileSync(path, `${JSON.stringify(state)}\n`);
-    console.log(`wrote ${name}.json`);
+  if (existsSync(path)) {
+    if (check) {
+      assert.deepEqual(build(), JSON.parse(readFileSync(path, 'utf8')), `${name}.json is already there and this code would save the table differently. Saved tables are written once; see the top of this script.`);
+    }
+
     return;
   }
 
-  assert.deepEqual(state, JSON.parse(readFileSync(path, 'utf8')), `${name}.json is already there and this code would save the table differently. Saved tables are written once; see the top of this script.`);
+  assert.equal(STATE_SCHEMA, schema, `${name}.json is a table from schema ${schema}, and this code saves schema ${STATE_SCHEMA}. See the top of this script.`);
+  writeFileSync(path, `${JSON.stringify(build())}\n`);
+  console.log(`wrote ${name}.json`);
 }
 
-assert.equal(STATE_SCHEMA, SCHEMA, `These are tables from schema ${SCHEMA}, and this code saves schema ${STATE_SCHEMA}. See the top of this script.`);
 mkdirSync(OUT, { recursive: true });
 
-Object.entries(TABLES).forEach(([name, build], index) => {
-  const state = saved(build(), 20 + index);
+let nth = 0;
 
-  write(`schema${SCHEMA}-${name}`, state);
+for (const { schema, tables, beforeEvents = false } of SETS) {
+  for (const [name, build] of Object.entries(tables)) {
+    const version = 20 + nth++;
+    const state = () => saved(build(), version, beforeEvents);
 
-  // Schema 2 was the same table without the bounty a hand is dealt under
-  if (name === 'betting-straddle-side-pot') {
-    const { bounty: _added, ...hand } = state.hand!;
+    write(`schema${schema}-${name}`, schema, state);
 
-    write(`schema2-${name}`, { ...state, schema: 2, hand });
+    // Schema 2 was the same table without the bounty a hand is dealt under
+    if (name === 'betting-straddle-side-pot') {
+      write(`schema2-${name}`, schema, () => {
+        const { bounty: _added, ...hand } = state().hand!;
+
+        return { ...state(), schema: 2, hand };
+      });
+    }
   }
-});
+}

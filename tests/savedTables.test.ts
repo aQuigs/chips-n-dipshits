@@ -15,6 +15,12 @@ const FILES = readdirSync(FOLDER)
   .filter((file) => file.endsWith('.json'))
   .sort();
 
+// Saved by the last code of schema 3, with everything added to a table while that schema lasted
+const LAST_OF_SCHEMA_3 = 'schema3-with-straddle-and-missed-blinds.json';
+
+// The rest were saved as schema 3 began, before any of it was added
+const OLDEST = FILES.filter((file) => file !== LAST_OF_SCHEMA_3);
+
 const HANDS_TO_PLAY = 4;
 const STEP_LIMIT = 3000;
 
@@ -34,7 +40,8 @@ test('there is a saved table for every state a new version has to pick a game up
     'schema3-run-it-twice-vote.json',
     'schema3-runout-two-boards.json',
     'schema3-waiting-requests.json',
-    ...FILES.slice(6),
+    'schema3-with-straddle-and-missed-blinds.json',
+    ...FILES.slice(7),
   ]);
 });
 
@@ -88,7 +95,7 @@ test('a hand saved before hands kept events has none, and the next hand has them
 });
 
 test('a table saved before co-hosts loads with none, and its host can name one', () => {
-  for (const file of FILES.filter((name) => !JSON.parse(readFileSync(new URL(name, FOLDER), 'utf8')).cohostIds)) {
+  for (const file of OLDEST.filter((name) => !JSON.parse(readFileSync(new URL(name, FOLDER), 'utf8')).cohostIds)) {
     const t = TestTable.adopt(load(file));
     assert.deepEqual(t.state.cohostIds, [], file);
 
@@ -98,7 +105,7 @@ test('a table saved before co-hosts loads with none, and its host can name one',
 });
 
 test('a table saved before tables could play dollars and cents is a whole-chip table, and goes on saying so', () => {
-  for (const file of FILES) {
+  for (const file of OLDEST) {
     assert.equal(load(file).config.unit, 'chips', file);
   }
 
@@ -114,7 +121,7 @@ test('a table saved before tables could play dollars and cents is a whole-chip t
 });
 
 test('a table saved before antes has none, its hand in play holds no dead money, and an ante set on it is posted from the next hand', () => {
-  for (const file of FILES) {
+  for (const file of OLDEST) {
     const state = load(file);
 
     assert.deepEqual([state.config.ante, state.config.anteFrom], [0, 'everyone'], file);
@@ -138,7 +145,7 @@ test('a table saved before antes has none, its hand in play holds no dead money,
 });
 
 test('a table saved before bomb pots has none called or counted, a hand in play that is an ordinary one, and the amount a new table of its kind starts with', () => {
-  for (const file of FILES) {
+  for (const file of OLDEST) {
     const state = load(file);
 
     assert.deepEqual([state.bombPotCalled, state.handsSinceBombPot, state.config.bombPotAmount, state.config.bombPotEvery, state.config.bombPotBoards], [false, 0, 100, 0, 'one'], file);
@@ -153,7 +160,7 @@ test('a table saved before bomb pots has none called or counted, a hand in play 
 });
 
 test('a table saved in the middle of a hand before missed blinds finishes that hand, moves the button on once as it used to, and follows the dead button from there', () => {
-  for (const file of FILES) {
+  for (const file of OLDEST) {
     const state = load(file);
 
     assert.deepEqual([state.blinds, state.config.missedBlinds], [null, 'owed'], file);
@@ -225,7 +232,7 @@ test('a bomb pot saved in the middle by the code before there were two boards go
 });
 
 test('a table saved before the last hands could be called has none called, and its night goes on', () => {
-  for (const file of FILES) {
+  for (const file of OLDEST) {
     const state = load(file);
 
     assert.deepEqual([state.lastHand, state.nightEndedAt], [null, null], file);

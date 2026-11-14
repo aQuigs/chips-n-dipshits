@@ -93,7 +93,7 @@ const LISTEN = `(() => {
   const connect = AudioNode.prototype.connect;
   AudioNode.prototype.connect = function (target, ...rest) {
     if (target instanceof AudioDestinationNode) {
-      window.played.push({ gain: this.gain.value, voices: [] });
+      window.played.push({ gain: this.gain.value, voices: [], starts: [] });
     }
 
     return connect.call(this, target, ...rest);
@@ -103,6 +103,7 @@ const LISTEN = `(() => {
     const start = kind.prototype.start;
     kind.prototype.start = function (...args) {
       window.played.at(-1).voices.push(this instanceof OscillatorNode ? 'tone ' + this.frequency.value : 'noise');
+      window.played.at(-1).starts.push(args[0] ?? this.context.currentTime);
 
       return start.apply(this, args);
     };
@@ -125,6 +126,9 @@ async function played(page: Page, from = 0): Promise<{ sound: string; gain: numb
 }
 
 const playedNames = async (page: Page, from = 0) => (await played(page, from)).map((sound) => sound.sound);
+
+/** When each sound the page has played starts, in seconds on the page's audio clock. */
+const playedAt = async (page: Page) => ((await page.evaluate('window.played.map((sound) => Math.min(...sound.starts))')) as number[]);
 
 /** The color a token stands for in the page's theme, as the browser writes a computed color. */
 const tokenColor = (page: Page, token: string) =>
@@ -807,6 +811,31 @@ const CHECKS: Check[] = [
       assert.deepEqual(await next(1, '.bet'), ['chips'], 'a touch wakes the sound');
 
       assert.deepEqual(warnings, [], 'the page complained in its console');
+      await page.context().close();
+    },
+  ],
+  [
+    'a bomb pot, dealt straight to the flop, plays the deal and then the flop on another player’s page, the one clear of the other',
+    async (rig) => {
+      const table = rig.table([
+        { name: 'Quigs', stack: 1000 },
+        { name: 'Stu', stack: 1000 },
+        { name: 'Pam', stack: 1000 },
+      ]);
+      const page = await table.open('Pam', 'phone', LISTEN);
+
+      table.act('Quigs', { type: 'setBombPot', on: true });
+      table.deal({ button: 0, board: '3s 4c Jd 9h Qd' });
+      await page.waitForSelector('.board .card[data-card]:nth-child(3)');
+      await page.waitForFunction('window.played.length >= 2');
+      await page.waitForTimeout(300);
+
+      assert.deepEqual(await playedNames(page), ['deal', 'street'], 'the deal and the flop, and nothing for the posts');
+
+      const [deal, flop] = await playedAt(page);
+      const dealLasts = Math.max(...RECIPES.deal.map((voice) => voice.at + voice.length));
+      assert.ok(flop! - deal! >= dealLasts, `the flop starts ${(flop! - deal!).toFixed(3)} s after the deal, which lasts ${dealLasts} s`);
+
       await page.context().close();
     },
   ],

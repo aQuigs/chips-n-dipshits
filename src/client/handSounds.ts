@@ -35,7 +35,7 @@ function soundOf(event: HandEvent, viewer: number | null): SoundName | null {
     case 'bounty':
       return 'chips';
 
-    // The cards coming out is what announces a new hand, blinds and all, and the fold or check made for a player who ran out of time is what is heard of it
+    // The cards coming out is what announces a new hand, whatever was posted for it (blinds, antes, a bomb pot), and the fold or check made for a player who ran out of time is what is heard of it
     case 'start':
     case 'post':
     case 'timeout':

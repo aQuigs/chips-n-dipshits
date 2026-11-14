@@ -64,6 +64,16 @@ test('there are spots from the moment hands are turned up with cards to come, a 
   const betting = new TestTable({ stacks: [1000, 1000] });
   betting.deal({ button: 0 });
   assert.equal(spotsOf(betting.view(0)), null);
+
+  // Nor while the blinds settle a chop, or once they have: nobody is all in, and the board has no card and gets none
+  const chop = new TestTable({ stacks: [1000, 1000, 1000], config: { allowChop: true } });
+  chop.deal({ button: 0 });
+  chop.fold(0);
+  chop.cmd(1, { type: 'offerChop' });
+  assert.deepEqual([chop.state.hand!.stage, spotsOf(chop.view(1))], ['chop', null]);
+
+  chop.cmd(2, { type: 'answerChop', agree: true });
+  assert.deepEqual([chop.view(1).hand!.result!.chopped, chop.view(1).hand!.boards, spotsOf(chop.view(1))], [[1, 2], [[]], null]);
 });
 
 test('a hand still in that the table cannot see leaves no spot at all, and neither does one hand alone', () => {

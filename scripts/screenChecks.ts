@@ -1204,7 +1204,6 @@ function feltingHand(rig: Rig): RigTable {
 
 const toastShown = (page: Page) => page.locator('.toast:visible').count();
 
-
 /**
  * What the seats say of their hands' chances to win, by seat: the figure of each board as it is written,
  * the favorite's with a star after it.

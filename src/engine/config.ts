@@ -1,6 +1,6 @@
 import { GameError } from './types.ts';
 import type { TableConfig } from './types.ts';
-import { LIMITS, text, wholeNumber, yesOrNo } from './validate.ts';
+import { LIMITS, text, webAddress, wholeNumber, yesOrNo } from './validate.ts';
 
 /** The sections of the settings form, in the order they show. `house` is what the house allows at the table. */
 export const CONFIG_GROUPS = ['table', 'stakes', 'clock', 'extras', 'house'] as const;
@@ -29,6 +29,15 @@ export interface TextSpec extends SpecBase {
   maxLength: number;
 }
 
+/** A secure web address, or '' for none. */
+export interface LinkSpec extends SpecBase {
+  kind: 'link';
+  default: string;
+  maxLength: number;
+  /** An example address for the empty field. */
+  placeholder: string;
+}
+
 /** A whole number: of chips, of anything else that is counted, or of seconds. */
 export interface NumberSpec extends SpecBase {
   kind: 'chips' | 'count' | 'seconds';
@@ -50,12 +59,12 @@ export interface ChoiceSpec<V extends string = string> extends SpecBase {
   options: { value: V; label: string }[];
 }
 
-export type ConfigSpec = TextSpec | NumberSpec | ToggleSpec | ChoiceSpec;
+export type ConfigSpec = TextSpec | LinkSpec | NumberSpec | ToggleSpec | ChoiceSpec;
 
 export type ConfigKey = keyof TableConfig;
 
 /** The kind of spec a setting of a given type takes; a string that is one of a few fixed values is a choice. */
-type SpecFor<V> = [V] extends [boolean] ? ToggleSpec : [V] extends [number] ? NumberSpec : [V] extends [string] ? (string extends V ? TextSpec : ChoiceSpec<V>) : never;
+type SpecFor<V> = [V] extends [boolean] ? ToggleSpec : [V] extends [number] ? NumberSpec : [V] extends [string] ? (string extends V ? TextSpec | LinkSpec : ChoiceSpec<V>) : never;
 
 /**
  * Every table setting. The defaults, the checks on what a host sends, both forms and the random tables
@@ -86,6 +95,17 @@ export const CONFIG_SPECS: { [K in ConfigKey]-?: SpecFor<TableConfig[K]> } = {
     subject: 'The table name',
     default: "Chips n' Dipshits",
     maxLength: LIMITS.tableNameLength,
+    group: 'table',
+    atCreate: true,
+  },
+  voiceLink: {
+    kind: 'link',
+    label: 'Voice chat link',
+    subject: 'The voice chat link',
+    hint: "Your group's Meet, Discord or Zoom call. Everyone at the table gets a button to join it",
+    default: '',
+    maxLength: LIMITS.linkLength,
+    placeholder: 'https://meet.google.com/…',
     group: 'table',
     atCreate: true,
   },
@@ -132,6 +152,8 @@ export function validSetting(spec: ConfigSpec, value: unknown): string | number 
   switch (spec.kind) {
     case 'text':
       return text(value, spec.subject, spec.maxLength);
+    case 'link':
+      return webAddress(value, spec.subject, spec.maxLength);
     case 'chips':
     case 'count':
     case 'seconds':

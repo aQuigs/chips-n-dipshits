@@ -24,4 +24,5 @@ export const STYLESHEETS = [
   'motion.css',
   'preferences.css',
   'deck.css',
+  'voice.css',
 ];

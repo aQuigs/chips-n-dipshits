@@ -7,6 +7,7 @@ No-limit hold'em for a group of friends, played in the browser. There is no serv
 - Cash game for up to 10 players: blinds, side pots, all-ins, showdown with show or muck, an action clock, sitting out, rebuys.
 - Straddles, run it twice and a seven-deuce bounty, each switched on or off per table.
 - The host approves seats and rebuys, pauses the game, changes blinds and settings, adjusts stacks, removes players and can hand the table to someone else.
+- The host can add a link to the group's Meet, Discord or Zoom call, and everyone at the table gets a button that opens it, saying which site it leads to.
 - The host can name co-hosts, who can do all of that too except name co-hosts, hand the table over or remove the host. The host has a ★ by their name and co-hosts a ☆.
 - A ledger with who pays whom to settle up, hand history, table chat with the dealer's play-by-play.
 - Four themes with a picker on the front page and in the menu; each player chooses their own, along with a four-color deck and a card back. Works on a phone, upright or sideways, and on a desktop.

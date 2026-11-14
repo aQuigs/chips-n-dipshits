@@ -18,6 +18,16 @@ function field(id: string, spec: ConfigSpec, value: string | number | boolean): 
     case 'text':
       return h('label.field', { for: id }, h('span', null, spec.label), h('input', { type: 'text', id, name: id, value, maxlength: spec.maxLength, required: true }), hint);
 
+    // Plain text, not type="url", and no maxlength: the browser would stop the form in its own words, or cut a pasted address short without a word
+    case 'link':
+      return h(
+        'label.field',
+        { for: id },
+        h('span', null, spec.label),
+        h('input', { type: 'text', id, name: id, value, inputmode: 'url', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', placeholder: spec.placeholder }),
+        hint,
+      );
+
     case 'chips':
     case 'count':
     case 'seconds':
@@ -43,6 +53,7 @@ function held(form: HTMLFormElement, id: string, spec: ConfigSpec): string | num
       return inputOf(form, id).checked;
 
     case 'text':
+    case 'link':
     // A group of radio buttons answers to its name with the value of the one that is picked
     case 'choice':
       return inputOf(form, id).value;

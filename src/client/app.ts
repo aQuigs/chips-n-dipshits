@@ -18,6 +18,7 @@ import { joinScreen, lobbyEl, noticeEl, welcomeBackEl } from './render/lobby.ts'
 import { hostOrCohost } from './render/roles.ts';
 import { tableEl } from './render/table.ts';
 import { createThemePicker } from './render/themePicker.ts';
+import { voiceLinkEl } from './render/voiceLink.ts';
 import type { Shape } from './render/table.ts';
 import { allowSound } from './sound.ts';
 import { fontsUrl, themeById } from './themes.ts';
@@ -491,10 +492,11 @@ export class App {
 
     const stakes = `${chips(view.config.smallBlind)}/${chips(view.config.bigBlind)} hold’em`;
 
-    screen.topbar.draw([waiting, state, view.config.name, stakes], () => [
+    screen.topbar.draw([waiting, state, view.config.name, stakes, view.config.voiceLink], () => [
       h('button.icon.menu-button', { type: 'button', 'aria-label': 'Menu', 'data-action': 'menu', onclick: () => this.openDialog({ kind: 'menu' }) }, '☰', waiting > 0 ? h('span.dot', null, String(waiting)) : null),
       h('div.title', null, h('b', null, view.config.name), h('span', null, stakes)),
       state ? h('span.pill', null, state) : null,
+      voiceLinkEl(view.config.voiceLink),
       h('button.btn.small', { type: 'button', 'data-action': 'invite', onclick: () => this.openDialog({ kind: 'invite' }) }, 'Invite'),
     ]);
   }

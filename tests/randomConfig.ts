@@ -21,6 +21,16 @@ export function randomSetting(spec: ConfigSpec, rng: Rng): string | number | boo
       return Array.from({ length }, () => LETTERS[rng.int(LETTERS.length)]).join('');
     }
 
+    case 'link': {
+      if (rng.int(3) === 0) {
+        return '';
+      }
+
+      const word = (length: number) => Array.from({ length }, () => LETTERS[rng.int(LETTERS.length)]).join('');
+
+      return `https://${word(1 + rng.int(12))}.example/${word(rng.int(12))}`;
+    }
+
     case 'chips':
     case 'count':
     case 'seconds': {

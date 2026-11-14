@@ -327,6 +327,31 @@ test('a settings change keeps everything it does not mention and is validated as
   assert.deepEqual(t.state.config, { ...before, sevenDeuceBounty: 40 });
 });
 
+test('the voice chat link changes at once, and the chat says who set, changed or removed it without printing it', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 1000] });
+  t.cmd(0, { type: 'setCohost', playerId: t.ids[1]!, on: true });
+  t.deal({ button: 0 });
+  const hand = JSON.stringify(t.state.hand);
+  const lines = () => t.feedText().filter((line) => line.includes('voice chat'));
+
+  t.cmd(0, { type: 'updateConfig', config: { voiceLink: 'https://meet.google.com/abc-defg-hij' } });
+  assert.equal(t.view(2).config.voiceLink, 'https://meet.google.com/abc-defg-hij', 'in the middle of a hand, not from the next one');
+
+  t.cmd(1, { type: 'updateConfig', config: { voiceLink: 'https://discord.gg/abc', bigBlind: 40 } });
+  t.cmd(1, { type: 'updateConfig', config: { voiceLink: '  https://discord.gg/abc ', bigBlind: 40 } });
+  t.cmd(0, { type: 'updateConfig', config: { voiceLink: '' } });
+  t.cmd(0, { type: 'updateConfig', config: { voiceLink: '' } });
+
+  assert.deepEqual(lines(), ['The host set the voice chat link', 'Co-host P1 changed the voice chat link', 'The host removed the voice chat link']);
+  assert.ok(t.feedText().every((line) => !line.includes('https') && !line.includes('discord')), 'the address is kept out of the chat');
+  assert.equal(JSON.stringify(t.state.hand), hand, 'the hand in play is left as it is');
+
+  assert.throws(() => t.cmd(2, { type: 'updateConfig', config: { voiceLink: 'https://evil.example' } }), { name: 'GameError' });
+  assert.throws(() => t.cmd(0, { type: 'updateConfig', config: { voiceLink: 'http://meet.google.com/abc' } }), /must start with https/);
+  assert.equal(t.state.config.voiceLink, '');
+  assert.deepEqual(lines().length, 3);
+});
+
 test('turning straddles off clears everyone who had asked to straddle', () => {
   const t = new TestTable({ stacks: [1000, 1000, 1000] });
   t.cmd(2, { type: 'setStraddle', on: true });

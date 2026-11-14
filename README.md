@@ -17,6 +17,7 @@ No-limit hold'em for a group of friends, played in the browser. There is no serv
 - A ledger with who pays whom to settle up, hand history, table chat with the dealer's play-by-play.
 - Four themes with a picker on the front page and in the menu; each player chooses their own, along with a four-color deck and a card back. Works on a phone, upright or sideways, and on a desktop.
 - Under your own cards, what you hold: your two cards before the flop ("Ace-king suited"), then your best hand on every street, one per board when run twice, with the cards that make it lifted and the rest faded. It also points out seven-deuce when the bounty is on. Preferences turns it off.
+- Short, quiet sounds for what happens at the table: cards dealt, chips for a bet or a call, a knock for a check, a fold, a sting for an all-in, each street, a pot won (a bigger one when it is yours), and a chime when it is your turn. Preferences has the switch and a volume. Only what happens while you watch makes a sound, never what you missed, and in another tab only the chime plays.
 - Keyboard shortcuts on a computer: F to fold, C to check or call, R to type a bet, 1 to 5 for the bet sizes, O or T to run it once or twice. Each button shows its key, and Preferences lists them and turns them off.
 - A personal link to carry on from another device.
 
@@ -111,4 +112,5 @@ Things worth knowing before changing it:
 - Each dialog is a file in `src/client/render/dialogs/`, with its line in the menu declared beside it, and `index.ts` lists them in the order the menu shows them.
 - What a player sets for themselves, such as sound or the deck, is an entry in `src/client/prefs.ts`. The Preferences dialog is drawn from those entries, with sample cards beside a choice that changes how cards look, and each choice is kept in the player's browser.
 - What happens on the page when the table changes, such as the chime when it is your turn, is an effect in `src/client/effects/`, listed in `effects.ts`. Each is handed the table as it was and as it is, with the hand's events and the lines that are new picked out, so none has to keep track of what it has already done.
+- Sounds are made in the page with Web Audio from the recipes in `src/client/soundRecipes.ts`, with no audio files. Anything that makes a sound calls `sounds.play('chips')` on the `Sounds` it is handed (`context.sounds` in an effect), which keeps it to the player's switch and volume and spaces out sounds that come at once. Which hand event makes which sound is the table in `src/client/handSounds.ts`.
 - Another game is a new engine module behind the same commands and views; another database is a new `TableStore`; another host for the page is a new `Transport` and `Links`.

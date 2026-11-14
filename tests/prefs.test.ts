@@ -3,14 +3,7 @@ import test from 'node:test';
 
 import { PREFERENCES, Preferences } from '../src/client/prefs.ts';
 import type { Pref, PrefHost, PrefMemory } from '../src/client/prefs.ts';
-
-function mapMemory(kept: Record<string, string> = {}): PrefMemory & { kept: Record<string, string> } {
-  return {
-    kept,
-    get: (key) => kept[key] ?? null,
-    set: (key, value) => void (kept[key] = value),
-  };
-}
+import { mapMemory } from './helpers.ts';
 
 const REFUSING: PrefMemory = {
   get: () => {

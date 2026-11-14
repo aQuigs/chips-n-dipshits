@@ -158,10 +158,14 @@ export class RigTable {
     throw new Error('the table never got where the check wanted it');
   }
 
-  /** The table in a browser, as one of its members, on a screen of the given size. */
-  async open(name: string, screen: ScreenName): Promise<Page> {
+  /** The table in a browser, as one of its members, on a screen of the given size. `init` runs in the page before anything of its own. */
+  async open(name: string, screen: ScreenName, init?: string): Promise<Page> {
     const { id, token } = this.auth(name);
     const page = await this.rig.page(screen, name);
+
+    if (init) {
+      await page.addInitScript(init);
+    }
 
     await page.goto(`${this.rig.url}?table=${this.id}&me=${id}.${token}`);
     await page.click('[data-action="confirm-member"]');

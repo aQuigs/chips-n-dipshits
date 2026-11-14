@@ -50,7 +50,8 @@ type ValueOf<P extends Pref> = P extends OnOffPref ? boolean : P extends RangePr
 export const PREFERENCES = {
   // Chosen with the theme picker, on the front page and in the menu
   theme: { kind: 'choice', label: 'Theme', options: THEMES.map((theme) => ({ value: theme.id, label: theme.name })), default: DEFAULT_THEME },
-  sound: { kind: 'onOff', label: 'Sound', hint: 'A chime when it is your turn', group: 'Sound', default: true },
+  sound: { kind: 'onOff', label: 'Sound', hint: 'Chips, cards, and a chime when it is your turn', group: 'Sound', default: true },
+  volume: { kind: 'range', label: 'Volume', hint: 'Plays a sample as you set it', group: 'Sound', min: 0, max: 100, step: 10, default: 50 },
   deck: {
     kind: 'choice',
     label: 'Deck',

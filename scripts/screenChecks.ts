@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import type { Page } from 'playwright';
 
 import { KEYS_SETTLE_MS } from '../src/client/hotkeys.ts';
+import { RECIPES } from '../src/client/soundRecipes.ts';
 import { THEMES } from '../src/client/themes.ts';
 import type { Command, TableConfig, TableView } from '../src/engine/index.ts';
 import { boxes, overlap, Rig, SCREENS, setStageHeight, squeezed, textBoxes } from './rig.ts';
@@ -73,19 +74,61 @@ const pressOn = (page: Page, screen: ScreenName) => (selector: string) => (scree
 
 const text = async (page: Page, selector: string) => ((await page.locator(selector).first().textContent()) ?? '').trim();
 
-// Run in the page: counts the notes it plays, since a check cannot listen
-const COUNT_NOTES = `(() => {
-  const make = AudioContext.prototype.createOscillator;
+// Run in the page: writes down each sound it plays, since a check cannot listen. A sound starts with its
+// own gain going to the speakers, at the volume it is played at, and then the notes and noise it is made of.
+// A headless browser allows sound without a touch, so the check holds the page to the rule itself
+const LISTEN = `(() => {
+  window.played = [];
+  window.contexts = [];
 
-  window.notesPlayed = 0;
-  AudioContext.prototype.createOscillator = function () {
-    window.notesPlayed += 1;
-
-    return make.call(this);
+  // Each audio context, and whether the visitor's gesture was under way when it was set up, as a browser insists
+  const Audio = AudioContext;
+  window.AudioContext = class extends Audio {
+    constructor(...args) {
+      super(...args);
+      window.contexts.push({ audio: this, inGesture: navigator.userActivation.isActive });
+    }
   };
+
+  const connect = AudioNode.prototype.connect;
+  AudioNode.prototype.connect = function (target, ...rest) {
+    if (target instanceof AudioDestinationNode) {
+      window.played.push({ gain: this.gain.value, voices: [], starts: [] });
+    }
+
+    return connect.call(this, target, ...rest);
+  };
+
+  for (const kind of [OscillatorNode, AudioBufferSourceNode]) {
+    const start = kind.prototype.start;
+    kind.prototype.start = function (...args) {
+      window.played.at(-1).voices.push(this instanceof OscillatorNode ? 'tone ' + this.frequency.value : 'noise');
+      window.played.at(-1).starts.push(args[0] ?? this.context.currentTime);
+
+      return start.apply(this, args);
+    };
+  }
 })()`;
 
-const CHIME_NOTES = 2;
+const voicesOf = (voices: string[]) => [...voices].sort().join(', ');
+
+const SOUND_BY_VOICES = new Map(Object.entries(RECIPES).map(([sound, voices]) => [voicesOf(voices.map((voice) => ('tone' in voice ? `tone ${voice.tone}` : 'noise'))), sound]));
+assert.equal(SOUND_BY_VOICES.size, Object.keys(RECIPES).length, 'two sounds are made of the same notes, so a check cannot tell them apart');
+
+/** What the page has played since `from`, each sound by name, at the volume it was played at. */
+async function played(page: Page, from = 0): Promise<{ sound: string; gain: number }[]> {
+  const sounds = (await page.evaluate('window.played')) as { gain: number; voices: string[] }[];
+
+  // The page keeps a gain to single precision
+  const rounded = (gain: number) => Math.round(gain * 1000) / 1000;
+
+  return sounds.slice(from).map(({ gain, voices }) => ({ sound: SOUND_BY_VOICES.get(voicesOf(voices)) ?? `something else: ${voices.join(', ')}`, gain: rounded(gain) }));
+}
+
+const playedNames = async (page: Page, from = 0) => (await played(page, from)).map((sound) => sound.sound);
+
+/** When each sound the page has played starts, in seconds on the page's audio clock. */
+const playedAt = async (page: Page) => ((await page.evaluate('window.played.map((sound) => Math.min(...sound.starts))')) as number[]);
 
 /** The color a token stands for in the page's theme, as the browser writes a computed color. */
 const tokenColor = (page: Page, token: string) =>
@@ -591,29 +634,27 @@ const CHECKS: Check[] = [
     },
   ],
   [
-    'the Preferences dialog fits a phone and a desktop, keeps the keyboard, and its sound switch is kept and obeyed',
+    'the Preferences dialog fits a phone and a desktop, keeps the keyboard, and its sound switch and volume are kept and obeyed',
     async (rig) => {
       for (const screen of ['phone', 'desktop'] as const) {
         const table = rig.table([
           { name: 'Quigs', stack: 1000 },
           { name: 'Stu', stack: 1000 },
         ]);
-        const page = await table.open('Quigs', screen);
+        const page = await table.open('Quigs', screen, LISTEN);
         const press = pressOn(page, screen);
-        const notes = () => page.evaluate('window.notesPlayed') as Promise<number>;
+        const chimes = async () => (await playedNames(page)).filter((sound) => sound === 'turn').length;
         const myTurnOn = (street: string) => (view: TableView) => view.hand!.street === street && view.hand!.toAct === 0;
-
-        await page.addInitScript(COUNT_NOTES);
-        await page.evaluate(COUNT_NOTES);
 
         // Heads-up the button acts first, so the deal puts the action on this page
         table.deal({ button: 0 });
         await page.waitForSelector('.turn [data-action="fold"]:enabled');
-        assert.equal(await notes(), CHIME_NOTES, 'the action arriving plays the chime once');
+        await page.waitForFunction('window.played.length === 2');
+        assert.deepEqual(await played(page), [{ sound: 'deal', gain: 0.25 }, { sound: 'turn', gain: 0.25 }], 'the deal and the chime, at the volume a player starts with');
 
         table.act('Stu', { type: 'chat', text: 'your go' });
         await page.waitForSelector('.entries li:has-text("your go")', { state: 'attached' });
-        assert.equal(await notes(), CHIME_NOTES, 'a view that leaves the action where it was chimes again');
+        assert.equal(await chimes(), 1, 'a view that leaves the action where it was chimes again');
 
         await press('[data-action="menu"]');
         assert.equal(await page.locator('.menu [data-action="sound"]').count(), 0, 'the menu still has its own sound entry');
@@ -627,9 +668,11 @@ const CHECKS: Check[] = [
 
         await page.waitForSelector('#pref-sound[aria-checked="true"]');
         assert.equal(await page.evaluate(`!!document.activeElement.closest('.dialog')`), true, 'opening Preferences leaves the keyboard on the page behind it');
-        assertOnScreen(await boxes(page, '.dialog, #pref-sound'), screen, 'the Preferences dialog');
-        assert.deepEqual(await squeezed(page, '.dialog h2, #pref-sound'), [], 'a preference is cut off');
+        assertOnScreen(await boxes(page, '.dialog, #pref-sound, #pref-volume'), screen, 'the Preferences dialog');
+        assert.deepEqual(await squeezed(page, '.dialog h2, #pref-sound, label[for="pref-volume"] > *'), [], 'a preference is cut off');
         assert.match(await text(page, '#pref-sound'), /^Sound/);
+        assert.match(await text(page, 'label[for="pref-volume"]'), /^Volume/);
+        assertApart(await boxes(page, '#pref-volume'), await textBoxes(page, 'label[for="pref-volume"] > span, label[for="pref-volume"] > small, #pref-sound'), 'the volume slider and the words around it');
         await shot(page, `preferences-${screen}`);
 
         if (screen === 'desktop') {
@@ -652,12 +695,16 @@ const CHECKS: Check[] = [
         table.play(passive, myTurnOn('flop'));
         await page.waitForSelector('.board .card[data-card]');
         await page.waitForSelector('.turn [data-action="check"]:enabled');
-        assert.equal(await notes(), CHIME_NOTES, 'the chime plays with the sound switched off');
+        assert.equal(await chimes(), 1, 'the chime plays with the sound switched off');
 
-        // A page that opens with the action on it chimes, unless the choice was kept
+        // A reload is no touch, so the page is touched before the action comes round to it again
         await page.reload();
         await page.waitForSelector('.turn [data-action="check"]:enabled');
-        assert.equal(await notes(), 0, 'the sound came back on with a reload');
+        await press('.pot');
+        table.play(passive, myTurnOn('turn'));
+        await page.waitForSelector('.board .card[data-card]:nth-child(4)');
+        await page.waitForSelector('.turn [data-action="check"]:enabled');
+        assert.deepEqual(await played(page), [], 'the sound came back on with a reload');
 
         await press('[data-action="menu"]');
         await press('.menu [data-action="preferences"]');
@@ -666,10 +713,189 @@ const CHECKS: Check[] = [
         await page.waitForSelector('#pref-sound[aria-checked="true"]');
         await press('[data-action="close"]');
 
-        table.play(passive, myTurnOn('turn'));
-        await page.waitForSelector('.board .card[data-card]:nth-child(4)');
+        table.play(passive, myTurnOn('river'));
+        await page.waitForSelector('.board .card[data-card]:nth-child(5)');
         await page.waitForSelector('.turn [data-action="check"]:enabled');
-        assert.equal(await notes(), CHIME_NOTES, 'switched back on, the chime stays silent');
+        assert.equal(await chimes(), 1, 'switched back on, the chime stays silent');
+
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'a bet, a check, a fold, a street and a win each sound on another player’s page, and nothing plays for what was missed or before a touch',
+    async (rig) => {
+      const table = rig.table([
+        { name: 'Quigs', stack: 1000 },
+        { name: 'Stu', stack: 1000 },
+        { name: 'Pam', stack: 1000 },
+      ]);
+
+      // Three-handed the button acts first before the flop, and Pam, in the big blind, acts first after it
+      table.deal({ button: 0, holes: { 0: 'Ah Kd', 1: 'Qs Qh', 2: '7c 2d' }, board: '3s 4c Jd 9h Qd' });
+      table.act('Quigs', { type: 'raise', to: 60 });
+
+      const page = await table.open('Pam', 'phone', LISTEN);
+      const press = pressOn(page, 'phone');
+      const warnings: string[] = [];
+      let heard = 0;
+
+      page.on('console', (message) => {
+        if (message.type() === 'error' || message.type() === 'warning') {
+          warnings.push(message.text());
+        }
+      });
+
+      /** Waits for the page to play as many sounds as are expected, gives it a moment to play more, and says what it played. */
+      const next = async (count: number, settled: string) => {
+        await page.waitForFunction(`window.played.length >= ${heard + count}`);
+        await page.waitForSelector(settled, { state: 'attached' });
+        await page.waitForTimeout(300);
+
+        const sounds = await playedNames(page, heard);
+        heard += sounds.length;
+
+        return sounds;
+      };
+
+      await page.waitForSelector('.bet');
+      await page.waitForTimeout(500);
+      assert.deepEqual(await playedNames(page), [], 'opening the table mid-hand plays what had already happened');
+
+      table.act('Stu', { type: 'fold' });
+      assert.deepEqual(await next(2, '.turn [data-action="fold"]:enabled'), ['fold', 'turn'], 'a fold, then the chime');
+
+      table.act('Pam', { type: 'call' });
+      assert.deepEqual(await next(2, '.board .card[data-card]:nth-child(3)'), ['street', 'turn'], 'the flop, with no sound for the call the viewer made');
+
+      table.act('Pam', { type: 'check' });
+      table.act('Quigs', { type: 'check' });
+      assert.deepEqual(await next(3, '.board .card[data-card]:nth-child(4)'), ['knock', 'street', 'turn'], 'a check, then the turn');
+
+      // The chime rings for the action coming back to the page, so the page sees it leave first
+      table.act('Pam', { type: 'check' });
+      await page.waitForSelector('.turn [data-action="check"]', { state: 'detached' });
+      table.act('Quigs', { type: 'raise', to: 100 });
+      assert.deepEqual(await next(2, '.turn [data-action="call"]:enabled'), ['chips', 'turn'], 'a bet');
+
+      table.act('Pam', { type: 'fold' });
+      assert.deepEqual(await next(1, '.feed li:has-text("wins")'), ['win'], 'someone else’s win');
+
+      // A reload is not a touch: until one, the next hand makes no sound
+      await page.reload();
+      await page.waitForSelector('.stage .table');
+      table.play(() => null, (view) => view.hand?.number === 2);
+      await page.waitForSelector('.seat.me .card[data-card]');
+      await page.waitForTimeout(500);
+      assert.deepEqual(await playedNames(page), [], 'a sound played before the page was touched');
+
+      heard = 0;
+      await press('.pot');
+      table.play(passive, (view) => view.hand!.toAct === 2);
+      assert.deepEqual(await next(2, '.turn [data-action="fold"]:enabled'), ['chips', 'turn'], 'after a touch the sounds are back');
+      assert.deepEqual(await page.evaluate('window.contexts.map((context) => context.inGesture)'), [true], 'the audio was set up outside a touch');
+
+      // A phone that slept comes back with its audio suspended: until a touch wakes it, sounds are dropped, not saved up
+      await page.evaluate('window.contexts[0].audio.suspend()');
+      table.act('Pam', { type: 'call' });
+      table.act('Quigs', { type: 'check' });
+      await page.waitForSelector('.board .card[data-card]:nth-child(3)');
+      await page.waitForSelector('.turn [data-action="check"]:enabled');
+      await press('.pot');
+      await page.waitForFunction(`window.contexts[0].audio.state === 'running'`);
+      await page.waitForTimeout(500);
+      assert.deepEqual(await playedNames(page, heard), [], 'the sounds of a suspended page played when it woke');
+
+      table.act('Pam', { type: 'check' });
+      table.act('Quigs', { type: 'raise', to: 40 });
+      assert.deepEqual(await next(1, '.bet'), ['chips'], 'a touch wakes the sound');
+
+      assert.deepEqual(warnings, [], 'the page complained in its console');
+      await page.context().close();
+    },
+  ],
+  [
+    'a bomb pot, dealt straight to the flop, plays the deal and then the flop on another player’s page, the one clear of the other',
+    async (rig) => {
+      const table = rig.table([
+        { name: 'Quigs', stack: 1000 },
+        { name: 'Stu', stack: 1000 },
+        { name: 'Pam', stack: 1000 },
+      ]);
+      const page = await table.open('Pam', 'phone', LISTEN);
+
+      table.act('Quigs', { type: 'setBombPot', on: true });
+      table.deal({ button: 0, board: '3s 4c Jd 9h Qd' });
+      await page.waitForSelector('.board .card[data-card]:nth-child(3)');
+      await page.waitForFunction('window.played.length >= 2');
+      await page.waitForTimeout(300);
+
+      assert.deepEqual(await playedNames(page), ['deal', 'street'], 'the deal and the flop, and nothing for the posts');
+
+      const [deal, flop] = await playedAt(page);
+      const dealLasts = Math.max(...RECIPES.deal.map((voice) => voice.at + voice.length));
+      assert.ok(flop! - deal! >= dealLasts, `the flop starts ${(flop! - deal!).toFixed(3)} s after the deal, which lasts ${dealLasts} s`);
+
+      await page.context().close();
+    },
+  ],
+  [
+    'the volume sets how loud the sounds play, with a sample as it is set, and the sound switch silences them all',
+    async (rig) => {
+      for (const screen of PHONE_AND_DESKTOP) {
+        const table = rig.table([
+          { name: 'Quigs', stack: 1000 },
+          { name: 'Stu', stack: 1000 },
+        ]);
+        const page = await table.open('Stu', screen, LISTEN);
+        const press = pressOn(page, screen);
+        const gains = async (from: number) => (await played(page, from)).map((sound) => sound.gain);
+
+        await press('[data-action="menu"]');
+        await press('.menu [data-action="preferences"]');
+        await page.waitForSelector('#pref-volume');
+        assert.equal(await page.inputValue('#pref-volume'), '50');
+
+        // Set as a player would: arrow keys at a computer, a tap partway along on a phone
+        if (screen === 'desktop') {
+          await page.focus('#pref-volume');
+          for (let step = 0; step < 3; step++) {
+            await page.keyboard.press('ArrowRight');
+          }
+        } else {
+          const [slider] = await boxes(page, '#pref-volume');
+          await page.touchscreen.tap(slider!.left + (slider!.right - slider!.left) * 0.8, (slider!.top + slider!.bottom) / 2);
+        }
+
+        const volume = Number(await page.inputValue('#pref-volume')) / 100;
+        assert.ok(volume > 0.5, `the slider did not move: ${volume}`);
+
+        await page.waitForFunction('window.played.length > 0');
+        await page.waitForTimeout(500);
+        const loudness = Math.round(volume * volume * 1000) / 1000;
+        assert.deepEqual(await played(page), [{ sound: 'chips', gain: loudness }], 'setting the volume plays one sample, at the new volume');
+        await press('[data-action="close"]');
+
+        table.deal({ button: 0 });
+        table.act('Quigs', { type: 'call' });
+        await page.waitForSelector('.turn [data-action="check"]:enabled');
+        await page.waitForFunction('window.played.length >= 4');
+        assert.deepEqual(await playedNames(page, 1), ['deal', 'chips', 'turn']);
+        assert.deepEqual(await gains(1), [loudness, loudness, loudness], 'the table’s sounds play at the volume set');
+
+        await press('[data-action="menu"]');
+        await press('.menu [data-action="preferences"]');
+        await press('#pref-sound');
+        await page.waitForSelector('#pref-sound[aria-checked="false"]');
+        await press('[data-action="close"]');
+
+        const before = (await played(page)).length;
+        table.act('Stu', { type: 'check' });
+        table.act('Stu', { type: 'check' });
+        table.act('Quigs', { type: 'raise', to: 40 });
+        await page.waitForSelector('.turn [data-action="call"]:enabled');
+        await page.waitForTimeout(500);
+        assert.deepEqual(await playedNames(page, before), [], 'a sound played with the sound switched off');
 
         await page.context().close();
       }

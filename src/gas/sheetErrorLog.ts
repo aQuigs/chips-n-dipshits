@@ -71,7 +71,7 @@ export class SheetErrorLog implements ErrorLog, ErrorShelf {
   }
 
   append(rows: ErrorRow[]): void {
-    const sheet = (this.sheet ??= openTab(this.deps.spreadsheet(), ERRORS_TAB, HEADERS, true, FORMATS)!);
+    const sheet = (this.sheet ??= this.tab());
 
     for (const row of rows) {
       sheet.appendRow(cellsOf(row));
@@ -81,6 +81,27 @@ export class SheetErrorLog implements ErrorLog, ErrorShelf {
 
     if (kept > ERROR_LIMITS.rowsKept) {
       sheet.deleteRows(FIRST_DATA_ROW, kept - TRIM_TO);
+    }
+  }
+
+  /**
+   * The Errors tab, made if it isn't there. Two runs that fail first at the same moment can both find no
+   * tab; Apps Script refuses the second tab of the same name, and the run refused writes to the first. If
+   * its row lands before the first run has written the headers, they overwrite it: one row lost at worst.
+   */
+  private tab(): SheetLike {
+    const spreadsheet = this.deps.spreadsheet();
+
+    try {
+      return openTab(spreadsheet, ERRORS_TAB, HEADERS, true, FORMATS)!;
+    } catch (error) {
+      const made = spreadsheet.getSheetByName(ERRORS_TAB);
+
+      if (!made) {
+        throw error;
+      }
+
+      return made;
     }
   }
 }

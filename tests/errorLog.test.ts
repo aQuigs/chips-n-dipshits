@@ -394,7 +394,7 @@ function randomGame(seed: number): { t: TestTable; rng: Rng } {
 function secretsOf(state: TableState): { tokens: string[]; cards: string[] } {
   return {
     tokens: state.members.map((member) => member.token),
-    cards: [...(state.hand?.players.flatMap((player) => player.cards) ?? []), ...(state.hand?.deck ?? [])],
+    cards: [...(state.hand?.players.flatMap((player) => player.cards.filter((_card, place) => !player.shown[place])) ?? []), ...(state.hand?.deck ?? [])],
   };
 }
 
@@ -431,62 +431,92 @@ function leakingError(state: TableState, rng: Rng): Error {
   }
 }
 
-test('over random games, whatever a handler throws at whatever point, no row holds a token, a hole card or an undealt card', (context) => {
-  // Apps Script's own log is told each failure in full, as it should be, which here is only noise
-  context.mock.method(console, 'error', () => undefined);
-  let thrown = 0;
+/**
+ * Has a random handler throw, partway through or before it starts, an error that quotes the table, and
+ * checks that no row holds a secret the table held at that moment. Returns whether the handler was reached.
+ */
+function throwsQuotingTheTable(t: TestTable, rng: Rng, seed: number): boolean {
+  const store = new MemoryStore();
+  store.transact(t.state.id, () => ({ save: t.state, at: t.now, effects: [], result: null }));
+
+  const clock = { now: () => t.now };
+  const errors = new MemoryErrorLog(clock);
+  const game = new PokerService({ store, presets: new MemoryPresetStore(), clock, rng: seededRng(seed), errors });
   const types = Object.keys(HANDLERS) as CommandType[];
+  const type = types[rng.int(types.length)]!;
+  const original = HANDLERS[type] as Handler<CommandType>;
+  const member = t.state.members[rng.int(t.state.members.length)]!;
+  let secrets = secretsOf(t.state);
+  let reached = false;
 
-  for (let seed = 1; seed <= 60; seed++) {
-    const { t, rng } = randomGame(seed);
-    const store = new MemoryStore();
-    store.transact(t.state.id, () => ({ save: t.state, at: t.now, effects: [], result: null }));
-
-    const clock = { now: () => t.now };
-    const errors = new MemoryErrorLog(clock);
-    const game = new PokerService({ store, presets: new MemoryPresetStore(), clock, rng: seededRng(seed), errors });
-    const type = types[rng.int(types.length)]!;
-    const original = HANDLERS[type] as Handler<CommandType>;
-    const member = t.state.members[rng.int(t.state.members.length)]!;
-    let secrets = secretsOf(t.state);
-
-    (HANDLERS as Record<CommandType, Handler<CommandType>>)[type] = {
-      ...original,
-      run: (call: Parameters<Handler<CommandType>['run']>[0]) => {
-        // Partway through the command, or before it does anything
-        if (chance(rng, 50)) {
-          try {
-            (original.run as (call: unknown) => void)(call);
-          } catch {
-            // Refused partway: what the table holds then is still what the error quotes
-          }
+  (HANDLERS as Record<CommandType, Handler<CommandType>>)[type] = {
+    ...original,
+    run: (call: Parameters<Handler<CommandType>['run']>[0]) => {
+      if (chance(rng, 50)) {
+        try {
+          (original.run as (call: unknown) => void)(call);
+        } catch {
+          // Refused partway: what the table holds then is still what the error quotes
         }
-
-        secrets = secretsOf(call.state);
-        throw leakingError(call.state, rng);
-      },
-    } as Handler<CommandType>;
-
-    try {
-      game.handle({ op: 'act', tableId: t.state.id, auth: { id: member.id, token: member.token }, command: { type } as Command });
-    } catch {
-      thrown += 1;
-    } finally {
-      (HANDLERS as Record<CommandType, Handler<CommandType>>)[type] = original;
-    }
-
-    const written = JSON.stringify(errors.rows);
-
-    for (const token of secrets.tokens) {
-      for (let at = 0; at + 10 <= token.length; at++) {
-        assert.ok(!written.includes(token.slice(at, at + 10)), `seed ${seed}: a piece of a token was written: ${written}`);
       }
-    }
 
-    for (const card of secrets.cards) {
-      assert.doesNotMatch(written, new RegExp(`(?<![A-Za-z0-9])${card}(?![a-z0-9])`), `seed ${seed}: the card ${card} was written: ${written}`);
+      secrets = secretsOf(call.state);
+      throw leakingError(call.state, rng);
+    },
+  } as Handler<CommandType>;
+
+  try {
+    game.handle({ op: 'act', tableId: t.state.id, auth: { id: member.id, token: member.token }, command: { type } as Command });
+  } catch {
+    reached = true;
+  } finally {
+    (HANDLERS as Record<CommandType, Handler<CommandType>>)[type] = original;
+  }
+
+  const written = JSON.stringify(errors.rows);
+
+  for (const token of secrets.tokens) {
+    for (let at = 0; at + 10 <= token.length; at++) {
+      assert.ok(!written.includes(token.slice(at, at + 10)), `seed ${seed}: a piece of a token was written: ${written}`);
     }
   }
 
-  assert.ok(thrown >= 20, `only ${thrown} of the games reached the handler`);
+  for (const card of secrets.cards) {
+    assert.doesNotMatch(written, new RegExp(`(?<![A-Za-z0-9])${card}(?![a-z0-9])`), `seed ${seed}: the card ${card} was written: ${written}`);
+  }
+
+  return reached;
+}
+
+test('over random games, whatever a handler throws at whatever point, no row holds a token, a hole card still face down or an undealt card', (context) => {
+  // Apps Script's own log is told each failure in full, as it should be, which here is only noise
+  context.mock.method(console, 'error', () => undefined);
+  let reached = 0;
+
+  for (let seed = 1; seed <= 60; seed++) {
+    const { t, rng } = randomGame(seed);
+    reached += throwsQuotingTheTable(t, rng, seed) ? 1 : 0;
+  }
+
+  assert.ok(reached >= 20, `only ${reached} of the games reached the handler`);
+});
+
+test('after a hand in which one card was shown, the other is still kept out of every row', (context) => {
+  context.mock.method(console, 'error', () => undefined);
+
+  for (let seed = 1; seed <= 20; seed++) {
+    const t = new TestTable({ stacks: [1000, 1000, 1000], seed });
+    t.deal({ button: 0 });
+
+    while (t.state.hand!.stage === 'betting') {
+      t.fold(t.playerIn(t.toAct!));
+    }
+
+    const winner = t.state.hand!.players.find((player) => !player.folded)!;
+    t.show(t.playerIn(winner.seat), [seed % 2]);
+    assert.deepEqual(winner.shown.filter(Boolean).length, 1);
+    assert.equal(secretsOf(t.state).cards.includes(winner.cards[(seed + 1) % 2]!), true, 'the card left face down is a secret');
+
+    throwsQuotingTheTable(t, seededRng(seed), seed);
+  }
 });

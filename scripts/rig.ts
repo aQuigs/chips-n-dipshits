@@ -360,9 +360,13 @@ export class Rig {
   /** Has a page throw `message` on its own, outside anything the page called, as a bug would; for this check that is no failure. */
   async throwIn(page: Page, message: string): Promise<void> {
     this.meant.push(message);
-    await page.evaluate((text) => setTimeout(() => {
-      throw new Error(text);
-    }), message);
+    // Thrown by a script of its own, which is uncaught at once and needs no timer, so it is the same on a page whose clock is held
+    await page.evaluate(`(() => {
+      const script = document.createElement('script');
+      script.textContent = ${JSON.stringify(`throw new Error(${JSON.stringify(message)})`)};
+      document.head.append(script);
+      script.remove();
+    })()`);
   }
 
   /** The front page, as someone who has not joined any table. */

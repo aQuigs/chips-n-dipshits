@@ -10055,6 +10055,8 @@ const CHECKS: Check[] = [
       table.deal({ button: 0 });
 
       const page = await table.open('Quigs', 'smallPhone');
+      // Held as the rig's clock is, so that a page slow on a busy runner draws nothing new of its own accord between the two looks
+      await page.clock.setFixedTime(Date.now());
       await dealt(page);
 
       // The whole page as drawn, less the clocks, which count down by themselves

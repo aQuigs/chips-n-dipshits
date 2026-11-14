@@ -6,6 +6,7 @@ import type { Effect, HandRecord, TableConfig, TableState } from '../src/engine/
 import { ERRORS_TAB, REPORTS_PER_RUN, SheetErrorLog } from '../src/gas/sheetErrorLog.ts';
 import { SheetPresetStore } from '../src/gas/sheetPresetStore.ts';
 import { TEXT, TIMESTAMP, WHOLE_NUMBER } from '../src/gas/sheets.ts';
+import type { SpreadsheetLike } from '../src/gas/sheets.ts';
 import { SheetStore } from '../src/gas/sheetStore.ts';
 import { ERROR_LIMITS, NOWHERE } from '../src/server/errorLog.ts';
 import { MemoryErrorLog } from '../src/server/memoryErrorLog.ts';
@@ -17,6 +18,7 @@ import { PokerService } from '../src/server/service.ts';
 import { StoreBusyError } from '../src/server/store.ts';
 import type { TableStore } from '../src/server/store.ts';
 import { Calls, FakeCache, FakeLock, FakeSpreadsheet } from './fakes.ts';
+import type { FakeSheet } from './fakes.ts';
 import { cards, DAY_MS, seededRng, TestTable } from './helpers.ts';
 import { fullestChat } from './invariants.ts';
 
@@ -2136,4 +2138,36 @@ test('a sweep that fails is reported before the call that made it returns, which
     errors.rows.map((row) => [row.where, row.message]),
     [['store put away', 'Sheet down']],
   );
+});
+
+test('two runs that fail first at the same moment make one Errors tab with one header row, and lose a row at worst, never failing', () => {
+  /** The Sheet as a run sees it that looked for the tab before the other run made it. */
+  const lookedEarly = (spreadsheet: FakeSpreadsheet, made: (sheet: FakeSheet) => void = () => undefined): SpreadsheetLike => {
+    let looked = false;
+
+    return {
+      getSheetByName: (name) => (looked ? spreadsheet.getSheetByName(name) : ((looked = true), null)),
+      insertSheet: (name) => {
+        const sheet = spreadsheet.insertSheet(name);
+        made(sheet);
+
+        return sheet;
+      },
+    };
+  };
+  const logOn = (spreadsheet: SpreadsheetLike) => new SheetErrorLog({ spreadsheet: () => spreadsheet, cache: new FakeCache(), clock: { now: () => NOW }, build: 'thisbuild123' });
+  const written = (spreadsheet: FakeSpreadsheet) => spreadsheet.getSheetByName(ERRORS_TAB)!.cells.map((row) => row[1]);
+
+  // The second run's insert comes after the first run has written its row
+  const after = new FakeSpreadsheet(null, {}, null, [ERRORS_TAB]);
+  logOn(after).report({ where: 'server act', error: 'first' });
+  assert.doesNotThrow(() => logOn(lookedEarly(after)).report({ where: 'server poll', error: 'second' }));
+  assert.deepEqual(written(after), ['Where', 'server act', 'server poll']);
+
+  // The second run's whole report comes between the first run's insert and its headers
+  const between = new FakeSpreadsheet(null, {}, null, [ERRORS_TAB]);
+  const second = logOn(lookedEarly(between));
+  const first = logOn(lookedEarly(between, () => second.report({ where: 'server poll', error: 'second' })));
+  assert.doesNotThrow(() => first.report({ where: 'server act', error: 'first' }));
+  assert.deepEqual(written(between), ['Where', 'server act']);
 });

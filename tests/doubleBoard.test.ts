@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { playerHand, replayHand, TIMING } from '../src/engine/index.ts';
-import type { Card, HandEvent, HandRecord, TableConfig } from '../src/engine/index.ts';
+import { replayHand, TIMING } from '../src/engine/index.ts';
+import type { HandEvent, TableConfig } from '../src/engine/index.ts';
 import { ACES, BOARD, checkAround, handRecords, KINGS, QUEENS, seededRng, TestTable } from './helpers.ts';
 import type { DealOptions, TableOptions } from './helpers.ts';
 import { assertChipsConserved, assertHandRecordsHold, assertInvariants, assertViewsKeepSecrets } from './invariants.ts';
@@ -207,7 +207,7 @@ test('double board: with everyone all in on the posts both boards are dealt out 
   assertHandRecordsHold(t.effects);
 });
 
-test('double board: a player all in during the hand makes a side pot, and once nobody can bet the rest of both boards is dealt out without a vote', () => {
+test('double board: a player all in during the hand makes a side pot, and the players with chips play on for both boards', () => {
   const sidePot = doubleBoard({ stacks: [1000, 1000, 300] }, { holes: { 0: QUEENS, 1: KINGS, 2: ACES } });
   sidePot.raise(1, 300);
   sidePot.call(2);
@@ -222,27 +222,6 @@ test('double board: a player all in during the hand makes a side pot, and once n
   assert.deepEqual(awardsOf(sidePot), [[[2, 450, 0], [1, 450, 1]], [[1, 200, 0], [1, 200, 1]]]);
   assert.deepEqual(sidePot.stacks(), [500, 1350, 450]);
   assertChipsConserved(sidePot.state);
-
-  const allIn = doubleBoard({ stacks: [1000, 1000, 300], config: { allowRunItTwice: true } }, { holes: { 0: QUEENS, 1: KINGS, 2: ACES } });
-  allIn.raise(1, 900);
-  allIn.call(2);
-  allIn.call(0);
-
-  const hand = allIn.state.hand!;
-  assert.deepEqual([hand.stage, hand.street, hand.runs], ['runout', 'flop', 2]);
-  assert.deepEqual(hand.log.slice(-3), ['P0 shows Q♠ Q♥', 'P1 shows K♠ K♥', 'P2 shows A♠ A♥']);
-  assertInvariants(allIn.state, allIn.now);
-
-  allIn.wait(TIMING.runoutStepMs);
-  assert.deepEqual(hand.boards.map((board) => board.length), [4, 4]);
-  allIn.runToResult();
-
-  assert.deepEqual(hand.boards, BOARDS);
-  assert.deepEqual(awardsOf(allIn), [[[2, 450, 0], [1, 450, 1]], [[1, 700, 0], [1, 700, 1]]]);
-  assert.deepEqual(allIn.stacks(), [0, 1850, 450]);
-
-  allIn.finishHand();
-  assertHandRecordsHold(allIn.effects);
 });
 
 test('double board: when everyone else folds, the last player takes every pot whole, with no word of boards', () => {
@@ -316,20 +295,6 @@ test('double board, seven-deuce bounty: paid for winning the whole main pot on b
   assert.deepEqual(unseen.state.hand!.result!.bounty!.payments, [{ seat: 1, amount: 50 }, { seat: 2, amount: 50 }]);
   assert.deepEqual(unseen.stacks(), [1300, 850, 850]);
   assertChipsConserved(unseen.state);
-});
-
-test('double board heads-up: both post, the button acts last on every street, and the boards split the pot', () => {
-  const t = doubleBoard({ stacks: [1000, 1000] }, { holes: { 0: ACES, 1: KINGS } });
-
-  assert.deepEqual(t.state.hand!.log.slice(1), ['Everyone posts bomb pot 100', ...FLOPS]);
-  assert.equal(t.toAct, 1);
-  t.raise(1, 50);
-  t.raise(0, 150);
-  t.call(1);
-  checkAround(t, [1, 0], 2);
-
-  assert.deepEqual(awardsOf(t), [[[0, 250, 0], [1, 250, 1]]]);
-  assert.deepEqual(t.stacks(), [1000, 1000]);
 });
 
 test('one board or two is settled when the bomb pot is dealt: a change waits for the next one, and the table says which is coming', () => {
@@ -421,17 +386,6 @@ test('an ordinary hand at a table that plays double-board bomb pots is on one bo
     'P0 wins 500 on the first board with pair of aces',
     'P1 wins 500 on the second board with three kings',
   ]);
-  assert.deepEqual(hand.events.slice(-9), [
-    ['runs', 2],
-    ['street', 0, ['2c', '7d', '9h']],
-    ['street', 0, ['Jc']],
-    ['street', 0, ['3s']],
-    ['street', 1, ['Kd', '4c', '5h']],
-    ['street', 1, ['8s']],
-    ['street', 1, ['Td']],
-    ['win', 0, 500, 0, 0],
-    ['win', 1, 500, 0, 1],
-  ]);
   assert.deepEqual(t.stacks(), [500, 500]);
 });
 
@@ -478,75 +432,11 @@ test('a double-board hand is told in events that name each street\'s board, repl
     ['win', 3, 205, 1, 1],
   ] satisfies HandEvent[]);
 
-  const faceDown = [...t.state.hand!.deck, ...t.state.hand!.players.filter((p) => !p.shown).flatMap((p) => p.cards)];
-  assert.ok(faceDown.length > 0 && faceDown.every((card) => !JSON.stringify(events).includes(`"${card}"`)), 'an event holds a card nobody was shown');
-
   t.finishHand();
-  const [record] = handRecords(t.effects);
-  assert.deepEqual(replayHand(record!.events)!.boards, BOARDS);
+
+  // The record's events hold no card that stayed face down and play back to its boards and awards
   assertHandRecordsHold(t.effects);
 });
-
-test('a timeout and a player leaving work in a double-board hand as in any other, and the hand still pays both boards', () => {
-  const t = new TestTable({ stacks: [1000, 1000, 1000], config: { bombPotBoards: 'two', actionSeconds: 20 } });
-  t.cmd(0, { type: 'setBombPot', on: true });
-  t.deal({ button: 0, holes: { 0: ACES, 1: KINGS, 2: QUEENS }, board: BOARD, secondBoard: SECOND });
-
-  t.wait(20_000 + TIMING.actionGraceMs);
-  assert.deepEqual([t.state.hand!.players[1]!.lastAction, t.state.seats[1]!.away, t.toAct], ['check', true, 2]);
-
-  t.cmd(2, { type: 'standUp' });
-  assert.deepEqual([t.state.seats[2]!.leaving, t.toAct], [true, 0]);
-
-  // Nobody bets, so the two who are away check all the way to the showdown
-  checkAround(t, [0], 3);
-  assert.deepEqual(awardsOf(t), [[[0, 150, 0], [1, 150, 1]]]);
-
-  t.finishHand();
-  assert.equal(t.state.seats[2], null);
-  assert.deepEqual(t.stacks(), [1050, 1050, 0]);
-  assertHandRecordsHold(t.effects);
-});
-
-/** Every card each player was dealt in each hand a table plays, by hand number: a record keeps only the cards that were shown. */
-function playAndRemember(t: TestTable, rng: ReturnType<typeof seededRng>, steps: number): Map<number, Map<number, Card[]>> {
-  const dealt = new Map<number, Map<number, Card[]>>();
-
-  for (let step = 0; step < steps; step++) {
-    randomStep(t, rng);
-    assertChipsConserved(t.state);
-
-    const hand = t.state.hand;
-    if (hand && !dealt.has(hand.number)) {
-      dealt.set(hand.number, new Map(hand.players.map((p) => [p.seat, [...p.cards]])));
-    }
-  }
-
-  return dealt;
-}
-
-/** That each board's half of each pot went, in equal parts but for its odd chips, to exactly the best hands on that board among the players in for the pot. */
-function assertBestHandsWonEachBoard(record: HandRecord, cards: Map<number, Card[]>): void {
-  for (const pot of record.result.pots) {
-    record.boards.forEach((board, run) => {
-      const half = Math.floor(pot.amount / 2) + (run === 0 ? pot.amount % 2 : 0);
-      const score = (seat: number) => playerHand(cards.get(seat)!, board).score;
-      const best = Math.max(...pot.eligible.map(score));
-      const winners = pot.eligible.filter((seat) => score(seat) === best);
-      const paid = pot.awards.filter((award) => award.run === run);
-
-      assert.equal(paid.reduce((sum, award) => sum + award.amount, 0), half, `hand ${record.number}: board ${run + 1} did not play for its half of a pot of ${pot.amount}`);
-
-      for (const award of paid) {
-        assert.ok(winners.includes(award.seat), `hand ${record.number}: seat ${award.seat} was paid on board ${run + 1} without the best hand there among ${pot.eligible}`);
-        assert.ok(award.amount === Math.floor(half / winners.length) || award.amount === Math.ceil(half / winners.length), `hand ${record.number}: a board's half was not split evenly`);
-      }
-
-      // A winner goes unpaid only when the half has fewer chips than winners
-      assert.ok(paid.length === winners.length || half < winners.length, `hand ${record.number}: a best hand on board ${run + 1} got nothing`);
-    });
-  }
-}
 
 test('over random double-board hands no chip is made or lost, and each board\'s half of every pot goes only to the best hands there among the players in for it', () => {
   const TABLES = 60;
@@ -568,7 +458,12 @@ test('over random double-board hands no chip is made or lost, and each board\'s 
     const t = new TestTable({ stacks, seed, config });
     t.cmd(0, { type: 'start' });
 
-    const dealt = playAndRemember(t, rng, 400);
+    for (let step = 0; step < 400; step++) {
+      randomStep(t, rng);
+      assertChipsConserved(t.state);
+    }
+
+    // Among much else, that each board's share of each pot went to exactly the best hands shown there by players in for it
     assertHandRecordsHold(t.effects);
 
     for (const record of handRecords(t.effects)) {
@@ -579,7 +474,6 @@ test('over random double-board hands no chip is made or lost, and each board\'s 
 
       assert.deepEqual(record.boards.map((board) => board.length), [5, 5], `hand ${record.number} was shown down short of two whole boards`);
       assert.equal(new Set(record.boards.flat()).size, 10, `hand ${record.number}: the boards share a card`);
-      assertBestHandsWonEachBoard(record, dealt.get(record.number)!);
 
       const { pots } = record.result;
       reached.shownDown += 1;

@@ -141,7 +141,7 @@ test('a table saved before bomb pots has none called or counted, a hand in play 
   for (const file of FILES) {
     const state = load(file);
 
-    assert.deepEqual([state.bombPotCalled, state.handsSinceBombPot, state.config.bombPotAmount, state.config.bombPotEvery], [false, 0, 100, 0], file);
+    assert.deepEqual([state.bombPotCalled, state.handsSinceBombPot, state.config.bombPotAmount, state.config.bombPotEvery, state.config.bombPotBoards], [false, 0, 100, 0, 'one'], file);
     assert.equal(state.hand === null ? null : state.hand.bombPot, null, file);
   }
 
@@ -152,11 +152,7 @@ test('a table saved before bomb pots has none called or counted, a hand in play 
   assert.deepEqual([restored.config.bombPotAmount, restored.config.bombPotEvery, restored.config.smallBlind], [250, 0, 25]);
 });
 
-test('a table saved before bomb pots could have two boards plays them on one, and a bomb pot it was saved in the middle of goes on as one', () => {
-  for (const file of FILES) {
-    assert.equal(load(file).config.bombPotBoards, 'one', file);
-  }
-
+test('a bomb pot saved in the middle by the code before there were two boards goes on as it was, on one', () => {
   // A bomb pot on one board says nothing of boards, so one saved by the code before is this one without the setting
   const t = new TestTable({ stacks: [1000, 1000, 1000], config: { allowRunItTwice: true } });
   t.cmd(0, { type: 'setBombPot', on: true });

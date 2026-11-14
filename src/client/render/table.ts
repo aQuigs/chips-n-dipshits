@@ -1,5 +1,6 @@
 import { formatAmount, shortAmount } from '../../engine/amounts.ts';
 import type { Denominated } from '../../engine/amounts.ts';
+import { BOARD_SIZE } from '../../engine/boards.ts';
 import { midSentence } from '../../engine/handNames.ts';
 import type { HandRead } from '../../engine/handNames.ts';
 import type { HandView, Holding, SeatView, TableView } from '../../engine/view.ts';
@@ -51,8 +52,6 @@ const BET_SPOTS: Record<Shape, Spot[]> = {
   wide: [[50, 70], [33, 70], [22, 59], [22, 41], [33, 30], [50, 30], [67, 30], [78, 41], [78, 59], [67, 70]],
   tall: [[50, 73], [33, 71, 1], [33, 59, 0], [33, 41, 0], [33, 28, 1], [50, 24], [67, 28, 1], [67, 41, 0], [67, 59, 0], [67, 71, 1]],
 };
-
-const BOARD_SIZE = 5;
 
 const ACTION_LABELS: Record<string, string> = {
   'small blind': 'SB',
@@ -197,7 +196,7 @@ function seatEl(view: TableView, seat: SeatView, slot: number, shape: Shape, clo
   const bounty = result?.bounty?.seat === seat.seat ? sum(result.bounty.payments.map((payment) => payment.amount)) : 0;
   const status = statusOf(seat, hand);
   // A seat makes a hand per board on more than one, and once they are shown down the result in the middle names them: on a phone it needs the room
-  const middleNamesHands = hand?.stage === 'done' && hand.boards.length > 1 && !hand.result?.uncontested;
+  const middleNamesHands = hand?.stage === 'done' && boardsWonOn(hand) > 1;
   const label = hand?.stage === 'done' && !middleNamesHands ? shownLabel(seat, hand) : null;
   const holding = isMe ? (hand?.holding ?? null) : null;
   const hint = holding && !middleNamesHands ? hintEl(holding) : null;
@@ -301,6 +300,11 @@ function boardEl(hand: HandView): HTMLElement {
   return h('div.boards', null, boards);
 }
 
+/** How many boards a hand's result speaks of: one for a hand everyone else folded, which was won whole however many were out. */
+function boardsWonOn(hand: HandView): number {
+  return hand.result?.uncontested ? 1 : hand.boards.length;
+}
+
 // More lines than this in the middle of the table run into the seats on a phone
 const RESULT_LINES = 3;
 
@@ -315,8 +319,7 @@ function resultLines(view: TableView, hand: HandView): string[] {
 
   const nameAt = (seat: number) => view.seats[seat]?.name ?? 'Someone';
   const amountOf = (chips: number) => formatAmount(chips, view.config);
-  // A hand everyone else folded was won whole, on no board in particular, however many were out
-  const runs = result.uncontested ? 1 : hand.boards.length;
+  const runs = boardsWonOn(hand);
   const lines: string[] = [];
   let fits = true;
 
@@ -350,8 +353,8 @@ function resultLines(view: TableView, hand: HandView): string[] {
     return [...lines, ...bountyLine];
   }
 
-  // Several pots say more than fits here: each winner gets one line, and the play-by-play has every pot
-  const winners = [...result.winnings].sort((a, b) => b.amount - a.amount).map((win) => `${nameAt(win.seat)} wins ${formatAmount(win.amount, view.config)}`);
+  // More winners than there are lines for, or than a board's line holds: each gets one line, and the play-by-play has every pot
+  const winners = [...result.winnings].sort((a, b) => b.amount - a.amount).map((win) => `${nameAt(win.seat)} wins ${amountOf(win.amount)}`);
   const room = RESULT_LINES - bountyLine.length;
   const shown = winners.length > room ? [...winners.slice(0, room - 1), `and ${winners.length - room + 1} more win a share`] : winners;
 

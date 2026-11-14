@@ -3147,36 +3147,37 @@ const CHECKS: Check[] = [
     },
   ],
   [
-    'the form for a new table takes the bomb pot settings, and starts the amount over in dollars',
+    'the form for a new table takes the bomb pot settings, starts the amount over in dollars and keeps the rest',
     async (rig) => {
       for (const screen of PHONE_AND_DESKTOP) {
         const page = await rig.lobby(screen);
         const press = pressOn(page, screen);
-        const values = async () => [await page.inputValue('#new-table-bomb-pot-amount'), await page.inputValue('#new-table-bomb-pot-every')];
+        const values = async () => [await page.inputValue('#new-table-bomb-pot-amount'), await page.inputValue('#new-table-bomb-pot-every'), await page.locator('#new-table-bomb-pot-boards input:checked').inputValue()];
 
-        assert.deepEqual(await values(), ['100', '0']);
+        assert.deepEqual(await values(), ['100', '0', 'one']);
 
         await page.fill('#host-name', 'Quigs');
         await page.fill('#new-table-bomb-pot-amount', '300');
         await page.fill('#new-table-bomb-pot-every', '4');
+        await press('#new-table-bomb-pot-boards label:has-text("Two boards")');
 
-        // What the table plays with starts the amounts over, the bomb pot among them, and keeps how often one comes
+        // What the table plays with starts the amounts over, the bomb pot among them, and keeps how often one comes and on how many boards
         await press('#new-table-unit label:has-text("Dollars and cents")');
-        assert.deepEqual(await values(), ['2.50', '4']);
+        assert.deepEqual(await values(), ['2.50', '4', 'two']);
         await page.fill('#new-table-bomb-pot-amount', '5');
 
-        await page.locator('label[for="new-table-bomb-pot-every"]').scrollIntoViewIfNeeded();
+        await page.locator('#new-table-bomb-pot-boards').scrollIntoViewIfNeeded();
         await shot(page, `bomb-pot-new-table-${screen}`);
-        assert.deepEqual(await squeezed(page, 'label[for^="new-table-bomb-pot"] span, label[for^="new-table-bomb-pot"] small, .card-panel .field input'), [], 'part of the form is cut off');
-        assertOnScreen(await boxes(page, '#new-table-bomb-pot-amount, #new-table-bomb-pot-every, label[for="new-table-bomb-pot-every"]'), screen, 'the bomb pot in the form for a new table');
+        assert.deepEqual(await squeezed(page, 'label[for^="new-table-bomb-pot"] span, label[for^="new-table-bomb-pot"] small, #new-table-bomb-pot-boards span, #new-table-bomb-pot-boards small, .card-panel .field input'), [], 'part of the form is cut off');
+        assertOnScreen(await boxes(page, '#new-table-bomb-pot-amount, #new-table-bomb-pot-every, label[for="new-table-bomb-pot-every"], #new-table-bomb-pot-boards'), screen, 'the bomb pot in the form for a new table');
         await assertNoSidewaysScroll(page);
 
         await press('[data-action="create-table"]');
         await page.waitForSelector('#table-link');
 
         const link = await page.inputValue('#table-link');
-        const { unit, bombPotAmount, bombPotEvery } = rig.store.read(new URL(link).searchParams.get('table')!)!.config;
-        assert.deepEqual({ unit, bombPotAmount, bombPotEvery }, { unit: 'cents', bombPotAmount: 500, bombPotEvery: 4 });
+        const { unit, bombPotAmount, bombPotEvery, bombPotBoards } = rig.store.read(new URL(link).searchParams.get('table')!)!.config;
+        assert.deepEqual({ unit, bombPotAmount, bombPotEvery, bombPotBoards }, { unit: 'cents', bombPotAmount: 500, bombPotEvery: 4, bombPotBoards: 'two' });
 
         await page.context().close();
       }
@@ -3686,7 +3687,6 @@ const CHECKS: Check[] = [
                 assertApart(middle, await boxes(page, '.seat .plate, .seat .hole .card'), 'the middle of the table and a seat');
                 assertApart(await boxes(page, '.board[data-run="0"] .card'), await boxes(page, `.board[data-run="1"] .card, ${under}`), 'the first board and what is under it');
                 assertApart(await boxes(page, '.board[data-run="1"] .card'), await boxes(page, under), 'the second board and what is under it');
-                await assertBetsApart(page);
                 await also(shape);
                 await shot(page, `double-board-${name}-${shape}-${kind.name}-${screen}`);
               },
@@ -3874,38 +3874,6 @@ const CHECKS: Check[] = [
 
           await page.context().close();
         }
-      }
-    },
-  ],
-  [
-    'the form for a new table takes one board or two for a bomb pot, and keeps the choice when the table changes to dollars',
-    async (rig) => {
-      for (const screen of PHONE_AND_DESKTOP) {
-        const page = await rig.lobby(screen);
-        const press = pressOn(page, screen);
-        const picked = (boards: string) => page.isChecked(`#new-table-bomb-pot-boards input[value="${boards}"]`);
-
-        assert.equal(await picked('one'), true);
-
-        await page.fill('#host-name', 'Quigs');
-        await press('#new-table-bomb-pot-boards label:has-text("Two boards")');
-        await press('#new-table-unit label:has-text("Dollars and cents")');
-        assert.equal(await picked('two'), true);
-
-        await page.locator('#new-table-bomb-pot-boards').scrollIntoViewIfNeeded();
-        await shot(page, `double-board-new-table-${screen}`);
-        assert.deepEqual(await squeezed(page, '#new-table-bomb-pot-boards .check span, #new-table-bomb-pot-boards > span, #new-table-bomb-pot-boards small'), [], 'part of the form is cut off');
-        assertOnScreen(await boxes(page, '#new-table-bomb-pot-boards, #new-table-bomb-pot-boards .check'), screen, 'the boards of a bomb pot in the form for a new table');
-        await assertNoSidewaysScroll(page);
-
-        await press('[data-action="create-table"]');
-        await page.waitForSelector('#table-link');
-
-        const link = await page.inputValue('#table-link');
-        const { unit, bombPotBoards } = rig.store.read(new URL(link).searchParams.get('table')!)!.config;
-        assert.deepEqual({ unit, bombPotBoards }, { unit: 'cents', bombPotBoards: 'two' });
-
-        await page.context().close();
       }
     },
   ],

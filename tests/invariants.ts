@@ -276,14 +276,11 @@ export function assertRecordBalances(record: HandRecord): void {
   assert.equal(new Set([...record.boards.flat(), ...record.players.flatMap((p) => p.cards ?? [])]).size >= record.boards[0]!.length, true);
 }
 
-function sumOf(amounts: number[]): number {
-  return amounts.reduce((sum, amount) => sum + amount, 0);
-}
-
 /**
  * Every board of a hand that was shown down played for an equal share of each pot, the chips that do
- * not divide going to the first boards, and a board's share went only to players in for that pot whose
- * hand there no other shown hand in for it beat. A hand won without a showdown went whole to its winner.
+ * not divide going to the first boards, and a board's share went, in equal parts but for its odd chips,
+ * to exactly the best hands shown there by players in for that pot. A hand won without a showdown went
+ * whole to its winner.
  */
 export function assertBoardsShareThePots(record: HandRecord): void {
   const { result, boards } = record;
@@ -296,28 +293,24 @@ export function assertBoardsShareThePots(record: HandRecord): void {
 
   assert.ok(boards.every((board) => board.length === BOARD_SIZE), `${where} was shown down on a board short of its cards`);
 
-  const scoreOf = (seat: number, run: number) => {
-    const shown = result.hands.find((hand) => hand.seat === seat && hand.run === run);
-    assert.ok(shown, `${where}: seat ${seat} was paid on board ${run + 1} without showing a hand there`);
-
-    return evaluateHand(shown.cards).score;
-  };
-
   for (const pot of result.pots) {
+    assert.ok(pot.awards.every((award) => award.run < boards.length), `${where}: a pot was paid on a board that was never dealt`);
+
     boards.forEach((_board, run) => {
+      const on = `${where}, board ${run + 1} of ${boards.length}, a pot of ${pot.amount}`;
       const share = Math.floor(pot.amount / boards.length) + (run < pot.amount % boards.length ? 1 : 0);
       const paid = pot.awards.filter((award) => award.run === run);
-      const shownHere = result.hands.filter((hand) => hand.run === run && pot.eligible.includes(hand.seat));
+      const shown = result.hands.filter((hand) => hand.run === run && pot.eligible.includes(hand.seat)).map((hand) => ({ seat: hand.seat, score: evaluateHand(hand.cards).score }));
+      const best = Math.max(...shown.map((hand) => hand.score));
+      const winners = shown.filter((hand) => hand.score === best).map((hand) => hand.seat);
 
-      assert.equal(sumOf(paid.map((award) => award.amount)), share, `${where}: board ${run + 1} of ${boards.length} did not play for its share of a pot of ${pot.amount}`);
+      assert.equal(paid.reduce((sum, award) => sum + award.amount, 0), share, `${on}: the board did not play for its share`);
+      assert.ok(paid.every((award) => winners.includes(award.seat)), `${on}: paid to ${paid.map((award) => award.seat)}, with the best hands shown by ${winners}`);
+      assert.ok(paid.every((award) => award.amount === Math.floor(share / winners.length) || award.amount === Math.ceil(share / winners.length)), `${on}: not split evenly`);
 
-      for (const award of paid) {
-        assert.ok(pot.eligible.includes(award.seat), `${where}: seat ${award.seat} was paid from a pot they were not in for`);
-        assert.ok(shownHere.every((hand) => evaluateHand(hand.cards).score <= scoreOf(award.seat, run)), `${where}: seat ${award.seat} was paid on board ${run + 1} over a better hand`);
-      }
+      // A winner goes unpaid only when the share has fewer chips than winners
+      assert.ok(paid.length === winners.length || share < winners.length, `${on}: a best hand got nothing`);
     });
-
-    assert.ok(pot.awards.every((award) => award.run < boards.length), `${where}: a pot was paid on a board that was never dealt`);
   }
 }
 

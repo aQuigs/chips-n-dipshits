@@ -10,12 +10,12 @@ import type { Platform } from './platform.ts';
 import { PREFERENCES, Preferences } from './prefs.ts';
 import type { AppPreferences } from './prefs.ts';
 import { controlsEl, controlsSignature, lockTurn } from './render/controls.ts';
-import { hostOrCohost } from './render/dialogs/dialog.ts';
-import { dialogEl, dialogShows } from './render/dialogs/index.ts';
+import { dialogAllowed, dialogEl, dialogShows } from './render/dialogs/index.ts';
 import type { Dialog, DialogHandlers } from './render/dialogs/index.ts';
 import { createFeed } from './render/feed.ts';
 import type { Feed } from './render/feed.ts';
 import { joinScreen, lobbyEl, noticeEl, welcomeBackEl } from './render/lobby.ts';
+import { hostOrCohost } from './render/roles.ts';
 import { tableEl } from './render/table.ts';
 import { createThemePicker } from './render/themePicker.ts';
 import type { Shape } from './render/table.ts';
@@ -593,8 +593,12 @@ export class App {
       return;
     }
 
-    const dialog = this.dialog;
     const view = this.view;
+    if (this.dialog && view && !dialogAllowed(this.dialog, view)) {
+      this.dialog = null;
+    }
+
+    const dialog = this.dialog;
 
     screen.overlay.element.hidden = !dialog || !view;
 

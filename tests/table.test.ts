@@ -393,19 +393,30 @@ test('a co-host runs the game but cannot remove the host, from their seat or fro
   t.cmd(1, { type: 'kick', playerId: t.ids[2]! });
   assert.equal(t.state.seats[2], null);
   assert.deepEqual(t.state.cohostIds, [t.ids[1], t.ids[2]], 'losing a seat does not end being a co-host');
-  assert.deepEqual(t.feedText().slice(-3), ["P1 set P2's stack to 700", 'P1 removed P2 from their seat', 'P2 leaves the table with 700']);
+  assert.deepEqual(t.feedText().slice(-3), ["Co-host P1 set P2's stack to 700", 'Co-host P1 removed P2 from their seat', 'P2 leaves the table with 700']);
 });
 
-test('a co-host who is taken off the table altogether stops being one', () => {
+test('only the host may take a co-host off the table altogether, which ends their role', () => {
   const t = new TestTable({ stacks: [1000, 1000] });
   t.cmd(0, { type: 'setCohost', playerId: t.ids[1]!, on: true });
   t.ids.push(addMember(t.state, 'Ann', t.ctx()).id);
   t.cmd(0, { type: 'setCohost', playerId: t.ids[2]!, on: true });
 
-  t.cmd(1, { type: 'kick', playerId: t.ids[2]! });
+  assert.throws(() => t.cmd(1, { type: 'kick', playerId: t.ids[2]! }), { message: 'Only the host can take a co-host off the table' });
+  assert.throws(() => t.cmd(2, { type: 'kick', playerId: t.ids[2]! }), { message: 'Only the host can take a co-host off the table' });
 
+  t.cmd(0, { type: 'kick', playerId: t.ids[2]! });
   assert.deepEqual(t.state.cohostIds, [t.ids[1]]);
-  assert.equal(t.feedText().at(-1), 'P1 removed Ann from the table');
+  assert.equal(t.feedText().at(-1), 'The host removed Ann from the table');
+});
+
+test('the chat names a co-host as one, so no player\'s name can pass for the host', () => {
+  const t = new TestTable({ stacks: [1000, 1000], names: ['Quigs', 'The host'] });
+  t.cmd(0, { type: 'setCohost', playerId: t.ids[1]!, on: true });
+
+  t.cmd(1, { type: 'setStack', playerId: t.ids[0]!, stack: 900 });
+
+  assert.equal(t.feedText().at(-1), "Co-host The host set Quigs's stack to 900");
 });
 
 test('a co-host removed from their seat mid-hand plays out as one who stood up, and keeps the role', () => {

@@ -28,6 +28,10 @@ function seatOwnerIndex(t: TestTable, seat: number): number {
   return t.ids.indexOf(t.state.seats[seat]!.playerId);
 }
 
+function hostIndex(t: TestTable): number {
+  return t.ids.indexOf(t.state.hostId);
+}
+
 /** The host or one of the co-hosts, picked at random, as an index into the table's player list. */
 function someoneRunningTheGame(t: TestTable, rng: Rng): number {
   const ids = [t.state.hostId, ...t.state.cohostIds];
@@ -80,10 +84,11 @@ export const FUZZ_COMMANDS: ((fuzz: Fuzz) => void)[] = [
   },
 
   // Sent by anyone, so the simulation also sees those who may not name co-hosts being refused
-  ({ t, rng, playerId }) => attempt(t, chance(rng, 70) ? t.ids.indexOf(t.state.hostId) : rng.int(t.ids.length), { type: 'setCohost', playerId, on: chance(rng, 60) }),
   ({ t, rng, playerId }) => {
     if (chance(rng, 20)) {
-      attempt(t, t.ids.indexOf(t.state.hostId), { type: 'transferHost', playerId });
+      attempt(t, hostIndex(t), { type: 'transferHost', playerId });
+    } else {
+      attempt(t, chance(rng, 70) ? hostIndex(t) : rng.int(t.ids.length), { type: 'setCohost', playerId, on: chance(rng, 60) });
     }
   },
 

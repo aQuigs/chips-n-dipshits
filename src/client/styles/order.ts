@@ -23,5 +23,4 @@ export const STYLESHEETS = [
   'toast.css',
   'motion.css',
   'preferences.css',
-  'roles.css',
 ];

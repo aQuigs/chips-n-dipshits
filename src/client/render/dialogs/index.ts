@@ -53,6 +53,13 @@ export function dialogShows(dialog: Dialog, view: TableView, handlers: DialogHan
   return BY_KIND.get(dialog.kind)!.shows?.(view, handlers, dialog);
 }
 
+/** Whether the viewer may still have the dialog open. */
+export function dialogAllowed(dialog: Dialog, view: TableView): boolean {
+  const kind = BY_KIND.get(dialog.kind)!;
+
+  return (kind.who ?? kind.menu?.who)?.(view) ?? true;
+}
+
 export function dialogEl(dialog: Dialog, view: TableView, handlers: DialogHandlers): HTMLElement {
   return BY_KIND.get(dialog.kind)!.draw(view, handlers, dialog);
 }

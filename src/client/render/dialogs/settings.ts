@@ -2,7 +2,8 @@ import { CONFIG_KEYS } from '../../../engine/config.ts';
 import type { TableView } from '../../../engine/view.ts';
 import { chips, h } from '../../ui.ts';
 import { configForm } from '../configForm.ts';
-import { frame, hostOrCohost, submit } from './dialog.ts';
+import { hostOrCohost } from '../roles.ts';
+import { frame, submit } from './dialog.ts';
 import type { DialogHandlers, DialogKind } from './dialog.ts';
 
 function settings(view: TableView, handlers: DialogHandlers): HTMLElement {

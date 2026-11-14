@@ -2,7 +2,7 @@
 import { validatedConfig } from '../config.ts';
 import { formatChips } from '../format.ts';
 import { restartActionClock } from '../hand.ts';
-import { actorName, requireMayRemove } from '../hosts.ts';
+import { actorName, dropCohost, requireMayRemove } from '../hosts.ts';
 import { grant, isDealtIn, leaveSeat, turnAway } from '../seating.ts';
 import { addFeed, memberNamed, recordLedger, seatIndexOf } from '../seats.ts';
 import { GameError } from '../types.ts';
@@ -59,9 +59,8 @@ export const kick: Handler<'kick'> = {
   by: 'host or cohost',
   run: ({ state, ctx, member, command }) => {
     const target = memberNamed(state, command.playerId);
-    requireMayRemove(state, member, target);
-
     const index = seatIndexOf(state, target.id);
+    requireMayRemove(state, member, target, index < 0);
 
     state.requests = state.requests.filter((r) => r.playerId !== target.id);
 
@@ -71,7 +70,7 @@ export const kick: Handler<'kick'> = {
     } else if (target.id !== state.hostId && target.buyIn === 0 && target.cashOut === 0) {
       // Someone who never played has no line in the ledger to be kept for, so their name and their place at the table are freed
       state.members = state.members.filter((m) => m !== target);
-      state.cohostIds = state.cohostIds.filter((id) => id !== target.id);
+      dropCohost(state, target.id);
       addFeed(state, ctx.now, 'system', null, `${actorName(state, member)} removed ${target.name} from the table`);
     }
   },
@@ -150,7 +149,8 @@ export const transferHost: Handler<'transferHost'> = {
 
     // The old host stays trusted with the game, so they keep its powers until the new host says otherwise
     state.hostId = target.id;
-    state.cohostIds = [...state.cohostIds.filter((id) => id !== target.id), member.id];
+    dropCohost(state, target.id);
+    state.cohostIds.push(member.id);
     addFeed(state, ctx.now, 'system', null, `${target.name} is now the host, and ${member.name} a co-host`);
   },
 };
@@ -168,7 +168,12 @@ export const setCohost: Handler<'setCohost'> = {
       return;
     }
 
-    state.cohostIds = on ? [...state.cohostIds, target.id] : state.cohostIds.filter((id) => id !== target.id);
+    if (on) {
+      state.cohostIds.push(target.id);
+    } else {
+      dropCohost(state, target.id);
+    }
+
     addFeed(state, ctx.now, 'system', null, on ? `${target.name} is now a co-host` : `${target.name} is no longer a co-host`);
   },
 };

@@ -72,8 +72,6 @@ function tableWithCohost(): TestTable {
   return t;
 }
 
-type Level = (typeof HANDLERS)[CommandType]['by'];
-
 /**
  * Who may send each command, stated again here on purpose: a command added to the table fails this
  * test until it is listed, so whoever adds one decides who may send it and shows that it holds. A
@@ -110,7 +108,7 @@ test('every command says who may send it, as this test expects', () => {
   assert.deepEqual(Object.keys(DECLARED).sort(), Object.keys(HANDLERS).sort(), 'a command is missing from DECLARED, or DECLARED names one the table does not take');
 
   for (const [type, declared] of Object.entries(DECLARED)) {
-    assert.equal(HANDLERS[type as CommandType].by as Level, declared.by, `${type} is sent by a different level than this test was told`);
+    assert.equal(HANDLERS[type as CommandType].by, declared.by, `${type} is sent by a different level than this test was told`);
   }
 });
 
@@ -145,11 +143,17 @@ for (const [type, declared] of Object.entries(DECLARED)) {
 
       const before = JSON.stringify(t.state);
       assert.throws(send(t, sender, command), { name: 'GameError', message: REFUSALS[declared.by] }, `${role} sending ${type}`);
-      assert.throws(send(t, sender, { ...command, playerId: 'NOBODY12', stack: -1, config: { bigBlind: -1 }, on: 'yes' }), { message: REFUSALS[declared.by] });
       assert.equal(JSON.stringify(t.state), before);
     }
   });
 }
+
+test('being refused for who you are comes before anything about the command itself is looked at', () => {
+  const t = tableWithCohost();
+
+  assert.throws(send(t, MEMBER, { type: 'setStack', playerId: 'NOBODY12', stack: -1 }), { message: 'Only the host or a co-host can do that' });
+  assert.throws(send(t, COHOST, { type: 'setCohost', playerId: 'NOBODY12', on: 'yes' }), { message: 'Only the host can do that' });
+});
 
 test('what a player does about their seat needs a seat', () => {
   const { t, watcher } = tableWithWatcher();

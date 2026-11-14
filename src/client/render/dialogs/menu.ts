@@ -1,6 +1,7 @@
 import type { TableView } from '../../../engine/view.ts';
 import { h } from '../../ui.ts';
-import { everyone, frame, hostOrCohost, seated } from './dialog.ts';
+import { hostOrCohost } from '../roles.ts';
+import { everyone, frame, seated } from './dialog.ts';
 import type { DialogHandlers, DialogKind, MenuEntry } from './dialog.ts';
 import type { Dialog } from './index.ts';
 

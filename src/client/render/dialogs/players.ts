@@ -1,7 +1,8 @@
 import type { TableView } from '../../../engine/view.ts';
 import { chips, h } from '../../ui.ts';
-import { roleMark } from '../roles.ts';
-import { frame, hostAlone, hostOrCohost } from './dialog.ts';
+import { roleOf } from '../../../engine/hosts.ts';
+import { hostAlone, hostOrCohost, roleMark } from '../roles.ts';
+import { frame } from './dialog.ts';
 import type { DialogHandlers, DialogKind } from './dialog.ts';
 
 function players(view: TableView, handlers: DialogHandlers): HTMLElement {
@@ -19,15 +20,13 @@ function players(view: TableView, handlers: DialogHandlers): HTMLElement {
     ),
   );
 
-  const isHost = hostAlone(view);
-
   // Who runs the table is the host's choice alone, and nobody is offered a say over their own role
   const roleButtons = (playerId: string, name: string) => {
-    if (!isHost || playerId === view.you.id) {
+    if (!hostAlone(view) || playerId === view.you.id) {
       return [];
     }
 
-    const cohost = view.cohostIds.includes(playerId)
+    const cohost = roleOf(view, playerId) === 'cohost'
       ? h('button.btn.small', { type: 'button', 'data-action': 'end-cohost', onclick: () => void handlers.send({ type: 'setCohost', playerId, on: false }) }, 'End co-host')
       : h(
           'button.btn.small',
@@ -66,9 +65,9 @@ function players(view: TableView, handlers: DialogHandlers): HTMLElement {
     return [cohost, makeHost];
   };
 
-  const remove = (playerId: string, name: string, body: string) =>
-    // Only the host may remove the host
-    playerId === view.hostId && !isHost
+  // A co-host may not remove the host, nor take another co-host off the table, which would end their role
+  const remove = (playerId: string, name: string, body: string, altogether: boolean) =>
+    !hostAlone(view) && (roleOf(view, playerId) === 'host' || (altogether && roleOf(view, playerId) === 'cohost'))
       ? null
       : h(
           'button.btn.small',
@@ -95,7 +94,7 @@ function players(view: TableView, handlers: DialogHandlers): HTMLElement {
               null,
               h('button.btn.small', { type: 'button', 'data-action': 'set-stack', onclick: () => handlers.open({ kind: 'setStack', playerId: seat.playerId }) }, 'Set stack'),
               roleButtons(seat.playerId, seat.name),
-              remove(seat.playerId, seat.name, 'They lose their seat and their chips are cashed out in the ledger. They can ask for a seat again.'),
+              remove(seat.playerId, seat.name, 'They lose their seat and their chips are cashed out in the ledger. They can ask for a seat again.', false),
             ),
           ),
         ]
@@ -115,7 +114,7 @@ function players(view: TableView, handlers: DialogHandlers): HTMLElement {
         'span.row-actions',
         null,
         roleButtons(playerId, name),
-        played.has(playerId) ? null : remove(playerId, name, 'They have not played here, so they are taken off the table and their name is free again. They can join again from the link.'),
+        played.has(playerId) ? null : remove(playerId, name, 'They have not played here, so they are taken off the table and their name is free again. They can join again from the link.', true),
       ),
     );
 
@@ -142,7 +141,6 @@ export const playersDialog: DialogKind<'players'> = {
     view.members,
     view.hostId,
     view.cohostIds,
-    view.you.role,
     view.hand?.number,
     view.seats.map((seat) => seat && [seat.playerId, seat.name, seat.seat, view.hand ? null : seat.stack]),
   ],

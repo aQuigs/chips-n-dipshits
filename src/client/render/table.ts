@@ -1,8 +1,7 @@
 import { evaluateHand } from '../../engine/handRank.ts';
 import type { HandView, SeatView, TableView } from '../../engine/view.ts';
 import { cardEl, chips, h, shortChips } from '../ui.ts';
-import { hostOrCohost } from './dialogs/dialog.ts';
-import { roleMark } from './roles.ts';
+import { hostOrCohost, roleMark } from './roles.ts';
 
 /** Whether the table is drawn lying down (desktop, landscape) or standing up (a phone held upright). */
 export type Shape = 'wide' | 'tall';
@@ -316,7 +315,7 @@ function messageEl(view: TableView, handlers: TableHandlers): HTMLElement | null
       );
     }
 
-    return h('div.message', null, view.handCount === 0 ? 'Waiting for the host to start the game' : 'The host paused the game');
+    return h('div.message', null, view.handCount === 0 ? 'Waiting for the host to start the game' : 'The game is paused');
   }
 
   return h('div.message', null, 'Waiting for at least two players with chips');

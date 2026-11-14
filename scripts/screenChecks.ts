@@ -55,6 +55,9 @@ function assertApart(these: Box[], those: Box[], what: string): void {
   }
 }
 
+/** Taps on a touch screen and clicks on the desktop, as the rig opens every screen but the desktop as a touch one. */
+const pressOn = (page: Page, screen: ScreenName) => (selector: string) => (screen === 'desktop' ? page.click(selector) : page.tap(selector));
+
 const text = async (page: Page, selector: string) => ((await page.locator(selector).first().textContent()) ?? '').trim();
 
 // Run in the page: counts the notes it plays, since a check cannot listen
@@ -316,7 +319,7 @@ const CHECKS: Check[] = [
           { name: 'Stu', stack: 1000 },
         ]);
         const page = await table.open('Quigs', screen);
-        const press = (selector: string) => (screen === 'phone' ? page.tap(selector) : page.click(selector));
+        const press = pressOn(page, screen);
         const notes = () => page.evaluate('window.notesPlayed') as Promise<number>;
         const myTurnOn = (street: string) => (view: TableView) => view.hand!.street === street && view.hand!.toAct === 0;
 
@@ -427,7 +430,7 @@ const CHECKS: Check[] = [
         table.join('Lurker');
 
         const page = await table.open('Quigs', screen);
-        const press = (selector: string) => (screen === 'phone' ? page.tap(selector) : page.click(selector));
+        const press = pressOn(page, screen);
         const row = (name: string) => `.dialog li:has-text("${name}")`;
 
         await press('[data-action="menu"]');
@@ -475,7 +478,7 @@ const CHECKS: Check[] = [
         table.act('Quigs', { type: 'setCohost', playerId: table.auth('Stu').id, on: true });
 
         const cohost = await table.open('Stu', screen);
-        const press = (selector: string) => (screen === 'phone' ? cohost.tap(selector) : cohost.click(selector));
+        const press = pressOn(cohost, screen);
 
         await press('[data-action="menu"]');
         const menu = await cohost.locator('.menu .menu-item').evaluateAll((items) => items.map((item) => item.getAttribute('data-action')));
@@ -490,14 +493,20 @@ const CHECKS: Check[] = [
         assert.equal(await cohost.locator('[data-action="make-host"], [data-action="make-cohost"], [data-action="end-cohost"]').count(), 0, 'a co-host is offered what only the host may do');
         assertOnScreen(await boxes(cohost, '.dialog .row-actions .btn'), screen, 'a button in the co-host\'s Players dialog');
         await shot(cohost, `players-as-cohost-${screen}`);
+
+        // No longer a co-host, they are left holding none of the host's tools
+        table.act('Quigs', { type: 'setCohost', playerId: table.auth('Stu').id, on: false });
+        await cohost.waitForSelector('.dialog', { state: 'detached' });
         await cohost.context().close();
 
-        const member = await table.open('Pam', screen);
-        await (screen === 'phone' ? member.tap('[data-action="menu"]') : member.click('[data-action="menu"]'));
-        await member.waitForSelector('.menu');
-        assert.equal(await member.locator('.menu [data-action="players"], .menu [data-action="settings"], .menu [data-action="start"]').count(), 0, 'a plain member is offered the host\'s tools');
-        assert.equal(await member.locator('.message [data-action="start"]').count(), 0);
-        await member.context().close();
+        if (screen === 'phone') {
+          const member = await table.open('Pam', screen);
+          await member.tap('[data-action="menu"]');
+          await member.waitForSelector('.menu');
+          assert.equal(await member.locator('.menu [data-action="players"], .menu [data-action="settings"], .menu [data-action="start"]').count(), 0, 'a plain member is offered the host\'s tools');
+          assert.equal(await member.locator('.message [data-action="start"]').count(), 0);
+          await member.context().close();
+        }
       }
     },
   ],

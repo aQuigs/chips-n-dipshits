@@ -4,7 +4,7 @@
  */
 import assert from 'node:assert/strict';
 
-import { FEED_LIMIT, LIMITS, reaches, replayHand, viewFor } from '../src/engine/index.ts';
+import { FEED_LIMIT, LIMITS, reaches, replayHand, roleOf, viewFor } from '../src/engine/index.ts';
 import type { Effect, FeedEntry, HandRecord, TableState } from '../src/engine/index.ts';
 import { CACHE_VALUE_BYTES, utf8Bytes } from '../src/gas/sheetStore.ts';
 import { restoreState } from '../src/server/store.ts';
@@ -112,6 +112,7 @@ export function assertViewsKeepSecrets(state: TableState, now: number): void {
     }
 
     // Requests waiting on the host are for the host and co-hosts to see; anyone else sees only their own
+    assert.equal(view.you.role, roleOf(state, viewer.id));
     const approves = reaches(view.you.role, 'host or cohost');
     assert.deepEqual(
       view.requests.map((request) => request.playerId),

@@ -54,6 +54,13 @@ export interface Move {
   after: number;
 }
 
+/**
+ * Moves that are decoration beside the game, such as a throw: they play in a lane of their own, which
+ * `idle()` and the stage's `data-moving` leave out, so a held card, a hand's chances or a deal never
+ * wait for one, however many are flying.
+ */
+export const ASIDE_MOVES: ReadonlySet<MoveName> = new Set<MoveName>(['throw']);
+
 /** How long each move takes, from leaving to landing. */
 export const MOVE_MS: Record<MoveName, number> = { deal: 260, board: 240, show: 200, bet: 200, chips: 280, muck: 220, facedown: 150, reveal: 210, confetti: 1100, throw: 550 };
 
@@ -83,7 +90,7 @@ export interface TableMotion {
   play(moves: readonly Move[]): void;
   /** Ends everything in flight at once, where it was going. */
   cancel(): void;
-  /** Resolves once nothing is moving: at once when nothing is. */
+  /** Resolves once nothing of the table is moving: at once when nothing is. What moves beside it (`ASIDE_MOVES`) is not waited for. */
   idle(): Promise<void>;
   /** Whether what is played now is seen: not by a viewer who has motion off, or on a page out of sight. */
   seen(): boolean;

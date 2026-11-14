@@ -1807,23 +1807,32 @@ const CHECKS: Check[] = [
       assertInside(flight.from, (await boxes(page, '.seat[data-seat="4"] .plate'))[0]!, 'the throw leaves from Sam');
       assertInside(flight.to, (await boxes(page, '.seat[data-seat="2"] .plate'))[0]!, 'the throw lands on Pam');
       await assertMarkOn(page, 'tomato', 2, 'Sam threw a tomato at Pam');
-      assert.equal(await page.locator('.stand-in').count(), 0, 'what flew is gone once it landed');
+      await page.waitForSelector('.thrown.stand-in', { state: 'detached' });
       await shot(page, 'reactions-throw-landed-smallPhone');
 
-      // The next hand dealt and a throw, both brought by one view: every card is dealt as without it, and the table comes to rest
-      playOut(table);
-      await page.waitForSelector('.seat-reaction', { state: 'detached', timeout: 10_000 });
-      await dealt(page);
-      await page.evaluate('window.flights.splice(0)');
+      // A hand dealt on a quiet table, then one dealt with a throw in the same moment: every card goes out just as it did
+      const deal = async (throwing: boolean) => {
+        playOut(table);
+        await page.waitForSelector('.seat-reaction', { state: 'detached', timeout: 10_000 });
+        await dealt(page);
+        await page.evaluate('window.flights.splice(0)');
 
-      rig.advance(REACTION_GAP_MS);
-      table.dealNext();
-      table.act('Lu', { type: 'react', kind: 'beer', to: table.auth('Quigs').id });
-      await page.waitForSelector('.seat-reaction[data-reaction="beer"]');
+        rig.advance(REACTION_GAP_MS);
+        table.dealNext();
+        if (throwing) {
+          table.act('Lu', { type: 'react', kind: 'beer', to: table.auth('Quigs').id });
+          await page.waitForSelector('.seat-reaction[data-reaction="beer"]');
+        }
 
-      const flights = await flown(page);
-      assert.equal(flights.filter((flight) => flight.name === 'deal').length, 2 * NINE_REACTING.length, 'a card was not dealt around');
-      assert.equal(flights.filter((flight) => flight.name === 'throw').length, 1);
+        await page.waitForFunction(`window.flights.filter((flight) => flight.name === 'deal').length === ${2 * NINE_REACTING.length}`);
+        const flights = await flown(page);
+
+        return { deal: flights.filter((flight) => flight.name === 'deal').map(({ delay, duration }) => [delay, duration]), throws: flights.filter((flight) => flight.name === 'throw').length };
+      };
+
+      const quiet = await deal(false);
+      const busy = await deal(true);
+      assert.deepEqual(busy, { deal: quiet.deal, throws: 1 }, 'the deal went out otherwise with a throw beside it');
       await assertMarkOn(page, 'beer', 0, 'Lu threw a beer at Quigs');
     },
   ],
@@ -1862,6 +1871,48 @@ const CHECKS: Check[] = [
       await page.tap('[data-action="reactions"]');
       await page.tap('[data-react="cry"]');
       await assertMarkOn(page, 'cry', 0, 'Quigs is crying');
+
+      // The wait after it stills the very buttons on screen, and lets them go as it ends: a tap then lands on what it was aimed at
+      rig.advance(REACTION_GAP_MS);
+      await page.tap('[data-action="reactions"]');
+      await page.waitForSelector('[data-react="clap"]:disabled');
+      assert.equal(await text(page, '.react-note'), 'One at a time: give it a few seconds');
+      await page.evaluate(`window.aimedAt = document.querySelector('[data-react="clap"]')`);
+
+      await page.waitForSelector('[data-react="clap"]:enabled', { timeout: REACTION_GAP_MS + 2000 });
+      assert.ok(await page.evaluate(`window.aimedAt === document.querySelector('[data-react="clap"]')`), 'the buttons were drawn again as the wait ended, which loses a tap that lands then');
+      assert.equal(await page.locator('.react-note').isVisible(), false);
+      await page.tap('[data-react="clap"]');
+      await assertMarkOn(page, 'clap', 0, 'Quigs is clapping');
+    },
+  ],
+  [
+    'throws in the air hold up nothing of the game: with two stopped mid-flight, the river held face down turns, the result comes and the table comes to rest as on a quiet table',
+    async (rig) => {
+      const table = rig.table(['Quigs', 'Stu', 'Pam', 'Al'].map((name) => ({ name, stack: 10_000 })), { allowRunItTwice: false });
+      table.deal({ button: 0, holes: { 0: 'Ah Ad', 1: 'Kh Kd', 2: '8c 3d', 3: '9c 4d' }, board: '2c 7d 9h Jc Ks' });
+      table.play((view, name) => (name === 'Pam' || name === 'Al' ? { type: 'fold' } : allIn(view)), (view) => view.hand!.stage !== 'betting');
+      table.play(() => null, (view) => view.hand!.boards[0]!.length === 4);
+
+      const page = await table.open('Quigs', 'smallPhone', MOTION, { moving: true });
+      await dealt(page);
+
+      rig.advance(table.view('Quigs').hand!.deadline! - rig.now());
+      await page.waitForSelector('.board-card.stand-in', { state: 'attached' });
+
+      // Two throws back to back while the river lies face down, each stopped halfway for as long as the check looks
+      await page.evaluate('window.holdAt = 0.5');
+      table.act('Pam', { type: 'react', kind: 'tomato', to: table.auth('Quigs').id });
+      table.act('Al', { type: 'react', kind: 'fish', to: table.auth('Stu').id });
+      await page.waitForFunction(`window.flights.filter((flight) => flight.name === 'throw').length === 2`);
+      await page.evaluate(`window.holdAt = null; window.thrown = document.getAnimations().filter((animation) => animation.id === 'throw')`);
+
+      await page.waitForSelector('.message.result', { timeout: MOST_SWEAT_MS + 5000 });
+      await dealt(page);
+      assert.equal(await page.locator('.board-card.stand-in').count(), 0, 'the river is still face down');
+      // Still in the air, or taken off with the table they flew over when it was drawn again: never landed, which would end the check's hold
+      assert.deepEqual(await page.evaluate('window.thrown.map((animation) => animation.playState)').then((states) => (states as string[]).filter((state) => state === 'finished')), []);
+      await page.evaluate('window.land()');
     },
   ],
   [

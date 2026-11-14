@@ -78,7 +78,25 @@ export class ReactionPicker {
           )
         : null,
     );
-    this.slot.draw([this.open, this.throwing?.id, others, refusal], () => (this.open ? this.panel(others, refusal) : null));
+    this.slot.draw([this.open, this.throwing?.id, others], () => (this.open ? this.panel(others) : null));
+    this.still(refusal, others.length === 0);
+  }
+
+  /**
+   * Stills every choice while `refusal` stands, on the buttons already drawn: the wait starting or ending
+   * never draws them again, so a tap that lands as it does is taken or plainly refused, never lost.
+   */
+  private still(refusal: string | null, alone: boolean): void {
+    const panel = this.slot.element;
+
+    panel.querySelectorAll<HTMLButtonElement>('[data-react], [data-throw-at]').forEach((button) => {
+      button.disabled = refusal !== null || (alone && button.dataset.thrown !== undefined);
+    });
+
+    const note = panel.querySelector('.react-note');
+    if (note) {
+      note.textContent = refusal ?? '';
+    }
   }
 
   close(): void {
@@ -105,8 +123,7 @@ export class ReactionPicker {
     }
   }
 
-  private panel(others: { id: string; name: string }[], refusal: string | null): HTMLElement {
-    const still = refusal !== null;
+  private panel(others: { id: string; name: string }[]): HTMLElement {
     const throwing = this.throwing;
 
     if (throwing) {
@@ -117,17 +134,24 @@ export class ReactionPicker {
         h(
           'div.react-targets',
           null,
-          others.map((other) => h('button.btn.small', { type: 'button', 'data-throw-at': other.id, disabled: still, onclick: () => this.pick(throwing, other.id) }, other.name)),
+          others.map((other) => h('button.btn.small', { type: 'button', 'data-throw-at': other.id, onclick: () => this.pick(throwing, other.id) }, other.name)),
         ),
         h('button.btn.small.react-back', { type: 'button', 'data-action': 'react-back', onclick: () => ((this.throwing = null), this.redraw()) }, 'Back'),
-        still ? h('div.react-note', null, refusal) : null,
+        h('div.react-note', { 'aria-live': 'polite' }),
       );
     }
 
-    const choice = (kind: ReactionKind, disabled: boolean) =>
+    const choice = (kind: ReactionKind) =>
       h(
         'button.react-choice',
-        { type: 'button', 'aria-label': reactionLabel(kind), title: reactionLabel(kind), 'data-react': kind.id, disabled, onclick: () => (kind.thrown ? ((this.throwing = kind), this.redraw()) : this.pick(kind)) },
+        {
+          type: 'button',
+          'aria-label': reactionLabel(kind),
+          title: reactionLabel(kind),
+          'data-react': kind.id,
+          'data-thrown': kind.thrown ? '' : null,
+          onclick: () => (kind.thrown ? ((this.throwing = kind), this.redraw()) : this.pick(kind)),
+        },
         kind.mark,
       );
 
@@ -135,10 +159,10 @@ export class ReactionPicker {
       'div.react-panel',
       { id: 'react-panel', role: 'group', 'aria-label': 'Reactions' },
       h('div.react-heading', null, 'React'),
-      h('div.react-row', null, REACTIONS.filter((kind) => !kind.thrown).map((kind) => choice(kind, still))),
+      h('div.react-row', null, REACTIONS.filter((kind) => !kind.thrown).map(choice)),
       h('div.react-heading', null, others.length > 0 ? 'Throw at someone' : 'Throw at someone, once someone else sits down'),
-      h('div.react-row', null, REACTIONS.filter((kind) => kind.thrown).map((kind) => choice(kind, still || others.length === 0))),
-      still ? h('div.react-note', null, refusal) : null,
+      h('div.react-row', null, REACTIONS.filter((kind) => kind.thrown).map(choice)),
+      h('div.react-note', { 'aria-live': 'polite' }),
     );
   }
 

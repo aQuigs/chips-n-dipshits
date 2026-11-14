@@ -13,6 +13,7 @@ import { settingsDialog } from './settings.ts';
 import { shuffleSeats } from './shuffle.ts';
 import { sitDialog } from './sit.ts';
 import { themeDialog } from './theme.ts';
+import { transferDialog } from './transfer.ts';
 
 export type { DialogHandlers } from './dialog.ts';
 
@@ -37,6 +38,7 @@ const REGISTERED = [
   sitDialog,
   rebuyDialog,
   setStackDialog,
+  transferDialog,
   confirmDialog,
 ];
 

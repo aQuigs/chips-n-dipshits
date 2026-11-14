@@ -5,7 +5,8 @@ import { restartActionClock } from '../hand.ts';
 import { actorName, dropCohost, requireMayRemove } from '../hosts.ts';
 import { movePlayer, shuffleEveryone } from '../reseating.ts';
 import { grant, isDealtIn, leaveSeat, turnAway } from '../seating.ts';
-import { addFeed, memberNamed, recordLedger, seatIndexOf } from '../seats.ts';
+import { addFeed, memberNamed, recordLedger, seatedMember, seatIndexOf } from '../seats.ts';
+import { transfer } from '../transfers.ts';
 import { GameError, SEAT_COUNT } from '../types.ts';
 import { wholeNumber, yesOrNo } from '../validate.ts';
 import type { Handler } from './handler.ts';
@@ -80,13 +81,7 @@ export const kick: Handler<'kick'> = {
 export const setStack: Handler<'setStack'> = {
   by: 'host or cohost',
   run: ({ state, ctx, member, command }) => {
-    const target = memberNamed(state, command.playerId);
-    const index = seatIndexOf(state, target.id);
-    const seat = state.seats[index];
-    if (!seat) {
-      throw new GameError(`${target.name} doesn't have a seat`);
-    }
-
+    const { member: target, index, seat } = seatedMember(state, command.playerId);
     if (isDealtIn(state, index)) {
       throw new GameError(`${target.name} is in the current hand, so wait until it is over`);
     }
@@ -104,19 +99,19 @@ export const setStack: Handler<'setStack'> = {
 export const moveSeat: Handler<'moveSeat'> = {
   by: 'host or cohost',
   run: ({ state, ctx, member, command }) => {
-    const target = memberNamed(state, command.playerId);
-    const from = seatIndexOf(state, target.id);
-    if (from < 0) {
-      throw new GameError(`${target.name} doesn't have a seat`);
-    }
-
-    movePlayer(state, ctx, actorName(state, member), from, wholeNumber(command.seat, 'The seat', 0, SEAT_COUNT - 1));
+    const { index } = seatedMember(state, command.playerId);
+    movePlayer(state, ctx, actorName(state, member), index, wholeNumber(command.seat, 'The seat', 0, SEAT_COUNT - 1));
   },
 };
 
 export const shuffleSeats: Handler<'shuffleSeats'> = {
   by: 'host or cohost',
   run: ({ state, ctx, member }) => shuffleEveryone(state, ctx, actorName(state, member)),
+};
+
+export const transferChips: Handler<'transferChips'> = {
+  by: 'host or cohost',
+  run: ({ state, ctx, member, command }) => transfer(state, ctx, actorName(state, member), command.from, command.to, command.amount),
 };
 
 export const updateConfig: Handler<'updateConfig'> = {

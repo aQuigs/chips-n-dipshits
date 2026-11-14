@@ -9,9 +9,9 @@ import { FakeCache, FakeLock, FakeSpreadsheet } from './fakes.ts';
 import { seededRng } from './helpers.ts';
 
 function setup() {
-  const spreadsheet = new FakeSpreadsheet();
-  const cache = new FakeCache();
   const lock = new FakeLock();
+  const spreadsheet = new FakeSpreadsheet(lock);
+  const cache = new FakeCache();
   const counts = { opens: 0, flushes: 0 };
   let failingFlush = 0;
 
@@ -53,7 +53,8 @@ function records(spreadsheet: FakeSpreadsheet) {
     tables,
     ledger,
     held: () => tables.cells[1]!.slice(9, 12).join(''),
-    ledgerAmounts: () => ledger.cells.slice(1).map((row) => row[4]),
+    // A transfer's chips are in their own column
+    ledgerAmounts: () => ledger.cells.slice(1).map((row) => row[4] || row[7]),
   };
 }
 
@@ -324,10 +325,10 @@ test('ledger entries and finished hands are appended to their own tabs', () => {
   save(store, table('ABC234'), effects);
 
   const ledger = spreadsheet.getSheetByName('Ledger')!.cells;
-  assert.deepEqual(ledger[0], ['Time', 'Table', 'Player', 'Type', 'Amount', 'Player ID', 'Record ID']);
+  assert.deepEqual(ledger[0], ['Time', 'Table', 'Player', 'Type', 'Amount', 'Player ID', 'Record ID', 'Transferred', 'Other player', 'Other player ID']);
   assert.deepEqual(ledger.slice(1).map((row) => row.slice(1)), [
-    ['ABC234', '12', 'buy-in', 500, 'P1', 'ABC234:1:0'],
-    ['ABC234', '12', 'cash-out', -650, 'P1', 'ABC234:1:2'],
+    ['ABC234', '12', 'buy-in', 500, 'P1', 'ABC234:1:0', '', '', ''],
+    ['ABC234', '12', 'cash-out', -650, 'P1', 'ABC234:1:2', '', '', ''],
   ]);
   assert.ok(ledger[1]![0] instanceof Date);
 
@@ -357,6 +358,96 @@ test('the Ledger tab reads in dollars for a table that plays dollars and cents, 
   // Numbers, not text, so someone can add the column up
   const amounts = ledger.cells.slice(1).map((row) => row[4]);
   assert.deepEqual(amounts, [150, -650, 1.5, -6.5, 1_000_000.05, 2000]);
+});
+
+/** The two lines a transfer is booked as, from Dana to Sam. */
+function transfer(amount: number, tableId = 'ABC234'): Effect[] {
+  const line = { at: 1_700_000_000_000, tableId, kind: 'transfer' as const };
+
+  return [
+    { type: 'ledger', entry: { ...line, playerId: 'D1', name: 'Dana', amount: -amount, otherId: 'S1', otherName: 'Sam' } },
+    { type: 'ledger', entry: { ...line, playerId: 'S1', name: 'Sam', amount, otherId: 'D1', otherName: 'Dana' } },
+  ];
+}
+
+test('a transfer reaches the Ledger tab as a line for each player, each naming the other, beside the Amount column so a player\'s amounts still add up to what they owe', () => {
+  const { store, spreadsheet } = setup();
+
+  save(store, table('ABC234'), [buyIn(1000), ...transfer(500)]);
+  save(store, table('CNT234', 1, { unit: 'cents' }), transfer(1234, 'CNT234'));
+
+  const ledger = spreadsheet.getSheetByName('Ledger')!;
+  const read = [3, 4, 5, 6].map((row) => [2, 3, 4, 5, 6, 8, 9, 10].map((column) => ledger.shown(row, column)));
+
+  assert.deepEqual(read, [
+    ['ABC234', 'Dana', 'transfer', '', 'D1', '-500', 'Sam', 'S1'],
+    ['ABC234', 'Sam', 'transfer', '', 'S1', '500', 'Dana', 'D1'],
+    ['CNT234', 'Dana', 'transfer', '', 'D1', '-12.34', 'Sam', 'S1'],
+    ['CNT234', 'Sam', 'transfer', '', 'S1', '12.34', 'Dana', 'D1'],
+  ]);
+  assert.deepEqual(ledger.cells.slice(1).map((row) => row[7]), ['', -500, 500, -12.34, 12.34], 'numbers, so the column can be added up');
+  assert.deepEqual(ledger.cells.slice(1).map((row) => row[4]), [1000, '', '', '', '']);
+});
+
+test('a transfer whose copy reported failure after the table was saved is copied once, both lines together', () => {
+  const { store, spreadsheet, failFlush } = setup();
+  save(store, table('ABC234', 1), [buyIn(1000)]);
+  const { ledger, held, ledgerAmounts } = records(spreadsheet);
+
+  failFlush(2);
+  save(store, table('ABC234', 2), transfer(300));
+  assert.match(held(), /"kind":"transfer"/);
+
+  save(store, table('ABC234', 3));
+  assert.deepEqual(ledgerAmounts(), [1000, -300, 300]);
+  assert.equal(held(), '');
+
+  // And when the tab refuses the write altogether, both lines wait in the row and go out with the next save
+  ledger.refuseWritesAfter(0);
+  save(store, table('ABC234', 4), transfer(200));
+  assert.deepEqual(ledgerAmounts(), [1000, -300, 300]);
+
+  ledger.acceptWrites();
+  save(store, table('ABC234', 5));
+  assert.deepEqual(ledgerAmounts(), [1000, -300, 300, -200, 200]);
+  assert.equal(held(), '');
+});
+
+test('a Ledger tab made before transfers gets the transfer columns\' headers with the first transfer, and its old lines are left as they were', () => {
+  const { store, spreadsheet, lock, anotherRun } = setup();
+
+  // The tab as the code before transfers made it, under the lock as the store holds it
+  const baseHeaders = ['Time', 'Table', 'Player', 'Type', 'Amount', 'Player ID', 'Record ID'];
+  lock.waitLock();
+  const old = spreadsheet.insertSheet('Ledger');
+  old.getRange(1, 1, 1, 7).setValues([baseHeaders]);
+  old.getRange(2, 1, 1, 7).setValues([[new Date(0), 'ABC234', 'Ann', 'buy-in', 100, 'P1', 'ABC234:1:0']]);
+  lock.releaseLock();
+
+  save(store, table('ABC234', 2), [buyIn(200)]);
+  assert.deepEqual(old.cells[0], baseHeaders, 'a copy with no transfer in it left the headers alone');
+
+  // A buy-in whose copy reported failure although it landed, held from before the change
+  const { tables, ledgerAmounts } = records(spreadsheet);
+  tables.cells[1]![9] = `~${JSON.stringify([{ id: 'ABC234:1:0', record: buyIn(100) }])}`;
+
+  save(anotherRun(), table('ABC234', 3), transfer(50));
+
+  assert.deepEqual(old.cells[0], [...baseHeaders, 'Transferred', 'Other player', 'Other player ID']);
+  assert.deepEqual(old.cells[1], [new Date(0), 'ABC234', 'Ann', 'buy-in', 100, 'P1', 'ABC234:1:0']);
+  assert.deepEqual(ledgerAmounts(), [100, 200, -50, 50], 'the line written before the new columns was found by its id and not written again');
+});
+
+test('a header someone renamed is kept when the transfer columns are headed', () => {
+  const { store, spreadsheet, lock } = setup();
+
+  lock.waitLock();
+  spreadsheet.insertSheet('Ledger').getRange(1, 1, 1, 7).setValues([['When', 'Table', 'Player', 'Type', 'Amount', 'Player ID', 'Record ID']]);
+  lock.releaseLock();
+
+  save(store, table('ABC234'), transfer(50));
+
+  assert.deepEqual(spreadsheet.getSheetByName('Ledger')!.cells[0], ['When', 'Table', 'Player', 'Type', 'Amount', 'Player ID', 'Record ID', 'Transferred', 'Other player', 'Other player ID']);
 });
 
 test('a ledger entry in dollars and cents that had to wait in its row is written in dollars whichever way it goes out', () => {

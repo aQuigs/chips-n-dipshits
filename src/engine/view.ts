@@ -93,6 +93,8 @@ export interface LedgerRow {
   name: string;
   buyIn: number;
   cashOut: number;
+  /** Chips the host moved to this player from others, less those moved away. Already counted in `stack` or `cashOut`, so shown here but never added to `net` again. */
+  transferred: number;
   /** Chips on the table right now. */
   stack: number;
   net: number;
@@ -244,6 +246,7 @@ export function ledgerOf(state: TableState): LedgerRow[] {
       name: member.name,
       buyIn: member.buyIn,
       cashOut: member.cashOut,
+      transferred: member.transferred,
       stack,
       net: stack + member.cashOut - member.buyIn,
     });

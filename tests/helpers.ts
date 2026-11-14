@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 
 import { applyCommand, createTable, addMember, freshDeck, startHand, tick, viewFor, SEAT_COUNT } from '../src/engine/index.ts';
-import type { Card, Command, Ctx, Effect, Hand, HandRecord, Rng, TableConfig, TableState, TableView } from '../src/engine/index.ts';
+import type { Card, Command, Ctx, Effect, Hand, HandRecord, LedgerEntry, Rng, TableConfig, TableState, TableView } from '../src/engine/index.ts';
 
 /** A small repeatable generator (mulberry32); the same seed always deals the same cards. */
 export function seededRng(seed: number): Rng {
@@ -43,6 +43,10 @@ export interface TableOptions {
 
 export function handRecords(effects: Effect[]): HandRecord[] {
   return effects.flatMap((effect) => (effect.type === 'hand' ? [effect.record] : []));
+}
+
+export function ledgerEntries(effects: Effect[]): LedgerEntry[] {
+  return effects.flatMap((effect) => (effect.type === 'ledger' ? [effect.entry] : []));
 }
 
 /** Replaces the cards of a hand just dealt with the ones `options` names. */

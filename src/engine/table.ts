@@ -92,6 +92,7 @@ function newMember(state: TableState, rawName: unknown, rng: Rng): Member {
     token: randomId(rng, TOKEN_LENGTH),
     buyIn: 0,
     cashOut: 0,
+    transferred: 0,
   };
   state.members.push(member);
 

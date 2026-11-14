@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { SEAT_COUNT } from '../src/engine/index.ts';
-import { handRecords, seededRng, TestTable } from './helpers.ts';
+import { handRecords, ledgerEntries, seededRng, TestTable } from './helpers.ts';
 import { assertChipsConserved, assertHandRecordsHold, assertInvariants, assertLedgerAgrees } from './invariants.ts';
 import { fixedSettings, randomConfig } from './randomConfig.ts';
 import { chance, randomStep } from './randomPlay.ts';
@@ -23,6 +23,7 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
   const handsWithAnte = { everyone: 0, bigBlind: 0 };
   const handsWithAnteIn = { chips: 0, cents: 0 };
   let shortAntes = 0;
+  const transfersIn = { chips: 0, cents: 0 };
 
   for (let seed = 1; seed <= TABLES; seed++) {
     const rng = seededRng(seed * 7919);
@@ -51,6 +52,7 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
     assertLedgerAgrees(t.state, t.effects);
     assert.deepEqual(fixedSettings(t.state.config), fixedSettings(config), 'a setting chosen for good was changed along the way');
     handsPlayed += assertHandRecordsHold(t.effects);
+    transfersIn[config.unit] += ledgerEntries(t.effects).filter((entry) => entry.kind === 'transfer' && entry.amount > 0).length;
 
     for (const record of handRecords(t.effects)) {
       showdowns += record.result.uncontested ? 0 : 1;
@@ -79,4 +81,6 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
   assert.ok(handsWithAnte.everyone >= TABLES * 5 && handsWithAnte.bigBlind >= TABLES * 5, antes);
   assert.ok(handsWithAnteIn.chips >= TABLES * 5 && handsWithAnteIn.cents >= TABLES * 5, antes);
   assert.ok(shortAntes >= TABLES / 4, antes);
+
+  assert.ok(transfersIn.chips >= TABLES && transfersIn.cents >= TABLES, `${transfersIn.chips} transfers at whole-chip tables and ${transfersIn.cents} at tables of dollars and cents`);
 });

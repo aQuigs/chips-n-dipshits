@@ -81,6 +81,16 @@ export const FUZZ_COMMANDS: ((fuzz: Fuzz) => void)[] = [
     attempt(t, someoneRunningTheGame(t, rng), { type: 'moveSeat', playerId, seat });
   },
   ({ t, rng }) => attempt(t, chance(rng, 80) ? someoneRunningTheGame(t, rng) : rng.int(t.ids.length), { type: 'shuffleSeats' }),
+  ({ t, rng, playerId }) => {
+    // Mostly between two players with seats, a part of the giver's stack or all of it; now and then more than they have
+    const seated = t.state.seats.flatMap((seat) => (seat ? [seat] : []));
+    const from = seated.find((seat) => seat.playerId === playerId) ?? seated[rng.int(seated.length)];
+    const to = chance(rng, 85) && seated.length > 0 ? seated[rng.int(seated.length)]!.playerId : t.ids[rng.int(t.ids.length)]!;
+    const stack = from?.stack ?? 0;
+    const amount = chance(rng, 20) ? stack : chance(rng, 90) ? 1 + rng.int(Math.max(stack, 1)) : stack + 1 + rng.int(100);
+
+    attempt(t, chance(rng, 90) ? someoneRunningTheGame(t, rng) : rng.int(t.ids.length), { type: 'transferChips', from: from?.playerId ?? playerId, to, amount });
+  },
   ({ t, rng, who }) => attempt(t, who, { type: 'ritVote', agree: chance(rng, 70) }),
 
   ({ t, rng }) => {

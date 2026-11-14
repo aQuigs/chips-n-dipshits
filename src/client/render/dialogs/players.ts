@@ -38,7 +38,7 @@ function players(view: TableView, handlers: DialogHandlers): HTMLElement {
               handlers.open({
                 kind: 'confirm',
                 title: `Make ${name} a co-host?`,
-                body: 'They can approve players, start and pause the game, change settings, adjust stacks and remove players, just as you can. You can end it at any time.',
+                body: 'They can approve players, start and pause the game, change settings, adjust stacks, transfer chips between players and remove players, just as you can. You can end it at any time.',
                 action: 'Make co-host',
                 command: { type: 'setCohost', playerId, on: true },
               }),
@@ -141,7 +141,13 @@ function players(view: TableView, handlers: DialogHandlers): HTMLElement {
     'Players',
     handlers,
     requests.length > 0 ? h('section', null, h('h3', null, 'Waiting for you'), h('ul.rows', null, requests)) : null,
-    h('section', null, h('h3', null, 'Seated'), seated.length > 0 ? h('ul.rows', null, seated) : h('p.note', null, 'Nobody is seated yet.')),
+    h(
+      'section',
+      null,
+      h('h3', null, 'Seated'),
+      seated.length > 0 ? h('ul.rows', null, seated) : h('p.note', null, 'Nobody is seated yet.'),
+      view.seats.filter((seat) => seat && !seat.leaving).length > 1 ? h('button.btn', { type: 'button', 'data-action': 'transfer', onclick: () => handlers.open({ kind: 'transfer' }) }, 'Transfer chips between players') : null,
+    ),
     watching.length > 0 ? h('section', null, h('h3', null, 'Watching'), h('ul.rows', null, watching.map((member) => watcherRow(member.id, member.name)))) : null,
   );
 }
@@ -151,7 +157,7 @@ export const playersDialog: DialogKind<'players'> = {
   menu: {
     label: 'Players',
     who: hostOrCohost,
-    note: (view) => (view.requests.length > 0 ? `${view.requests.length} waiting for you` : 'Approve, adjust stacks, move, remove'),
+    note: (view) => (view.requests.length > 0 ? `${view.requests.length} waiting for you` : 'Approve, adjust stacks, transfer chips, move, remove'),
   },
   // Stacks move with every bet. Redrawn that often, a button here would be gone before a tap on it landed,
   // so during a hand the list keeps the stacks it was drawn with

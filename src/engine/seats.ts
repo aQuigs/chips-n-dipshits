@@ -1,6 +1,6 @@
 import { formatAmount } from './amounts.ts';
 import { GameError, SEAT_COUNT } from './types.ts';
-import type { Ctx, FeedKind, LedgerKind, Member, TableState } from './types.ts';
+import type { Ctx, FeedKind, LedgerDetail, Member, MoneyKind, Seat, TableState } from './types.ts';
 
 export const FEED_LIMIT = 60;
 
@@ -61,6 +61,18 @@ export function seatIndexOf(state: TableState, playerId: string): number {
   return state.seats.findIndex((seat) => seat?.playerId === playerId);
 }
 
+/** The member a host's command is about, who must have a seat. */
+export function seatedMember(state: TableState, playerId: string): { member: Member; index: number; seat: Seat } {
+  const member = memberNamed(state, playerId);
+  const index = seatIndexOf(state, member.id);
+  const seat = state.seats[index];
+  if (!seat) {
+    throw new GameError(`${member.name} doesn't have a seat`);
+  }
+
+  return { member, index, seat };
+}
+
 export function addFeed(state: TableState, now: number, kind: FeedKind, from: string | null, text: string): void {
   state.feedSeq += 1;
   state.feed.push({ seq: state.feedSeq, at: now, kind, from, text });
@@ -70,17 +82,31 @@ export function addFeed(state: TableState, now: number, kind: FeedKind, from: st
   }
 }
 
-export function recordLedger(state: TableState, ctx: Ctx, member: Member, kind: LedgerKind, amount: number): void {
+function book(state: TableState, ctx: Ctx, member: Member, detail: LedgerDetail): void {
+  ctx.effects.push({
+    type: 'ledger',
+    entry: { at: ctx.now, tableId: state.id, playerId: member.id, name: member.name, ...detail },
+  });
+}
+
+/** Chips bought (a positive amount) or cashed out (a negative one). */
+export function recordLedger(state: TableState, ctx: Ctx, member: Member, kind: MoneyKind, amount: number): void {
   if (amount > 0) {
     member.buyIn += amount;
   } else {
     member.cashOut -= amount;
   }
 
-  ctx.effects.push({
-    type: 'ledger',
-    entry: { at: ctx.now, tableId: state.id, playerId: member.id, name: member.name, kind, amount },
-  });
+  book(state, ctx, member, { kind, amount });
+}
+
+/** Chips moved from one stack to another, booked for both players at once so the two lines always come as a pair. */
+export function recordTransfer(state: TableState, ctx: Ctx, from: Member, to: Member, amount: number): void {
+  from.transferred -= amount;
+  to.transferred += amount;
+
+  book(state, ctx, from, { kind: 'transfer', amount: -amount, otherId: to.id, otherName: to.name });
+  book(state, ctx, to, { kind: 'transfer', amount, otherId: from.id, otherName: from.name });
 }
 
 /**

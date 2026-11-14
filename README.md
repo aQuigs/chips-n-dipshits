@@ -102,8 +102,8 @@ The choices the code makes where poker rooms differ:
   - 💰 Retirement Fund: took 100 big blinds or more from the pots of one hand, both boards added up, as the biggest pot counts it.
   - 🔥 Heater: won three hands in a row, a hand won being one they took chips from the pots of or collected the bounty in. Losing a hand, folding it or sitting it out ends the run; a hand nobody won, as a chop, leaves it as it was, so two wins, a chop and a win are three in a row. Six in a row earns it again.
   - 💀 Felted: took the last chip of another player alone. A player broken by a split pot was felted by nobody. Felting two players in one hand is one badge.
-  - 🍦 Double Scoop: took every chip of a hand on two boards, a double-board bomb pot or one run twice, that went to a showdown.
-  - 💩 Seven-Deuce: won a hand outright holding seven-deuce, as the bounty counts it: everyone else folded, or at a showdown it beat every other hand turned up, on every board the main pot paid out on. The table has to have seen the cards: turned up at the showdown, for the bounty, or by choice. Without a bounty, seven-deuce that wins without a call and is never shown earns nothing.
+  - 🍦 Double Scoop: took every chip of a hand on more than one board, a double-board bomb pot or one run twice or three times, that went to a showdown.
+  - 💩 Seven-Deuce: won a hand outright holding seven-deuce, as the bounty counts it: everyone else folded, or at a showdown it beat every other hand turned up, on every board, even one a main pot too small to split paid nothing on. The table has to have seen the cards: turned up at the showdown, for the bounty, or by choice. Without a bounty, seven-deuce that wins without a call and is never shown earns nothing.
   - 🍔 Nothing Burger: won a pot at a showdown without so much as a pair, against someone else in for it. A side pot nobody else was left in is no win at a showdown.
   - ❄️ Cooler: turned up four of a kind or better of their own and won no pot on that board that anyone else was in for. It comes on top of the badge for the hand.
   - 🏧 ATM: went broke for the third time in one night, and again at the sixth.

@@ -30,11 +30,6 @@ const many = (rank: number) => RANK_WORDS[rank]![1];
 /** Words as they start a line: "Twice". */
 export const capitalized = (text: string) => text[0]!.toUpperCase() + text.slice(1);
 
-/** "Dana", "Dana and Sam", "Dana, Sam and Lee". */
-export function listed(names: readonly string[]): string {
-  return names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)!}`;
-}
-
 /** Each category's name from its most significant rank and, for two pair and a full house, the second. */
 const MADE_NAMES: Record<number, (first: number, second: number) => string> = {
   [STRAIGHT_FLUSH]: (first) => (first === ACE ? 'Royal flush' : `Straight flush, ${one(first)} high`),

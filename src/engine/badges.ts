@@ -63,17 +63,15 @@ const named = (hands: HandShown[]): string => midSentence(hands[0]!.name);
 
 /**
  * Whether the player won the hand outright, as the seven-deuce bounty counts it: everyone else folded,
- * or at a showdown their hand beat every other one turned up, on every board the main pot paid out on.
+ * or at a showdown their hand beat every other one turned up, on every board.
  */
 function wonOutright(hand: HandFacts, player: PlayerFacts): boolean {
   if (hand.ended === 'folds') {
     return !player.folded;
   }
 
-  // A main pot too small to split leaves a board with nothing of it, and the bounty does not ask who won there
-  const played = Array.from({ length: hand.boards }, (_board, board) => board).filter((board) => hand.players.some((other) => other.wins.some((win) => win.pot === 0 && win.board === board)));
-
-  return played.every((board) => {
+  // Every board, even one a main pot too small to split left with nothing of it: losing there is not winning outright
+  return Array.from({ length: hand.boards }, (_board, board) => board).every((board) => {
     const mine = player.shown.find((shown) => shown.board === board);
     const others = hand.players.filter((other) => other !== player).flatMap((other) => other.shown.filter((shown) => shown.board === board));
 
@@ -142,8 +140,8 @@ export const BADGES: readonly Badge[] = [
     id: 'scoop',
     name: 'Double Scoop',
     mark: '🍦',
-    description: 'Took every chip of a showdown on two boards.',
-    earned: (hand, player) => hand.boards === 2 && hand.ended === 'showdown' && player.tookOut === hand.pot,
+    description: 'Took every chip of a showdown on more than one board.',
+    earned: (hand, player) => hand.boards > 1 && hand.ended === 'showdown' && player.tookOut === hand.pot,
   },
   {
     id: 'sevenDeuce',

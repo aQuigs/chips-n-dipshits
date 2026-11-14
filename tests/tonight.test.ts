@@ -460,12 +460,8 @@ function badgesEarned(record: HandRecord, player: HandRecord['players'][number],
   };
   const felted = record.players.some((other) => other !== player && other.endStack === 0 && feltedBy(other).size === 1 && feltedBy(other).has(seat));
 
-  // Runs the main pot paid nothing on, being too small to split, are not asked about
+  // Every run, even one a main pot too small to split paid nothing on
   const beatEveryone = record.boards.every((_board, run) => {
-    if (!result.pots[0]?.awards.some((award) => award.run === run && award.amount > 0)) {
-      return true;
-    }
-
     const mine = shown.find((hand) => hand.run === run);
     const theirs = result.hands.filter((hand) => hand.seat !== seat && hand.run === run);
 
@@ -483,7 +479,7 @@ function badgesEarned(record: HandRecord, player: HandRecord['players'][number],
     bigPot: record.bigBlind > 0 && took >= 100 * record.bigBlind,
     heater: every(after.streak, before.streak, 3),
     felted,
-    scoop: record.boards.length === 2 && !result.uncontested && took === pot,
+    scoop: record.boards.length > 1 && !result.uncontested && took === pot,
     sevenDeuce: player.cards !== null && isSevenDeuce(player.cards) && outright,
     airBall: shown.some((hand) => hand.value.category === HIGH_CARD && wonOn(hand.run)),
     cooler: [...ownQuads, ...ownFlush].some((hand) => !wonOn(hand.run)),

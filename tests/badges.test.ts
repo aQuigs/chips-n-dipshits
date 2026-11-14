@@ -64,6 +64,19 @@ function bust(t: TestTable): void {
 }
 
 /** A bomb pot of 100 on two boards, dealt with the button on seat 0, checked down by everyone in it. */
+/** Seat 0's aces all in against seat 2's kings before the flop, run three times on these boards, the small blind folding. */
+function runThreeTimes(thirdBoard: string): TestTable {
+  const t = new TestTable({ stacks: [1000, 1000, 1000], config: { maxRuns: 3 } });
+  t.deal({ button: 0, holes: { 0: ACES, 2: KINGS }, board: BOARD, secondBoard: SECOND.replace('Kd', '3d'), thirdBoard });
+  t.raise(0, 1000);
+  t.fold(1);
+  t.call(2);
+  t.cmd(0, { type: 'ritVote', runs: 3 });
+  t.cmd(2, { type: 'ritVote', runs: 3 });
+
+  return t;
+}
+
 function doubleBoard(holes: Record<number, string>, secondBoard: string): TestTable {
   const t = new TestTable({ stacks: [1000, 1000, 1000], config: { bombPotBoards: 'two' } });
   t.cmd(0, { type: 'setBombPot', on: true });
@@ -246,6 +259,14 @@ const CASES: Record<string, { earns: Case[]; misses: Case[] }> = {
   scoop: {
     earns: [
       {
+        said: 'aces that won all three boards of a hand run three times',
+        earned: () => {
+          const t = runThreeTimes('6d 9c Qs 2h 8h');
+
+          return earnedIn(t, 0, () => t.finishHand());
+        },
+      },
+      {
         said: 'aces that won both boards',
         earned: () => {
           const t = doubleBoard({ 0: ACES, 1: QUEENS, 2: KINGS }, 'Jd 4c 5h 8s Td');
@@ -267,6 +288,14 @@ const CASES: Record<string, { earns: Case[]; misses: Case[] }> = {
             checkAround(t, [1, 2, 0], 3);
             t.finishHand();
           });
+        },
+      },
+      {
+        said: 'aces that won two boards of three, the kings taking the third',
+        earned: () => {
+          const t = runThreeTimes('Kc 9c Qs 2h 8h');
+
+          return earnedIn(t, 0, () => t.finishHand());
         },
       },
       {
@@ -303,6 +332,22 @@ const CASES: Record<string, { earns: Case[]; misses: Case[] }> = {
     misses: [
       showdown('seven-deuce, a pair of sevens, that lost to kings', { 0: KINGS, 2: '7s 2d' }, '7c 4h 9h Jc 3s', 2),
       showdown('seven-deuce that split the pot playing the board', { 0: '7s 2d', 2: '7c 2h' }, 'As Kd Qh Jc 9s', 0),
+      {
+        said: 'seven-deuce run three times that won two boards and lost the third, which a main pot of two chips left with nothing',
+        earned: () => {
+          const t = new TestTable({ stacks: [1, 500], config: { smallBlind: 1, bigBlind: 2, sevenDeuceBounty: 50, maxRuns: 3 } });
+
+          return earnedIn(t, 0, () => {
+            t.deal({ button: 0, holes: { 0: '7h 2c', 1: 'Jh Td' }, board: '7d 7s 2h 9c 4d', secondBoard: '7c 2d 5s 8h Ad', thirdBoard: 'Js Kc Qd 5c 3h' });
+            while (t.state.hand!.stage === 'betting') {
+              t.call(t.toAct!);
+            }
+            t.cmd(0, { type: 'ritVote', runs: 3 });
+            t.cmd(1, { type: 'ritVote', runs: 3 });
+            t.finishHand();
+          });
+        },
+      },
       {
         said: 'seven-deuce that everyone folded to and that was never shown, with no bounty',
         earned: () => {

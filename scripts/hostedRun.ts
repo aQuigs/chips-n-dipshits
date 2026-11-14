@@ -601,6 +601,60 @@ try {
     await first.waitForSelector('.toast', { state: 'hidden' });
   }
 
+  console.log('A rabbit hunt whose answer is lost after the table played it is sent once more, and the cards come out once');
+  {
+    const dealer = await open(browser);
+    const rabbitTable = await createTable(dealer, server.url, 'Bart');
+    const [id, token] = inAddress(dealer, 'me')!.split('.');
+    const act = (command: object) => fetch(`${server.url}api`, { method: 'POST', body: JSON.stringify({ op: 'act', tableId: rabbitTable, auth: { id, token }, command, build: UNSTAMPED_BUILD }) });
+
+    assert.equal(((await (await act({ type: 'updateConfig', config: { rabbitHunting: true } })).json()) as { ok: boolean }).ok, true);
+    await sit(dealer, 0);
+
+    const other = await open(browser);
+    await other.goto(`${server.url}?table=${rabbitTable}`);
+    await other.fill('#join-name', 'Lisa');
+    await other.click('[data-action="join-table"]');
+    await sit(other, 1);
+    await dealer.click('.banner [data-action="approve"]');
+    await other.waitForSelector('.seat.me');
+    await dealer.click('.message [data-action="start"]');
+
+    // Whoever acts first folds, which ends the hand before the flop
+    const folder = await Promise.race([dealer, other].map((page) => page.waitForSelector('.turn [data-action="fold"]:enabled').then(() => page)));
+    await folder.click('.turn [data-action="fold"]');
+
+    const hunter = folder === dealer ? other : dealer;
+    const hunts: string[] = [];
+    await hunter.route('**/api', async (route) => {
+      const body = JSON.parse(route.request().postData() ?? '{}') as { op?: string; command?: { type?: string } };
+
+      if (body.op !== 'act' || body.command?.type !== 'huntRabbit') {
+        return route.fallback();
+      }
+
+      hunts.push(body.command.type);
+
+      // The first is played by the table, and its answer never reaches the page
+      if (hunts.length === 1) {
+        await route.fetch();
+        return route.abort('failed');
+      }
+
+      return route.fallback();
+    });
+
+    await hunter.click('.message [data-action="hunt"]');
+    await hunter.waitForSelector('.board .card.hunted:nth-child(5)');
+    await folder.waitForSelector('.board .card.hunted:nth-child(5)');
+
+    assert.deepEqual(hunts, ['huntRabbit', 'huntRabbit'], 'the hunt with no answer was sent once more');
+    assert.equal(await hunter.locator('.feed li:has-text("hunts the rabbit")').count(), 1, 'and the cards came out once');
+
+    await dealer.context().close();
+    await other.context().close();
+  }
+
   // What a page of the newer build would send, for what the pages left behind can no longer do
   const asNewerBuild = async (request: object) => {
     const response = await fetch(`${server.url}api`, { method: 'POST', body: JSON.stringify({ ...request, build: NEWER_BUILD }) });

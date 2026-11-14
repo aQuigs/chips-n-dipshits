@@ -1162,10 +1162,10 @@ type ChopTable = (typeof CHOP_TABLES)[number];
 const UNICODE = LONG_NAMES[2]!;
 
 /** Four players, Quigs the host on the button: the widest name has the small blind, Ünïcödé the big blind, and Marge and Quigs fold to them. */
-function foldedToTheBlinds(rig: Rig, kind: ChopTable): RigTable {
+function foldedToTheBlinds(rig: Rig, kind: ChopTable, config: Partial<TableConfig> = {}): RigTable {
   const table = rig.table(
     LONG_NAMES.slice(0, 4).map((name) => ({ name, stack: kind.stack })),
-    kind.config,
+    { ...kind.config, ...config },
   );
 
   table.deal({ button: 0, holes: { 1: 'Ks Qd', 2: '9c 8c' } });
@@ -1217,7 +1217,7 @@ const chopAgreedCheck = (kind: ChopTable): Check => [
         await shot(small, `chop-offer-${kind.name}-${screen}-${shape}`);
       });
 
-      await pressOn(small, screen)('.turn [data-action="offer-chop"]');
+      await answeredAfter(small, () => pressOn(small, screen)('.turn [data-action="offer-chop"]'));
       await small.waitForSelector('.controls .waiting:has-text("You offered to chop")');
       assert.equal(await text(small, '.controls .waiting'), `You offered to chop. Waiting for ${UNICODE}`);
       assert.equal(await small.locator('.turn').count(), 0, 'the small blind still has a turn after offering');
@@ -1254,7 +1254,7 @@ const chopAgreedCheck = (kind: ChopTable): Check => [
       );
 
       // Yes: the hand is over with each blind back on its seat and nobody a winner
-      await pressOn(big, screen)('.turn [data-action="chop-yes"]');
+      await answeredAfter(big, () => pressOn(big, screen)('.turn [data-action="chop-yes"]'));
       const result = `${WIDEST} and ${UNICODE} chop the blinds`;
 
       for (const page of [small, big, other]) {
@@ -1313,9 +1313,8 @@ const chopTurnedDownCheck = (kind: ChopTable): Check => [
       table.act(WIDEST, { type: 'offerChop' });
 
       const big = await table.open(UNICODE, screen);
-      await pressOn(big, screen)('.turn [data-action="chop-no"]');
-      await big.waitForSelector('.chop-question', { state: 'detached' });
-      assert.equal(await text(big, '.controls .waiting'), `Waiting for ${WIDEST}`);
+      await answeredAfter(big, () => pressOn(big, screen)('.turn [data-action="chop-no"]'));
+      await big.waitForSelector(`.controls .waiting:has-text("Waiting for ${WIDEST}")`);
 
       await small.waitForSelector('.turn [data-action="call"]');
       assert.deepEqual(await turnActions(small), ['fold', 'call', 'raise']);
@@ -7136,6 +7135,80 @@ const CHECKS: Check[] = [
     },
   ]),
   ...CHOP_TABLES.flatMap((kind) => [chopAgreedCheck(kind), chopTurnedDownCheck(kind)]),
+  ...[MOTION_LAYOUTS[0]!, MOTION_LAYOUTS[2]!].map((layout): Check => [
+    `an offer to chop and its answer show as sent at the tap and nothing more, a refused offer puts the turn back as it was, and a lost one is looked up and never sent twice (${layout.name})`,
+    async (rig) => {
+      const where = (what: string) => `${layout.name}, ${what}`;
+      const kind = CHOP_TABLES[layout.config ? 1 : 0]!;
+      // Without a clock, whose bar would shrink under the comparison of the table before and after
+      const table = foldedToTheBlinds(rig, kind, { actionSeconds: 0 });
+      const small = await table.open(WIDEST, layout.screen);
+      const press = pressOn(small, layout.screen);
+      const sent = movesSent(small);
+      const said = complaints(small);
+      const moves = await Gate.on(small, 'moves');
+      const polls = await Gate.on(small, 'polls');
+      const offers = () => table.view('Quigs').hand!.stage === 'chop';
+
+      await holdShape(small, layout);
+      await small.waitForSelector('.turn [data-action="offer-chop"]:enabled');
+      const offering = await shownOn(small);
+
+      // Held on its way: the buttons are gone, the bar names nobody, and the table is as the server last told it
+      await moves.close('requests');
+      await press('.turn [data-action="offer-chop"]');
+      await moves.holding();
+      assert.equal(await small.locator('.turn').count(), 0, where('the turn is still up with the offer on its way'));
+      assert.equal(await text(small, '.controls .waiting'), 'Waiting for the dealer', where('the bar with the offer sent'));
+      assertSameDrawn((await shownOn(small)).table, offering.table, where('the table with the offer sent'));
+      assert.equal(offers(), false, where('the server has the offer already'));
+      await shot(small, `chop-offer-sent-${layout.name}`);
+
+      // Refused, the turn is back as it was, Chop and all
+      await moves.refuse();
+      await small.waitForSelector('.turn [data-action="offer-chop"]:enabled');
+      assertAsShown(await shownOn(small), offering, where('an offer the server refused'));
+
+      // Heard, and its answer lost: the page looks it up with a fresh poll, finds it made, and sends nothing again
+      await polls.close('requests');
+      await moves.close('answers');
+      await press('.turn [data-action="offer-chop"]');
+      await moves.holding();
+      await moves.lose();
+      await small.waitForSelector('.toast:has-text("Checking whether that was played")');
+      assert.equal(offers(), true, where('the server never heard the offer whose answer was lost'));
+      assert.equal(await small.locator('.turn').count(), 0, where('an offer in doubt can be made again'));
+      await polls.open();
+      await small.waitForSelector(`.controls .waiting:has-text("You offered to chop. Waiting for ${UNICODE}")`);
+      assert.equal(await small.locator('.toast:has-text("no sign of")').count(), 0, where('an offer that was made is said not to have arrived'));
+      await moves.open();
+      assert.deepEqual(sent, ['offerChop', 'offerChop'], where('the offers sent: one refused, one whose answer was lost'));
+      assert.equal(table.view('Quigs').hand!.events.filter((event) => event[0] === 'chopOffer').length, 1, where('the offer was made twice'));
+
+      // The big blind's answer, held once: the question goes and nothing else changes until the server has it
+      const big = await table.open(UNICODE, layout.screen);
+      const bigMoves = await Gate.on(big, 'moves');
+      await holdShape(big, layout);
+      await big.waitForSelector('.turn [data-action="chop-yes"]:enabled');
+      const asked = await shownOn(big);
+
+      await bigMoves.close('requests');
+      await pressOn(big, layout.screen)('.turn [data-action="chop-yes"]');
+      await bigMoves.holding();
+      assert.equal(await big.locator('.turn').count(), 0, where('the question is still up with the answer on its way'));
+      assert.equal(await text(big, '.controls .waiting'), 'Waiting for the dealer', where('the big blind\'s bar with the answer sent'));
+      assertSameDrawn((await shownOn(big)).table, asked.table, where('the table with the answer sent'));
+      assert.equal(offers(), true, where('the server has the answer already'));
+      await shot(big, `chop-answer-sent-${layout.name}`);
+
+      await bigMoves.open();
+      await small.waitForSelector(`.message.result:has-text("${WIDEST} and ${UNICODE} chop the blinds")`);
+      assert.deepEqual(ownComplaints(said), [], where('the console'));
+
+      await small.context().close();
+      await big.context().close();
+    },
+  ]),
   [
     'the table settings switch chops on and off, the table is told, and with them on a player switches Always chop under the table, which chops at once when both blinds have it',
     async (rig) => {

@@ -3,7 +3,7 @@ import type { BettingOptions } from './betting.ts';
 import { bombPotDue, bombPotHangsOnCall } from './bombPots.ts';
 import { isSevenDeuce } from './cards.ts';
 import type { Card } from './cards.ts';
-import { mayOfferChop } from './chop.ts';
+import { foldChops, mayOfferChop } from './chop.ts';
 import type { HandEvent } from './events.ts';
 import { readHand } from './handNames.ts';
 import type { HandRead } from './handNames.ts';
@@ -90,6 +90,8 @@ export interface HandView {
   options: BettingOptions | null;
   /** The viewer is the small blind on the clock and may offer to chop instead of a move. */
   canOfferChop: boolean;
+  /** The viewer folding now ends the hand in a chop with nobody asked, so a page showing the fold names nobody next. */
+  foldChops: boolean;
   /** The viewer is the big blind, on the clock to answer an offer to chop. */
   canAnswerChop: boolean;
   /** The viewer still owes a run-it-twice vote. */
@@ -227,6 +229,7 @@ export function viewFor(state: TableState, playerId: string, now: number): Table
       deadline: hand.deadline,
       options: myTurn ? bettingOptions(state, hand, mine) : null,
       canOfferChop: mySeat >= 0 && mayOfferChop(state, mySeat),
+      foldChops: mySeat >= 0 && foldChops(state, mySeat),
       canAnswerChop: hand.stage === 'chop' && mine !== undefined && hand.toAct === mySeat,
       canVote: hand.stage === 'ritVote' && mine !== undefined && !mine.folded && mine.ritVote === null,
       canShow: hand.stage === 'done' && mine !== undefined && !mine.shown,

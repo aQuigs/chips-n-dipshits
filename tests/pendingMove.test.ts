@@ -5,12 +5,12 @@ import type { TestContext } from 'node:test';
 import { Attention } from '../src/client/attention.ts';
 import type { AttentionWay, AttentionWays, Call } from '../src/client/attention.ts';
 import { celebrationMoves } from '../src/client/celebrations.ts';
-import { ServerClock, ServerLine, TableConnection } from '../src/client/connection.ts';
+import { MOVES, ServerClock, ServerLine, TableConnection } from '../src/client/connection.ts';
 import type { SendOutcome } from '../src/client/connection.ts';
 import { betSlide, followHand } from '../src/client/handMoves.ts';
 import { soundsHeard } from '../src/client/handSounds.ts';
 import type { Move } from '../src/client/motion.ts';
-import { UNCONFIRMED_AFTER_MS } from '../src/client/pendingMove.ts';
+import { PendingMove, UNCONFIRMED_AFTER_MS } from '../src/client/pendingMove.ts';
 import { isTurnMove } from '../src/client/prediction.ts';
 import { PREFERENCES, Preferences } from '../src/client/prefs.ts';
 import type { Ability } from '../src/client/prefs.ts';
@@ -738,6 +738,32 @@ test('a kind of move the page does not know shows as sent and nothing else, unti
   assert.equal(page.shown.waiting, null, 'the table has answered, and whatever buttons the view offers are back');
   assert.deepEqual(page.said, [], 'nothing is said of a move the page never showed as played');
   assert.deepEqual(page.view, structuredClone(server.view('Quigs')));
+});
+
+test('an offer to chop and its answer are moves the page shows only as sent: the buttons go, and the table is as the server last told it', () => {
+  // Folded round to the blinds: seat 1 has the small blind and the Chop button, then seat 2 the question
+  const t = new TestTable({ stacks: [1000, 1000, 1000, 1000], config: { allowChop: true } });
+  t.deal({ button: 0 });
+  t.fold(3);
+  t.fold(0);
+
+  const asked = (seat: number, move: Command): void => {
+    const view = t.view(seat);
+    const pending = new PendingMove();
+
+    assert.ok(MOVES.has(move.type), `${move.type} is not a move: a lost one would be sent again`);
+    assert.equal(pending.begin(move, view, 0), false, `${move.type} shows as played`);
+    assert.equal(pending.out, 'sent');
+    assert.equal(pending.shown(view), view, `${move.type} changed the table shown`);
+  };
+
+  assert.ok(t.view(1).hand!.canOfferChop);
+  asked(1, { type: 'offerChop', turn: t.state.turn });
+
+  t.cmd(1, { type: 'offerChop' });
+  assert.ok(t.view(2).hand!.canAnswerChop);
+  asked(2, { type: 'answerChop', agree: true, turn: t.state.turn });
+  asked(2, { type: 'answerChop', agree: false, turn: t.state.turn });
 });
 
 test('a table that went back under a move keeps the move on it while the same decision is open', async (t) => {

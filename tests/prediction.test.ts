@@ -226,6 +226,33 @@ test('nobody is named when the next player is one the server acts for', () => {
   assert.equal(predicted!.seats[1]!.folded, false, 'what the server does for another player is not guessed at');
 });
 
+test('a small blind who could offer to chop and calls instead has no offer left in what the page shows', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 1000, 1000], config: { allowChop: true } });
+  t.deal({ button: 0 });
+  t.fold(3);
+  t.fold(0);
+
+  const played = play(t, { type: 'call' });
+
+  assert.equal(played.before.hand!.canOfferChop, true);
+  assertIsWhatTheEngineSays(played, 'the small blind completing');
+});
+
+test('a fold to two blinds who always chop names nobody: the hand ends in the chop then and there', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 1000, 1000], config: { allowChop: true } });
+  t.cmd(1, { type: 'setAlwaysChop', on: true });
+  t.cmd(2, { type: 'setAlwaysChop', on: true });
+  t.deal({ button: 0 });
+  t.fold(3);
+
+  const { before, predicted, after } = play(t, { type: 'fold' });
+
+  assert.equal(before.hand!.foldChops, true);
+  assert.deepEqual(after.hand!.result!.chopped, [1, 2], 'the engine did not chop');
+  assert.deepEqual([claims(predicted).toAct, claims(predicted).turn], [null, before.hand!.turn]);
+  assert.equal(predicted!.seats[0]!.folded, true);
+});
+
 test('a move the view does not offer is not predicted', () => {
   const t = new TestTable({ stacks: [1000, 1000, 1000] });
   t.deal({ button: 0 });
@@ -288,12 +315,12 @@ const STEPS_PER_TABLE = 400;
 function withClaimsOf(onto: TableView, from: TableView): TableView {
   const seat = onto.you.seat!;
   const { stack, bet, folded, allIn, lastAction } = from.seats[seat]!;
-  const { pot, currentBet, toAct, turn, deadline, options, holding, events } = from.hand!;
+  const { pot, currentBet, toAct, turn, deadline, options, canOfferChop, foldChops, holding, events } = from.hand!;
 
   return {
     ...onto,
     seats: onto.seats.map((other, index) => (index === seat ? { ...other!, stack, bet, folded, allIn, lastAction } : other)),
-    hand: { ...onto.hand!, pot, currentBet, toAct, turn, deadline, options, holding, events },
+    hand: { ...onto.hand!, pot, currentBet, toAct, turn, deadline, options, canOfferChop, foldChops, holding, events },
   };
 }
 
@@ -314,7 +341,7 @@ function movesFor(view: TableView, pick: (most: number) => number): TurnMove[] {
 }
 
 test('for whoever is to act on random tables, every move the page predicts is the move the engine plays, and it predicts every move the engine allows', (t) => {
-  const reached = { moves: 0, refused: 0, passedOn: 0, endedStreet: 0, endedHand: 0, runOut: 0, serverActedForNext: 0, allInForLess: 0, allIn: 0, withAnte: 0, withMissedBlind: 0, inBombPot: 0, onTwoBoards: 0, withSidePots: 0, inCents: 0, unfollowed: 0 };
+  const reached = { moves: 0, refused: 0, passedOn: 0, endedStreet: 0, endedHand: 0, runOut: 0, serverActedForNext: 0, allInForLess: 0, allIn: 0, withAnte: 0, withMissedBlind: 0, inBombPot: 0, onTwoBoards: 0, withSidePots: 0, inCents: 0, unfollowed: 0, chopOffered: 0, foldChopped: 0 };
 
   // Moves made before the flop of a hand with each kind of straddle posted: by anyone, and by a blind, who acts before the straddler there
   const straddled: Record<Straddle, number> = { straddle: 0, 'double straddle': 0, 'button straddle': 0, 'Mississippi straddle': 0 };
@@ -324,7 +351,10 @@ test('for whoever is to act on random tables, every move the page predicts is th
     const rng = seededRng(seed * 104_729);
     const players = 2 + rng.int(SEAT_COUNT - 1);
     const stacks = Array.from({ length: players }, () => (chance(rng, 25) ? 1 + rng.int(60) : 100 + rng.int(1900)));
-    const config = randomConfig(rng);
+    // A small blind who may chop needs three players or more and nothing but the blinds in, which random settings and
+    // play give too seldom: a quarter of the tables let the blinds chop, deal without an ante or a straddle, and fold to them
+    const chopping = seed % 4 === 0;
+    const config = { ...randomConfig(rng), ...(chopping ? { allowChop: true, ante: 0 } : {}) };
     const table = new TestTable({ stacks, seed, config: fixedSettings(config) });
 
     table.cmd(0, { type: 'updateConfig', config });
@@ -333,9 +363,14 @@ test('for whoever is to act on random tables, every move the page predicts is th
     for (let step = 0; step < STEPS_PER_TABLE; step++) {
       const hand = table.state.hand;
 
+      // And now and then each player switches Always chop, so that a fold to the blinds can end the hand in a chop
+      if (table.state.config.allowChop && chance(rng, 10)) {
+        table.state.seats.forEach((seat) => seat && table.cmd(table.ids.indexOf(seat.playerId), { type: 'setAlwaysChop', on: chance(rng, 70) }));
+      }
+
       // Random play hardly ever leaves a straddle on until it is its player's to post, so now and then everyone asks for
       // every kind the table allows, or only for those from under the gun: a straddle from elsewhere leaves no room for a double
-      if (chance(rng, 15)) {
+      if (!chopping && chance(rng, 15)) {
         const wanted = chance(rng, 50) ? STRADDLES.slice(0, STRADDLES_IN_A_ROW) : STRADDLES;
 
         for (const kind of straddlesAllowed(table.state.config)) {
@@ -389,7 +424,7 @@ test('for whoever is to act on random tables, every move the page predicts is th
 
           // It changes what it claims to know, and nothing else
           assert.deepEqual(predicted, withClaimsOf(before, predicted), `${where}: the prediction changed more than it claims to know`);
-          assert.deepEqual([predicted.hand!.options, predicted.hand!.deadline], [null, null], where);
+          assert.deepEqual([predicted.hand!.options, predicted.hand!.canOfferChop, predicted.hand!.foldChops, predicted.hand!.deadline], [null, false, false, null], where);
 
           // The move is the next thing the hand's events tell, and leaves the table as the prediction has it
           if (followed) {
@@ -429,6 +464,8 @@ test('for whoever is to act on random tables, every move the page predicts is th
           reached.allInForLess += sent.type === 'call' && mine.allIn && mine.bet < before.hand!.currentBet ? 1 : 0;
           reached.allIn += mine.allIn ? 1 : 0;
           reached.withAnte += posts.some((post) => post === 'ante' || post === 'big blind ante') ? 1 : 0;
+          reached.chopOffered += before.hand!.canOfferChop ? 1 : 0;
+          reached.foldChopped += sent.type === 'fold' && after.hand!.result?.chopped ? 1 : 0;
 
           if (before.hand!.street === 'preflop') {
             const blind = seat === before.hand!.sbSeat || seat === before.hand!.bbSeat;
@@ -448,7 +485,14 @@ test('for whoever is to act on random tables, every move the page predicts is th
         }
       }
 
-      randomStep(table, rng);
+      const now = table.state.hand;
+      const nobodyIn = now?.stage === 'betting' && now.street === 'preflop' && now.lastAggressor === null && now.toAct !== now.sbSeat && now.toAct !== now.bbSeat;
+
+      if (chopping && nobodyIn && chance(rng, 75)) {
+        table.cmd(table.ids.indexOf(table.state.seats[now.toAct!]!.playerId), { type: 'fold' });
+      } else {
+        randomStep(table, rng);
+      }
     }
   }
 
@@ -461,5 +505,7 @@ test('for whoever is to act on random tables, every move the page predicts is th
   assert.ok(reached.withAnte >= TABLES * 50 && reached.withMissedBlind >= TABLES / 2 && reached.withSidePots >= TABLES * 5, told);
   // Every kind of straddle, and the blinds who face it: where the action starts and what a raise must be differ for each
   assert.ok(STRADDLES.every((kind) => straddled[kind.what] >= TABLES && blindFacing[kind.what] >= TABLES / 4), told);
+  // A small blind who could have offered to chop, and a fold that left two blinds who always chop
+  assert.ok(reached.chopOffered >= TABLES && reached.foldChopped >= TABLES / 8, told);
   assert.ok(reached.inBombPot >= TABLES * 10 && reached.onTwoBoards >= TABLES * 5 && reached.inCents >= TABLES * 50, told);
 });

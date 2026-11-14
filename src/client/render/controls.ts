@@ -240,6 +240,11 @@ function waitingText(view: TableView, hand: HandView | null): string {
   if (hand.stage === 'chop') {
     const big = view.seats[hand.bbSeat]?.name ?? 'the big blind';
 
+    // As for a bet: the big blind sees this only while their own answer is out, and it is for the server to say what comes
+    if (hand.toAct === view.you.seat) {
+      return 'Waiting for the dealer';
+    }
+
     return view.you.seat === hand.sbSeat ? `You offered to chop. Waiting for ${big}` : `${smallBlindName(view, hand)} offered to chop. Waiting for ${big}`;
   }
 

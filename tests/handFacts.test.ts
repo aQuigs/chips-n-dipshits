@@ -87,8 +87,8 @@ test('a showdown: what each player put in and took out, who won the pot, and the
   const facts = factsOf(t);
 
   assert.deepEqual(
-    { number: facts.number, ended: facts.ended, bombPot: facts.bombPot, boards: facts.boards, runTwice: facts.runTwice, bigBlind: facts.bigBlind, pot: facts.pot },
-    { number: 1, ended: 'showdown', bombPot: null, boards: 1, runTwice: false, bigBlind: 20, pot: 50 },
+    { number: facts.number, ended: facts.ended, bombPot: facts.bombPot, boards: facts.boards, timesRun: facts.timesRun, bigBlind: facts.bigBlind, pot: facts.pot },
+    { number: 1, ended: 'showdown', bombPot: null, boards: 1, timesRun: 1, bigBlind: 20, pot: 50 },
   );
   assert.deepEqual(facts.players.map((p) => [p.seat, p.playerId, p.name]), [0, 1, 2].map((seat) => [seat, t.ids[seat], `P${seat}`]));
   assert.deepEqual(chips(facts), [[20, 50, 30], [10, 0, -10], [20, 0, -20]]);
@@ -219,23 +219,43 @@ test('a bust: the player left with nothing was felted by everyone paid from a po
 });
 
 test('run twice with a winner on each board: the hand was run twice, each won their board, and each showed a hand on both', () => {
-  const t = new TestTable({ stacks: [500, 500, 500], config: { smallBlind: 5, bigBlind: 20, allowRunItTwice: true } });
+  const t = new TestTable({ stacks: [500, 500, 500], config: { smallBlind: 5, bigBlind: 20, maxRuns: 2 } });
   t.deal({ button: 0, holes: { 0: ACES, 2: KINGS }, board: BOARD, secondBoard: SECOND });
   t.raise(0, 500);
   t.fold(1);
   t.call(2);
-  t.cmd(0, { type: 'ritVote', agree: true });
-  t.cmd(2, { type: 'ritVote', agree: true });
+  t.cmd(0, { type: 'ritVote', runs: 2 });
+  t.cmd(2, { type: 'ritVote', runs: 2 });
 
   const facts = factsOf(t);
 
-  assert.deepEqual([facts.boards, facts.runTwice, facts.bombPot, facts.ended], [2, true, null, 'showdown']);
+  assert.deepEqual([facts.boards, facts.timesRun, facts.bombPot, facts.ended], [2, 2, null, 'showdown']);
   assert.deepEqual(at(facts, 0).wins, [{ pot: 0, board: 0, amount: 503, between: 1, contested: true }]);
   assert.deepEqual(at(facts, 2).wins, [{ pot: 0, board: 1, amount: 502, between: 1, contested: true }]);
   assert.deepEqual(facts.players.map(wonAPot), [true, false, true]);
   assert.deepEqual(at(facts, 0).shown.map((hand) => [hand.board, hand.name]), [[0, 'Pair of aces'], [1, 'Pair of aces']]);
   assert.deepEqual(at(facts, 2).shown.map((hand) => [hand.board, hand.name, hand.category]), [[0, 'Pair of kings', PAIR], [1, 'Three kings', THREE_OF_A_KIND]]);
   assert.deepEqual(facts.players.map((p) => p.busted), [false, false, false]);
+});
+
+test('run three times: the facts say so, and a player who won two boards was paid on each', () => {
+  const t = new TestTable({ stacks: [500, 500, 500], config: { smallBlind: 7, bigBlind: 20, maxRuns: 3 } });
+  t.deal({ button: 0, holes: { 0: ACES, 2: KINGS }, board: BOARD, secondBoard: SECOND, thirdBoard: 'Qd Qc 6h 5s 4d' });
+  t.raise(0, 500);
+  t.fold(1);
+  t.call(2);
+  t.cmd(0, { type: 'ritVote', runs: 3 });
+  t.cmd(2, { type: 'ritVote', runs: 3 });
+
+  const facts = factsOf(t);
+
+  assert.deepEqual([facts.boards, facts.timesRun, facts.pot], [3, 3, 1007]);
+  assert.deepEqual(at(facts, 0).wins, [
+    { pot: 0, board: 0, amount: 336, between: 1, contested: true },
+    { pot: 0, board: 2, amount: 335, between: 1, contested: true },
+  ]);
+  assert.deepEqual(at(facts, 2).wins, [{ pot: 0, board: 1, amount: 336, between: 1, contested: true }]);
+  assert.deepEqual(at(facts, 0).shown.map((hand) => hand.board), [0, 1, 2]);
 });
 
 test('a double-board bomb pot: scooped, one player is paid on both boards; with a tie on one, that board is split', () => {
@@ -248,7 +268,7 @@ test('a double-board bomb pot: scooped, one player is paid on both boards; with 
 
   const scoop = factsOf(scooped);
 
-  assert.deepEqual([scoop.boards, scoop.runTwice, scoop.bombPot], [2, false, { amount: 100, boards: 2 }]);
+  assert.deepEqual([scoop.boards, scoop.timesRun, scoop.bombPot], [2, 1, { amount: 100, boards: 2 }]);
   assert.equal(scoop.pot, 500);
   assert.deepEqual(at(scoop, 0).wins, [{ pot: 0, board: 0, amount: 250, between: 1, contested: true }, { pot: 0, board: 1, amount: 250, between: 1, contested: true }]);
   assert.deepEqual(chips(scoop), [[200, 500, 300], [200, 0, -200], [100, 0, -100]]);
@@ -296,7 +316,7 @@ test('won with seven-deuce: the cards are a fact when the bounty turned them up,
 });
 
 test('a player who wins a side pot and loses it to the bounty is busted by whoever collected, and by nobody else', () => {
-  const t = new TestTable({ stacks: [80, 50, 1000], config: { smallBlind: 5, bigBlind: 10, sevenDeuceBounty: 100, allowRunItTwice: false } });
+  const t = new TestTable({ stacks: [80, 50, 1000], config: { smallBlind: 5, bigBlind: 10, sevenDeuceBounty: 100, maxRuns: 1 } });
   t.deal({ button: 0, holes: { 0: KINGS, 1: '7h 2s', 2: QUEENS }, board: '7c 2d 9h Jc 3s' });
   t.raise(0, 80);
   t.call(1);

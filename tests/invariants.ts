@@ -4,7 +4,7 @@
  */
 import assert from 'node:assert/strict';
 
-import { badgeOf, blindsOnly, BOARD_SIZE, boardsDealt, evaluateHand, FEED_LIMIT, FLOP_SIZE, handFacts, isStraddle, LIMITS, nightIsOver, owes, PLAYING_THE_BOARD, reaches, replayHand, roleOf, STRADDLES, STRADDLES_IN_A_ROW, straddlesAllowed, viewFor, wonAPot } from '../src/engine/index.ts';
+import { badgeOf, blindsOnly, BOARD_SIZE, boardsDealt, evaluateHand, FEED_LIMIT, FLOP_SIZE, handFacts, isStraddle, LIMITS, MOST_RUNS, nightIsOver, owes, PLAYING_THE_BOARD, reaches, replayHand, roleOf, STRADDLES, STRADDLES_IN_A_ROW, straddlesAllowed, viewFor, wonAPot } from '../src/engine/index.ts';
 import type { Effect, FeedEntry, HandPlayer, HandRecord, TableState } from '../src/engine/index.ts';
 import { CACHE_VALUE_BYTES, utf8Bytes } from '../src/gas/sheetStore.ts';
 import { restoreState } from '../src/server/store.ts';
@@ -208,6 +208,28 @@ export function assertBoardsHold(state: TableState): void {
 }
 
 /**
+ * A pick of how many times to run it is a number the game offers, made only by a player still in once
+ * the betting is over, and only in a hand on one board that nobody has yet decided to run out.
+ */
+export function assertPicksHold(state: TableState): void {
+  const hand = state.hand;
+  if (!hand) {
+    return;
+  }
+
+  for (const player of hand.players) {
+    const pick = player.ritVote;
+
+    assert.ok(pick === null || (Number.isInteger(pick) && pick >= 1 && pick <= MOST_RUNS), `${player.name} picked ${pick}`);
+    assert.ok(pick === null || (!player.folded && hand.stage !== 'betting' && hand.stage !== 'chop'), `${player.name} picked while the hand could not ask them`);
+  }
+
+  if (hand.stage === 'ritVote') {
+    assert.ok(hand.runs === 1 && hand.maxRuns > 1, `a hand on ${hand.runs} boards dealt to be run ${hand.maxRuns} times at most is asking how many times to run it`);
+  }
+}
+
+/**
  * An offer to chop stands only in a hand the blinds could chop, with the big blind on the clock to
  * answer it, and only once a hand. Nobody always chops at a table that doesn't chop.
  */
@@ -396,6 +418,7 @@ export function assertInvariants(state: TableState, now: number): void {
   assertStraddlesHold(state);
   assertBombPotsHold(state);
   assertBoardsHold(state);
+  assertPicksHold(state);
   assertNightHolds(state);
   assertNumbersHold(state);
   assertChopHolds(state);
@@ -547,6 +570,24 @@ export function assertBombPotIsPlayedAsOne(record: HandRecord): void {
 }
 
 /**
+ * A hand run out after players picked was run no more times than any of them picked, each picked at
+ * most once, and it ended on that many boards.
+ */
+export function assertRunAsPicked(record: HandRecord): void {
+  const picks = record.events.flatMap((event) => (event[0] === 'vote' ? [event] : []));
+  const runs = record.events.find((event) => event[0] === 'runs');
+  if (picks.length === 0 || !runs) {
+    return;
+  }
+
+  const where = `hand ${record.number}`;
+
+  assert.equal(new Set(picks.map((pick) => pick[1])).size, picks.length, `${where}: a player picked twice`);
+  assert.ok(picks.every((pick) => runs[1] <= pick[2]), `${where} was run ${runs[1]} times with picks of ${picks.map((pick) => pick[2])}`);
+  assert.equal(record.boards.length, runs[1], `${where} was run ${runs[1]} times and ended on ${record.boards.length} boards`);
+}
+
+/**
  * A chopped hand gave each blind back to the seat that posted it, the small blind and the big blind
  * and nothing else, and ended there: every stack as it was dealt, no pot, no winner, no bounty, nothing
  * shown, no flop. Only a chopped hand has a chop among its events.
@@ -596,6 +637,7 @@ export function assertHandRecordsHold(effects: Effect[]): number {
     assertEventsRetellTheHand(record);
     assertBombPotIsPlayedAsOne(record);
     assertBoardsShareThePots(record);
+    assertRunAsPicked(record);
     assertChopIsWhole(record);
   }
 

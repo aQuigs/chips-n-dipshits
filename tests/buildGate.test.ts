@@ -44,7 +44,7 @@ function changes(tableId: string, auth: Auth): ApiRequest[] {
     { op: 'act', tableId, auth, command: { type: 'check' } },
     { op: 'act', tableId, auth, command: { type: 'call' } },
     { op: 'act', tableId, auth, command: { type: 'raise', to: 100 } },
-    { op: 'act', tableId, auth, command: { type: 'ritVote', agree: true } },
+    { op: 'act', tableId, auth, command: { type: 'ritVote', runs: 2 } },
   ];
 }
 

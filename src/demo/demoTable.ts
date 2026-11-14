@@ -192,7 +192,7 @@ export function createDemoTable(options: DemoOptions = {}): DemoTable {
     }
 
     if (hand?.canVote) {
-      return { type: 'ritVote', agree: true };
+      return { type: 'ritVote', runs: hand.maxRuns };
     }
 
     if (hand?.canAnswerChop) {

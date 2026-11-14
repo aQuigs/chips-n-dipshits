@@ -272,7 +272,7 @@ class Page {
       seen: () => this.moving,
     };
     // Each sound asked for a long while after the last, so none is dropped for coming in a burst
-    const sounds = new Sounds({ play: (sound) => void this.heard.push(sound) }, prefs, { now: () => (this.soundClock += 60_000), inView: () => true });
+    const sounds = new Sounds({ now: () => (this.soundClock += 60), play: (sound) => void this.heard.push(sound) }, prefs, { inView: () => true });
     const turns = new YourTurn(new Attention(prefs, { ...ways, flash: this.flash }));
 
     this.wire = new Wire(server);
@@ -632,7 +632,7 @@ test('the last card of an all-in runout is held back from the view that confirms
       { name: 'Quigs', stack: 1000 },
       { name: 'Stu', stack: 1000 },
     ],
-    { allowRunItTwice: false },
+    { maxRuns: 1 },
   );
   server.deal({ button: 0, holes: { 0: ACES, 1: KINGS }, board: '2c 7d 9h Jc 3s' });
   server.act('Quigs', { type: 'call' });
@@ -676,7 +676,7 @@ test('a move shown early tells no badge: the badges of the hand it ends come fro
       { name: 'Quigs', stack: 1000 },
       { name: 'Stu', stack: 1000 },
     ],
-    { allowRunItTwice: false },
+    { maxRuns: 1 },
   );
   server.deal({ button: 0, holes: { 0: ACES, 1: KINGS }, board: '2c 7d 9h Jc 3s' });
   server.act('Quigs', { type: 'call' });
@@ -738,7 +738,7 @@ test('the hands’ chances are those of the cards face up: unchanged until a car
       { name: 'Quigs', stack: 1000 },
       { name: 'Stu', stack: 1000 },
     ],
-    { allowRunItTwice: false },
+    { maxRuns: 1 },
   );
   server.deal({ button: 0, holes: { 0: ACES, 1: KINGS }, board: '2c 7d 9h Jc 3s' });
   server.act('Quigs', { type: 'raise', to: 1000 });
@@ -1014,3 +1014,41 @@ for (const failure of FAILURES) {
     assert.equal(server.view('Quigs').seats[0]!.bet, failure.played ? 20 : 0, 'the server played it once, or not at all');
   });
 }
+
+test('a pick that ends the picking tells no badge: the hand it runs out comes from the server, and its badges once, in the view that clears it', async (t) => {
+  const server = new Server(
+    [
+      { name: 'Quigs', stack: 1000 },
+      { name: 'Stu', stack: 1000 },
+    ],
+    { maxRuns: 3 },
+  );
+  server.deal({ button: 0, holes: { 0: ACES, 1: KINGS }, board: '2c 7d 9h Jc 3s', secondBoard: '4d 8s Ts Qh 5c', thirdBoard: '6c 2h 3d 9s Th' });
+  server.act('Quigs', { type: 'call' });
+  server.act('Stu', { type: 'raise', to: 1000 });
+  server.act('Quigs', { type: 'call' });
+  server.act('Stu', { type: 'ritVote', runs: 3 });
+
+  const page = await pageOf(t, server, 'Quigs');
+  page.moving = true;
+  const before = page.told.length;
+  const told = () => page.told.slice(before).flatMap((change) => change.earned);
+
+  // Shown as sent and nothing more: the picking is still open on the page, and nothing is told
+  const sending = page.tap({ type: 'ritVote', runs: 3 });
+  assert.equal(page.view.hand!.stage, 'ritVote');
+  assert.deepEqual(told(), []);
+  await page.wire.answer('act');
+  await sending;
+
+  for (let steps = 0; server.view('Quigs').hand; steps++) {
+    assert.deepEqual(told(), [], 'a badge was told before the hand was cleared');
+    assert.ok(steps < 20, 'the hand was never cleared');
+
+    server.now = server.view('Quigs').hand!.deadline!;
+    await page.wire.answer('poll');
+    await page.land();
+  }
+
+  assert.deepEqual(told(), [{ id: 'bigPot', times: 1 }, { id: 'felted', times: 1 }, { id: 'scoop', times: 1 }]);
+});

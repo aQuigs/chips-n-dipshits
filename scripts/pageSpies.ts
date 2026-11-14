@@ -60,13 +60,15 @@ export const ownComplaints = (said: string[]) => said.filter((line) => !line.sta
 
 /** The move a request carries, by name; null for any other request. */
 export function moveIn(request: Request): string | null {
-  const body = JSON.parse(request.postData() ?? '{}') as { op?: string; command?: { type: string; agree?: boolean } };
+  const body = JSON.parse(request.postData() ?? '{}') as { op?: string; command?: { type: string; agree?: boolean; runs?: number } };
 
   if (body.op !== 'act' || !body.command || !MOVES.has(body.command.type as Command['type'])) {
     return null;
   }
 
-  return body.command.agree === undefined ? body.command.type : `${body.command.type} ${body.command.agree}`;
+  const answer = body.command.agree ?? body.command.runs;
+
+  return answer === undefined ? body.command.type : `${body.command.type} ${answer}`;
 }
 
 /** The moves a page sends from now on, in order, whatever becomes of them on the way. */

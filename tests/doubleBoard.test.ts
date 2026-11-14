@@ -64,7 +64,7 @@ test('a double-board bomb pot: two flops are dealt as the hand starts, each stre
 
   checkAround(t, [1, 2, 0], 1);
   assert.equal(hand.stage, 'done');
-  assert.equal(hand.deadline, t.now + TIMING.runTwicePauseMs, 'two boards get the longer look that a hand run twice gets');
+  assert.equal(hand.deadline, t.now + TIMING.boardsPauseMs, 'two boards get the longer look that a hand run twice gets');
   assertChipsConserved(t.state);
 
   t.finishHand();
@@ -171,7 +171,7 @@ test('double board: a side pot is split between the boards like the main pot, ea
 });
 
 test('double board: with everyone all in on the posts both boards are dealt out together, a street at a time, and nobody is asked to run it twice', () => {
-  const t = doubleBoard({ stacks: [100, 60, 100], config: { allowRunItTwice: true } }, { holes: { 0: QUEENS, 1: ACES, 2: KINGS } });
+  const t = doubleBoard({ stacks: [100, 60, 100], config: { maxRuns: 2 } }, { holes: { 0: QUEENS, 1: ACES, 2: KINGS } });
   const hand = t.state.hand!;
 
   assert.deepEqual(hand.log.slice(1), [
@@ -185,7 +185,7 @@ test('double board: with everyone all in on the posts both boards are dealt out 
   ]);
   assert.deepEqual([hand.stage, hand.runs, hand.toAct], ['runout', 2, null], 'the boards are two already, so there is no vote');
   assert.ok([0, 1, 2].every((seat) => !t.view(seat).hand!.canVote));
-  assert.throws(() => t.cmd(0, { type: 'ritVote', agree: true }), { name: 'GameError', message: 'There is no run-it-twice vote for you right now' });
+  assert.throws(() => t.cmd(0, { type: 'ritVote', runs: 2 }), { name: 'GameError', message: 'There is nothing to pick for you right now' });
   assert.deepEqual(hand.events.at(-1), ['runs', 2]);
   assertInvariants(t.state, t.now);
 
@@ -333,7 +333,7 @@ test('one board or two is settled when the bomb pot is dealt: a change waits for
 });
 
 test('a bomb pot on one board is played as before at a table that could play two, and so is a called one that comes by count', () => {
-  const t = new TestTable({ stacks: [1000, 1000, 1000], config: { bombPotBoards: 'one', allowRunItTwice: true } });
+  const t = new TestTable({ stacks: [1000, 1000, 1000], config: { bombPotBoards: 'one', maxRuns: 2 } });
   t.cmd(0, { type: 'setBombPot', on: true });
   t.deal({ button: 0, holes: { 0: ACES, 1: KINGS, 2: QUEENS }, board: BOARD });
   const hand = t.state.hand!;
@@ -361,7 +361,7 @@ test('a bomb pot on one board is played as before at a table that could play two
 });
 
 test('an ordinary hand at a table that plays double-board bomb pots is on one board, and is run twice as before: one board after the other', () => {
-  const t = new TestTable({ stacks: [500, 500], config: { bombPotBoards: 'two', allowRunItTwice: true } });
+  const t = new TestTable({ stacks: [500, 500], config: { bombPotBoards: 'two', maxRuns: 2 } });
   t.deal({ button: 0, holes: { 0: ACES, 1: KINGS }, board: BOARD, secondBoard: SECOND });
   const hand = t.state.hand!;
 
@@ -370,13 +370,13 @@ test('an ordinary hand at a table that plays double-board bomb pots is on one bo
   t.call(1);
   assert.equal(hand.stage, 'ritVote');
 
-  t.cmd(0, { type: 'ritVote', agree: true });
-  t.cmd(1, { type: 'ritVote', agree: true });
+  t.cmd(0, { type: 'ritVote', runs: 2 });
+  t.cmd(1, { type: 'ritVote', runs: 2 });
   assert.deepEqual([hand.stage, hand.runs, hand.boards], ['runout', 2, [[]]]);
 
   t.runToResult();
   assert.deepEqual(hand.log.slice(-9), [
-    'Everyone agreed to run it twice',
+    'Everyone agreed: running it twice',
     'First board, Flop: 2♣ 7♦ 9♥',
     'First board, Turn: 2♣ 7♦ 9♥ J♣',
     'First board, River: 2♣ 7♦ 9♥ J♣ 3♠',
@@ -451,7 +451,7 @@ test('over random double-board hands no chip is made or lost, and each board\'s 
       bombPotBoards: 'two',
       bombPotEvery: 1,
       bombPotAmount: 1 + rng.int(150),
-      allowRunItTwice: chance(rng, 50),
+      maxRuns: chance(rng, 50) ? 3 : 1,
       sevenDeuceBounty: chance(rng, 30) ? 25 : 0,
     };
 

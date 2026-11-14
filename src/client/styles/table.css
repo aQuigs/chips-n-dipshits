@@ -68,10 +68,15 @@
   width: 52%;
 }
 
-/* Two boards take smaller cards, so that with the pot under them they still fit between the bets */
+/* Two boards take smaller cards, so that with the pot under them they still fit between the bets, and three smaller still */
 .table[data-boards='2'] {
   --boards: 2;
   --board-card-w: clamp(20px, 5.4cqmin, 42px);
+}
+
+.table[data-boards='3'] {
+  --boards: 3;
+  --board-card-w: clamp(16px, 4.4cqmin, 34px);
 }
 
 .boards {
@@ -129,4 +134,31 @@
 /* Under more than one board the result has less of the table to itself, so its lines sit closer */
 .table:not([data-boards='1']) .message.result {
   line-height: 1.25;
+}
+
+/* Under three boards a phone's felt has room for fewer lines, so the result is set smaller and tighter to keep clear of the seats */
+.table[data-boards='3'] .message.result {
+  font-size: 0.92em;
+  line-height: 1.15;
+}
+
+/* Three boards with the pot under them reach the viewer's cards on a phone, while the felt has room to spare above them */
+.table[data-boards='3'] .center {
+  top: 47.5%;
+}
+
+/*
+ * Lying on a phone, three boards, the pot and the viewer's hand named for each board leave no room for
+ * the pots one by one; by then everyone is all in and nothing is left to bet, and the result says who
+ * won which.
+ */
+@container (max-height: 350px) {
+  .table.wide[data-boards='3'] .sidepots {
+    display: none;
+  }
+
+  /* The hint's line a board lifts the viewer's cards higher still */
+  .table.wide[data-boards='3']:has(.seat.me .hint.per-board) .center {
+    top: 45%;
+  }
 }

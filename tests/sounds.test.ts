@@ -22,9 +22,10 @@ class Ears {
   readonly sounds: Sounds;
 
   constructor() {
-    const maker: SoundMaker = { play: (sound, volume, delay) => void this.played.push({ sound, volume, delay }) };
+    // The delay to the microsecond, as sums of seconds round
+    const maker: SoundMaker = { now: () => this.now / 1000, play: (sound, volume, at) => void this.played.push({ sound, volume, delay: Math.round((at - this.now / 1000) * 1e6) / 1e6 }) };
 
-    this.sounds = new Sounds(maker, this.prefs, { now: () => this.now, inView: () => this.inView });
+    this.sounds = new Sounds(maker, this.prefs, { inView: () => this.inView });
   }
 
   /** What the hand-sounds effect does with a change. */
@@ -78,7 +79,7 @@ const BY_SOMEONE_ELSE: [HandEvent, SoundName | null][] = [
   [['return', 1, 200], null],
   [['street', 0, ['As', 'Kd', '2c']], 'street'],
   [['street', 1, ['9h']], 'street'],
-  [['vote', 1, true], null],
+  [['vote', 1, 3], null],
   [['runs', 2], null],
   [['show', 1, ['7d', '2s']], null],
   [['muck', 1], null],
@@ -149,7 +150,7 @@ test('a hand plays its deal, its moves, its streets and its result as they come'
 });
 
 test('a hand run twice deals every street of both boards with its own sound, and the pot after the last', () => {
-  const table = new TestTable({ stacks: [1000, 1000], config: { allowRunItTwice: true } });
+  const table = new TestTable({ stacks: [1000, 1000], config: { maxRuns: 2 } });
   const page = new Page(table, 1);
 
   table.deal({ button: 0, holes: { 0: 'As Ah', 1: 'Kd Kc' }, board: '3c 8d Jh Qs 4d', secondBoard: '2c 5h 9s 6d 7c' });
@@ -158,8 +159,8 @@ test('a hand run twice deals every street of both boards with its own sound, and
   assert.deepEqual(page.arrive(), ['allIn']);
   table.call(1);
   page.arrive();
-  table.cmd(0, { type: 'ritVote', agree: true });
-  table.cmd(1, { type: 'ritVote', agree: true });
+  table.cmd(0, { type: 'ritVote', runs: 2 });
+  table.cmd(1, { type: 'ritVote', runs: 2 });
   page.arrive();
 
   const heard: SoundName[][] = [];
@@ -346,4 +347,20 @@ test('out of sight, only the chime that calls the player back plays', () => {
   ears.sounds.play('turn');
 
   assert.deepEqual(ears.played.map((played) => played.sound), ['turn']);
+});
+
+test('sounds asked for together start one gap apart on the clock that plays them, though it moves in steps the page clock does not', () => {
+  // The audio clock moves a step of a render at a time, and a busy page takes a while between two sounds
+  const audio = { now: 4 };
+  const starts: number[] = [];
+  const maker: SoundMaker = { now: () => audio.now, play: (_sound, _volume, at) => void starts.push(at) };
+  const sounds = new Sounds(maker, new Preferences(PREFERENCES, mapMemory()), { inView: () => true });
+
+  sounds.play('deal');
+  audio.now += 0.003;
+  sounds.play('street');
+
+  const dealLasts = Math.max(...RECIPES.deal.map((voice) => voice.at + voice.length));
+  assert.ok(starts[1]! - starts[0]! >= dealLasts, `the flop starts ${(starts[1]! - starts[0]!).toFixed(3)} s after the deal, which lasts ${dealLasts} s`);
+  assert.ok(Math.abs(starts[1]! - starts[0]! - SOUND_GAP_MS / 1000) < 1e-9, 'the flop starts one gap after the deal');
 });

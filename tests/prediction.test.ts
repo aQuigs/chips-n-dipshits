@@ -277,7 +277,7 @@ test('a move the view does not offer is not predicted', () => {
   assert.equal(predict(watcher, { type: 'fold' }), null, 'a move by someone only watching');
 
   assert.equal(isTurnMove({ type: 'raise', to: 40 }), true);
-  assert.equal(isTurnMove({ type: 'ritVote', agree: true }), false, 'a vote on running it twice answers no decision of a turn');
+  assert.equal(isTurnMove({ type: 'ritVote', runs: 2 }), false, 'a vote on running it twice answers no decision of a turn');
   assert.equal(isTurnMove({ type: 'chat', text: 'hi' }), false);
 });
 

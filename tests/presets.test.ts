@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { DEFAULT_CONFIG, fromPreset, matchingPreset, newConfig, PRESET_KEYS, presetSettings, startingConfig } from '../src/engine/index.ts';
+import { DEFAULT_CONFIG, fromPreset, matchingPreset, newConfig, PRESET_KEYS, presetSettings, sharedPreset, startingConfig } from '../src/engine/index.ts';
 import type { TableConfig } from '../src/engine/index.ts';
 import type { ApiResponse, Auth } from '../src/server/api.ts';
 import { BuildGate } from '../src/server/build.ts';
@@ -49,6 +49,23 @@ test('a preset saved before a setting existed gives it the value a new table sta
   assert.equal(used.config.maxBuyIn, startingConfig({ unit: 'cents' }).maxBuyIn, 'what dollars and cents suggests, not the whole-chip default');
   assert.equal(used.config.smallBlind, 10);
   assert.deepEqual(newConfig(used.config), used.config);
+});
+
+test('a preset saved when run it twice was a switch runs it as it did: on is up to twice and off is once only, and a value of the new setting saved beside it wins', () => {
+  const { maxRuns: _runs, ...beforeThree } = kept({});
+
+  for (const [on, runs] of [[true, 2], [false, 1]] as const) {
+    const saved = { ...beforeThree, allowRunItTwice: on };
+    const used = fromPreset(saved);
+
+    assert.deepEqual(used.notes, []);
+    assert.equal(used.config.maxRuns, runs);
+    assert.ok(!('allowRunItTwice' in used.config));
+    assert.equal(fromPreset(sharedPreset({ name: 'Old', settings: saved }).settings).config.maxRuns, runs, 'as the page has it from the server');
+  }
+
+  assert.equal(fromPreset(beforeThree).config.maxRuns, 3, 'a preset older than either starts where a new table does');
+  assert.equal(fromPreset({ ...beforeThree, allowRunItTwice: true, maxRuns: 3 }).config.maxRuns, 3);
 });
 
 test('a preset saved when there was one kind of straddle plays as it did: under the gun if it allowed that, and no other kind', () => {

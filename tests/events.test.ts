@@ -112,14 +112,14 @@ test('a hand can be followed one event at a time from its events alone', () => {
 });
 
 test('side pots, both boards of a hand run twice and every vote are in the events', () => {
-  const t = new TestTable({ stacks: [300, 1000, 1000], config: { allowRunItTwice: true } });
+  const t = new TestTable({ stacks: [300, 1000, 1000], config: { maxRuns: 2 } });
   t.deal({ button: 0, holes: { 0: 'As Ah', 1: 'Kd Kh', 2: 'Qc Qs' }, board: 'Ks 7s 2h 3c 4d', secondBoard: 'Ac Qd 8h 5c 6s' });
 
   t.raise(0, 300);
   t.raise(1, 1000);
   t.call(2);
   for (const voter of [0, 1, 2]) {
-    t.cmd(voter, { type: 'ritVote', agree: true });
+    t.cmd(voter, { type: 'ritVote', runs: 2 });
   }
 
   const record = recordOf(t);
@@ -131,9 +131,9 @@ test('side pots, both boards of a hand run twice and every vote are in the event
     ['show', 0, ['As', 'Ah']],
     ['show', 1, ['Kd', 'Kh']],
     ['show', 2, ['Qc', 'Qs']],
-    ['vote', 0, true],
-    ['vote', 1, true],
-    ['vote', 2, true],
+    ['vote', 0, 2],
+    ['vote', 1, 2],
+    ['vote', 2, 2],
     ['runs', 2],
     ['street', 0, ['Ks', '7s', '2h']],
     ['street', 0, ['3c']],
@@ -151,12 +151,12 @@ test('side pots, both boards of a hand run twice and every vote are in the event
 });
 
 test('a vote against, a timeout, a muck and a bounty each leave their event', () => {
-  const declined = new TestTable({ stacks: [500, 500], config: { allowRunItTwice: true } });
+  const declined = new TestTable({ stacks: [500, 500], config: { maxRuns: 2 } });
   declined.deal({ button: 0, holes: { 0: 'As Ah', 1: 'Kd Kh' }, board: 'Ks 7s 2h 3c 4d' });
   declined.raise(0, 500);
   declined.call(1);
-  declined.cmd(1, { type: 'ritVote', agree: false });
-  assert.deepEqual(declined.state.hand!.events.slice(-2), [['vote', 1, false], ['runs', 1]]);
+  declined.cmd(1, { type: 'ritVote', runs: 1 });
+  assert.deepEqual(declined.state.hand!.events.slice(-2), [['vote', 1, 1], ['runs', 1]]);
   assertEventsRetellTheHand(recordOf(declined));
 
   const slow = new TestTable({ stacks: [500, 500, 500], config: { actionSeconds: 10 } });
@@ -223,15 +223,15 @@ function longestRecordedHand(): TestTable {
   const pairs = ['As Ah', 'Ks Kh', 'Qs Qh', 'Js Jh', 'Ts Th', '9c 9d', '8c 8d', '7c 7d', '6c 6d', '5c 5d'];
   const names = pairs.map((_pair, seat) => `${'W'.repeat(LIMITS.nameLength - 1)}${seat}`);
   const stacks = pairs.map((_pair, seat) => LIMITS.chips - 10 * seat);
-  const t = new TestTable({ stacks, names, config: { maxBuyIn: LIMITS.chips, allowRunItTwice: true, smallBlind: 1, bigBlind: 2 } });
+  const t = new TestTable({ stacks, names, config: { maxBuyIn: LIMITS.chips, maxRuns: 3, smallBlind: 1, bigBlind: 2 } });
 
   while (t.state.members.length < LIMITS.members) {
     addMember(t.state, `${'好'.repeat(LIMITS.nameLength - 2)}${t.state.members.length}`, t.ctx());
   }
 
-  t.deal({ button: 0, holes: Object.fromEntries(pairs.entries()), board: '2c 3d 4h 9s Jc', secondBoard: 'Kd Qd 8s 3c 2h' });
+  t.deal({ button: 0, holes: Object.fromEntries(pairs.entries()), board: '2c 3d 4h 9s Jc', secondBoard: 'Kd Qd 8s 3c 2h', thirdBoard: 'Ad 6s 4c Td 7h' });
 
-  // What the hand still has to tell once the raising stops: everyone's last bet, cards and vote, both boards and every pot
+  // What the hand still has to tell once the raising stops: everyone's last bet, cards and pick, three boards and every pot on each
   const ending = 70;
   const act = (raiseTo: 'minRaiseTo' | 'maxRaiseTo') => {
     const options = t.view(t.toAct!).hand!.options!;
@@ -252,13 +252,13 @@ function longestRecordedHand(): TestTable {
   }
 
   for (let voter = 0; voter < 10; voter++) {
-    t.cmd(voter, { type: 'ritVote', agree: true });
+    t.cmd(voter, { type: 'ritVote', runs: 3 });
   }
 
   return t;
 }
 
-test('the longest hand that is recorded fits its cell in the Hands tab with room to spare, and its table fits the cache', () => {
+test('the longest hand that is recorded, ten-handed and run three times, fits its cell in the Hands tab with room to spare, and its table fits the cache', () => {
   const t = longestRecordedHand();
   assertInvariants(t.state, t.now);
 
@@ -267,7 +267,7 @@ test('the longest hand that is recorded fits its cell in the Hands tab with room
   const events = JSON.stringify(record.events).length;
 
   assert.ok(record.events.length > EVENT_LIMIT - 20, `the hand has ${record.events.length} events, well short of the ${EVENT_LIMIT} a hand may have`);
-  assert.ok(record.result.pots.length === 9 && record.boards.length === 2);
+  assert.ok(record.result.pots.length === 9 && record.boards.length === 3);
   assertRecordBalances(record);
   assertEventsRetellTheHand(record);
 
@@ -341,13 +341,13 @@ test('each ante is an event that puts its chips straight in the pot, and the fir
 });
 
 test('a hand with antes replays to its final stacks, through side pots, two boards and an ante that came back unmatched', () => {
-  const twice = new TestTable({ stacks: [100, 500, 500], config: { ante: 25, anteFrom: 'bigBlind', allowRunItTwice: true } });
+  const twice = new TestTable({ stacks: [100, 500, 500], config: { ante: 25, anteFrom: 'bigBlind', maxRuns: 2 } });
   twice.deal({ button: 0, holes: { 0: 'As Ah', 1: 'Ks Kh', 2: 'Qs Qh' }, board: '2c 7d 9h Jc 3s', secondBoard: 'Qd 4c 5h 8s Td' });
   twice.raise(0, 100);
   twice.raise(1, 500);
   twice.call(2);
   for (const voter of [0, 1, 2]) {
-    twice.cmd(voter, { type: 'ritVote', agree: true });
+    twice.cmd(voter, { type: 'ritVote', runs: 2 });
   }
 
   const record = recordOf(twice);
@@ -429,7 +429,7 @@ test('a bomb pot says so in its first event, and is told as what everyone posted
 });
 
 test('a bomb pot that is all in when dealt replays through what came back, a second board and every pot', () => {
-  const t = new TestTable({ stacks: [1000, 60, 50], config: { allowRunItTwice: true } });
+  const t = new TestTable({ stacks: [1000, 60, 50], config: { maxRuns: 2 } });
   t.cmd(0, { type: 'setBombPot', on: true });
   t.deal({ button: 0, holes: { 0: 'Qs Qh', 1: 'Ks Kh', 2: 'As Ah' }, board: '2c 7d 9h Jc 3s', secondBoard: 'Kd 4c' });
 
@@ -451,7 +451,7 @@ test('a bomb pot that is all in when dealt replays through what came back, a sec
   assert.deepEqual(returned.seats.map((seat) => [seat.stack, seat.bet]), [[940, 0], [0, 0], [0, 0]]);
 
   for (const voter of [0, 1, 2]) {
-    t.cmd(voter, { type: 'ritVote', agree: true });
+    t.cmd(voter, { type: 'ritVote', runs: 2 });
   }
 
   const record = recordOf(t);

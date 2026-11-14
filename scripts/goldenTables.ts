@@ -26,7 +26,7 @@ import { TestTable } from '../tests/helpers.ts';
 
 const OUT = fileURLToPath(new URL('../tests/fixtures/tables/', import.meta.url));
 
-const CONFIG: Partial<TableConfig> = { minBuyIn: 400, maxBuyIn: 2000, actionSeconds: 30, allowRunItTwice: true, sevenDeuceBounty: 25 };
+const CONFIG: Partial<TableConfig> = { minBuyIn: 400, maxBuyIn: 2000, actionSeconds: 30, maxRuns: 2, sevenDeuceBounty: 25 };
 
 function table(stacks: number[], seed: number, config: Partial<TableConfig> = {}): TestTable {
   return new TestTable({ stacks, config: { ...CONFIG, ...config }, seed });
@@ -85,7 +85,7 @@ function runItTwiceVote(): TestTable {
   t.raise(0, 940);
   t.fold(1);
   t.call(2);
-  t.cmd(0, { type: 'ritVote', agree: true });
+  t.cmd(0, { type: 'ritVote', runs: 2 });
 
   return t;
 }
@@ -94,10 +94,25 @@ function runItTwiceVote(): TestTable {
 function runoutOnTwoBoards(): TestTable {
   const t = runItTwiceVote();
 
-  t.cmd(2, { type: 'ritVote', agree: true });
+  t.cmd(2, { type: 'ritVote', runs: 2 });
   for (let step = 0; step < 3; step++) {
     t.wait(TIMING.runoutStepMs);
   }
+
+  return t;
+}
+
+/** Two players all in before the flop at a table that never runs it twice: the flop is out and the turn is to come. */
+function runoutWithRunItTwiceOff(): TestTable {
+  const t = table([1000, 1000, 1000], 37, { maxRuns: 1 });
+
+  t.cmd(0, { type: 'start' });
+  t.deal({ button: 0, holes: { 0: 'As Ah', 1: '9c 8c', 2: 'Kd Kh' }, board: 'Ks 7s 2d 3c 4h' });
+
+  t.raise(0, 1000);
+  t.fold(1);
+  t.call(2);
+  t.wait(TIMING.runoutStepMs);
 
   return t;
 }
@@ -181,6 +196,15 @@ const SETS: TableSet[] = [
     schema: 3,
     tables: {
       'with-straddle-and-missed-blinds': bettingWithStraddleAndMissedBlinds,
+    },
+  },
+  // Schema 4 as it ended: the last code for which running it more than once was a yes or no to running it twice
+  {
+    schema: 4,
+    tables: {
+      'run-it-twice-vote': runItTwiceVote,
+      'runout-two-boards': runoutOnTwoBoards,
+      'runout-run-it-twice-off': runoutWithRunItTwiceOff,
     },
   },
 ];

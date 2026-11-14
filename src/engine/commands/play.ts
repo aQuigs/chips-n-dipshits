@@ -1,13 +1,14 @@
 /*
  * What a player does in the hand on the table. Any member may send these: whether it is their turn,
- * their vote or their cards to show is for the hand to say, in its own words.
+ * their pick of how many times to run it or their cards to show is for the hand to say, in its own words.
  */
 import type { BettingAction } from '../betting.ts';
-import { act, answerChop as answerChopIn, offerChop as offerChopIn, showCards as showCardsOf, voteRunItTwice } from '../hand.ts';
+import { act, answerChop as answerChopIn, offerChop as offerChopIn, pickRuns, showCards as showCardsOf } from '../hand.ts';
+import { MOST_RUNS } from '../runVote.ts';
 import { seatIndexOf } from '../seats.ts';
 import { GameError } from '../types.ts';
 import type { Ctx, Member, TableState } from '../types.ts';
-import { yesOrNo } from '../validate.ts';
+import { wholeNumber, yesOrNo } from '../validate.ts';
 import type { Handler } from './handler.ts';
 
 /** The decision an action says it answers. Left out, the action is for whichever decision is open. */
@@ -47,7 +48,7 @@ export const answerChop: Handler<'answerChop'> = {
 
 export const ritVote: Handler<'ritVote'> = {
   by: 'member',
-  run: ({ state, ctx, member, command }) => voteRunItTwice(state, ctx, seatIndexOf(state, member.id), yesOrNo(command.agree, 'Your vote')),
+  run: ({ state, ctx, member, command }) => pickRuns(state, ctx, seatIndexOf(state, member.id), wholeNumber(command.runs, 'How many times to run it', 1, MOST_RUNS)),
 };
 
 export const showCards: Handler<'showCards'> = {

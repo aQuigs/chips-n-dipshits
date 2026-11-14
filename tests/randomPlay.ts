@@ -1,7 +1,7 @@
 /* Random play on a test table: what the simulation runs, and what plays a saved table on after it is read back. */
 import assert from 'node:assert/strict';
 
-import { addMember, CONFIG_KEYS, LIMITS, mayOfferChop, nextDeadline, owes, SEAT_COUNT, straddlesAllowed, viewFor } from '../src/engine/index.ts';
+import { addMember, CONFIG_KEYS, LIMITS, mayOfferChop, MOST_RUNS, nextDeadline, owes, SEAT_COUNT, straddlesAllowed, viewFor } from '../src/engine/index.ts';
 import type { Command, GameError, Rng } from '../src/engine/index.ts';
 import type { TestTable } from './helpers.ts';
 import { randomConfig } from './randomConfig.ts';
@@ -126,7 +126,8 @@ export const FUZZ_COMMANDS: ((fuzz: Fuzz) => void)[] = [
   },
   // Called more often than taken back, so that some are dealt
   ({ t, rng }) => attempt(t, chance(rng, 80) ? someoneRunningTheGame(t, rng) : rng.int(t.ids.length), { type: 'setBombPot', on: chance(rng, 75) }),
-  ({ t, rng, who }) => attempt(t, who, { type: 'ritVote', agree: chance(rng, 70) }),
+  // Past what any table allows too, which must be refused
+  ({ t, rng, who }) => attempt(t, who, { type: 'ritVote', runs: rng.int(MOST_RUNS + 2) }),
 
   // The last hands are called, changed and called off, the night is ended outright, and play is started again after it
   ({ t, rng }) => attempt(t, chance(rng, 85) ? someoneRunningTheGame(t, rng) : rng.int(t.ids.length), { type: 'setLastHands', hands: chance(rng, 50) ? null : rng.int(LIMITS.lastHands + 1), from: Math.max(0, t.state.handCount - rng.int(2)) }),
@@ -237,7 +238,11 @@ export function randomStep(t: TestTable, rng: Rng): void {
 
   if (hand?.stage === 'ritVote' && chance(rng, 70)) {
     const voter = hand.players.find((p) => !p.folded && p.ritVote === null)!;
-    t.cmd(seatOwnerIndex(t, voter.seat), { type: 'ritVote', agree: chance(rng, 85) });
+    const cap = t.state.config.maxRuns;
+    const roll = rng.int(100);
+
+    // The most the table allows more often than not, since running it that many times takes everyone picking it
+    t.cmd(seatOwnerIndex(t, voter.seat), { type: 'ritVote', runs: roll < 15 ? 1 : roll < 85 ? cap : 1 + (roll % cap) });
     return;
   }
 

@@ -221,12 +221,12 @@ test('a chop is never taken for an all-in runout, though the big blind is all in
 });
 
 test('run twice, each board’s last card is turned in the view that brings it: the first alone, the second with the result after it', () => {
-  const { t, page } = dealt([1000, 1000], { 0: ACES, 1: KINGS }, { allowRunItTwice: true }, '2c 7d 9h Jc 3s', 'Kd 4c 5h 8s Td');
+  const { t, page } = dealt([1000, 1000], { 0: ACES, 1: KINGS }, { maxRuns: 2 }, '2c 7d 9h Jc 3s', 'Kd 4c 5h 8s Td');
 
   t.raise(0, 1000);
   t.call(1);
-  t.cmd(0, { type: 'ritVote', agree: true });
-  t.cmd(1, { type: 'ritVote', agree: true });
+  t.cmd(0, { type: 'ritVote', runs: 2 });
+  t.cmd(1, { type: 'ritVote', runs: 2 });
   const changes = runOut(t, page);
   const held = changes.map((change) => sweatOf(change));
 
@@ -339,7 +339,7 @@ test('every color of confetti stands out from every color of every theme’s fel
 
 test('the hold fits the pause before the next hand at its shortest, and shrinks to fit a shorter one or is left out', () => {
   // The shortest pause a hand that was run out is left on
-  const shortest = Math.min(TIMING.showdownPauseMs, TIMING.runTwicePauseMs);
+  const shortest = Math.min(TIMING.showdownPauseMs, TIMING.boardsPauseMs);
   assert.ok(MOST_SWEAT_MS + AFTER_SWEAT_MS <= shortest);
 
   const result = allInPreflop(1000).at(-1)!;

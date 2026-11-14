@@ -17,8 +17,10 @@ export interface DealOptions {
   holes?: Record<number, string>;
   /** Community cards in the order they come out. */
   board?: string;
-  /** The extra cards the second board gets when the hand is run twice, or all the cards of the second board of a hand dealt on two. */
+  /** The extra cards the second board gets when the hand is run more than once, or all the cards of the second board of a hand dealt on two. */
   secondBoard?: string;
+  /** The extra cards the third board gets when the hand is run three times. */
+  thirdBoard?: string;
 }
 
 export interface TableOptions {
@@ -51,8 +53,8 @@ function streetByStreet(boards: Card[][]): Card[] {
 /** Replaces the cards of a hand just dealt with the ones `options` names. */
 export function fixCards(hand: Hand, options: DealOptions): void {
   const holes = options.holes ?? {};
-  const boards = [cards(options.board ?? ''), cards(options.secondBoard ?? '')];
-  // A hand dealt on two boards takes each street for both; a second board that comes with running it twice follows the whole first
+  const boards = [options.board, options.secondBoard, options.thirdBoard].map((board) => cards(board ?? '')).filter((board, nth) => nth === 0 || board.length > 0);
+  // A hand dealt on two boards takes each street for both; a board that comes with running it again follows the whole one before
   const upcoming = hand.runs > 1 ? streetByStreet(boards) : boards.flat();
   const given = [...Object.values(holes).flatMap(cards), ...upcoming];
   const fixed = new Set(given);
@@ -125,7 +127,7 @@ export class TestTable {
   constructor(options: TableOptions) {
     this.rng = seededRng(options.seed ?? 1);
 
-    const config = { minBuyIn: 1, maxBuyIn: 1_000_000, actionSeconds: 0, allowRunItTwice: false, ...options.config };
+    const config = { minBuyIn: 1, maxBuyIn: 1_000_000, actionSeconds: 0, maxRuns: 1, ...options.config };
     const name = (seat: number) => options.names?.[seat] ?? `P${seat}`;
     const { state, host } = createTable('TEST01', name(0), config, this.ctx());
     this.state = state;

@@ -174,7 +174,7 @@ test('only the host or a co-host calls the last hands or ends the night: a seate
 
 test('the count goes down as each hand dealt is finished, whatever the hand was, and the last one ends the night', () => {
   // Paused, so that each hand is the one dealt here
-  const t = new TestTable({ stacks: [1000, 1000, 1000], config: { allowRunItTwice: true } });
+  const t = new TestTable({ stacks: [1000, 1000, 1000], config: { maxRuns: 2 } });
   t.cmd(HOST, { type: 'setLastHands', hands: 5 });
 
   t.deal({ button: 0 });
@@ -214,7 +214,7 @@ test('the count goes down as each hand dealt is finished, whatever the hand was,
     t.call(t.toAct!);
   }
   for (const player of t.state.hand!.players.filter((p) => !p.folded)) {
-    t.cmd(t.ids.indexOf(player.playerId), { type: 'ritVote', agree: true });
+    t.cmd(t.ids.indexOf(player.playerId), { type: 'ritVote', runs: 2 });
   }
   t.runToResult();
   assert.equal(t.state.hand!.runs, 2);

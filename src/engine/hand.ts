@@ -14,6 +14,8 @@ import { planHand, takeUp } from './handPlan.ts';
 import { playerHand } from './handRank.ts';
 import type { HandValue } from './handRank.ts';
 import { buildPots, splitAmount } from './pots.ts';
+import { timesText, timesToRun, voteStory } from './runVote.ts';
+import type { Unpicked } from './runVote.ts';
 import { addFeed, clockwiseAfter, clockwiseFrom, eligibleSeats, seatsClockwiseAfter } from './seats.ts';
 import { stakesText } from './stakes.ts';
 import { GameError } from './types.ts';
@@ -27,7 +29,8 @@ export const TIMING = {
   runoutStepMs: 1800,
   uncontestedPauseMs: 3500,
   showdownPauseMs: 7000,
-  runTwicePauseMs: 10000,
+  /** After a showdown on more than one board, which takes longer to read. */
+  boardsPauseMs: 10000,
 };
 
 const HOLE_CARDS = 2;
@@ -40,7 +43,7 @@ const LOG_GAP = '… a long stretch of the action is left out …';
 const STREET_TITLES: Record<Street, string> = { preflop: 'Preflop', flop: 'Flop', turn: 'Turn', river: 'River' };
 
 /** What the play-by-play calls each board of a hand played on several. */
-const BOARD_NAMES = ['First board', 'Second board'];
+const BOARD_NAMES = ['First board', 'Second board', 'Third board'];
 
 function narrate(state: TableState, ctx: Ctx, text: string): void {
   addFeed(state, ctx.now, 'dealer', null, text);
@@ -230,6 +233,7 @@ export function startHand(state: TableState, ctx: Ctx): void {
     straddles: plan.straddles,
     passedOver: plan.passedOver,
     bounty: sevenDeuceBounty,
+    maxRuns: state.config.maxRuns,
     bombPot,
     chopOffered: false,
     deck,
@@ -646,8 +650,7 @@ export function stopWaitingFor(state: TableState, ctx: Ctx, seatIndex: number): 
   } else if (hand.stage === 'chop' && hand.toAct === seatIndex) {
     settleChop(state, ctx, player, state.seats[seatIndex]!.alwaysChop, false);
   } else if (hand.stage === 'ritVote' && !player.folded && player.ritVote === null) {
-    narrate(state, ctx, `${player.name} left without voting, so it runs once`);
-    startRunout(state, ctx, 1);
+    endVote(state, ctx, { why: 'left', name: player.name });
   }
 }
 
@@ -663,9 +666,9 @@ function beginRunout(state: TableState, ctx: Ctx): void {
     }
   }
 
-  // A second board is offered only to a hand on one: boards dealt apart from the start are already two
+  // Running it more than once is offered only to a hand on one board: boards dealt apart from the start are simply dealt out
   const everyoneCanVote = live.every((p) => !state.seats[p.seat]!.away && !state.seats[p.seat]!.leaving);
-  if (hand.runs === 1 && state.config.allowRunItTwice && everyoneCanVote) {
+  if (hand.runs === 1 && hand.maxRuns > 1 && everyoneCanVote) {
     hand.stage = 'ritVote';
     hand.deadline = ctx.now + TIMING.ritVoteMs;
     return;
@@ -683,31 +686,40 @@ function startRunout(state: TableState, ctx: Ctx, runs: number): void {
   record(hand, ['runs', runs]);
 }
 
-export function voteRunItTwice(state: TableState, ctx: Ctx, seatIndex: number, agree: boolean): void {
+/** A player still in picks how many times the rest is run, which settles it once nobody can pick fewer. */
+export function pickRuns(state: TableState, ctx: Ctx, seatIndex: number, runs: number): void {
   const hand = state.hand;
   const player = hand ? playerAt(hand, seatIndex) : undefined;
 
   if (!hand || hand.stage !== 'ritVote' || !player || player.folded) {
-    throw new GameError('There is no run-it-twice vote for you right now');
+    throw new GameError('There is nothing to pick for you right now');
   }
+
+  const cap = hand.maxRuns;
 
   if (player.ritVote !== null) {
-    throw new GameError('You already voted');
+    throw new GameError('You already picked');
   }
 
-  player.ritVote = agree;
-  record(hand, ['vote', seatIndex, agree]);
-
-  if (!agree) {
-    narrate(state, ctx, `${player.name} wants to run it once`);
-    startRunout(state, ctx, 1);
-    return;
+  if (runs > cap) {
+    throw new GameError(`This table runs it ${timesText(cap)} at most`);
   }
 
-  if (livePlayers(hand).every((p) => p.ritVote === true)) {
-    startRunout(state, ctx, 2);
-    narrate(state, ctx, 'Everyone agreed to run it twice');
+  player.ritVote = runs;
+  record(hand, ['vote', seatIndex, runs]);
+
+  if (timesToRun(livePlayers(hand).map((p) => p.ritVote), cap) !== null) {
+    endVote(state, ctx);
   }
+}
+
+/** The picking is over: the rest is run as many times as the picks come to, a player who never picked having picked once. */
+function endVote(state: TableState, ctx: Ctx, unpicked?: Unpicked): void {
+  const live = livePlayers(state.hand!);
+  const runs = timesToRun(live.map((p) => p.ritVote ?? 1), state.hand!.maxRuns)!;
+
+  narrate(state, ctx, voteStory(live, runs, unpicked));
+  startRunout(state, ctx, runs);
 }
 
 /** Deals the next street of an all-in runout, and settles the hand once every board is complete. */
@@ -792,16 +804,16 @@ function settleShowdown(state: TableState, ctx: Ctx): void {
     const awards: PotAward[] = [];
 
     potShares(hand, pot.amount).forEach((amount, run) => {
-      if (amount === 0) {
-        return;
-      }
-
       const best = Math.max(...pot.eligible.map((seat) => values[run]!.get(seat)!.score));
       const winners = pot.eligible.filter((seat) => values[run]!.get(seat)!.score === best);
 
-      // Taken from the hands, not the payouts: in a tie over a single chip only one player is paid
+      // Taken from the hands, not the payouts: a board whose share is nothing, or a tie over a single chip, still names who won it
       if (potIndex === 0) {
         winners.forEach((seat) => mainPotWinners.add(seat));
+      }
+
+      if (amount === 0) {
+        return;
       }
 
       const runLabel = hand.runs > 1 ? ` on the ${midSentence(BOARD_NAMES[run]!)}` : '';
@@ -929,7 +941,7 @@ function finishHand(state: TableState, ctx: Ctx, result: HandResult): void {
   if (result.uncontested) {
     pause = TIMING.uncontestedPauseMs;
   } else if (hand.runs > 1) {
-    pause = TIMING.runTwicePauseMs;
+    pause = TIMING.boardsPauseMs;
   }
 
   hand.result = result;
@@ -996,8 +1008,7 @@ export function stepHand(state: TableState, ctx: Ctx): HandRecord | null {
       timeOut(state, ctx);
       return null;
     case 'ritVote':
-      narrate(state, ctx, 'Not everyone voted in time, so it runs once');
-      startRunout(state, ctx, 1);
+      endVote(state, ctx, { why: 'time' });
       return null;
     case 'runout':
       runoutStep(state, ctx);

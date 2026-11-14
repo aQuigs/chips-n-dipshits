@@ -27,7 +27,8 @@ const RANK_WORDS: Record<number, [one: string, many: string]> = {
 
 const one = (rank: number) => RANK_WORDS[rank]![0];
 const many = (rank: number) => RANK_WORDS[rank]![1];
-const capitalized = (text: string) => text[0]!.toUpperCase() + text.slice(1);
+/** Words as they start a line: "Twice". */
+export const capitalized = (text: string) => text[0]!.toUpperCase() + text.slice(1);
 
 /** Each category's name from its most significant rank and, for two pair and a full house, the second. */
 const MADE_NAMES: Record<number, (first: number, second: number) => string> = {

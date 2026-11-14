@@ -3,18 +3,22 @@ import type { AppPreferences } from './prefs.ts';
 /** Every sound the page can make. Each is one short recipe in `soundRecipes.ts`. */
 export type SoundName = 'deal' | 'chips' | 'knock' | 'fold' | 'allIn' | 'street' | 'win' | 'myWin' | 'turn';
 
-/** What makes the sounds: the Web Audio synthesizer in a browser, or silence where there is none. */
+/**
+ * What makes the sounds: the Web Audio synthesizer in a browser, or silence where there is none. Sounds
+ * are placed on its own clock, the one they play by: a clock of the page's would put two sounds as far
+ * apart as the page's time between asking for them, not as far as the audio's.
+ */
 export interface SoundMaker {
-  /** Plays a sound `delay` seconds from now at `volume`, from 0 to 1, or does nothing when it can't. */
-  play(sound: SoundName, volume: number, delay: number): void;
+  /** Where its clock stands, in seconds from any fixed start; null while it can't play. */
+  now(): number | null;
+  /** Plays a sound at `at` on its clock, at `volume`, from 0 to 1, or does nothing when it can't. */
+  play(sound: SoundName, volume: number, at: number): void;
 }
 
-export const silentSounds: SoundMaker = { play: () => undefined };
+export const silentSounds: SoundMaker = { now: () => null, play: () => undefined };
 
-/** What the page knows that decides whether and when a sound is heard. */
+/** What the page knows that decides whether a sound is heard. */
 export interface Listening {
-  /** Milliseconds, from any fixed start. */
-  now(): number;
   /** False while the page is out of sight: another tab, a phone asleep. */
   inView(): boolean;
 }
@@ -61,14 +65,18 @@ export class Sounds {
       return;
     }
 
-    const now = this.listening.now();
-    const at = Math.max(now, this.nextAt);
-
-    if (at - now > MOST_WAIT_MS && !callsBack) {
+    const now = this.maker.now();
+    if (now === null) {
       return;
     }
 
-    this.nextAt = at + SOUND_GAP_MS;
-    this.maker.play(sound, volume, (at - now) / 1000);
+    const at = Math.max(now, this.nextAt);
+
+    if ((at - now) * 1000 > MOST_WAIT_MS && !callsBack) {
+      return;
+    }
+
+    this.nextAt = at + SOUND_GAP_MS / 1000;
+    this.maker.play(sound, volume, at);
   }
 }

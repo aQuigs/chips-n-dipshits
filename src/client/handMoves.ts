@@ -72,8 +72,8 @@ function gather(seats: ReplaySeat[]): Step[] {
 
 /**
  * The seats the events leave a bet in front of where the table, as it was drawn at that moment, has
- * none. When the betting ends with players all in and a vote on running it twice, the bets go to the
- * pot at once, and the events only say so when the vote is over.
+ * none. When the betting ends with players all in and picking how many times to run it, the bets go
+ * to the pot at once, and the events only say so when the picking is over.
  */
 function gatheredUnsaid(table: ReplayPosition | null | undefined, drawn: TableView | null): ReplaySeat[] {
   return (table?.seats ?? []).filter((seat) => seat.bet > 0 && !drawn?.seats[seat.seat]?.bet);
@@ -140,7 +140,7 @@ function stepsOf(event: HandEvent, before: ReplayPosition, after: ReplayPosition
       // The viewer has been looking at their own cards all along
       return event[1] === viewer ? [] : [{ moves: [{ name: 'show', to: cardsOf(event[1]), after: 0 }] }];
 
-    // One pile to each winner, with all they won: the shares of a split pot, of side pots and of two boards leave together
+    // One pile to each winner, with all they won: the shares of a split pot, of side pots and of several boards leave together
     case 'win':
       return [...gather(before.seats), { kind: 'won', moves: [chips(POT, seatOf(event[1]), event[2])] }];
 

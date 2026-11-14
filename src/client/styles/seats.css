@@ -189,7 +189,7 @@
   font-weight: 800;
 }
 
-/* The line under a seat: a made hand, or a run-it-twice vote */
+/* The line under a seat: a made hand, or how many times its player picked to run it */
 .tag {
   flex: none;
   max-width: 140%;
@@ -209,7 +209,7 @@
   white-space: nowrap;
 }
 
-.tag.vote.yes {
+.tag.vote.picked {
   color: var(--good);
 }
 

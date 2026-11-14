@@ -27,7 +27,7 @@ function soundOf(event: HandEvent, viewer: number | null, dealtOn: number): Soun
 
     // Every street sounds the same, and once: boards dealt together, as in a double-board bomb pot, get a street at the
     // same moment, and the first board's event is the one heard, whether or not the others' arrive with it. A board run
-    // out after another, as when a hand is run twice, has streets of its own
+    // out after another, as when a hand is run more than once, has streets of its own
     case 'street':
       return event[1] === 0 || event[1] >= dealtOn ? 'street' : null;
 

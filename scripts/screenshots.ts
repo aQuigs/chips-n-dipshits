@@ -288,11 +288,11 @@ try {
   await secondDevice.waitForSelector('.seat.me');
   await secondDevice.context().close();
 
-  // ---- Hand 2: everyone all in, run twice ----
+  // ---- Hand 2: everyone all in, run twice: the fewest anyone picks ----
   await openFromMenu(host.page, 'start');
 
   // Everyone who can raise goes all in: hand 1 can end in a split pot, and two players who only called would bet on after the flop
-  for (let player = await onTheClock(players, '[data-action="rit-yes"]'); player; player = await onTheClock(players, '[data-action="rit-yes"]')) {
+  for (let player = await onTheClock(players, '[data-action="rit-2"]'); player; player = await onTheClock(players, '[data-action="rit-2"]')) {
     const page = player.page;
 
     if (await has(page, '.turn [data-action="raise"]')) {
@@ -304,12 +304,13 @@ try {
     }
   }
 
-  await phone.page.waitForSelector('[data-action="rit-yes"]');
-  await shot(host.page, '11-run-it-twice-vote-desktop');
-  await shot(phone.page, '11-run-it-twice-vote-phone');
+  await phone.page.waitForSelector('[data-action="rit-3"]');
+  await shot(host.page, '11-run-it-vote-desktop');
+  await shot(phone.page, '11-run-it-vote-phone');
 
-  for (const { page } of players) {
-    await act(page, 'rit-yes');
+  // Everyone wants three but the last, who wants two, and two it is
+  for (const [nth, { page }] of players.entries()) {
+    await act(page, nth === players.length - 1 ? 'rit-2' : 'rit-3');
   }
 
   await host.page.waitForSelector('.table[data-boards="2"]');

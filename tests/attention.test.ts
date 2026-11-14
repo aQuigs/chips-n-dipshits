@@ -313,7 +313,7 @@ class Browser {
     };
 
     return {
-      sounds: new Sounds({ play: (sound) => void this.played.push(sound) }, new Preferences(PREFERENCES, mapMemory()), { now: () => 0, inView: () => !this.hidden }),
+      sounds: new Sounds({ now: () => 0, play: (sound) => void this.played.push(sound) }, new Preferences(PREFERENCES, mapMemory()), { inView: () => !this.hidden }),
       touch: this,
       root: this.root,
       sight: { away: () => this.hidden, onBack: (listener) => this.shownListeners.push(listener) },

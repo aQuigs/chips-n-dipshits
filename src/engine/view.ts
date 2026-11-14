@@ -52,12 +52,13 @@ export interface SeatView {
   cards: VisibleCard[] | null;
   /** The cards are face up for the whole table, not just for this viewer. */
   shown: boolean;
-  ritVote: boolean | null;
+  /** How many times they picked to run the rest, for everyone to see as at a real table; null until they pick. */
+  ritVote: number | null;
 }
 
 /** What the viewer's own two cards make, for them alone. */
 export interface Holding {
-  /** One for each board dealt so far, which is two once a hand run twice deals its second. */
+  /** One for each board on the table, which grows as a hand run more than once lays each next board. */
   reads: HandRead[];
   /** Seven-deuce in a hand that pays the bounty for it. */
   bounty: boolean;
@@ -69,6 +70,8 @@ export interface HandView {
   street: Street;
   boards: Card[][];
   runs: number;
+  /** The most times the rest may be run in this hand, which is what the viewer may pick up to. */
+  maxRuns: number;
   button: number;
   sbSeat: number;
   bbSeat: number;
@@ -94,7 +97,7 @@ export interface HandView {
   foldChops: boolean;
   /** The viewer is the big blind, on the clock to answer an offer to chop. */
   canAnswerChop: boolean;
-  /** The viewer still owes a run-it-twice vote. */
+  /** The viewer has yet to pick how many times to run the rest, up to `maxRuns`. */
   canVote: boolean;
   /** The viewer may turn their cards face up. */
   canShow: boolean;
@@ -214,6 +217,7 @@ export function viewFor(state: TableState, playerId: string, now: number): Table
       street: hand.street,
       boards: hand.boards,
       runs: hand.runs,
+      maxRuns: hand.maxRuns,
       button: hand.button,
       sbSeat: hand.sbSeat,
       bbSeat: hand.bbSeat,

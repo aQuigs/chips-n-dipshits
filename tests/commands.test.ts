@@ -202,11 +202,12 @@ test('anyone at the table may chat, ask for a seat or take a request back, and t
   assert.throws(send(t, watcher, { type: 'check' }), { message: "It's not your turn" });
   assert.throws(send(t, watcher, { type: 'call' }), { message: "It's not your turn" });
   assert.throws(send(t, watcher, { type: 'raise', to: 100 }), { message: "It's not your turn" });
-  assert.throws(send(t, watcher, { type: 'ritVote', agree: true }), { message: 'There is no run-it-twice vote for you right now' });
+  assert.throws(send(t, watcher, { type: 'ritVote', runs: 2 }), { message: 'There is nothing to pick for you right now' });
   assert.throws(send(t, watcher, { type: 'showCards' }), { message: 'You can show your cards once the hand is over' });
 
   // What was sent is read before the hand is asked, so a malformed move says what is wrong with it
   assert.throws(send(t, watcher, { type: 'fold', turn: 'now' }), { message: 'The turn must be a whole number' });
-  assert.throws(send(t, watcher, { type: 'ritVote', agree: 'yes' }), { message: 'Your vote must be on or off' });
+  assert.throws(send(t, watcher, { type: 'ritVote', agree: true }), { message: 'How many times to run it must be a whole number from 1 to 3' });
+  assert.throws(send(t, watcher, { type: 'ritVote', runs: 4 }), { message: 'How many times to run it must be a whole number from 1 to 3' });
   assert.throws(send(t, t.toAct!, { type: 'raise', to: '100' }), { message: /A raise here must be between/ });
 });

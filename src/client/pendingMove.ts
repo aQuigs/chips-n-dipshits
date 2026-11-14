@@ -16,7 +16,7 @@ export const UNCONFIRMED_AFTER_MS = 4000;
 interface Pending {
   /**
    * The move as the page shows it played, with the decision it answers by the number the hand gave it.
-   * Null for a move the page cannot play out, a run-it-twice vote or a kind of move added since: of
+   * Null for a move the page cannot play out, a pick of how many times to run it or a kind of move added since: of
    * that one it shows only that it is out.
    */
   played: { move: TurnMove; turn: number } | null;

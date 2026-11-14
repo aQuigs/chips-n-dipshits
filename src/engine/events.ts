@@ -34,10 +34,11 @@ export type HandEvent =
   | [kind: 'timeout', seat: number]
   /** The part of a bet nobody could call goes back, and with it any part of an ante nobody could match. */
   | [kind: 'return', seat: number, amount: number]
-  /** The cards a street adds to a board: board 0, or 1 for the second one of a hand played on two. */
+  /** The cards a street adds to a board: board 0 for the first, and on from there for a hand played on several. */
   | [kind: 'street', board: number, cards: Card[]]
-  | [kind: 'vote', seat: number, agree: boolean]
-  /** Betting is over with cards to come, and the rest is dealt out on this many boards: more than one when the hand is run twice, or was dealt on two. */
+  /** A player still in picks how many times to run the rest: see `runVote.ts`. */
+  | [kind: 'vote', seat: number, runs: number]
+  /** Betting is over with cards to come, and the rest is dealt out on this many boards: more than one when it is run more than once, or the hand was dealt on several. */
   | [kind: 'runs', count: number]
   | [kind: 'show', seat: number, cards: Card[]]
   | [kind: 'muck', seat: number]

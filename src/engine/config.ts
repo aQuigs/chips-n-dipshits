@@ -67,7 +67,8 @@ export interface ToggleSpec extends Omit<SpecBase, 'hint'> {
   default: boolean;
 }
 
-export interface ChoiceSpec<V extends string = string> extends SpecBase {
+/** One of a few values, which are words or, for a setting that is a count, numbers. */
+export interface ChoiceSpec<V extends string | number = string | number> extends SpecBase {
   kind: 'choice';
   default: V;
   options: {
@@ -89,8 +90,18 @@ function straddleSwitch(setting: StraddleKind['setting']): ToggleSpec {
   return { kind: 'toggle', label: kind.label, subject: kind.subject, default: kind.byDefault, group: 'house', nextHand: true };
 }
 
-/** The kind of spec a setting of a given type takes; a string that is one of a few fixed values is a choice. */
-type SpecFor<V> = [V] extends [boolean] ? ToggleSpec : [V] extends [number] ? NumberSpec : [V] extends [string] ? (string extends V ? TextSpec | LinkSpec : ChoiceSpec<V>) : never;
+/** The kind of spec a setting of a given type takes; a string or a number that is one of a few fixed values is a choice. */
+type SpecFor<V> = [V] extends [boolean]
+  ? ToggleSpec
+  : [V] extends [number]
+    ? number extends V
+      ? NumberSpec
+      : ChoiceSpec<V>
+    : [V] extends [string]
+      ? string extends V
+        ? TextSpec | LinkSpec
+        : ChoiceSpec<V>
+      : never;
 
 /**
  * Every table setting. The defaults, the checks on what a host sends, both forms and the random tables
@@ -177,7 +188,20 @@ export const CONFIG_SPECS: { [K in ConfigKey]-?: SpecFor<TableConfig[K]> } = {
   allowDoubleStraddle: straddleSwitch('allowDoubleStraddle'),
   allowButtonStraddle: straddleSwitch('allowButtonStraddle'),
   allowMississippiStraddle: straddleSwitch('allowMississippiStraddle'),
-  allowRunItTwice: { kind: 'toggle', label: 'Offer run it twice when everyone is all in', subject: 'Run it twice', default: true, group: 'house' },
+  maxRuns: {
+    kind: 'choice',
+    label: 'When everyone is all in, run the rest',
+    subject: 'Running it more than once',
+    hint: 'Each player still in picks how many times, and the fewest picked wins',
+    default: 3,
+    options: [
+      { value: 1, label: 'Once only' },
+      { value: 2, label: 'Up to twice' },
+      { value: 3, label: 'Up to three times' },
+    ],
+    group: 'house',
+    nextHand: true,
+  },
   allowChop: { kind: 'toggle', label: 'Let the blinds chop when it folds to them', subject: 'Chopping the blinds', default: false, group: 'house' },
   missedBlinds: {
     kind: 'choice',
@@ -267,6 +291,30 @@ export const CONFIG_RULES: ConfigRule[] = [
     config.actionSeconds !== 0 && config.actionSeconds < LIMITS.minActionSeconds ? `The action clock must be off or at least ${LIMITS.minActionSeconds} seconds` : null,
   ),
 ];
+
+/**
+ * Settings a table or a preset may have been saved with under a name since retired, and the settings
+ * each old value comes to now. A saved table is brought forward by its schema step and a saved preset,
+ * which has no schema, as it is read; both through `withRetiredSettings`.
+ */
+const RETIRED_SETTINGS: Record<string, (old: unknown) => Partial<TableConfig>> = {
+  // A switch until three runs were allowed, and on meant up to twice
+  allowRunItTwice: (on) => ({ maxRuns: on === false ? 1 : 2 }),
+};
+
+/** Saved settings with any under a retired name put as the settings that took their place, unless those were saved too. */
+export function withRetiredSettings(saved: Record<string, unknown>): Record<string, unknown> {
+  const settings = { ...saved };
+
+  for (const [name, now] of Object.entries(RETIRED_SETTINGS)) {
+    if (name in settings) {
+      Object.assign(settings, { ...now(settings[name]), ...settings });
+      delete settings[name];
+    }
+  }
+
+  return settings;
+}
 
 export const DEFAULT_CONFIG = Object.fromEntries(CONFIG_KEYS.map((key) => [key, CONFIG_SPECS[key].default])) as unknown as TableConfig;
 

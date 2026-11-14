@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
-import { owes, replayHand, STATE_SCHEMA, TIMING } from '../src/engine/index.ts';
-import type { TableState } from '../src/engine/index.ts';
+import { owes, replayHand, STATE_SCHEMA, TIMING, upgradeRecord } from '../src/engine/index.ts';
+import type { HandRecord, TableState } from '../src/engine/index.ts';
 import { restoreState } from '../src/server/store.ts';
 import { checkAround, handRecords, seededRng, TestTable } from './helpers.ts';
 import { assertHandRecordsHold, assertInvariants } from './invariants.ts';
@@ -18,8 +18,8 @@ const FILES = readdirSync(FOLDER)
 // Saved by the last code of schema 3, with everything added to a table while that schema lasted
 const LAST_OF_SCHEMA_3 = 'schema3-with-straddle-and-missed-blinds.json';
 
-// The rest were saved as schema 3 began, before any of it was added
-const OLDEST = FILES.filter((file) => file !== LAST_OF_SCHEMA_3);
+// The rest of schema 3 were saved as it began, before any of it was added
+const OLDEST = FILES.filter((file) => /^schema[23]-/.test(file) && file !== LAST_OF_SCHEMA_3);
 
 const HANDS_TO_PLAY = 4;
 const STEP_LIMIT = 3000;
@@ -204,7 +204,7 @@ test('a table saved in the middle of a hand before missed blinds finishes that h
 
 test('a bomb pot saved in the middle by the code before there were two boards goes on as it was, on one', () => {
   // A bomb pot on one board says nothing of boards, so one saved by the code before is this one without the setting
-  const t = new TestTable({ stacks: [1000, 1000, 1000], config: { allowRunItTwice: true } });
+  const t = new TestTable({ stacks: [1000, 1000, 1000], config: { maxRuns: 2 } });
   t.cmd(0, { type: 'setBombPot', on: true });
   t.deal({ button: 0, holes: { 0: 'As Ah', 1: 'Ks Kh', 2: 'Qs Qh' }, board: '2c 7d 9h Jc 3s' });
   t.check(1);
@@ -232,7 +232,7 @@ test('a bomb pot saved in the middle by the code before there were two boards go
 });
 
 test('a table saved when a hand had one straddle, kept as its seat, has it as a line of one, and every player who asked to straddle still posts under the gun', () => {
-  for (const file of FILES) {
+  for (const file of FILES.filter((name) => /^schema[23]-/.test(name))) {
     const state = load(file);
     const before = JSON.parse(readFileSync(new URL(file, FOLDER), 'utf8')) as { seats: ({ straddle: boolean } | null)[]; hand: { straddleSeat: number | null } | null };
 
@@ -320,4 +320,60 @@ test('a table saved before the last hands could be called has none called, and i
 
     assert.deepEqual([state.lastHand, state.nightEndedAt], [null, null], file);
   }
+});
+
+test('a table saved when running it more than once was a yes or no to twice: on is up to twice, off is once only, and each yes is a pick of twice', () => {
+  for (const file of FILES) {
+    const raw = JSON.parse(readFileSync(new URL(file, FOLDER), 'utf8')) as { config: { allowRunItTwice?: boolean }; hand: { players: { ritVote: boolean | null }[] } | null };
+    const state = load(file);
+
+    assert.equal(state.config.maxRuns, raw.config.allowRunItTwice === false ? 1 : 2, file);
+    assert.ok(!('allowRunItTwice' in state.config), file);
+    assert.deepEqual(state.hand?.players.map((player) => player.ritVote), raw.hand?.players.map((player) => (player.ritVote === null ? null : player.ritVote ? 2 : 1)), file);
+    assert.ok((state.hand?.events ?? []).every((event) => event[0] !== 'vote' || typeof event[2] === 'number'), file);
+  }
+
+  // Saved in the middle of the vote, one player having said yes: they picked twice, and twice is the most the other can pick
+  const voting = TestTable.adopt(load('schema4-run-it-twice-vote.json'));
+  assert.deepEqual(voting.state.hand!.events.filter((event) => event[0] === 'vote'), [['vote', 0, 2]]);
+  assert.deepEqual([voting.view(2).hand!.canVote, voting.view(2).seats[0]!.ritVote], [true, 2]);
+  assert.throws(() => voting.cmd(2, { type: 'ritVote', runs: 3 }), { message: 'This table runs it twice at most' });
+  voting.cmd(2, { type: 'ritVote', runs: 2 });
+  assert.ok(voting.feedText().includes('Everyone agreed: running it twice'));
+  voting.runToResult();
+  assert.equal(voting.state.hand!.boards.length, 2);
+  voting.finishHand();
+  assertHandRecordsHold(voting.effects);
+
+  // Saved between the two runs: the second board is dealt on, and the hand is paid on both
+  const between = TestTable.adopt(load('schema4-runout-two-boards.json'));
+  assert.deepEqual(between.state.hand!.boards.map((board) => board.length), [5, 4]);
+  between.runToResult();
+  assert.ok(between.state.hand!.result!.pots[0]!.awards.some((award) => award.run === 1));
+  between.finishHand();
+  assertHandRecordsHold(between.effects);
+  assertInvariants(between.state, between.now);
+
+  // Saved with run it twice off, while the hand was run out once: it is run out once, as it would have been
+  const off = TestTable.adopt(load('schema4-runout-run-it-twice-off.json'));
+  assert.deepEqual([off.state.config.maxRuns, off.state.hand!.stage, off.state.hand!.runs], [1, 'runout', 1]);
+  off.finishHand();
+  assertHandRecordsHold(off.effects);
+  assert.equal(handRecords(off.effects)[0]!.boards.length, 1);
+});
+
+test('a hand record saved when a pick was a yes or no to twice reads each as the number of runs it was', () => {
+  const t = new TestTable({ stacks: [500, 500], config: { maxRuns: 2 } });
+  t.deal({ button: 0 });
+  t.raise(0, 500);
+  t.call(1);
+  t.cmd(0, { type: 'ritVote', runs: 2 });
+  t.cmd(1, { type: 'ritVote', runs: 1 });
+  t.finishHand();
+
+  const [record] = handRecords(t.effects);
+  const asOnceSaved = JSON.parse(JSON.stringify(record).replace('["vote",0,2]', '["vote",0,true]').replace('["vote",1,1]', '["vote",1,false]')) as HandRecord;
+  assert.deepEqual(asOnceSaved.events.filter((event) => event[0] === 'vote'), [['vote', 0, true], ['vote', 1, false]]);
+
+  assert.deepEqual(upgradeRecord(asOnceSaved), record);
 });

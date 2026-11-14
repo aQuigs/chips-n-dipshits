@@ -261,6 +261,10 @@ export const updateConfig: Handler<'updateConfig'> = {
       addFeed(state, ctx.now, 'system', null, state.config.allowChop ? 'The blinds may chop when it folds to them' : 'The blinds no longer chop');
     }
 
+    if (state.config.rabbitHunting !== before.rabbitHunting) {
+      addFeed(state, ctx.now, 'system', null, state.config.rabbitHunting ? 'Rabbit hunting is on: after a hand ends early, anyone dealt in can see the cards that would have come' : 'Rabbit hunting is off');
+    }
+
     if (state.config.missedBlinds !== before.missedBlinds) {
       const forgiven = state.config.missedBlinds === 'forgiven';
 

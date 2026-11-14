@@ -717,14 +717,16 @@ async function caughtUp(page: Page, view: TableView): Promise<void> {
     seats.filter((seat) => seat.bet > 0).length,
     seats.filter((seat) => seat.folded).length,
     hand?.stage === 'done',
+    hand?.hunted?.flat().length ?? 0,
   ];
 
   await page.waitForFunction(`JSON.stringify([
     document.querySelector('.seat.acting') ? Number(document.querySelector('.seat.acting').dataset.seat) : null,
-    document.querySelectorAll('.board .card[data-card]').length,
+    document.querySelectorAll('.board .card[data-card]:not(.hunted)').length,
     document.querySelectorAll('.bet[data-bet]').length,
     document.querySelectorAll('.seat.folded').length,
     document.querySelector('.message.result') !== null,
+    document.querySelectorAll('.board .card.hunted').length,
   ]) === ${JSON.stringify(JSON.stringify(wanted))}`);
 }
 
@@ -1623,6 +1625,84 @@ async function assertMiddleFits(page: Page, screen: ScreenName): Promise<void> {
     assertApart(await boxes(page, `.board[data-run="${run}"] .card`), await boxes(page, `.board:not([data-run="${run}"]) .card, ${under}`), `board ${run + 1} and what is around it`);
   }
   assert.deepEqual(await squeezed(page, `.pot, .plate .stack, .message > div, .seat .tag`), [], 'something on the table is cut off');
+}
+
+const RABBIT_PLAYERS: RigPlayer[] = ['Quigs', 'Stu', 'Pam'].map((name) => ({ name, stack: 1000 }));
+const RABBIT_HOLES = { 0: 'As Kd', 1: 'Qc Jc', 2: '7h 2d' };
+const RABBIT_BOARD = 'Kh 9c 4s Th 2c';
+const RABBIT_NOTE = '🐇 Rabbit hunt: didn’t count';
+
+/** Three players at a table that hunts, and Kibitz watching. */
+function rabbitTable(rig: Rig, config: Partial<TableConfig> = {}): RigTable {
+  const table = rig.table(RABBIT_PLAYERS, { rabbitHunting: true, ...config });
+
+  table.join('Kibitz');
+
+  return table;
+}
+
+/** Quigs, on the button, bets with `cards` of the board out and Stu and Pam fold to him; until then everyone checks or calls. */
+function foldedTo(table: RigTable, cards: number): void {
+  table.deal({ button: 0, holes: RABBIT_HOLES, board: RABBIT_BOARD });
+
+  if (cards > 0) {
+    table.act('Quigs', { type: 'call' });
+    table.act('Stu', { type: 'call' });
+    table.act('Pam', { type: 'check' });
+  }
+
+  for (let out = 3; out < cards; out++) {
+    for (const name of ['Stu', 'Pam', 'Quigs']) {
+      table.act(name, { type: 'check' });
+    }
+  }
+
+  if (cards > 0) {
+    table.act('Stu', { type: 'check' });
+    table.act('Pam', { type: 'check' });
+  }
+
+  table.act('Quigs', { type: 'raise', to: 3 * table.view('Quigs').config.bigBlind });
+  table.act('Stu', { type: 'fold' });
+  table.act('Pam', { type: 'fold' });
+}
+
+/** The hunted cards on a page, board by board, and that each is drawn as no part of the board: faded, ringed with a dashed line and named so. */
+async function assertHuntedMarked(page: Page, boards: string[][], what: string): Promise<void> {
+  const drawn = (await page.evaluate(`[...document.querySelectorAll('.board')].map((board) => [...board.querySelectorAll('.card.hunted')].map((card) => card.dataset.card))`)) as string[][];
+  assert.deepEqual(drawn, boards, `${what}: the hunted cards`);
+
+  const looks = (await page.evaluate(`[...document.querySelectorAll('.board .card[data-card]')].map((card) => ({
+    hunted: card.classList.contains('hunted'),
+    opacity: Number(getComputedStyle(card).opacity),
+    outline: getComputedStyle(card).outlineStyle,
+    label: card.getAttribute('aria-label'),
+  }))`)) as { hunted: boolean; opacity: number; outline: string; label: string }[];
+
+  for (const look of looks) {
+    if (look.hunted) {
+      assert.ok(look.opacity < 0.7 && look.outline === 'dashed' && look.label.endsWith('would have come, did not count'), `${what}: a hunted card is drawn like one in play: ${JSON.stringify(look)}`);
+    } else {
+      assert.ok(look.opacity === 1 && look.outline !== 'dashed', `${what}: a card of the board is drawn like a hunted one: ${JSON.stringify(look)}`);
+    }
+  }
+
+  assert.equal(await text(page, '.message.result .rabbit-note'), RABBIT_NOTE, `${what}: the note under the result`);
+  assert.equal(await page.locator('[data-action="hunt"]').count(), 0, `${what}: the button is still there once the cards are out`);
+}
+
+/** The middle of the table after a hand that can be hunted: the boards and the result, as `assertMiddleFits` has them, and the hunt's button clear of them and of every seat. */
+async function assertRabbitFits(page: Page, screen: ScreenName, what: string): Promise<void> {
+  await assertMiddleFits(page, screen);
+
+  const button = await boxes(page, '.message [data-action="hunt"]');
+  if (button.length > 0) {
+    assert.deepEqual(await squeezed(page, '.message [data-action="hunt"]'), [], `${what}: the button is cut off`);
+    assertOnScreen(button, screen, `${what}: the button`);
+    assertApart(button, await boxes(page, '.board .card, .message > div, .seat .plate, .seat .hole .card, .seat .tag'), `${what}: the button and the table`);
+  }
+
+  await assertNoSidewaysScroll(page);
 }
 
 const CHECKS: Check[] = [
@@ -9027,6 +9107,184 @@ const CHECKS: Check[] = [
       assert.ok(sameBox(without!, plate!), `the seat is ${JSON.stringify(plate)} with the trophy and ${JSON.stringify(without)} without it`);
 
       await page.context().close();
+    },
+  ],
+  ...(['smallPhone', 'desktop'] as const).map(
+    (screen): Check => [
+      `on a ${screen}, after a hand that ends before the flop, on the flop or on the turn, everyone dealt in is offered a rabbit hunt under the result and a watcher is not; a hunt lays the rest out marked, the same for the watcher`,
+      async (rig) => {
+        // Before the flop the bet nobody called goes back, and Quigs wins the blinds and his own call of the big blind
+        for (const [cards, won, hunted] of [[0, 50, ['Kh', '9c', '4s', 'Th', '2c']], [3, 60, ['Th', '2c']], [4, 60, ['2c']]] as const) {
+          const table = rabbitTable(rig);
+          foldedTo(table, cards);
+
+          const stu = await table.open('Stu', screen);
+          const kibitz = await table.open('Kibitz', screen);
+          const where = `${screen}, folded with ${cards} cards out`;
+
+          await stu.waitForSelector('.message.result [data-action="hunt"]');
+          assert.equal(await text(stu, '.message.result [data-action="hunt"]'), '🐇 Rabbit hunt');
+          assert.equal(await text(stu, '.message.result > div'), `Quigs wins ${won}`);
+          assert.equal(await kibitz.locator('.message.result').count(), 1);
+          assert.equal(await kibitz.locator('[data-action="hunt"], .rabbit-note').count(), 0, `${where}: a watcher is offered a hunt`);
+
+          await inShapesOf(
+            stu,
+            screen,
+            async (shape) => {
+              await assertRabbitFits(stu, screen, `${where}, the offer, ${shape}`);
+              await shot(stu, `rabbit-offer-${cards}-${screen}-${shape}`);
+            },
+            { buttonsUp: false },
+          );
+
+          // Not a move: what says it went through is the page showing it
+          await pressOn(stu, screen)('[data-action="hunt"]');
+
+          for (const [who, page] of [['Stu', stu], ['the watcher', kibitz]] as const) {
+            await page.waitForSelector('.rabbit-note');
+            await assertHuntedMarked(page, [[...hunted]], `${where}, ${who}`);
+            await inShapesOf(
+              page,
+              screen,
+              async (shape) => {
+                await assertRabbitFits(page, screen, `${where}, ${who} sees the hunt, ${shape}`);
+                await shot(page, `rabbit-hunted-${cards}-${who === 'Stu' ? 'player' : 'watcher'}-${screen}-${shape}`);
+              },
+              { buttonsUp: false },
+            );
+          }
+
+          await stu.context().close();
+          await kibitz.context().close();
+        }
+      },
+    ],
+  ),
+  [
+    'the hunted cards are told from the board in a dark and a light theme, by the winner and by a player who folded, and the play-by-play and the history say who hunted what',
+    async (rig) => {
+      for (const screen of PHONE_AND_DESKTOP) {
+        const table = rabbitTable(rig);
+        foldedTo(table, 3);
+        table.act('Pam', { type: 'huntRabbit', hand: 1 });
+
+        const quigs = await table.open('Quigs', screen);
+        const pam = await table.open('Pam', screen);
+
+        for (const theme of ['cardroom', 'daylight']) {
+          for (const [who, page] of [['winner', quigs], ['folded', pam]] as const) {
+            await choose(page, { theme });
+            await page.waitForSelector('.rabbit-note');
+            await assertHuntedMarked(page, [['Th', '2c']], `${screen}, ${theme}, the ${who}`);
+            await shot(page, `rabbit-theme-${theme}-${who}-${screen}`);
+          }
+        }
+
+        // The winner's hint reads the board alone: no hunted card is lifted as one that plays
+        assert.equal(await quigs.locator('.board .card.hunted.plays, .board .card.hunted.idle').count(), 0);
+
+        const line = 'Pam hunts the rabbit, cards that did not count: 10♥ 2♣';
+        await toggleFeed(pam, screen);
+        await pam.waitForSelector('.entries li:has-text("hunts the rabbit")');
+        assert.equal((await texts(pam, '.entries li')).at(-1), line);
+        assert.deepEqual(await squeezed(pam, '.entries li'), [], 'a line of the play-by-play is cut off');
+        await shot(pam, `rabbit-play-by-play-${screen}`);
+        await toggleFeed(pam, screen);
+
+        clear(rig, table);
+        const press = pressOn(pam, screen);
+        await press('[data-action="menu"]');
+        await press('.menu [data-action="history"]');
+        await pam.waitForSelector('.history summary');
+        await press('.history summary');
+        assert.equal((await text(pam, '.history pre')).split('\n').at(-1), line);
+        await shot(pam, `rabbit-history-${screen}`);
+
+        await quigs.context().close();
+        await pam.context().close();
+      }
+    },
+  ],
+  [
+    'a double-board bomb pot that ends on the flop hunts both boards, each marked on its own board, standing, lying and on the desktop',
+    async (rig) => {
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        const table = rabbitTable(rig, { bombPotBoards: 'two', bombPotAmount: 50 });
+        table.act('Quigs', { type: 'setBombPot', on: true });
+        table.deal({ button: 0, holes: RABBIT_HOLES, board: RABBIT_BOARD, secondBoard: 'Ad 8d 3h Js 5s' });
+        table.act('Stu', { type: 'raise', to: 40 });
+        table.act('Pam', { type: 'fold' });
+        table.act('Quigs', { type: 'fold' });
+
+        const pam = await table.open('Pam', screen);
+        await pressOn(pam, screen)('[data-action="hunt"]');
+        await pam.waitForSelector('.rabbit-note');
+        await assertHuntedMarked(pam, [['Th', '2c'], ['Js', '5s']], `${screen}, two boards`);
+
+        await inShapesOf(
+          pam,
+          screen,
+          async (shape) => {
+            await assertRabbitFits(pam, screen, `${screen}, two boards hunted, ${shape}`);
+            await shot(pam, `rabbit-two-boards-${screen}-${shape}`);
+          },
+          { buttonsUp: false },
+        );
+
+        await pam.context().close();
+      }
+    },
+  ],
+  [
+    'with animations on, the hunted cards drop onto their places one after another and land as a still table draws them, standing and on the desktop',
+    async (rig) => {
+      for (const layout of [MOTION_LAYOUTS[0]!, MOTION_LAYOUTS[2]!]) {
+        const table = rabbitTable(rig, layout.config);
+        foldedTo(table, 0);
+
+        const { moving, still, step } = await watch(table, 'Stu', layout);
+        const where = (what: string) => `${layout.name}, ${what}`;
+        const seen = await step('the hunt', () => table.act('Stu', { type: 'huntRabbit', hand: 1 }));
+        const cards = flightsOf(seen, 'card', false);
+
+        assert.deepEqual(seen.flights.map((flight) => flight.name), ['hunt', 'hunt', 'hunt', 'hunt', 'hunt'], where('five hunted cards move, and nothing else'));
+        assert.deepEqual(cards.map((card) => [card.board, card.delay]), [0, 1, 2, 3, 4].map((nth) => [0, nth * 60]), where('one after another'));
+        cards.forEach((card) => assertDrops(card, where('a hunted card')));
+        await shot(moving, `rabbit-motion-landed-${layout.name}`);
+
+        await moving.context().close();
+        await still.context().close();
+      }
+    },
+  ],
+  [
+    'the table settings switch rabbit hunting on, off as a table starts, and the table is told',
+    async (rig) => {
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        const table = rig.table(RABBIT_PLAYERS);
+        const host = await table.open('Quigs', screen);
+        const press = pressOn(host, screen);
+        const switchFor = 'label[for="table-rabbit-hunting"]';
+
+        await press('[data-action="menu"]');
+        await press('.menu [data-action="settings"]');
+        await host.waitForSelector('#table-rabbit-hunting');
+        assert.equal(await host.isChecked('#table-rabbit-hunting'), false);
+        assert.equal(await text(host, switchFor), 'Rabbit hunting: after a hand ends early, a player can see the cards that would have come');
+        await host.locator('#table-rabbit-hunting').scrollIntoViewIfNeeded();
+        assertOnScreen(await boxes(host, switchFor), screen, 'the switch for rabbit hunting');
+        assert.deepEqual(await squeezed(host, `${switchFor} span`), [], 'the name of the switch is cut off');
+        await assertNoSidewaysScroll(host);
+        await shot(host, `rabbit-settings-${screen}`);
+
+        await press(switchFor);
+        await press('[data-action="save-settings"]');
+        await host.waitForSelector('.dialog', { state: 'detached' });
+        assert.equal(table.view('Quigs').config.rabbitHunting, true);
+        assert.equal(table.view('Quigs').feed.at(-1)!.text, 'Rabbit hunting is on: after a hand ends early, anyone dealt in can see the cards that would have come');
+        await host.context().close();
+      }
     },
   ],
 ];

@@ -309,6 +309,7 @@ test('the last hand of the night can be hunted like any other, and the night end
 test('switched on during a hand, the setting lets that hand be hunted; switched off after it ended, the hunt is refused', () => {
   const on = shuffledTable(7, { rabbitHunting: false });
   on.cmd(0, { type: 'updateConfig', config: HUNTING });
+  assert.equal(on.feedText().at(-1), 'Rabbit hunting is on: after a hand ends early, anyone dealt in can see the cards that would have come');
   foldOutAt(on, 3);
   assert.equal(on.state.hand!.deadline, on.now + TIMING.uncontestedPauseMs + TIMING.rabbitOfferMs);
   hunt(on);
@@ -316,6 +317,7 @@ test('switched on during a hand, the setting lets that hand be hunted; switched 
   const off = shuffledTable(7);
   foldOutAt(off, 3);
   off.cmd(0, { type: 'updateConfig', config: { rabbitHunting: false } });
+  assert.equal(off.feedText().at(-1), 'Rabbit hunting is off');
   assert.throws(() => hunt(off), { name: 'GameError', message: /doesn't hunt/ });
 });
 

@@ -87,6 +87,22 @@ export function dealStreet(hand: Boards & Pick<Hand, 'deck'>): StreetDealt[] {
   });
 }
 
+/**
+ * Deals what was still to come on each board the way the hand would have dealt it, a street at a time
+ * by `dealStreet`, onto copies of the boards: the cards each board would have had beyond its own. They
+ * come off the hand's deck, which is left without them, and the boards themselves are left as they are.
+ */
+export function dealTheRest(hand: Boards & Pick<Hand, 'deck'>): Card[][] {
+  const copy = { boards: hand.boards.map((board) => [...board]), runs: hand.runs, runIndex: hand.runIndex, sharedBoardLength: hand.sharedBoardLength, deck: hand.deck };
+
+  while (!boardsComplete(copy)) {
+    dealStreet(copy);
+  }
+
+  // A board laid only while being dealt here starts from the cards the boards have in common
+  return copy.boards.map((board, index) => board.slice(hand.boards[index]?.length ?? hand.sharedBoardLength));
+}
+
 /** What each board plays for of a pot: equal shares, with the chips that don't divide going to the first boards. */
 export function potShares(hand: Boards, amount: number): number[] {
   return [...splitAmount(amount, hand.boards.map((_board, index) => index)).values()];

@@ -50,7 +50,12 @@ export type HandEvent =
   /** The big blind's answer. A no follows a `timeout` when the clock ran out, and stands for any answer they could not give. */
   | [kind: 'chopAnswer', seat: number, agree: boolean]
   /** The blinds chop: each goes back from in front of the seat that posted it, and the hand is over with no winner. */
-  | [kind: 'chop', returned: [seat: number, amount: number][]];
+  | [kind: 'chop', returned: [seat: number, amount: number][]]
+  /**
+   * After a hand that ended before its boards were out, the cards each board would have been dealt
+   * next, laid out at a player's asking (rabbit hunting). They are no part of any board and count for nothing.
+   */
+  | [kind: 'hunt', cards: Card[][]];
 
 /**
  * Events are saved with the table on every action, and unlike the play-by-play they are no use with
@@ -95,6 +100,8 @@ export interface ReplayPosition {
   pot: number;
   boards: Card[][];
   awards: { seat: number; amount: number; pot: number; board: number }[];
+  /** The cards each board would have been dealt next, once a player hunted them after the hand; null until then. Never part of `boards`. */
+  hunted: Card[][] | null;
 }
 
 /**
@@ -120,6 +127,7 @@ export function replayHand(events: readonly HandEvent[], count = events.length):
     pot: 0,
     boards: table.boards,
     awards: [],
+    hunted: null,
   };
 
   const at = (seat: number) => position.seats.find((s) => s.seat === seat)!;
@@ -218,6 +226,10 @@ export function replayHand(events: readonly HandEvent[], count = events.length):
           at(seat).bet -= amount;
           at(seat).stack += amount;
         }
+        break;
+
+      case 'hunt':
+        position.hunted = event[1];
         break;
 
       case 'start':

@@ -74,6 +74,8 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
   const blinds = { missedBigBlinds: 0, deadSmallBlinds: 0, shortOfOwed: 0, noSmallBlind: 0, deadButtons: 0, keptWaiting: 0, forgivenTables: 0 };
   const chops = { offered: 0, agreed: 0, turnedDown: 0 };
   const reactions = { shown: 0, thrown: 0, full: 0 };
+  // Hands whose rabbit was hunted, and of those how many on two boards
+  const hunts = { hunted: 0, onTwoBoards: 0 };
   const straddles: Record<Straddle | 'passedOver' | 'overAnAnte' | 'shownDown', number> = { straddle: 0, 'double straddle': 0, 'button straddle': 0, 'Mississippi straddle': 0, passedOver: 0, overAnAnte: 0, shownDown: 0 };
 
   const sent = new Set<CommandType>();
@@ -145,6 +147,10 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
         doubleBoards.ranOut += record.events.some((event) => event[0] === 'runs') ? 1 : 0;
         doubleBoards.withSidePots += record.result.pots.length > 1 ? 1 : 0;
       }
+
+      const hunt = record.events.find((event) => event[0] === 'hunt');
+      hunts.hunted += hunt ? 1 : 0;
+      hunts.onTwoBoards += hunt && record.boards.length === 2 ? 1 : 0;
 
       const answers = chopAnswers(record);
       chops.offered += record.events.some((event) => event[0] === 'chopOffer') ? 1 : 0;
@@ -224,6 +230,9 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
   // Sent beside the game on a generator of their own (`ASIDE_COMMANDS`), so every count above is what it was before there were any
   const reacting = `reactions: ${JSON.stringify(reactions)}`;
   assert.ok(reactions.shown >= TABLES && reactions.thrown >= TABLES && reactions.full >= TABLES, reacting);
+
+  const hunting = `rabbits hunted: ${JSON.stringify(hunts)}`;
+  assert.ok(hunts.hunted >= TABLES && hunts.onTwoBoards >= TABLES / 20, hunting);
 
   const doubles = `double-board bomb pots: ${JSON.stringify(doubleBoards)}`;
   assert.ok(doubleBoards.chips >= TABLES / 2 && doubleBoards.cents >= TABLES / 2, doubles);

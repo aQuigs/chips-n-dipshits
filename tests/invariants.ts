@@ -201,6 +201,11 @@ export function assertBoardsHold(state: TableState): void {
   }
   assert.equal(new Set(dealt).size, dealt.length - (boards.length - 1) * (boards.length > 1 ? shared : 0), 'two boards hold the same card beyond those they have in common');
 
+  // The cards that would have come were dealt from the deck too, so no card is anywhere twice: in a hand, on a board, hunted or still in the deck
+  const everywhere = [...hand.players.flatMap((player) => player.cards), ...new Set(dealt), ...(hand.hunted ?? []).flat(), ...hand.deck];
+  assert.equal(new Set(everywhere).size, everywhere.length, 'a card is in two places at once among the hands, the boards, the hunted cards and the deck');
+  assert.ok(hand.hunted === null || (hand.stage === 'done' && hand.hunted.length === runs && hand.hunted.every((cards, board) => (boards[board]?.length ?? shared) + cards.length === BOARD_SIZE)), 'the hunted cards are not the rest of each board, once the hand was over');
+
   if (hand.stage === 'betting') {
     assert.equal(boards.length, runs, 'a board is still to come while there is betting');
     assert.ok(boards.every((board) => board.length === boards[0]!.length), 'the boards are at different streets while there is betting');
@@ -573,6 +578,10 @@ export function assertEventsRetellTheHand(record: HandRecord): void {
       assert.ok(event[2].every((card) => faceUp.has(card)), `hand ${record.number}: event ${index} holds a card nobody was shown`);
     }
   });
+
+  // The cards hunted after the hand are no part of what it was played with, and none of them is there twice
+  const hunted = (end.hunted ?? []).flat();
+  assert.ok(hunted.every((card) => !faceUp.has(card)) && new Set(hunted).size === hunted.length, `hand ${record.number}: a hunted card is also on a board, in a hand shown or hunted twice`);
 }
 
 /**

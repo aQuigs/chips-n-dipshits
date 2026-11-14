@@ -541,6 +541,17 @@ export class App {
     }
   }
 
+  /**
+   * Asks to see the cards a hand would have dealt. Asking twice shows nothing twice, so unlike a move,
+   * a request that got no answer is sent once more rather than looked up: the hand is off the table
+   * a few seconds later, which is no time to wait for a poll.
+   */
+  private async hunt(hand: number): Promise<void> {
+    if ((await this.send({ type: 'huntRabbit', hand })) === 'unanswered') {
+      await this.send({ type: 'huntRabbit', hand });
+    }
+  }
+
   /** The server no longer knows this browser at the table, so start over from the join screen or the lobby. */
   private dropSession(error: ApiError): void {
     const tableId = this.table?.session.tableId;
@@ -729,6 +740,7 @@ export class App {
           onSit: (seat) => this.openDialog({ kind: 'sit', seat }),
           onStart: () => void this.send({ type: 'start' }),
           onPlayOn: () => void this.send({ type: 'playOn' }),
+          onHunt: (hand) => void this.hunt(hand),
           moving: screen.seatMoves.tableHandlers(),
         },
         turning,

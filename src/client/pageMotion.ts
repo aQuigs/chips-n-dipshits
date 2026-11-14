@@ -24,6 +24,8 @@ const LOOKS: Record<MoveName, Look> = {
   deal: { mover: 'standing', easing: 'cubic-bezier(0.2, 0.8, 0.3, 1)', shape: SMALL, opacity: 0 },
   // The deck sits where the board does, so a board card only drops the last of the way onto its place
   board: { mover: 'standing', easing: 'ease-out', shape: 'translateY(-35%) scale(0.92)', opacity: 0 },
+  // As a board card does, a little slower and askew, settling into the faded look of a card that did not count
+  hunt: { mover: 'standing', easing: 'ease-out', shape: 'translateY(-35%) scale(0.92) rotate(-8deg)', opacity: 0 },
   // Turned over on its long edge
   show: { mover: 'standing', easing: 'ease-out', shape: 'rotateY(90deg)', opacity: 1 },
   bet: { mover: 'standing', easing: 'ease-out', shape: SMALL, opacity: 0 },

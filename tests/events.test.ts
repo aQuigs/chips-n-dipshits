@@ -97,6 +97,7 @@ test('a hand can be followed one event at a time from its events alone', () => {
     pot: 0,
     boards: [[]],
     awards: [],
+    hunted: null,
   });
 
   // The blinds are in, then the raise and the fold

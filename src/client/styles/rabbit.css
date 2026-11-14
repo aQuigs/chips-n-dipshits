@@ -1,0 +1,28 @@
+/* ---- Rabbit hunting ---- */
+
+/*
+ * A card that would have come: faded, and ringed with a dashed line like the empty place it fills, so
+ * nobody glancing at the table takes it for a card in play, whatever colors they can tell apart.
+ */
+.board .card.hunted {
+  opacity: 0.55;
+  outline: 2px dashed var(--felt-ink);
+  outline-offset: 1px;
+  box-shadow: none;
+}
+
+.rabbit-note {
+  color: var(--felt-muted);
+  font-size: 0.8em;
+  font-weight: 600;
+}
+
+/* Something to look at, not a move: drawn plainer than the felt's other buttons */
+.btn.rabbit {
+  min-height: 32px;
+  padding: 0 12px;
+  border-color: var(--felt-muted);
+  background: color-mix(in srgb, var(--felt-ink) 12%, transparent);
+  color: var(--felt-ink);
+  font-size: 0.85em;
+}

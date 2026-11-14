@@ -23,8 +23,9 @@ export interface BoardCard {
 /**
  * Every move there is, by name. How each looks is the page's business (`LOOKS` in pageMotion.ts):
  *
- * - `deal`, `board`, `show` and `bet` move what the table has standing at `to` once the view is drawn:
- *   a seat's cards, one card of a board, a seat's bet. Where the table draws nothing there, nothing moves.
+ * - `deal`, `board`, `hunt`, `show` and `bet` move what the table has standing at `to` once the view is
+ *   drawn: a seat's cards, one card of a board, a card that would have come on a board (rabbit hunting),
+ *   a seat's bet. Where the table draws nothing there, nothing moves.
  * - `chips` and `muck` move a stand-in for what the table no longer draws: a pile of chips, or a
  *   seat's cards face down. It is drawn at `from`, travels to `to` and is gone when it lands.
  * - `facedown` is a stand-in for a board card face down, lying at `from` until it turns onto its edge,
@@ -34,7 +35,7 @@ export interface BoardCard {
  * - `throw` is something a player throws at another's seat: `mark` drawn at `from`, spinning across to
  *   `to` and gone when it lands, where whoever threw it shows what landed.
  */
-export type MoveName = 'deal' | 'board' | 'show' | 'bet' | 'chips' | 'muck' | 'facedown' | 'reveal' | 'confetti' | 'throw';
+export type MoveName = 'deal' | 'board' | 'hunt' | 'show' | 'bet' | 'chips' | 'muck' | 'facedown' | 'reveal' | 'confetti' | 'throw';
 
 export interface Move {
   name: MoveName;
@@ -62,7 +63,7 @@ export interface Move {
 export const ASIDE_MOVES: ReadonlySet<MoveName> = new Set<MoveName>(['throw']);
 
 /** How long each move takes, from leaving to landing. */
-export const MOVE_MS: Record<MoveName, number> = { deal: 260, board: 240, show: 200, bet: 200, chips: 280, muck: 220, facedown: 150, reveal: 210, confetti: 1100, throw: 550 };
+export const MOVE_MS: Record<MoveName, number> = { deal: 260, board: 240, hunt: 280, show: 200, bet: 200, chips: 280, muck: 220, facedown: 150, reveal: 210, confetti: 1100, throw: 550 };
 
 /**
  * What moves things across the table. Motion is decoration over a table that is already drawn as it

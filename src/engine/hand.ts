@@ -1,9 +1,10 @@
 import { formatAmount } from './amounts.ts';
 import { bettingIsClosed, bettingOptions, chipsFor, objectionTo, onTheClock, passesTo } from './betting.ts';
 import type { BettingAction } from './betting.ts';
-import { boardsComplete, dealStreet, newBoards, potShares, runOut } from './boards.ts';
+import { boardsComplete, dealStreet, dealTheRest, newBoards, potShares, runOut } from './boards.ts';
 import { boardsDealt, bombPotName, claimBombPot } from './bombPots.ts';
 import { isSevenDeuce, prettyCards, shuffledDeck } from './cards.ts';
+import type { Card } from './cards.ts';
 import { answerUnasked, chopsUnasked, mayOfferChop } from './chop.ts';
 import { takesEvent } from './events.ts';
 import type { HandEvent } from './events.ts';
@@ -31,6 +32,13 @@ export const TIMING = {
   showdownPauseMs: 7000,
   /** After a showdown on more than one board, which takes longer to read. */
   boardsPauseMs: 10000,
+  /**
+   * Added to the pause after a hand that can be rabbit hunted, at a table that hunts: an answer takes
+   * a second or two to reach the players, and asking takes as long again.
+   */
+  rabbitOfferMs: 1500,
+  /** The least the table stays on a hand once its rabbit is hunted, so the cards are seen: the most one player can hold the next hand up by. */
+  rabbitShowMs: 3000,
 };
 
 const HOLE_CARDS = 2;
@@ -237,6 +245,7 @@ export function startHand(state: TableState, ctx: Ctx): void {
     bombPot,
     chopOffered: false,
     deck,
+    hunted: null,
     ...newBoards(boardsDealt(bombPot)),
     street: 'preflop',
     stage: 'betting',
@@ -947,7 +956,91 @@ function finishHand(state: TableState, ctx: Ctx, result: HandResult): void {
   hand.result = result;
   hand.stage = 'done';
   hand.toAct = null;
+
+  if (rabbitToHunt(state, hand)) {
+    pause += TIMING.rabbitOfferMs;
+  }
+
   hand.deadline = ctx.now + pause;
+}
+
+/** Whether somebody won the hand: took chips from its pots, or the bounty. Nobody did in a hand the blinds chopped, or one with nothing in it. */
+function wonBySomebody(result: HandResult): boolean {
+  return result.winnings.some((win) => win.amount > 0) || result.bounty !== null;
+}
+
+/**
+ * Whether the hand on the table has a rabbit to hunt: the table hunts, the hand is over with a board
+ * still short of its cards, and nobody has hunted it yet. Only a hand somebody won has one, so the
+ * cards to come of a hand nobody won, as one the blinds chopped, stay in the deck.
+ */
+export function rabbitToHunt(state: TableState, hand: Hand): boolean {
+  return state.config.rabbitHunting && hand.stage === 'done' && hand.hunted === null && !boardsComplete(hand) && wonBySomebody(hand.result!);
+}
+
+/** Whether the player in a seat may hunt the hand's rabbit: one dealt into it, folded or not, who has not left. */
+export function mayHunt(state: TableState, seatIndex: number): boolean {
+  const hand = state.hand;
+
+  return hand !== null && playerAt(hand, seatIndex) !== undefined && !state.seats[seatIndex]!.leaving && rabbitToHunt(state, hand);
+}
+
+/**
+ * Lays out the cards hand number `number` would have dealt next on each board, for everyone to see,
+ * at the asking of the player in `seatIndex`. They are the deck's next cards, dealt by the hand's own
+ * rules, so they are the ones that would have come; they go nowhere near the boards, and count for
+ * nothing. The first to ask shows everyone and asking again does nothing, so a request that got no
+ * answer can simply be sent again. The table stays on the hand long enough for them to be seen.
+ */
+export function huntRabbit(state: TableState, ctx: Ctx, seatIndex: number, number: number): void {
+  const hand = state.hand;
+
+  if (!hand || hand.number !== number) {
+    throw new GameError('That hand is over and the next one is on its way, so its rabbit is gone');
+  }
+
+  const player = playerAt(hand, seatIndex);
+  const dealtIn = player !== undefined && !state.seats[seatIndex]!.leaving;
+
+  if (dealtIn && hand.hunted !== null) {
+    return;
+  }
+
+  if (!dealtIn || !rabbitToHunt(state, hand)) {
+    throw new GameError(huntRefusal(state, hand, dealtIn));
+  }
+
+  hand.hunted = dealTheRest(hand);
+  record(hand, ['hunt', hand.hunted]);
+  narrate(state, ctx, `${player.name} hunts the rabbit, cards that did not count: ${huntedText(hand.hunted)}`);
+  hand.deadline = Math.max(hand.deadline!, ctx.now + TIMING.rabbitShowMs);
+}
+
+function huntRefusal(state: TableState, hand: Hand, dealtIn: boolean): string {
+  if (!state.config.rabbitHunting) {
+    return "This table doesn't hunt the rabbit";
+  }
+
+  if (!dealtIn) {
+    return 'Only a player dealt into the hand can hunt the rabbit';
+  }
+
+  if (hand.stage !== 'done') {
+    return 'The rabbit can be hunted once the hand is over';
+  }
+
+  return boardsComplete(hand) ? 'Every card of that hand is already out' : 'Nobody won that hand, so there is no rabbit to hunt';
+}
+
+/** The hunted cards as the play-by-play says them, a board at a time when there are more. */
+function huntedText(hunted: readonly Card[][]): string {
+  const dealt = hunted.flatMap((cards, board) => (cards.length === 0 ? [] : [{ board, cards }]));
+
+  if (hunted.length === 1) {
+    return prettyCards(dealt[0]!.cards);
+  }
+
+  return dealt.map(({ board, cards }) => `${midSentence(BOARD_NAMES[board]!)} ${prettyCards(cards)}`).join(', ');
 }
 
 /** After a hand is over, anyone who was dealt in may turn their cards face up. */

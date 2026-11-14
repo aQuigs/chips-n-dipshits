@@ -30,6 +30,7 @@ test('the default settings are the registry\'s defaults, and the table accepts t
     bombPotEvery: 0,
     bombPotBoards: 'one',
     missedBlinds: 'owed',
+    rabbitHunting: false,
   });
   assert.deepEqual(validatedConfig({}, DEFAULT_CONFIG), DEFAULT_CONFIG);
   assert.deepEqual(newConfig({}), DEFAULT_CONFIG);

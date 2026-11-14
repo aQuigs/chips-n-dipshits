@@ -3,7 +3,7 @@
  * their pick of how many times to run it or their cards to show is for the hand to say, in its own words.
  */
 import type { BettingAction } from '../betting.ts';
-import { act, answerChop as answerChopIn, offerChop as offerChopIn, pickRuns, showCards as showCardsOf } from '../hand.ts';
+import { act, answerChop as answerChopIn, huntRabbit as huntRabbitIn, offerChop as offerChopIn, pickRuns, showCards as showCardsOf } from '../hand.ts';
 import { MOST_RUNS } from '../runVote.ts';
 import { seatIndexOf } from '../seats.ts';
 import { GameError } from '../types.ts';
@@ -54,4 +54,9 @@ export const ritVote: Handler<'ritVote'> = {
 export const showCards: Handler<'showCards'> = {
   by: 'member',
   run: ({ state, ctx, member }) => showCardsOf(state, ctx, seatIndexOf(state, member.id)),
+};
+
+export const huntRabbit: Handler<'huntRabbit'> = {
+  by: 'member',
+  run: ({ state, ctx, member, command }) => huntRabbitIn(state, ctx, seatIndexOf(state, member.id), wholeNumber(command.hand, 'The hand', 1)),
 };

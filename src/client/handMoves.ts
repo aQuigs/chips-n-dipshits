@@ -133,6 +133,10 @@ function stepsOf(event: HandEvent, before: ReplayPosition, after: ReplayPosition
       return [...gather(before.seats), { kind: 'street', moves: cards.map((_card, nth) => ({ name: 'board', to: { at: 'board', board, card: first + nth }, after: nth * BOARD_GAP_MS })) }];
     }
 
+    // Each board's cards that would have come drop onto the places left for them, a board's cards one after another
+    case 'hunt':
+      return [{ moves: event[1].flatMap((cards, board) => cards.map((_card, nth): Move => ({ name: 'hunt', to: { at: 'board', board, card: before.boards[board]!.length + nth }, after: nth * BOARD_GAP_MS }))) }];
+
     case 'runs':
       return gather(before.seats);
 

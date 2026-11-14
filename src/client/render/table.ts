@@ -79,6 +79,8 @@ export interface TableHandlers {
   onSit(seat: number): void;
   onStart(): void;
   onPlayOn(): void;
+  /** Asks to see the cards hand number `hand` would have dealt (rabbit hunting). */
+  onHunt(hand: number): void;
   /** While the host picks a new seat for a player: who, and where a pick goes. */
   moving?: { playerId: string; to(seat: number): void };
 }
@@ -356,7 +358,9 @@ function boardEl(hand: HandView, turning: readonly BoardCard[]): HTMLElement {
     const dealt = board.map((card) => cardEl(card));
     // A card being turned over has nothing to say yet about the viewer's hand
     markPlaying(dealt.filter((_card, index) => !turning.some((held) => held.board === run && held.card === index)), hand.holding?.reads.slice(run, run + 1) ?? []);
-    const slots = Array.from({ length: BOARD_SIZE }, (_slot, index) => dealt[index] ?? h('div.card.slot'));
+    // The cards that would have come lie in the places left for them, marked as no part of the board
+    const hunted = (hand.hunted?.[run] ?? []).map(huntedCardEl);
+    const slots = Array.from({ length: BOARD_SIZE }, (_slot, index) => dealt[index] ?? hunted[index - dealt.length] ?? h('div.card.slot'));
 
     return h('div.board', { 'data-run': run }, slots);
   });
@@ -368,6 +372,32 @@ function boardEl(hand: HandView, turning: readonly BoardCard[]): HTMLElement {
 
   return h('div.boards', null, boards);
 }
+
+/** A card that would have come, drawn so that nobody takes it for one in play, and named so to whoever hears the page read. */
+function huntedCardEl(card: string): HTMLElement {
+  const drawn = cardEl(card);
+
+  drawn.classList.add('hunted');
+  drawn.setAttribute('aria-label', `${drawn.getAttribute('aria-label')}, would have come, did not count`);
+
+  return drawn;
+}
+
+/** Under the result of a hand that ended early: the cards that would have come once hunted, or for a player dealt in, the button to hunt them. */
+function rabbitEl(hand: HandView, handlers: TableHandlers): HTMLElement | null {
+  if (hand.hunted) {
+    return h('div.rabbit-note', null, RABBIT, ' Rabbit hunt: didn’t count');
+  }
+
+  if (!hand.canHunt) {
+    return null;
+  }
+
+  return h('button.btn.rabbit', { type: 'button', 'data-action': 'hunt', title: 'See the cards that would have come', onclick: () => handlers.onHunt(hand.number) }, RABBIT, ' Rabbit hunt');
+}
+
+/** In Unicode 6.0, so every phone draws it. */
+const RABBIT = '🐇';
 
 /** How many boards a hand's result speaks of: one for a hand everyone else folded, which was won whole however many were out. */
 function boardsWonOn(hand: HandView): number {
@@ -480,7 +510,7 @@ function messageEl(view: TableView, handlers: TableHandlers): HTMLElement | null
   }
 
   if (hand?.stage === 'done') {
-    return h('div.message.result', null, resultLines(view, hand).map((line) => h('div', null, line)));
+    return h('div.message.result', null, resultLines(view, hand).map((line) => h('div', null, line)), rabbitEl(hand, handlers));
   }
 
   if (hand) {

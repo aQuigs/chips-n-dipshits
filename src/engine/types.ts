@@ -56,6 +56,8 @@ export interface TableConfig {
   missedBlinds: MissedBlinds;
   /** When everyone else folds before the flop, the small blind may offer the big blind to take the blinds back: see `chop.ts`. */
   allowChop: boolean;
+  /** When a hand ends before its boards are out, anyone dealt in may ask to see the cards that would have come: see `huntRabbit` in `hand.ts`. */
+  rabbitHunting: boolean;
 }
 
 export interface Member {
@@ -250,6 +252,12 @@ export interface Hand {
   chopOffered: boolean;
   /** Undealt cards; the next card comes off the end. */
   deck: Card[];
+  /**
+   * The cards each board would have been dealt next, laid out for everyone once the hand was over
+   * because a player asked (rabbit hunting); null until then. They are no part of the boards, and
+   * nothing that counts or ranks a hand reads them.
+   */
+  hunted: Card[][] | null;
   /** The boards on the table. They and the three fields after them are kept by `boards.ts`, and written nowhere else. */
   boards: Card[][];
   /** How many boards the hand is played on: more than one from the deal in a double-board bomb pot, or from an all-in on when the rest is run more than once. More than are on the table while a hand run several times has boards still to come. */
@@ -486,6 +494,8 @@ export type Command =
   /** How many times the player wants the rest of an all-in hand run: see `runVote.ts`. */
   | { type: 'ritVote'; runs: number }
   | { type: 'showCards' }
+  /** Asks to see the cards hand number `hand` would have dealt, once it is over: see `huntRabbit` in `hand.ts`. */
+  | { type: 'huntRabbit'; hand: number }
   | { type: 'chat'; text: string }
   /** A reaction over the sender's own seat, or something thrown at the seated player `to`: an id in `REACTIONS`. */
   | { type: 'react'; kind: string; to?: string }

@@ -106,6 +106,7 @@ const DECLARED: { [T in CommandType]: { by: 'member' | 'seat' } | { by: HostLeve
   answerChop: { by: 'member' },
   ritVote: { by: 'member' },
   showCards: { by: 'member' },
+  huntRabbit: { by: 'member' },
   chat: { by: 'member' },
   react: { by: 'seat' },
 

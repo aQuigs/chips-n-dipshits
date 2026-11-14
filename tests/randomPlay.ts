@@ -1,7 +1,7 @@
 /* Random play on a test table: what the simulation runs, and what plays a saved table on after it is read back. */
 import assert from 'node:assert/strict';
 
-import { addMember, CONFIG_KEYS, LIMITS, mayOfferChop, MOST_RUNS, nextDeadline, owes, REACTIONS, SEAT_COUNT, seededRng, straddlesAllowed, viewFor } from '../src/engine/index.ts';
+import { addMember, CONFIG_KEYS, LIMITS, mayOfferChop, MOST_RUNS, nextDeadline, owes, rabbitToHunt, REACTIONS, SEAT_COUNT, seededRng, straddlesAllowed, viewFor } from '../src/engine/index.ts';
 import type { Command, GameError, Rng } from '../src/engine/index.ts';
 import type { TestTable } from './helpers.ts';
 import { randomConfig } from './randomConfig.ts';
@@ -104,6 +104,8 @@ export const FUZZ_COMMANDS: ((fuzz: Fuzz) => void)[] = [
     attempt(t, who, chance(rng, 50) ? { type: 'offerChop' } : { type: 'answerChop', agree: chance(rng, 50) });
   },
   ({ t, who }) => attempt(t, who, { type: 'showCards' }),
+  // For the hand on the table, or now and then one before it, which is refused
+  ({ t, rng, who }) => attempt(t, who, { type: 'huntRabbit', hand: (t.state.hand?.number ?? t.state.handCount) - (chance(rng, 90) ? 0 : 1) }),
   ({ t, rng, playerId }) => attempt(t, someoneRunningTheGame(t, rng), { type: 'setStack', playerId, stack: rng.int(2000) }),
   ({ t, rng, playerId }) => attempt(t, someoneRunningTheGame(t, rng), { type: 'kick', playerId }),
   ({ t, rng, playerId }) => {
@@ -290,6 +292,12 @@ export function randomStep(t: TestTable, rng: Rng, asides = true): void {
 
     // The most the table allows more often than not, since running it that many times takes everyone picking it
     t.cmd(seatOwnerIndex(t, voter.seat), { type: 'ritVote', runs: roll < 15 ? 1 : roll < 85 ? cap : 1 + (roll % cap) });
+    return;
+  }
+
+  // A hand that ended early is over before a side event is likely to come along, so its rabbit is hunted here, by anyone dealt in
+  if (hand?.stage === 'done' && rabbitToHunt(t.state, hand) && chance(rng, 50)) {
+    attempt(t, seatOwnerIndex(t, pick(rng, hand.players)!.seat), { type: 'huntRabbit', hand: hand.number });
     return;
   }
 

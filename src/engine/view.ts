@@ -7,6 +7,7 @@ import { foldChops, mayOfferChop } from './chop.ts';
 import type { HandEvent } from './events.ts';
 import { readHand } from './handNames.ts';
 import type { HandRead } from './handNames.ts';
+import { mayHunt } from './hand.ts';
 import { comingIn } from './handPlan.ts';
 import type { ComesIn } from './handPlan.ts';
 import { reaches, roleOf } from './hosts.ts';
@@ -102,6 +103,10 @@ export interface HandView {
   canVote: boolean;
   /** The viewer may turn their cards face up. */
   canShow: boolean;
+  /** The viewer may ask to see the cards that would have come: see `huntRabbit`. */
+  canHunt: boolean;
+  /** The cards each board would have been dealt next, once someone hunted them, the same for every viewer; null until then. No part of `boards`. */
+  hunted: Card[][] | null;
   result: HandResult | null;
   /** Everything that has happened in the hand so far, in order. The same for every viewer: it holds no face-down card. */
   events: HandEvent[];
@@ -240,6 +245,8 @@ export function viewFor(state: TableState, playerId: string, now: number): Table
       canAnswerChop: hand.stage === 'chop' && mine !== undefined && hand.toAct === mySeat,
       canVote: hand.stage === 'ritVote' && mine !== undefined && !mine.folded && mine.ritVote === null,
       canShow: hand.stage === 'done' && mine !== undefined && !mine.shown,
+      canHunt: mySeat >= 0 && mayHunt(state, mySeat),
+      hunted: hand.hunted,
       result: hand.result,
       events: hand.events,
       holding: mine && !mine.folded ? holdingOf(hand, mine) : null,

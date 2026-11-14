@@ -116,10 +116,10 @@ test('a preset saved before a bomb pot could have two boards plays its bomb pots
 });
 
 test('a setting since taken out of the game is dropped without a word', () => {
-  const used = fromPreset({ ...kept({ bigBlind: 40 }), rabbitHunting: true, burnCardsShown: 'often' });
+  const used = fromPreset({ ...kept({ bigBlind: 40 }), dealersChoice: true, burnCardsShown: 'often' });
 
   assert.deepEqual(used.notes, []);
-  assert.equal('rabbitHunting' in used.config, false);
+  assert.equal('dealersChoice' in used.config, false);
   assert.equal(used.config.bigBlind, 40);
 });
 
@@ -258,7 +258,7 @@ test('anyone may list the presets, without being at any table', () => {
 
 test('a listed preset holds only settings presets keep, whatever was put in its row', () => {
   const { handle, presets } = setup();
-  presets.save({ name: 'By hand', settings: { bigBlind: 40, voiceLink: 'https://meet.google.com/abc-defg-hij', rabbitHunting: true }, savedAt: 0, savedBy: 'Quigs' }, false);
+  presets.save({ name: 'By hand', settings: { bigBlind: 40, voiceLink: 'https://meet.google.com/abc-defg-hij', dealersChoice: true }, savedAt: 0, savedBy: 'Quigs' }, false);
 
   const listed = handle({ op: 'presets' });
   assert.ok(listed.ok && listed.kind === 'presets');

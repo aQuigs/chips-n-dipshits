@@ -43,4 +43,5 @@ export const STYLESHEETS = [
   'chances.css',
   'high-hand.css',
   'reactions.css',
+  'rabbit.css',
 ];

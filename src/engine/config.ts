@@ -273,6 +273,7 @@ export const CONFIG_SPECS: { [K in ConfigKey]-?: SpecFor<TableConfig[K]> } = {
     atCreate: true,
     nextHand: true,
   },
+  rabbitHunting: { kind: 'toggle', label: 'Rabbit hunting: after a hand ends early, show the cards that would have come', subject: 'Rabbit hunting', default: false, group: 'house' },
 };
 
 export const CONFIG_KEYS = Object.keys(CONFIG_SPECS) as ConfigKey[];

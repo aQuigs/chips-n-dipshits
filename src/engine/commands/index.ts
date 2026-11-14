@@ -6,7 +6,7 @@ import type { Command, Ctx, TableState } from '../types.ts';
 import { chat } from './anyone.ts';
 import type { Call, CommandType, Handler, SeatedCall } from './handler.ts';
 import { approve, deny, endTheNight, forgiveBlinds, kick, moveSeat, pause, payHighHand, playOn, setBombPot, setCohost, setLastHands, setStack, shuffleSeats, start, transferChips, transferHost, updateConfig } from './host.ts';
-import { answerChop, call, check, fold, offerChop, raise, ritVote, showCards } from './play.ts';
+import { answerChop, call, check, fold, huntRabbit, offerChop, raise, ritVote, showCards } from './play.ts';
 import { cancelRequest, comeIn, react, requestRebuy, requestSeat, setAlwaysChop, setStraddle, sitIn, sitOut, standUp } from './seat.ts';
 
 /** Every command the table takes. A new one is a member of `Command`, its handler, and its line here. */
@@ -29,6 +29,7 @@ export const HANDLERS: { [T in CommandType]: Handler<T> } = {
   answerChop,
   ritVote,
   showCards,
+  huntRabbit,
 
   chat,
   react,

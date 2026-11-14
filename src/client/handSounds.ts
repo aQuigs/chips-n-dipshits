@@ -34,6 +34,10 @@ function soundOf(event: HandEvent, viewer: number | null, dealtOn: number): Soun
     case 'win':
       return byOther(event[1]) ? 'win' : 'myWin';
 
+    // The cards that would have come land as a street does, all boards at once
+    case 'hunt':
+      return 'street';
+
     // The bounty's chips changing hands, after the pot it was won with. A chop is the blinds' chips going back
     case 'bounty':
     case 'chop':

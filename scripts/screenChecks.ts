@@ -143,6 +143,10 @@ const playedNames = async (page: Page, from = 0) => (await played(page, from)).m
 /** When each sound the page has played starts, in seconds on the page's audio clock. */
 const playedAt = async (page: Page) => ((await page.evaluate('window.played.map((sound) => Math.min(...sound.starts))')) as number[]);
 
+// Two starts worked out from one reading of the audio clock are apart by the delay between them only as nearly as
+// the sums round: for one reading in three the difference comes out a hair under it
+const CLOCK_ROUNDING = 1e-9;
+
 /** The color a token stands for in the page's theme, as the browser writes a computed color. */
 const tokenColor = (page: Page, token: string) =>
   page.evaluate(`(() => {
@@ -1455,7 +1459,7 @@ const CHECKS: Check[] = [
 
       const [deal, flop] = await playedAt(page);
       const dealLasts = Math.max(...RECIPES.deal.map((voice) => voice.at + voice.length));
-      assert.ok(flop! - deal! >= dealLasts, `the flop starts ${(flop! - deal!).toFixed(3)} s after the deal, which lasts ${dealLasts} s`);
+      assert.ok(flop! - deal! >= dealLasts - CLOCK_ROUNDING, `the flop starts ${(flop! - deal!).toFixed(3)} s after the deal, which lasts ${dealLasts} s`);
 
       await page.context().close();
     },
@@ -4401,7 +4405,7 @@ const CHECKS: Check[] = [
 
       const [deal, flop] = await playedAt(page);
       const dealLasts = Math.max(...RECIPES.deal.map((voice) => voice.at + voice.length));
-      assert.ok(flop! - deal! >= dealLasts, `the flops start ${(flop! - deal!).toFixed(3)} s after the deal, which lasts ${dealLasts} s`);
+      assert.ok(flop! - deal! >= dealLasts - CLOCK_ROUNDING, `the flops start ${(flop! - deal!).toFixed(3)} s after the deal, which lasts ${dealLasts} s`);
 
       // Stu, left of the button, checks to Pam, whose own check is silent to her; the button's check brings the turn
       table.act('Stu', { type: 'check' });

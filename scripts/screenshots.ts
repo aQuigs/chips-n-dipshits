@@ -10,7 +10,11 @@ import { chromium } from 'playwright';
 import type { Browser, Page } from 'playwright';
 
 import { THEMES } from '../src/client/themes.ts';
+import { LIMITS } from '../src/engine/index.ts';
 import { startDevServer } from '../src/dev/server.ts';
+import { MemoryStore } from '../src/server/memoryStore.ts';
+import { PokerService } from '../src/server/service.ts';
+import { seededRng } from '../tests/helpers.ts';
 import { clientPage } from './bundle.ts';
 
 const OUT = fileURLToPath(new URL('../screenshots/', import.meta.url));
@@ -138,7 +142,13 @@ async function openFromMenu(page: Page, action: string): Promise<void> {
 await mkdir(OUT, { recursive: true });
 
 const html = await clientPage({});
-const server = await startDevServer({ port: 0, page: async () => html });
+/*
+ * Every run plays the same game: the requests that draw from the rng (creating the table, joining,
+ * dealing) go one at a time in a fixed order. With this seed the first hand has one winner and the
+ * second busts players, which the rebuy pictures need.
+ */
+const service = new PokerService({ store: new MemoryStore(), clock: { now: () => Date.now() }, rng: seededRng(1) });
+const server = await startDevServer({ port: 0, page: async () => html, service });
 const browser = await chromium.launch();
 const players: Player[] = [];
 
@@ -195,6 +205,13 @@ try {
   const watched = new Set([host, phone]);
 
   await shot(host.page, '06-ready-desktop');
+
+  // Each player's turn waits while their pictures are taken, which on a busy machine outlasts the usual clock and folds them
+  await openFromMenu(host.page, 'settings');
+  await host.page.fill('#table-action-seconds', String(LIMITS.maxActionSeconds));
+  await host.page.click('[data-action="save-settings"]');
+  await host.page.waitForSelector('.dialog', { state: 'detached' });
+
   await host.page.click('.message [data-action="start"]');
 
   // ---- Hand 1: bets on every street, down to a showdown ----
@@ -271,13 +288,13 @@ try {
   // ---- Hand 2: everyone all in, run twice ----
   await openFromMenu(host.page, 'start');
 
-  let first = true;
+  // Everyone who can raise goes all in: hand 1 can end in a split pot, and two players who only called would bet on after the flop
   for (let player = await onTheClock(players, '[data-action="rit-yes"]'); player; player = await onTheClock(players, '[data-action="rit-yes"]')) {
     const page = player.page;
 
-    if (first) {
-      first = false;
+    if (await has(page, '.turn [data-action="raise"]')) {
       await page.click('.presets button:has-text("All in")');
+      await page.waitForSelector('.turn [data-action="raise"]:has-text("All in")');
       await act(page, 'raise');
     } else {
       await act(page, 'call');

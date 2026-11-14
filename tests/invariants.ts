@@ -4,7 +4,7 @@
  */
 import assert from 'node:assert/strict';
 
-import { FEED_LIMIT, LIMITS, reaches, replayHand, roleOf, viewFor } from '../src/engine/index.ts';
+import { evaluateHand, FEED_LIMIT, LIMITS, PLAYING_THE_BOARD, reaches, replayHand, roleOf, viewFor } from '../src/engine/index.ts';
 import type { Effect, FeedEntry, HandRecord, TableState } from '../src/engine/index.ts';
 import { CACHE_VALUE_BYTES, utf8Bytes } from '../src/gas/sheetStore.ts';
 import { restoreState } from '../src/server/store.ts';
@@ -134,6 +134,22 @@ export function assertViewsKeepSecrets(state: TableState, now: number): void {
 
       assert.deepEqual(seen, allowed ? player.cards : [null, null], 'a view shows the wrong cards');
     }
+
+    // The hint reads the viewer's own cards and the board, and is there only while those cards are live
+    const mine = hand?.players.find((p) => p.playerId === viewer.id);
+    const holding = view.hand?.holding ?? null;
+    assert.equal(holding !== null, mine !== undefined && !mine.folded, `${viewer.name} has a hint that is not theirs to have, or lacks their own`);
+    holding?.reads.forEach((read, run) => {
+      const own = new Set([...mine!.cards, ...hand!.boards[run]!]);
+      assert.ok(read.plays.every((card) => own.has(card)), `${viewer.name}'s hint plays a card that is not theirs or the board's`);
+
+      // The view reads the player's own seat and the right board: whether the hand is right is checked over random deals in handNames.test.ts
+      const shown = hand!.result?.hands.find((entry) => entry.seat === mine!.seat && entry.run === run);
+      if (shown && hand!.boards[run]!.length === 5) {
+        assert.equal(evaluateHand(read.plays).score, evaluateHand(shown.cards).score, `${viewer.name}'s hint makes a different hand from the one shown`);
+        assert.ok(read.name === shown.name || read.name === PLAYING_THE_BOARD, `${viewer.name}'s hint says ${read.name} and the showdown ${shown.name}`);
+      }
+    });
 
     // Requests waiting on the host are for the host and co-hosts to see; anyone else sees only their own
     assert.equal(view.you.role, roleOf(state, viewer.id));

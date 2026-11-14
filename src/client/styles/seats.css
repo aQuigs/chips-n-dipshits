@@ -1,8 +1,13 @@
 /* ---- Seats ---- */
 
+/* The width of every seat but the viewer's, set on the table so the viewer's seat can measure its room by it */
+.table {
+  --seat-w-other: clamp(66px, 20cqmin, 128px);
+}
+
 /* A column that centers its children, so a label wider than the seat spills evenly to both sides */
 .seat {
-  --seat-w: clamp(66px, 20cqmin, 128px);
+  --seat-w: var(--seat-w-other);
 
   position: absolute;
   top: var(--y);

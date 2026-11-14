@@ -283,8 +283,8 @@ test('showdown: the last player to bet on the river shows first, and a beaten ha
 
   const feed = t.feedText();
   const shows = feed.filter((line) => line.includes('shows') || line.includes('mucks'));
-  assert.deepEqual(shows, ['P2 shows K♠ K♥ (Pair of Kings)', 'P0 shows A♠ A♥ (Pair of Aces)', 'P1 mucks']);
-  assert.ok(feed.includes('P0 wins 180 with Pair of Aces'));
+  assert.deepEqual(shows, ['P2 shows K♠ K♥ (Pair of kings)', 'P0 shows A♠ A♥ (Pair of aces)', 'P1 mucks']);
+  assert.ok(feed.includes('P0 wins 180 with pair of aces'));
   assert.deepEqual(t.stacks(), [1120, 940, 940]);
 
   const seenByLoser = t.view(2).seats;
@@ -307,7 +307,7 @@ test('showdown after a checked river starts left of the button', () => {
   checkAround(t, [1, 2, 0], 3);
 
   const shows = t.feedText().filter((line) => line.includes('shows') || line.includes('mucks'));
-  assert.deepEqual(shows, ['P1 shows K♠ K♥ (Pair of Kings)', 'P2 mucks', 'P0 shows A♠ A♥ (Pair of Aces)']);
+  assert.deepEqual(shows, ['P1 shows K♠ K♥ (Pair of kings)', 'P2 mucks', 'P0 shows A♠ A♥ (Pair of aces)']);
 });
 
 test('a hand that loses the main pot still shows when it can win a side pot', () => {
@@ -324,9 +324,9 @@ test('a hand that loses the main pot still shows when it can win a side pot', ()
   checkAround(t, [1, 2], 2);
 
   const shows = t.feedText().filter((line) => line.includes('shows') || line.includes('mucks'));
-  assert.deepEqual(shows, ['P0 shows A♠ A♥ (Pair of Aces)', 'P1 shows K♠ K♥ (Pair of Kings)', 'P2 mucks']);
-  assert.ok(t.feedText().includes('P0 wins 300 from the main pot with Pair of Aces'));
-  assert.ok(t.feedText().includes('P1 wins 100 from side pot 1 with Pair of Kings'));
+  assert.deepEqual(shows, ['P0 shows A♠ A♥ (Pair of aces)', 'P1 shows K♠ K♥ (Pair of kings)', 'P2 mucks']);
+  assert.ok(t.feedText().includes('P0 wins 300 from the main pot with pair of aces'));
+  assert.ok(t.feedText().includes('P1 wins 100 from side pot 1 with pair of kings'));
   assert.deepEqual(t.stacks(), [300, 950, 850]);
   assertChipsConserved(t.state);
 });
@@ -1032,7 +1032,7 @@ test('dollars and cents: the play-by-play, the pots and the result of a split po
   const log = t.state.hand!.log;
   assert.equal(log[0], 'Hand #1 · blinds 0.25/0.50 · P0 has the button');
   assert.deepEqual(log.slice(1, 6), ['P1 posts small blind 0.25', 'P2 posts big blind 0.50', 'P0 raises to 1.50', 'P1 folds', 'P2 calls 1.00']);
-  assert.deepEqual(log.slice(-2), ['P2 wins 1.63 with Royal Flush', 'P0 wins 1.62 with Royal Flush']);
+  assert.deepEqual(log.slice(-2), ['P2 wins 1.63 with royal flush', 'P0 wins 1.62 with royal flush']);
 
   t.finishHand();
   const [record] = handRecords(t.effects);
@@ -1051,7 +1051,7 @@ test('dollars and cents: an uncalled bet, a short all-in and a seven-deuce bount
 
   // The small blind had 0.40 in all, so the last 0.10 of the big blind and of the raiser's matching 0.50 make a side pot
   const text = t.feedText();
-  for (const line of ['P1 calls 0.15 and is all in', 'Uncalled bet of 1.00 returned to P0', 'P0 wins 1.20 from the main pot with Full House, Sevens full of Twos', 'P0 wins 0.20 from side pot 1 with Full House, Sevens full of Twos']) {
+  for (const line of ['P1 calls 0.15 and is all in', 'Uncalled bet of 1.00 returned to P0', 'P0 wins 1.20 from the main pot with full house, sevens over deuces', 'P0 wins 0.20 from side pot 1 with full house, sevens over deuces']) {
     assert.ok(text.includes(line), `"${line}" is missing from: ${text.join(' / ')}`);
   }
 

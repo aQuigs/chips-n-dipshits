@@ -9158,7 +9158,13 @@ const CHECKS: Check[] = [
       toShowdown(table, { 0: '8s 4h', 1: 'Ks Kh', 2: 'Qs Qh' });
       clear(rig, table);
       table.act('Kibitz', { type: 'chat', text: 'kings no good' });
-      await kibitz.waitForSelector('.feed li:has-text("kings no good")', { state: 'attached' });
+
+      // Every page has to have heard of this hand before the next is played. One that hears of both at once gets
+      // this hand's lines 14 seconds old, takes the view for a late one and tells no news from it, the toast included
+      for (const [, page] of pages) {
+        await page.waitForSelector('.feed li:has-text("kings no good")', { state: 'attached' });
+      }
+
       assert.deepEqual(await markedOn(kibitz), ['Quigs'], 'a worse hand took the high hand');
 
       toShowdown(table, { 0: '8s 4h', 1: 'Ks Kh', 2: 'Qs Qh' }, 'Kd 7d 9h Jc 3s');
@@ -11854,6 +11860,43 @@ const CHECKS: Check[] = [
         assertOnScreen(await boxes(page, '.standings-players > li:last-child summary'), screen, 'the last player');
         await page.context().close();
       }
+    },
+  ],
+  [
+    'a page that heard nothing through a whole hand is not told it took the high hand by the late view that shows it, and is told by the next view that reaches it on time',
+    async (rig) => {
+      const table = highHandTable(rig, {}, 1000);
+      toShowdown(table, { 0: 'As Ah', 1: 'Ks Kh', 2: '8c 4d' }, HIGH_HAND_BOARD, true);
+      clear(rig, table);
+
+      const stu = await table.open('Stu', 'phone');
+      const polls = await Gate.on(stu, 'polls');
+
+      // The page waits a second of its own before it asks again, which must not count against what it then hears
+      await stu.clock.setFixedTime(Date.now());
+      await stu.waitForSelector('.plate:has(.high-hand)');
+
+      // Two hands go by, the second of them Stu's three kings, and the one answer on its way to his page is lost
+      await polls.close('answers');
+      const before = rig.now();
+      toShowdown(table, { 0: '8s 4h', 1: 'Ks Kh', 2: 'Qs Qh' });
+      clear(rig, table);
+      toShowdown(table, { 0: '8s 4h', 1: 'Ks Kh', 2: 'Qs Qh' }, 'Kd 7d 9h Jc 3s');
+      clear(rig, table);
+      assert.ok(rig.now() - before > 10_000, 'the first of the two hands is no older than a page takes for fresh');
+      await polls.holding();
+      await polls.lose();
+      await polls.open();
+
+      // The view that shows it is a late one: the table is drawn as it stands, and nothing in it is news
+      await stu.waitForSelector('.feed li:has-text("Stu takes the high hand with three kings")', { state: 'attached' });
+      assert.deepEqual(await markedOn(stu), ['Stu']);
+      assert.equal(await toastShown(stu), 0, 'a late view told its news');
+
+      // The next thing to happen brings a view on time, which tells what the late one could not
+      table.act('Kibitz', { type: 'chat', text: 'nice kings' });
+      await stu.waitForSelector('.toast:has-text("You have 🏆 the high hand with three kings")');
+      await stu.context().close();
     },
   ],
 ];

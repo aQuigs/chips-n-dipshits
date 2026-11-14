@@ -11,6 +11,8 @@ export type Suitedness = 's' | 'o';
 
 const HOW_TO_WRITE = 'Write two ranks, such as 72 or AA, with s after them for suited only or o for offsuit only, such as J4s or 72o. A ten is T or 10';
 
+const MOST_QUOTED = 8;
+
 const TYPED = /^(10|[2-9TJQKA])(10|[2-9TJQKA])([SO]?)$/;
 
 /** The rank's letter in `RANKS`, from a rank as typed, 10 being a ten. */
@@ -21,7 +23,11 @@ export function parseStartingHand(typed: string): string {
   const match = TYPED.exec(typed.replace(/\s+/g, '').toUpperCase());
 
   if (!match) {
-    throw new GameError(typed.trim() === '' ? `A bounty needs a hand. ${HOW_TO_WRITE}` : `“${typed.trim()}” isn't a hand. ${HOW_TO_WRITE}`);
+    const shown = typed.trim();
+    // Quoted back only when short, as a player types a hand: anything longer is no slip of the finger
+    const what = shown.length <= MOST_QUOTED ? `“${shown}”` : 'That';
+
+    throw new GameError(shown === '' ? `A bounty needs a hand. ${HOW_TO_WRITE}` : `${what} isn't a hand. ${HOW_TO_WRITE}`);
   }
 
   const [high, low] = [rankLetter(match[1]!), rankLetter(match[2]!)].sort((a, b) => RANKS.indexOf(b) - RANKS.indexOf(a)) as [string, string];

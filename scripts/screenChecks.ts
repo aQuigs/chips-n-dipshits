@@ -10798,17 +10798,22 @@ const CHECKS: Check[] = [
         assert.equal(await page.locator('#new-table-bounties .bounty-heads:visible').count(), 0);
 
         await page.fill('#host-name', `Quigs ${screen}`);
-        if (cents) {
-          await press('#new-table-unit label:has-text("Dollars and cents")');
-        }
-
         await press('[data-action="add-bounty"]');
         await page.fill('#new-table-bounties-hand-0', '27');
-        await page.fill('#new-table-bounties-amount-0', cents ? '.25' : '25');
+        await page.fill('#new-table-bounties-amount-0', '25');
         await press('[data-action="add-bounty"]');
         await page.fill('#new-table-bounties-hand-1', 'J4S');
-        await page.fill('#new-table-bounties-amount-1', cents ? '0.5' : '50');
+        await page.fill('#new-table-bounties-amount-1', '50');
         await page.locator('#new-table-bounties-hand-1').blur();
+
+        // Picked after the hands were typed, dollars and cents keeps the hands and starts what they pay over
+        if (cents) {
+          await press('#new-table-unit label:has-text("Dollars and cents")');
+          const rows = () => page.evaluate(`[...document.querySelectorAll('#new-table-bounties .bounty-row input')].map((input) => input.value)`) as Promise<string[]>;
+          assert.deepEqual(await rows(), ['72', '', 'J4s', '']);
+          await page.fill('#new-table-bounties-amount-0', '.25');
+          await page.fill('#new-table-bounties-amount-1', '0.5');
+        }
         assert.deepEqual(await texts(page, '#new-table-bounties .said'), ['Seven-deuce', 'Jack-four suited']);
         assert.equal(await page.locator('#new-table-bounties .note:visible').count(), 0);
 

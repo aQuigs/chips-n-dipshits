@@ -1,9 +1,9 @@
-import type { Bounty } from '../../engine/bounties.ts';
 import { CONFIG_GROUPS, CONFIG_KEYS, CONFIG_SPECS, fixedAtCreation, holdsAmounts, sameSetting, startingConfig } from '../../engine/config.ts';
 import type { ConfigKey, ConfigSpec, SettingValue } from '../../engine/config.ts';
 import type { TableConfig } from '../../engine/types.ts';
 import { h } from '../ui.ts';
 import { bountiesHeld, bountyListField } from './bountyList.ts';
+import type { BountyRow } from './bountyList.ts';
 import { amountField, amountOf, checkField, inputOf, numberField, numberOf } from './forms.ts';
 
 export interface ConfigForm {
@@ -18,7 +18,7 @@ export interface ConfigForm {
 }
 
 /** The field for one setting. `table` is the table its amounts are written for. */
-function field(id: string, spec: ConfigSpec, value: SettingValue, table: TableConfig): HTMLElement {
+function field(id: string, spec: ConfigSpec, value: SettingValue | readonly BountyRow[], table: TableConfig): HTMLElement {
   const hint = 'hint' in spec && spec.hint ? h('small', null, spec.hint) : null;
 
   switch (spec.kind) {
@@ -59,7 +59,7 @@ function field(id: string, spec: ConfigSpec, value: SettingValue, table: TableCo
       );
 
     case 'handAmounts':
-      return bountyListField(id, spec, value as Bounty[], table);
+      return bountyListField(id, spec, value as readonly BountyRow[], table);
   }
 }
 
@@ -119,15 +119,18 @@ export function configForm(values: TableConfig, idPrefix: string, creating: bool
     table = startingConfig(Object.fromEntries(choices.map((key) => [key, held(form, idOf(key), CONFIG_SPECS[key], table)])));
 
     for (const key of shown.filter(holdsAmounts)) {
-      redraw(key);
+      const spec = CONFIG_SPECS[key];
+
+      // A hand is the same hand in chips and in dollars: only what it pays starts over
+      redraw(key, spec.kind === 'handAmounts' ? bountiesHeld(form, idOf(key), table).map(([hand]): BountyRow => [hand, null]) : table[key]);
     }
 
     startedOver?.(table);
   };
 
-  const draw = (key: ConfigKey): HTMLElement => {
+  const draw = (key: ConfigKey, value: SettingValue | readonly BountyRow[] = table[key]): HTMLElement => {
     const spec = CONFIG_SPECS[key];
-    const element = field(idOf(key), spec, table[key], table);
+    const element = field(idOf(key), spec, value, table);
 
     if (closed(key)) {
       for (const input of element.querySelectorAll('input')) {
@@ -142,8 +145,8 @@ export function configForm(values: TableConfig, idPrefix: string, creating: bool
     return element;
   };
 
-  const redraw = (key: ConfigKey): HTMLElement => {
-    const fresh = draw(key);
+  const redraw = (key: ConfigKey, value?: SettingValue | readonly BountyRow[]): HTMLElement => {
+    const fresh = draw(key, value);
 
     fields.get(key)!.replaceWith(fresh);
     fields.set(key, fresh);

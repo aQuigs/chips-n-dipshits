@@ -362,7 +362,8 @@ export function fieldsOf(input: unknown): Record<string, unknown> {
  */
 export function startingConfig(chosen?: unknown): TableConfig {
   const given = fieldsOf(chosen);
-  const start: Partial<Record<ConfigKey, unknown>> = { ...DEFAULT_CONFIG };
+  // A copy all through, so no two tables are handed the same list
+  const start = JSON.parse(JSON.stringify(DEFAULT_CONFIG)) as Partial<Record<ConfigKey, unknown>>;
 
   for (const key of CONFIG_KEYS) {
     const spec = CONFIG_SPECS[key];

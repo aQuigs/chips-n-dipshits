@@ -38,6 +38,7 @@ test('anything that is not two ranks with an s or an o, or a pair with neither, 
   }
 
   assert.throws(() => parseStartingHand('  '), { name: 'GameError', message: `A bounty needs a hand. ${allowed}` });
+  assert.throws(() => parseStartingHand('7'.repeat(100_000)), { name: 'GameError', message: `That isn't a hand. ${allowed}` }, 'whatever was sent is quoted back');
   assert.throws(() => parseStartingHand('AAs'), { name: 'GameError', message: 'A pair is never suited or offsuit: write it as AA' });
   assert.throws(() => parseStartingHand('22o'), { name: 'GameError', message: 'A pair is never suited or offsuit: write it as 22' });
 });

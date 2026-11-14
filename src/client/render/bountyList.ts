@@ -15,6 +15,9 @@ function typedHand(typed: string): { hand: string; problem: null } | { hand: nul
   }
 }
 
+/** A row as the list is drawn with it: a hand, and what it pays or nothing yet. */
+export type BountyRow = readonly [hand: string, amount: number | null];
+
 const handInputOf = (row: Element) => row.querySelector<HTMLInputElement>('input.bounty-hand')!;
 
 /**
@@ -23,7 +26,7 @@ const handInputOf = (row: Element) => row.querySelector<HTMLInputElement>('input
  * its name in words, or what is wrong with it, so a refused row says why where it is typed; the form
  * isn't sent while a row is refused. Drawn once with its form, so rows half typed stay as they are.
  */
-export function bountyListField(id: string, spec: HandAmountsSpec, value: readonly Bounty[], table: Denominated): HTMLElement {
+export function bountyListField(id: string, spec: HandAmountsSpec, value: readonly BountyRow[], table: Denominated): HTMLElement {
   const rows = h('div.bounty-rows');
   const heads = h('div.bounty-heads', { 'aria-hidden': 'true' }, h('span', null, 'Hand'), h('span', null, 'Each pays'));
   const none = h('p.note', null, 'No bounties.');
@@ -59,7 +62,7 @@ export function bountyListField(id: string, spec: HandAmountsSpec, value: readon
     full.hidden = !add.hidden;
   };
 
-  const addRow = ([hand, amount]: [string, number | null]): HTMLElement => {
+  const addRow = ([hand, amount]: BountyRow): HTMLElement => {
     const n = made++;
     const handId = `${id}-hand-${n}`;
     const amountId = `${id}-amount-${n}`;

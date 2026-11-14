@@ -46,7 +46,7 @@ export interface PlayerFacts {
   putIn: number;
   /** Chips they took out of the pots. An uncalled bet coming back is not among them, and neither is a bounty. */
   tookOut: number;
-  /** The seven-deuce bounty: what they collected, or below zero what they paid. */
+  /** A bounty: what they collected, or below zero what they paid. */
   bounty: number;
   /** What the hand did to their stack: `tookOut - putIn + bounty`. */
   net: number;

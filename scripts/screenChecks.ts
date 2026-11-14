@@ -2372,12 +2372,14 @@ const CHECKS: Check[] = [
     async (rig) => {
       for (const screen of ['phone', 'phoneSideways', 'desktop'] as const) {
         const build = `updated-${screen}`;
+
+        // A clock, to see it stopped, and an ante, which makes the top bar the notice has to cover a line taller on a phone
         const table = rig.table(
           [
             { name: 'Quigs', stack: 1000 },
             { name: 'Stu', stack: 1000 },
           ],
-          { actionSeconds: 30 },
+          { actionSeconds: 30, ante: 5 },
         );
 
         // On the river with the big blind's check in: the page is on the clock, with every button of a turn to

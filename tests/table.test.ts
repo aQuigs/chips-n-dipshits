@@ -5,7 +5,7 @@ import { addMember, createTable, DEFAULT_CONFIG, ledgerOf, STATE_SCHEMA, viewFor
 import type { Ctx, Effect } from '../src/engine/index.ts';
 import { restoreState } from '../src/server/store.ts';
 import { seededRng, TestTable } from './helpers.ts';
-import { assertChipsConserved } from './invariants.ts';
+import { assertChipsConserved, assertViewsKeepSecrets } from './invariants.ts';
 
 function freshCtx(): Ctx {
   return { now: 5000, rng: seededRng(7), effects: [] };
@@ -336,13 +336,143 @@ test('turning straddles off clears everyone who had asked to straddle', () => {
   assert.equal(t.state.seats[2]!.straddle, false);
 });
 
-test('the host can hand the table to someone else', () => {
-  const t = new TestTable({ stacks: [1000, 1000] });
+test('the host can hand the table to someone else, and stays on as a co-host', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 1000] });
+  t.cmd(0, { type: 'setCohost', playerId: t.ids[1]!, on: true });
 
   t.cmd(0, { type: 'transferHost', playerId: t.ids[1]! });
 
-  assert.equal(t.view(1).you.isHost, true);
-  assert.throws(() => t.cmd(0, { type: 'start' }), /Only the host/);
+  assert.equal(t.view(1).you.role, 'host');
+  assert.equal(t.view(0).you.role, 'cohost');
+  assert.deepEqual(t.state.cohostIds, [t.ids[0]], 'the new host is no longer listed as a co-host');
+  assert.equal(t.feedText().at(-1), 'P1 is now the host, and P0 a co-host');
+
+  assert.throws(() => t.cmd(0, { type: 'transferHost', playerId: t.ids[2]! }), { message: 'Only the host can do that' });
+  t.cmd(0, { type: 'start' });
+
+  t.cmd(1, { type: 'setCohost', playerId: t.ids[0]!, on: false });
+  assert.equal(t.view(0).you.role, 'member');
+  assert.equal(t.feedText().at(-1), 'P0 is no longer a co-host');
+
+  const before = JSON.stringify(t.state);
+  t.cmd(1, { type: 'transferHost', playerId: t.ids[1]! });
+  assert.equal(JSON.stringify(t.state), before, 'handing the table to yourself changes nothing');
+});
+
+test('the host names co-hosts and takes it back, and the chat says so each time it changes', () => {
+  const t = new TestTable({ stacks: [1000, 1000] });
+  t.ids.push(addMember(t.state, 'Watcher', t.ctx()).id);
+
+  t.cmd(0, { type: 'setCohost', playerId: t.ids[2]!, on: true });
+  t.cmd(0, { type: 'setCohost', playerId: t.ids[2]!, on: true });
+  assert.deepEqual(t.state.cohostIds, [t.ids[2]], 'a co-host need not be seated, and is listed once');
+  assert.equal(t.feedText().filter((line) => line === 'Watcher is now a co-host').length, 1);
+
+  t.cmd(0, { type: 'setCohost', playerId: t.ids[2]!, on: false });
+  t.cmd(0, { type: 'setCohost', playerId: t.ids[1]!, on: false });
+  assert.deepEqual(t.state.cohostIds, []);
+  assert.equal(t.feedText().at(-1), 'Watcher is no longer a co-host');
+
+  assert.throws(() => t.cmd(0, { type: 'setCohost', playerId: t.ids[0]!, on: true }), { message: 'The host has every power a co-host has' });
+  assert.throws(() => t.cmd(0, { type: 'setCohost', playerId: 'NOBODY12', on: true }), { message: 'That player is no longer at the table' });
+  assert.throws(() => t.cmd(0, { type: 'setCohost', playerId: t.ids[1]!, on: 'yes' as unknown as boolean }), { message: 'Co-host must be on or off' });
+});
+
+test('a co-host runs the game but cannot remove the host, from their seat or from the table', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 1000] });
+  t.cmd(0, { type: 'setCohost', playerId: t.ids[1]!, on: true });
+  t.cmd(0, { type: 'setCohost', playerId: t.ids[2]!, on: true });
+
+  assert.throws(() => t.cmd(1, { type: 'kick', playerId: t.ids[0]! }), { message: 'Only the host can remove the host' });
+  t.cmd(0, { type: 'standUp' });
+  assert.throws(() => t.cmd(1, { type: 'kick', playerId: t.ids[0]! }), { message: 'Only the host can remove the host' });
+  assert.throws(() => t.cmd(1, { type: 'setCohost', playerId: t.ids[2]!, on: false }), { message: 'Only the host can do that' });
+
+  // A co-host is the host's equal in everything else, over other co-hosts too
+  t.cmd(1, { type: 'setStack', playerId: t.ids[2]!, stack: 700 });
+  t.cmd(1, { type: 'kick', playerId: t.ids[2]! });
+  assert.equal(t.state.seats[2], null);
+  assert.deepEqual(t.state.cohostIds, [t.ids[1], t.ids[2]], 'losing a seat does not end being a co-host');
+  assert.deepEqual(t.feedText().slice(-3), ["Co-host P1 set P2's stack to 700", 'Co-host P1 removed P2 from their seat', 'P2 leaves the table with 700']);
+});
+
+test('only the host may take a co-host off the table altogether, which ends their role', () => {
+  const t = new TestTable({ stacks: [1000, 1000] });
+  t.cmd(0, { type: 'setCohost', playerId: t.ids[1]!, on: true });
+  t.ids.push(addMember(t.state, 'Ann', t.ctx()).id);
+  t.cmd(0, { type: 'setCohost', playerId: t.ids[2]!, on: true });
+
+  assert.throws(() => t.cmd(1, { type: 'kick', playerId: t.ids[2]! }), { message: 'Only the host can take a co-host off the table' });
+  assert.throws(() => t.cmd(2, { type: 'kick', playerId: t.ids[2]! }), { message: 'Only the host can take a co-host off the table' });
+
+  t.cmd(0, { type: 'kick', playerId: t.ids[2]! });
+  assert.deepEqual(t.state.cohostIds, [t.ids[1]]);
+  assert.equal(t.feedText().at(-1), 'The host removed Ann from the table');
+});
+
+test('the chat names a co-host as one, so no player\'s name can pass for the host', () => {
+  const t = new TestTable({ stacks: [1000, 1000], names: ['Quigs', 'The host'] });
+  t.cmd(0, { type: 'setCohost', playerId: t.ids[1]!, on: true });
+
+  t.cmd(1, { type: 'setStack', playerId: t.ids[0]!, stack: 900 });
+
+  assert.equal(t.feedText().at(-1), "Co-host The host set Quigs's stack to 900");
+});
+
+test('a co-host removed from their seat mid-hand plays out as one who stood up, and keeps the role', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 1000] });
+  t.cmd(0, { type: 'setCohost', playerId: t.ids[2]!, on: true });
+  t.deal({ button: 0 });
+
+  t.cmd(0, { type: 'kick', playerId: t.ids[2]! });
+  assert.equal(t.state.seats[2]!.leaving, true);
+
+  t.cmd(2, { type: 'pause' });
+  while (t.toAct !== null) {
+    t.fold(t.toAct);
+  }
+  t.finishHand();
+
+  assert.equal(t.state.seats[2], null);
+  assert.equal(t.state.running, false);
+  assert.equal(t.view(2).you.role, 'cohost');
+  assertChipsConserved(t.state);
+});
+
+test('a co-host\'s own seat and chips need nobody\'s approval, like the host\'s', () => {
+  const t = new TestTable({ stacks: [1000, 300] });
+  t.ids.push(addMember(t.state, 'Ann', t.ctx()).id);
+  t.cmd(0, { type: 'setCohost', playerId: t.ids[2]!, on: true });
+
+  t.cmd(2, { type: 'requestSeat', seat: 5, buyIn: 500 });
+  assert.equal(t.state.seats[5]!.stack, 500);
+
+  t.cmd(0, { type: 'setCohost', playerId: t.ids[1]!, on: true });
+  t.deal({ button: 0 });
+  t.cmd(1, { type: 'requestRebuy', amount: 200 });
+  assert.equal(t.state.seats[1]!.pendingAdd, 200, 'chips asked for mid-hand still wait for its end');
+  assert.deepEqual(t.state.requests, []);
+});
+
+test('a co-host is told they have the host\'s powers and sees every request; a plain member sees their own, and everyone sees who the co-hosts are', () => {
+  const t = new TestTable({ stacks: [1000, 1000] });
+  t.ids.push(addMember(t.state, 'Ann', t.ctx()).id);
+  t.ids.push(addMember(t.state, 'Bob', t.ctx()).id);
+  t.cmd(0, { type: 'setCohost', playerId: t.ids[1]!, on: true });
+  t.cmd(2, { type: 'requestSeat', seat: 5, buyIn: 500 });
+  t.cmd(3, { type: 'requestSeat', seat: 6, buyIn: 500 });
+
+  const asked = [t.ids[2], t.ids[3]];
+  assert.deepEqual(t.view(0).requests.map((r) => r.playerId), asked);
+  assert.deepEqual(t.view(1).requests.map((r) => r.playerId), asked);
+  assert.deepEqual(t.view(2).requests.map((r) => r.playerId), [t.ids[2]]);
+
+  assert.deepEqual([0, 1, 2].map((player) => t.view(player).you.role), ['host', 'cohost', 'member']);
+  for (const player of [0, 1, 2, 3]) {
+    assert.deepEqual(t.view(player).cohostIds, [t.ids[1]]);
+  }
+
+  assertViewsKeepSecrets(t.state, t.now);
 });
 
 test('chat lands in the feed, which keeps only the latest entries', () => {

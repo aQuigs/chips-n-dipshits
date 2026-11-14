@@ -21,14 +21,13 @@ export interface DialogHandlers {
 /** A dialog's line in the menu. */
 export interface MenuEntry {
   label: string;
-  /** Who gets to see it: `everyone`, `theHost`, `seated`, or a rule of its own. */
+  /** Who gets to see it: `everyone`, `seated`, `hostOrCohost` or `hostAlone` (`roles.ts`), or a rule of its own. */
   who(view: TableView): boolean;
   /** The small print under the label. */
   note?(view: TableView, handlers: DialogHandlers): string;
 }
 
 export const everyone = (): boolean => true;
-export const theHost = (view: TableView): boolean => view.you.isHost;
 export const seated = (view: TableView): boolean => view.you.seat !== null;
 
 /**
@@ -43,6 +42,11 @@ export interface DialogKind<K extends string = string, P = unknown> {
    * has to be told nothing, since the menu opens it by its kind alone.
    */
   menu?: MenuEntry;
+  /**
+   * Who may keep it open, checked with every view so a dialog closes when, say, a co-host stops being
+   * one. Left out, it is whoever its menu entry is for, or anyone.
+   */
+  who?(view: TableView): boolean;
   /**
    * What its content depends on. A dialog showing live table data is redrawn when this changes; one
    * that leaves it out holds a form someone may be filling in, and is drawn once.

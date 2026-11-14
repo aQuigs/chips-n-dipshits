@@ -2,7 +2,8 @@ import { CONFIG_KEYS } from '../../../engine/config.ts';
 import type { TableView } from '../../../engine/view.ts';
 import { chips, h } from '../../ui.ts';
 import { configForm } from '../configForm.ts';
-import { frame, submit, theHost } from './dialog.ts';
+import { hostOrCohost } from '../roles.ts';
+import { frame, submit } from './dialog.ts';
 import type { DialogHandlers, DialogKind } from './dialog.ts';
 
 function settings(view: TableView, handlers: DialogHandlers): HTMLElement {
@@ -25,6 +26,6 @@ function settings(view: TableView, handlers: DialogHandlers): HTMLElement {
 
 export const settingsDialog: DialogKind<'settings'> = {
   kind: 'settings',
-  menu: { label: 'Table settings', who: theHost, note: (view) => `Blinds ${chips(view.config.smallBlind)}/${chips(view.config.bigBlind)}` },
+  menu: { label: 'Table settings', who: hostOrCohost, note: (view) => `Blinds ${chips(view.config.smallBlind)}/${chips(view.config.bigBlind)}` },
   draw: settings,
 };

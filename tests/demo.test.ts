@@ -25,7 +25,7 @@ test('the demo table opens on your decision: top pair and a flush draw, facing a
   const hand = view.hand!;
 
   assert.equal(view.you.seat, 0);
-  assert.ok(view.you.isHost);
+  assert.equal(view.you.role, 'host');
   assert.equal(hand.street, 'flop');
   assert.equal(hand.button, 0);
   assert.equal(hand.toAct, 0);

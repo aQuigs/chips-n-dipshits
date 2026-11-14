@@ -1,5 +1,6 @@
 import type { TableView } from '../../../engine/view.ts';
 import { h } from '../../ui.ts';
+import { hostOrCohost } from '../roles.ts';
 import { everyone, frame, seated } from './dialog.ts';
 import type { DialogHandlers, DialogKind, MenuEntry } from './dialog.ts';
 import type { Dialog } from './index.ts';
@@ -14,7 +15,7 @@ export interface MenuAction {
 
 export const pauseGame: MenuAction = {
   action: 'pause',
-  menu: { label: 'Pause the game', who: (view) => view.you.isHost && view.running, note: () => 'No new hands until you resume' },
+  menu: { label: 'Pause the game', who: (view) => hostOrCohost(view) && view.running, note: () => 'No new hands until you resume' },
   pick(handlers) {
     void handlers.send({ type: 'pause' });
     handlers.close();
@@ -23,7 +24,7 @@ export const pauseGame: MenuAction = {
 
 export const startGame: MenuAction = {
   action: 'start',
-  menu: { label: 'Start the game', who: (view) => view.you.isHost && !view.running },
+  menu: { label: 'Start the game', who: (view) => hostOrCohost(view) && !view.running },
   pick(handlers) {
     void handlers.send({ type: 'start' });
     handlers.close();

@@ -1,6 +1,7 @@
 import type { TableView } from '../../../engine/view.ts';
 import { h } from '../../ui.ts';
 import { numberField, numberOf } from '../forms.ts';
+import { hostOrCohost } from '../roles.ts';
 import { frame, submit } from './dialog.ts';
 import type { DialogHandlers, DialogKind } from './dialog.ts';
 
@@ -24,5 +25,6 @@ function setStack(view: TableView, playerId: string, handlers: DialogHandlers): 
 
 export const setStackDialog: DialogKind<'setStack', { playerId: string }> = {
   kind: 'setStack',
+  who: hostOrCohost,
   draw: (view, handlers, { playerId }) => setStack(view, playerId, handlers),
 };

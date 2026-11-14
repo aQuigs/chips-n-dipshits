@@ -1,5 +1,6 @@
 import { formatChips } from './format.ts';
 import { stopWaitingFor } from './hand.ts';
+import { reaches, roleOf } from './hosts.ts';
 import { addFeed, memberOf, recordLedger, seatIndexOf, vacateSeat } from './seats.ts';
 import { GameError } from './types.ts';
 import type { Ctx, SeatRequest, TableState } from './types.ts';
@@ -86,11 +87,11 @@ export function turnAway(state: TableState, ctx: Ctx, hopeless: (request: SeatRe
   state.requests = state.requests.filter((r) => !dropped.includes(r));
 }
 
-/** Files a request for the host, who doesn't need to approve their own. */
+/** Files a request for the host and co-hosts, who don't need to approve their own. */
 export function submit(state: TableState, ctx: Ctx, request: SeatRequest): void {
   state.requests = state.requests.filter((r) => r.playerId !== request.playerId);
 
-  if (request.playerId === state.hostId) {
+  if (reaches(roleOf(state, request.playerId), 'host or cohost')) {
     grant(state, ctx, request);
     return;
   }

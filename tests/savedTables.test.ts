@@ -86,3 +86,13 @@ test('a hand saved before hands kept events has none, and the next hand has them
   assert.deepEqual(finished!.events, []);
   assert.equal(t.state.hand!.events[0]![0], 'start', 'the hand dealt next is recorded from its first event');
 });
+
+test('a table saved before co-hosts loads with none, and its host can name one', () => {
+  for (const file of FILES.filter((name) => !JSON.parse(readFileSync(new URL(name, FOLDER), 'utf8')).cohostIds)) {
+    const t = TestTable.adopt(load(file));
+    assert.deepEqual(t.state.cohostIds, [], file);
+
+    t.cmd(0, { type: 'setCohost', playerId: t.ids[1]!, on: true });
+    assert.equal(t.view(1).you.role, 'cohost', file);
+  }
+});

@@ -4,6 +4,7 @@ export * from './config.ts';
 export * from './events.ts';
 export * from './format.ts';
 export * from './hand.ts';
+export * from './hosts.ts';
 export * from './handRank.ts';
 export * from './pots.ts';
 export * from './seats.ts';

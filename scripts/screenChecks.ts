@@ -55,6 +55,9 @@ function assertApart(these: Box[], those: Box[], what: string): void {
   }
 }
 
+/** Taps on a touch screen and clicks on the desktop, as the rig opens every screen but the desktop as a touch one. */
+const pressOn = (page: Page, screen: ScreenName) => (selector: string) => (screen === 'desktop' ? page.click(selector) : page.tap(selector));
+
 const text = async (page: Page, selector: string) => ((await page.locator(selector).first().textContent()) ?? '').trim();
 
 // Run in the page: counts the notes it plays, since a check cannot listen
@@ -316,7 +319,7 @@ const CHECKS: Check[] = [
           { name: 'Stu', stack: 1000 },
         ]);
         const page = await table.open('Quigs', screen);
-        const press = (selector: string) => (screen === 'phone' ? page.tap(selector) : page.click(selector));
+        const press = pressOn(page, screen);
         const notes = () => page.evaluate('window.notesPlayed') as Promise<number>;
         const myTurnOn = (street: string) => (view: TableView) => view.hand!.street === street && view.hand!.toAct === 0;
 
@@ -414,6 +417,154 @@ const CHECKS: Check[] = [
         table.view('Quigs').members.map((member) => member.name),
         ['Quigs', 'Stu'],
       );
+    },
+  ],
+  [
+    'the host makes a co-host from the Players dialog and ends it again, on a phone and a desktop',
+    async (rig) => {
+      for (const screen of ['phone', 'desktop'] as const) {
+        const table = rig.table([
+          { name: 'Quigs', stack: 1000 },
+          { name: 'Marge Simpson-Jr', stack: 1000 },
+        ]);
+        table.join('Lurker');
+
+        const page = await table.open('Quigs', screen);
+        const press = pressOn(page, screen);
+        const row = (name: string) => `.dialog li:has-text("${name}")`;
+
+        await press('[data-action="menu"]');
+        await press('.menu [data-action="players"]');
+
+        for (const name of ['Marge Simpson-Jr', 'Lurker']) {
+          assert.deepEqual(await page.locator(`${row(name)} button`).allInnerTexts(), name === 'Lurker' ? ['Make co-host', 'Make host', 'Remove'] : ['Set stack', 'Make co-host', 'Make host', 'Remove']);
+        }
+        assert.deepEqual(await page.locator(`${row('Quigs')} button`).allInnerTexts(), ['Set stack', 'Remove'], 'the host is offered a say over their own role');
+        assertOnScreen(await boxes(page, '.dialog .row-actions .btn'), screen, 'a button in the Players dialog');
+        assert.deepEqual(await squeezed(page, '.dialog .row-actions .btn'), [], 'a button in the Players dialog is cut off');
+        await shot(page, `players-host-${screen}`);
+
+        await press(`${row('Marge Simpson-Jr')} [data-action="make-cohost"]`);
+        assert.equal(await text(page, '.dialog h2'), 'Make Marge Simpson-Jr a co-host?');
+        await press('[data-action="confirm"]');
+        assert.deepEqual(table.view('Quigs').cohostIds, [table.auth('Marge Simpson-Jr').id]);
+
+        await press('[data-action="menu"]');
+        await press('.menu [data-action="players"]');
+        await page.waitForSelector(`${row('Marge Simpson-Jr')} .cohost`);
+        assert.equal(await page.locator('.seat[data-seat="1"] .plate .cohost').count(), 1, 'the seat does not show the co-host mark');
+        await shot(page, `players-cohost-named-${screen}`);
+
+        // Ending it is undone in one tap, so it asks nothing
+        await press(`${row('Marge Simpson-Jr')} [data-action="end-cohost"]`);
+        await page.waitForSelector(`${row('Marge Simpson-Jr')} [data-action="make-cohost"]`);
+        assert.deepEqual(table.view('Quigs').cohostIds, []);
+        assert.match(await text(page, '.feed-toggle .latest'), /Marge Simpson-Jr is no longer a co-host/);
+
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'a co-host gets the host\'s tools but not the host\'s own, and a plain member gets neither',
+    async (rig) => {
+      for (const screen of ['phone', 'desktop'] as const) {
+        const table = rig.table([
+          { name: 'Quigs', stack: 1000 },
+          { name: 'Stu', stack: 1000 },
+          { name: 'Pam', stack: 1000 },
+        ]);
+        table.join('Lurker');
+        table.act('Quigs', { type: 'setCohost', playerId: table.auth('Stu').id, on: true });
+
+        const cohost = await table.open('Stu', screen);
+        const press = pressOn(cohost, screen);
+
+        await press('[data-action="menu"]');
+        const menu = await cohost.locator('.menu .menu-item').evaluateAll((items) => items.map((item) => item.getAttribute('data-action')));
+        for (const tool of ['players', 'settings', 'start']) {
+          assert.ok(menu.includes(tool), `the co-host's menu has no ${tool}: ${menu.join(', ')}`);
+        }
+
+        await press('.menu [data-action="players"]');
+        assert.deepEqual(await cohost.locator('.dialog li:has-text("Quigs") button').allInnerTexts(), ['Set stack'], 'a co-host is offered to remove the host');
+        assert.deepEqual(await cohost.locator('.dialog li:has-text("Pam") button').allInnerTexts(), ['Set stack', 'Remove']);
+        assert.deepEqual(await cohost.locator('.dialog li:has-text("Lurker") button').allInnerTexts(), ['Remove']);
+        assert.equal(await cohost.locator('[data-action="make-host"], [data-action="make-cohost"], [data-action="end-cohost"]').count(), 0, 'a co-host is offered what only the host may do');
+        assertOnScreen(await boxes(cohost, '.dialog .row-actions .btn'), screen, 'a button in the co-host\'s Players dialog');
+        await shot(cohost, `players-as-cohost-${screen}`);
+
+        // No longer a co-host, they are left holding none of the host's tools
+        table.act('Quigs', { type: 'setCohost', playerId: table.auth('Stu').id, on: false });
+        await cohost.waitForSelector('.dialog', { state: 'detached' });
+        await cohost.context().close();
+
+        if (screen === 'phone') {
+          const member = await table.open('Pam', screen);
+          await member.tap('[data-action="menu"]');
+          await member.waitForSelector('.menu');
+          assert.equal(await member.locator('.menu [data-action="players"], .menu [data-action="settings"], .menu [data-action="start"]').count(), 0, 'a plain member is offered the host\'s tools');
+          assert.equal(await member.locator('.message [data-action="start"]').count(), 0);
+          await member.context().close();
+        }
+      }
+    },
+  ],
+  [
+    'the co-host mark sits beside the host\'s star, whole, however long the names',
+    async (rig) => {
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        // The host's name is a long one too
+        const players = tenPlayers();
+        [players[0]!.name, players[3]!.name] = [players[3]!.name, players[0]!.name];
+
+        const table = rig.table(players);
+        for (const name of ['WWWWWWWWWWWWWWWW', '你好你好你好你好', 'Stu']) {
+          table.act('Marge Simpson-Jr', { type: 'setCohost', playerId: table.auth(name).id, on: true });
+        }
+
+        const page = await table.open('Big Al', screen);
+        await page.waitForSelector('.plate .cohost');
+        assert.equal(await page.locator('.plate .host').count(), 1);
+        assert.equal(await page.locator('.plate .cohost').count(), 3);
+
+        // The name gives way to its mark: the mark is drawn whole, inside its plate
+        const cut = await page.evaluate(`[...document.querySelectorAll('.plate .host, .plate .cohost')].filter((mark) => {
+          const box = mark.getBoundingClientRect();
+          const name = mark.parentElement.getBoundingClientRect();
+          return box.width < 4 || box.left < name.left - 1 || box.right > name.right + 1;
+        }).length`);
+        assert.equal(cut, 0, 'a host or co-host mark is cut off by a long name');
+        assert.deepEqual(await squeezed(page, '.plate .stack'), [], 'a stack is cut off');
+        assertOnScreen(await boxes(page, '.seat .plate'), screen, 'a seat');
+        await shot(page, `cohost-marks-${screen}`);
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'a co-host approves a seat request from the banner',
+    async (rig) => {
+      const table = rig.table([
+        { name: 'Quigs', stack: 1000 },
+        { name: 'Stu', stack: 1000 },
+      ]);
+      table.join('Ann');
+      table.act('Quigs', { type: 'setCohost', playerId: table.auth('Stu').id, on: true });
+
+      const page = await table.open('Stu', 'phone');
+      table.act('Ann', { type: 'requestSeat', seat: 4, buyIn: 500 });
+
+      await page.waitForSelector('.banner:has-text("Ann wants seat 5") [data-action="approve"]');
+      assert.equal(await text(page, '.menu-button .dot'), '1');
+      assertOnScreen(await boxes(page, '.banner .btn'), 'phone', 'the banner\'s buttons');
+      await shot(page, 'cohost-approves-phone');
+
+      await page.tap('.banner [data-action="approve"]');
+      await page.waitForSelector('.banner', { state: 'detached' });
+      assert.equal(table.view('Ann').you.seat, 4);
+      assert.match(await text(page, '.feed-toggle .latest'), /Ann sits down with 500/);
+      await page.context().close();
     },
   ],
 ];

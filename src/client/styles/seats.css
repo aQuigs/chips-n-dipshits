@@ -58,15 +58,31 @@
 }
 
 .plate .name {
+  display: flex;
+  justify-content: center;
   overflow: hidden;
   font-weight: 700;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.plate .host {
+/* The name gives way to the host's or a co-host's mark, which stays whole */
+.plate .name > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.host,
+.cohost {
+  flex: none;
   margin-left: 0.3em;
+}
+
+.host {
   color: var(--accent);
+}
+
+.cohost {
+  color: var(--muted);
 }
 
 .plate .stack {

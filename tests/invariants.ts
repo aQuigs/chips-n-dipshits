@@ -4,7 +4,7 @@
  */
 import assert from 'node:assert/strict';
 
-import { badgeOf, blindsOnly, BOARD_SIZE, boardsDealt, evaluateHand, FEED_LIMIT, FLOP_SIZE, handFacts, isStraddle, LIMITS, MOST_RUNS, nextHighHand, nightIsOver, owes, PLAYING_THE_BOARD, reaches, replayHand, roleOf, STRADDLES, STRADDLES_IN_A_ROW, straddlesAllowed, viewFor, wonAPot } from '../src/engine/index.ts';
+import { badgeOf, blindsOnly, BOARD_SIZE, boardsDealt, evaluateHand, FEED_LIMIT, FLOP_SIZE, handFacts, isStraddle, LIMITS, MOST_RUNS, nextHighHand, nightIsOver, owes, PLAYING_THE_BOARD, REACTION_GAP_MS, reactionKind, reaches, REACTIONS_LIVE, replayHand, roleOf, STRADDLES, STRADDLES_IN_A_ROW, straddlesAllowed, viewFor, wonAPot } from '../src/engine/index.ts';
 import type { Card, Effect, FeedEntry, HandPlayer, HandRecord, TableState } from '../src/engine/index.ts';
 import { CACHE_VALUE_BYTES, utf8Bytes } from '../src/gas/sheetStore.ts';
 import { restoreState } from '../src/server/store.ts';
@@ -312,6 +312,25 @@ export function assertHighHandHolds(state: TableState): void {
   }
 }
 
+/** The table keeps no more reactions than its cap, each a kind this code knows, thrown only at someone else, and none sooner than its sender's gap allows. */
+export function assertReactionsHold(state: TableState): void {
+  const { reactions } = state;
+
+  assert.ok(reactions.length <= REACTIONS_LIVE, `the table keeps ${reactions.length} reactions`);
+
+  reactions.forEach((reaction, index) => {
+    const kind = reactionKind(reaction.kind);
+
+    assert.ok(kind, `a reaction of a kind this code does not know: ${reaction.kind}`);
+    assert.equal(reaction.to !== undefined, kind.thrown, 'a throw with nobody to land on, or a reaction thrown');
+    assert.notEqual(reaction.to, reaction.from, 'a throw at its own thrower');
+
+    const sooner = reactions.slice(0, index).some((earlier) => earlier.from === reaction.from && reaction.at - earlier.at < REACTION_GAP_MS);
+    assert.ok(!sooner, 'a player reacted again sooner than the gap allows');
+    assert.ok(index === 0 || reactions[index - 1]!.at <= reaction.at, 'reactions out of order');
+  });
+}
+
 /** The table comes back from being saved exactly as it was. */
 export function assertSurvivesSaving(state: TableState): void {
   const json = JSON.stringify(state);
@@ -452,6 +471,7 @@ export function assertInvariants(state: TableState, now: number): void {
   assertNightHolds(state);
   assertNumbersHold(state);
   assertChopHolds(state);
+  assertReactionsHold(state);
   assertSurvivesSaving(state);
   assertViewsKeepSecrets(state, now);
   assertFitsTheStore(state);

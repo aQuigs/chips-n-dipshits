@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { eligibleSeats, handFacts, isStraddle, nightIsOver, SEAT_COUNT } from '../src/engine/index.ts';
+import { eligibleSeats, handFacts, isStraddle, nightIsOver, REACTIONS_LIVE, SEAT_COUNT } from '../src/engine/index.ts';
 import type { Straddle } from '../src/engine/index.ts';
 import { handRecords, ledgerEntries, seededRng, TestTable } from './helpers.ts';
 import { assertChipsConserved, assertHandRecordsHold, chopAnswers, assertInvariants, assertLedgerAgrees } from './invariants.ts';
@@ -33,6 +33,7 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
   const nights = { afterLastHand: 0, endedOutright: 0, startedAgain: 0, signals: 0 };
   const blinds = { missedBigBlinds: 0, deadSmallBlinds: 0, shortOfOwed: 0, noSmallBlind: 0, deadButtons: 0, keptWaiting: 0, forgivenTables: 0 };
   const chops = { offered: 0, agreed: 0, turnedDown: 0 };
+  const reactions = { shown: 0, thrown: 0, full: 0 };
   const straddles: Record<Straddle | 'passedOver' | 'overAnAnte' | 'shownDown', number> = { straddle: 0, 'double straddle': 0, 'button straddle': 0, 'Mississippi straddle': 0, passedOver: 0, overAnAnte: 0, shownDown: 0 };
 
   for (let seed = 1; seed <= TABLES; seed++) {
@@ -56,7 +57,14 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
       }
 
       const before = { hands: t.state.handCount, called: t.state.bombPotCalled, inHand: t.state.hand !== null, over: nightIsOver(t.state), effects: t.effects.length };
+      const lastReaction = t.state.reactions.at(-1);
       randomStep(t, rng);
+
+      const made = t.state.reactions.at(-1);
+      if (made && made !== lastReaction) {
+        reactions[made.to === undefined ? 'shown' : 'thrown'] += 1;
+        reactions.full += t.state.reactions.length === REACTIONS_LIVE ? 1 : 0;
+      }
 
       if (t.effects.slice(before.effects).some((effect) => effect.type === 'ledger' && effect.entry.kind === 'high hand')) {
         bonuses[before.over === nightIsOver(t.state) ? 'early' : 'atNightsEnd'] += 1;
@@ -178,6 +186,10 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
   // Random play is mostly two-handed or has an ante or a straddle in the pot, where nobody chops: tests/chop.test.ts chops by the hundred
   const chopping = `chops: ${JSON.stringify(chops)}`;
   assert.ok(chops.offered >= TABLES / 20 && chops.agreed >= TABLES / 30 && chops.turnedDown >= 1, chopping);
+
+  // Sent beside the game on a generator of their own (`ASIDE_COMMANDS`), so every count above is what it was before there were any
+  const reacting = `reactions: ${JSON.stringify(reactions)}`;
+  assert.ok(reactions.shown >= TABLES && reactions.thrown >= TABLES && reactions.full >= TABLES, reacting);
 
   const doubles = `double-board bomb pots: ${JSON.stringify(doubleBoards)}`;
   assert.ok(doubleBoards.chips >= TABLES / 2 && doubleBoards.cents >= TABLES / 2, doubles);

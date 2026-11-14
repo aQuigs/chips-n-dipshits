@@ -1,6 +1,7 @@
 /* What a player asks for about their own seat. */
 import { formatAmount, validAmount } from '../amounts.ts';
 import { choosePosting } from '../handPlan.ts';
+import { addReaction } from '../reactions.ts';
 import { leaveSeat, submit } from '../seating.ts';
 import { seatIndexOf } from '../seats.ts';
 import { chooseStraddle, isStraddle, straddleKind } from '../straddles.ts';
@@ -110,4 +111,10 @@ export const setAlwaysChop: Handler<'setAlwaysChop'> = {
 
     seat.alwaysChop = on;
   },
+};
+
+/** Allowed from a seat at any time, sitting out and once the night is over too: it touches nothing of the game. */
+export const react: Handler<'react'> = {
+  by: 'seat',
+  run: ({ state, ctx, member, command }) => addReaction(state, ctx.now, member.id, command.kind, command.to),
 };

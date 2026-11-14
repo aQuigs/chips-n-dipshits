@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { addMember, BADGES, createTable, DEFAULT_CONFIG, LIMITS, presetSettings } from '../src/engine/index.ts';
+import { addMember, BADGES, createTable, DEFAULT_CONFIG, LIMITS, presetSettings, REACTIONS, REACTIONS_LIVE } from '../src/engine/index.ts';
 import type { Effect, HandRecord, TableConfig, TableState } from '../src/engine/index.ts';
 import { SheetPresetStore } from '../src/gas/sheetPresetStore.ts';
 import { SheetStore } from '../src/gas/sheetStore.ts';
@@ -964,6 +964,12 @@ test('after the longest night the fullest table still fits its row and the cache
     paid: Object.fromEntries(t.state.members.map((member) => [member.id, 10 * LIMITS.chips])),
   };
   t.state.feed = fullestChat();
+
+  // As many reactions as the table keeps, each as long as one can be: a throw, the longest kind, between two members
+  const longest = [...REACTIONS].filter((kind) => kind.thrown).sort((a, b) => b.id.length - a.id.length)[0]!;
+  t.state.reactions = Array.from({ length: REACTIONS_LIVE }, (_reaction, index) => ({ from: t.ids[index]!, kind: longest.id, at: 9_999_999_999_999, to: t.ids[index + 1]! }));
+  const reactions = JSON.stringify(t.state.reactions).length;
+  assert.ok(reactions <= 300, `the reactions take ${reactions} characters`);
 
   const numbers = JSON.stringify(t.state.tonight).length;
   assert.ok(numbers <= LIMITS.members * 400, `the night's numbers for ${LIMITS.members} players take ${numbers} characters`);

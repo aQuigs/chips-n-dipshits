@@ -342,6 +342,17 @@ export interface Tonight {
   highHand: HighHands;
 }
 
+/** A reaction or a throw, kept on the table for a few seconds after it is made: see `reactions.ts`. */
+export interface Reaction {
+  /** The member who made it. */
+  from: string;
+  /** Its id in `REACTIONS`. */
+  kind: string;
+  at: number;
+  /** The member a throw is aimed at; left out of a reaction shown over the sender's own seat. */
+  to?: string;
+}
+
 export interface TableState {
   schema: number;
   id: string;
@@ -386,6 +397,8 @@ export interface TableState {
   tonight: Tonight;
   feed: FeedEntry[];
   feedSeq: number;
+  /** The reactions made in the last few seconds, oldest first, and never more than `REACTIONS_LIVE`. Only `reactions.ts` changes it. */
+  reactions: Reaction[];
 }
 
 /** Chips bought or cashed out, which money is paid for: what the settle-up counts. */
@@ -474,6 +487,8 @@ export type Command =
   | { type: 'ritVote'; runs: number }
   | { type: 'showCards' }
   | { type: 'chat'; text: string }
+  /** A reaction over the sender's own seat, or something thrown at the seated player `to`: an id in `REACTIONS`. */
+  | { type: 'react'; kind: string; to?: string }
   | { type: 'start' }
   | { type: 'pause' }
   | { type: 'approve'; playerId: string }

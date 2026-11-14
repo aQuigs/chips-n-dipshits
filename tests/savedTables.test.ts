@@ -406,3 +406,17 @@ test('a table saved before the high hand was kept has it from the best hands sho
   assert.deepEqual(t.state.tonight.highHand.paid, { [idOf('P2')]: 3, [idOf('P0')]: 2 });
   assertInvariants(t.state, t.now);
 });
+
+test('a table saved before reactions loads with none, and its players can react', () => {
+  for (const file of FILES) {
+    const state = load(file);
+
+    assert.deepEqual(state.reactions, [], file);
+  }
+
+  const t = TestTable.adopt(load(OLDEST[0]!));
+  const seated = t.state.seats.find((seat) => seat !== null)!;
+  t.cmd(t.ids.indexOf(seated.playerId), { type: 'react', kind: 'laugh' });
+
+  assert.equal(t.view(0).reactions.length, 1);
+});

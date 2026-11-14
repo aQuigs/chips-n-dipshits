@@ -196,6 +196,27 @@ function bestHandsShownTonight(): TestTable {
   return t;
 }
 
+/** After a night's best hands were shown, three players all in, every one of them picking three runs: the hand is being run out on three boards. */
+function runoutOnThreeBoards(): TestTable {
+  const t = bestHandsShownTonight();
+
+  t.cmd(0, { type: 'updateConfig', config: { maxRuns: 3 } });
+  t.deal({ button: 0, holes: { 0: 'As Ah', 1: 'Kd Kh', 2: '9c 8c' }, board: 'Ks 7s 2d 3c 4h' });
+  t.raise(0, t.state.seats[0]!.stack + t.state.hand!.players[0]!.committed);
+  t.call(1);
+  t.call(2);
+
+  for (const seat of [0, 1, 2]) {
+    t.cmd(seat, { type: 'ritVote', runs: 3 });
+  }
+
+  for (let step = 0; step < 3; step++) {
+    t.wait(TIMING.runoutStepMs);
+  }
+
+  return t;
+}
+
 /** Tables as the code of one time saved them. */
 interface TableSet {
   /** The schema that code saved. */
@@ -234,6 +255,12 @@ const SETS: TableSet[] = [
       'runout-two-boards': runoutOnTwoBoards,
       'runout-run-it-twice-off': runoutWithRunItTwiceOff,
       'best-hands-shown': bestHandsShownTonight,
+    },
+  },
+  {
+    schema: 5,
+    tables: {
+      'runout-three-boards': runoutOnThreeBoards,
     },
   },
 ];

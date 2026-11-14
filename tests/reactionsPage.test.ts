@@ -114,7 +114,7 @@ function shownTable(clock: () => number): { shown: ShownTable; told: TableChange
   return { shown, told };
 }
 
-test('the viewer’s own reaction is told the moment it is made, with nothing else, and not again when the server sends it back', () => {
+test('the viewer’s own reaction is told the moment it is made, with nothing else and as no news of the table, and not again when the server sends it back', () => {
   const t = table();
   const { shown, told } = shownTable(() => t.now);
   shown.take(seenBy(t), false);
@@ -126,6 +126,8 @@ test('the viewer’s own reaction is told the moment it is made, with nothing el
   const tap = told.at(-1)!;
   assert.deepEqual(tap.reactions, [own]);
   assert.deepEqual([tap.events, tap.feed, tap.earned, tap.nightEnded, tap.wentBack], [[], [], [], false, false]);
+  // Were it news, a turn a late view brought and nothing announced would be announced by the tap
+  assert.equal(tap.current, false);
   assert.equal(tap.view, before, 'the table shown is as it was');
 
   t.cmd(DANA, { type: 'react', kind: 'tomato', to: t.ids[SAM] });
@@ -334,19 +336,14 @@ test('one reaction at a time: a second while the first is out is not sent', asyn
   line.hangUp();
 });
 
-test('the table’s own refusal of a reaction is said; any other leaves the seat alone and says nothing, the poll being what hears of a seat gone', async () => {
-  for (const [code, words] of [
-    ['invalid', ['Plenty flying already: try again in a moment']],
-    ['busy', []],
-    ['unauthorized', []],
-    ['not_found', []],
-  ] as const) {
+test('a refused reaction says nothing, since the player saw it at the tap, and leaves the seat alone, the poll being what hears of a seat gone', async () => {
+  for (const code of ['invalid', 'busy', 'unauthorized', 'not_found'] as const) {
     const { line, connection, said, refused } = connected();
     const outcome = connection.send(REACT);
 
     await line.settle({ ok: false, code, error: 'Plenty flying already: try again in a moment', build: 'b' });
 
     assert.equal(await outcome, 'refused');
-    assert.deepEqual([said, refused, line.polls], [words, [], 0], code);
+    assert.deepEqual([said, refused, line.polls], [[], [], 0], code);
   }
 });

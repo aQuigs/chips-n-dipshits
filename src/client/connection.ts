@@ -289,9 +289,14 @@ export class TableConnection {
 
     this.setFleeting(true);
     const response = await this.server.ask({ op: 'act', tableId: this.session.tableId, auth: this.session.auth, command });
+
+    if (this.closed) {
+      return 'unanswered';
+    }
+
     this.setFleeting(false);
 
-    if (this.closed || !response) {
+    if (!response) {
       return 'unanswered';
     }
 
@@ -299,11 +304,8 @@ export class TableConnection {
       this.take(response.view);
     }
 
-    // The table's own reason, such as too many at once, is worth a line; one about getting through to it is not
-    if (!response.ok && response.code === 'invalid') {
-      this.listener.notice(response.error);
-    }
-
+    // Nothing is said even of the table's own refusal: the page showed the reaction at the tap, from a view
+    // a poll behind, and a line saying it never happened would only contradict what the player saw
     return response.ok ? 'taken' : 'refused';
   }
 

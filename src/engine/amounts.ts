@@ -28,6 +28,9 @@ const STYLES: Record<Unit, UnitStyle> = {
 };
 
 /** How many of the table's smallest unit make one of what it writes: 100 cents to the dollar. */
+/** Every kind of money a table can play in. */
+export const UNITS = Object.keys(STYLES) as Unit[];
+
 function perWhole(table: Denominated): number {
   return 10 ** STYLES[table.unit].decimals;
 }

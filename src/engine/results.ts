@@ -60,28 +60,33 @@ function resultOf(playerId: string, row: TonightRow, highHand: boolean): PlayerR
   };
 }
 
+/** What of a night adds up: over two members of one table who are one player, and over a player's nights. */
+export type Summed = Pick<PlayerResult, 'net' | 'hands' | 'won' | 'biggest' | 'best' | 'badges'>;
+
 /**
- * Adds another member's night to a known player's, for one who sat at the table as two ("Bob" and
- * "Bob 2"): money, hands and pots add up, as do the badges; the biggest pot is the bigger of the two,
- * and the best hand the better, the first member's when they are as good.
+ * Two of them as one: money, hands and pots add up, as do the badges; the biggest pot is the bigger
+ * of the two, and the best hand the better, the first one's when they are as good.
  */
-function combined(result: PlayerResult, more: PlayerResult): PlayerResult {
-  const badges = { ...result.badges };
+export function addedUp(first: Summed, more: Summed): Summed {
+  const badges = { ...first.badges };
 
   for (const [id, times] of Object.entries(more.badges)) {
     badges[id] = (badges[id] ?? 0) + times;
   }
 
   return {
-    ...result,
-    net: result.net + more.net,
-    hands: result.hands + more.hands,
-    won: result.won + more.won,
-    biggest: Math.max(result.biggest, more.biggest),
-    best: rankOf(more.best) > rankOf(result.best) ? more.best : result.best,
+    net: first.net + more.net,
+    hands: first.hands + more.hands,
+    won: first.won + more.won,
+    biggest: Math.max(first.biggest, more.biggest),
+    best: rankOf(more.best) > rankOf(first.best) ? more.best : first.best,
     badges,
-    highHand: result.highHand || more.highHand,
   };
+}
+
+/** Adds another member's night to a known player's, for one who sat at the table as two ("Bob" and "Bob 2"), under the first one's name. */
+function combined(result: PlayerResult, more: PlayerResult): PlayerResult {
+  return { ...result, ...addedUp(result, more), highHand: result.highHand || more.highHand };
 }
 
 /**

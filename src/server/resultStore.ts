@@ -4,7 +4,7 @@
  * are kept, how they add up into a player's record, and when a table's are written again. Every store
  * follows these, so the record is the same over a Sheet and in memory.
  */
-import { evaluateHand, resultsOf } from '../engine/index.ts';
+import { addedUp, resultsOf } from '../engine/index.ts';
 import type { Card, PlayerResult, TableResults, TableState, Unit } from '../engine/index.ts';
 import { SETTLE_AFTER_MS } from './api.ts';
 
@@ -80,7 +80,6 @@ export interface PlayerRecord {
  */
 export type Records = Record<Unit, PlayerRecord[]>;
 
-const rankOf = (cards: readonly Card[] | null): number => (cards ? evaluateHand(cards).score : -1);
 
 const inOrder = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
@@ -95,20 +94,13 @@ export function recordsOf(rows: readonly NightResult[]): Records {
     const ofUnit = records[row.unit];
     const record = ofUnit.get(row.playerId) ?? { id: row.playerId, nights: 0, nightsUp: 0, net: 0, hands: 0, won: 0, biggest: 0, best: null, badges: {}, highHands: 0 };
 
-    record.nights += 1;
-    record.nightsUp += row.net > 0 ? 1 : 0;
-    record.net += row.net;
-    record.hands += row.hands;
-    record.won += row.won;
-    record.biggest = Math.max(record.biggest, row.biggest);
-    record.best = rankOf(row.best) > rankOf(record.best) ? row.best : record.best;
-    record.highHands += row.highHand ? 1 : 0;
-
-    for (const [id, times] of Object.entries(row.badges)) {
-      record.badges[id] = (record.badges[id] ?? 0) + times;
-    }
-
-    ofUnit.set(row.playerId, record);
+    ofUnit.set(row.playerId, {
+      ...record,
+      ...addedUp(record, row),
+      nights: record.nights + 1,
+      nightsUp: record.nightsUp + (row.net > 0 ? 1 : 0),
+      highHands: record.highHands + (row.highHand ? 1 : 0),
+    });
   }
 
   return { chips: [...records.chips.values()], cents: [...records.cents.values()] };

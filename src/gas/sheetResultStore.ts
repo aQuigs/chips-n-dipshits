@@ -1,8 +1,8 @@
-import { asNumber, evaluateHand, fromNumber, madeHandName, RANKS, SUITS } from '../engine/index.ts';
+import { asNumber, evaluateHand, fromNumber, madeHandName, RANKS, SUITS, UNITS } from '../engine/index.ts';
 import type { Card, TableResults, Unit } from '../engine/index.ts';
 import type { ErrorLog } from '../server/errorLog.ts';
 import { isPlayerId } from '../server/playerStore.ts';
-import { countedOnce, everyNights, nightsIn, nightsOf, recordsOf } from '../server/resultStore.ts';
+import { countedOnce, everyNights, nightsIn, recordsOf } from '../server/resultStore.ts';
 import type { NightResult, PlayedNight, PlayerRecord, ResultStore, ResultWriter, Standings } from '../server/resultStore.ts';
 import { AMOUNT, HeldReports, openTab, TEXT, TIMESTAMP, underLock, WHOLE_NUMBER } from './sheets.ts';
 import type { CacheLike, LockLike, SheetLike, SpreadsheetLike } from './sheets.ts';
@@ -77,7 +77,6 @@ const LOCK_WAIT_MS = 3000;
 // the game may go on handing out the standings as they were before such a change
 const CACHE_SECONDS = 300;
 
-const UNITS: Unit[] = ['chips', 'cents'];
 const standingsKey = (unit: Unit) => `results:${unit}`;
 const nightsKey = (unit: Unit, playerId: string) => `nights:${unit}:${playerId}`;
 
@@ -238,16 +237,11 @@ export class SheetResultStore implements ResultStore, ResultWriter {
   }
 
   standings(): Standings {
-    return this.reports.after(() => this.cached() ?? this.locked(() => this.cached() ?? this.remember(this.rows())));
+    return this.reports.after(() => this.cached() ?? this.locked(() => this.cached() ?? this.remember(this.rows()).standings));
   }
 
   nights(playerId: string, unit: Unit): PlayedNight[] {
-    const read = (): PlayedNight[] => {
-      const rows = this.rows();
-      this.remember(rows);
-
-      return nightsOf(rows, playerId, unit);
-    };
+    const read = (): PlayedNight[] => this.remember(this.rows()).nights[unit].get(playerId) ?? [];
 
     return this.reports.after(() => this.cachedNights(playerId, unit) ?? this.locked(() => this.cachedNights(playerId, unit) ?? read()));
   }
@@ -436,7 +430,7 @@ export class SheetResultStore implements ResultStore, ResultWriter {
    * which reading it is of. Standings that can't be put there must not leave older ones behind; nights
    * that can't are read again when asked for.
    */
-  private remember(rows: NightResult[]): Standings {
+  private remember(rows: NightResult[]): { standings: Standings; nights: ReturnType<typeof everyNights> } {
     const standings: Standings = { asOf: this.deps.clock.now(), records: recordsOf(rows) };
     const nights = everyNights(rows);
     const ofPlayers = UNITS.flatMap((unit) => [...nights[unit]].map(([playerId, played]) => [nightsKey(unit, playerId), JSON.stringify({ asOf: standings.asOf, nights: played })]));
@@ -447,7 +441,7 @@ export class SheetResultStore implements ResultStore, ResultWriter {
       this.put(Object.fromEntries(ofPlayers));
     }
 
-    return standings;
+    return { standings, nights };
   }
 
   /** Puts what was just read under the lock into the cache, and says whether it could. */

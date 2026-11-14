@@ -192,7 +192,7 @@ The Results tab is what the standings are read from: a row for each table and kn
 - The standings show a player under the name the Players tab has for them, and nobody who is not on it. Their rows stay, and count again if their row in Players comes back.
 - A row the game cannot read is left out of the standings and left as it is; the Errors tab says how many and where (`store read results`).
 - The game goes by the tab as it was for up to five minutes after a change.
-- When this version is first deployed there is no Results tab. The first night that goes on record makes it; until then the standings say no night is on record. Tables already in the Sheet were played before anyone was known, so they add nothing unless their players come back and say who they are.
+- When this version is first deployed there is no Results tab. The first night that goes on record makes it; until then the standings say no night is on record.
 
 ## When something breaks
 
@@ -240,7 +240,7 @@ To see that it works on the live game, sit at a table, open the browser's develo
 | `npm run screenshots` | The same browser run, saving a picture of every screen, and of the table in every theme, to `screenshots/`. |
 | `npm run build` | Type-checks and writes `dist/gas` (what is pushed to Apps Script) and `dist/web` (the page for any static host). |
 | `npm run gallery` | Writes `dist/gallery.html`, a showcase of the themes with the app playing against bots in the page. |
-| `npm run check:live` | Plays a short game at the deployed address in real browsers and checks the page Google serves is the one that was built. Leaves one small table in the Sheet, and one player called Live check in the Players tab. Both of its browsers are that one player, so its tables are nobody's night: they add no row to Results and nothing to the standings. |
+| `npm run check:live` | Plays a short game at the deployed address in real browsers and checks the page Google serves is the one that was built. Leaves one small table in the Sheet, and one player called Live check in the Players tab. Its tables add nothing to the standings. |
 
 ## How it is put together
 

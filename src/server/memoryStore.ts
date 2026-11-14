@@ -10,6 +10,7 @@ import type { TablePeek, TableStore, Txn } from './store.ts';
 interface Kept {
   json: string;
   changedAt: number;
+  version: number;
 }
 
 /**
@@ -34,7 +35,7 @@ export class MemoryStore implements TableStore {
     const txn = fn(this.read(tableId));
 
     if (txn.save !== null) {
-      this.tables.set(txn.save.id, { json: JSON.stringify(txn.save), changedAt: txn.at });
+      this.tables.set(txn.save.id, { json: JSON.stringify(txn.save), changedAt: txn.at, version: txn.save.version });
       this.keep(txn.effects, txn.save);
     }
 
@@ -86,7 +87,7 @@ export class MemoryStore implements TableStore {
       return;
     }
 
-    const tables = [...this.tables].map(([id, { json, changedAt }]) => ({ id, changedAt, version: restoreState(json).version }));
+    const tables = [...this.tables].map(([id, { changedAt, version }]) => ({ id, changedAt, version }));
 
     this.settled = settleIdle(tables, now, this.settled, this.results, (table) => this.read(table.id), console.error, asked);
   }

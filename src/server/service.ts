@@ -1,4 +1,4 @@
-import { addMember, applyCommand, createTable, GameError, listedLike, playerName, presetName, presetSettings, randomId, requireLevel, setIdentity, sharedPreset, tick, viewFor } from '../engine/index.ts';
+import { addMember, applyCommand, createTable, GameError, listedLike, playerName, presetName, presetSettings, randomId, requireLevel, setIdentity, sharedPreset, tick, UNITS, viewFor } from '../engine/index.ts';
 import type { Arriving, Command, Ctx, Member, Preset, Rng, TableState, Unit } from '../engine/index.ts';
 import { HISTORY_LIMIT } from './api.ts';
 import type { ApiResponse, Auth, ErrorCode, Joined, UnitStandings, Who } from './api.ts';
@@ -169,8 +169,6 @@ export function failureOf(request: unknown, error: unknown): Failure {
  * results written as they finally stand, the way the end of a night does.
  */
 export const LAST_WORDS: LastWords = (state, at) => [{ type: 'nightEnded', night: { at, tableId: state.id } }];
-
-const UNITS: Unit[] = ['chips', 'cents'];
 
 /**
  * Serves every request the game's clients make. It knows nothing about HTTP, Apps Script or Sheets:

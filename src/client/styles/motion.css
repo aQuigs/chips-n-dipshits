@@ -1,8 +1,10 @@
 /* ---- Things in motion on the table: stand-ins for chips and cards the table no longer draws ---- */
 
-/* Over everything on the table and under no finger. Where it lies comes from the table, as a bet's place does */
+/* Over everything on the table and under no finger, held by its middle at the place the table gives it, as a bet is */
 .stand-in {
+  position: absolute;
   z-index: 6;
+  transform: translate(-50%, -50%);
   pointer-events: none;
 }
 
@@ -10,12 +12,6 @@
    a tap goes to the seat or the felt under it */
 .stage[data-moving] :is(.card, .bet) {
   pointer-events: none;
-}
-
-/* A seat's two cards, held by the middle of the place a seat keeps for them */
-.hole.stand-in {
-  position: absolute;
-  transform: translate(-50%, -50%);
 }
 
 /* A chip with no figure beside it */

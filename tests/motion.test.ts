@@ -133,8 +133,8 @@ test('each kind of hand event moves what it should, or nothing', () => {
     ['an uncalled bet going back', [...ON_THE_FLOP, ['bet', 1, 500, 480], ['call', 2, 300, 0], ['fold', 0]], ['return', 1, 200], ['chips 200 bet1>seat1 @0']],
     ['the part of a bomb pot nobody could match going back', [DEALT[0]!, ['post', 0, 'bomb pot', 185, 815, 'contribution'], ['post', 1, 'bomb pot', 57, 943, 'contribution'], ['deal']], ['return', 0, 128], ['chips 128 pot>seat0 @0']],
     ['a blind and part of an ante going back', [DEALT[0]!, ['post', 1, 'ante', 6, 994, 'contribution'], ['post', 1, 'small blind', 3, 991], ['deal']], ['return', 1, 7], ['chips 3 bet1>seat1 @0', 'chips 4 pot>seat1 @0']],
-    ['the flop, with the bets before it', ON_THE_FLOP.slice(0, -1), ON_THE_FLOP.at(-1)!, ['chips 20 bet0>pot @0', 'chips 20 bet1>pot @0', 'chips 20 bet2>pot @0', 'board deck>board0.0 @120', 'board deck>board0.1 @180', 'board deck>board0.2 @240']],
-    ['the turn after checks', [...ON_THE_FLOP, ['check', 1], ['check', 2], ['check', 0]], ['street', 0, ['9h']], ['board deck>board0.3 @0']],
+    ['the flop, with the bets before it', ON_THE_FLOP.slice(0, -1), ON_THE_FLOP.at(-1)!, ['chips 20 bet0>pot @0', 'chips 20 bet1>pot @0', 'chips 20 bet2>pot @0', 'board >board0.0 @120', 'board >board0.1 @180', 'board >board0.2 @240']],
+    ['the turn after checks', [...ON_THE_FLOP, ['check', 1], ['check', 2], ['check', 0]], ['street', 0, ['9h']], ['board >board0.3 @0']],
     ['a vote to run it twice', ON_THE_FLOP, ['vote', 1, true], []],
     ['the bets going in when the rest is run out', [...ON_THE_FLOP, ['bet', 1, 980, 0], ['call', 2, 980, 0], ['fold', 0]], ['runs', 1], ['chips 980 bet1>pot @0', 'chips 980 bet2>pot @0']],
     ['cards turned face up', ON_THE_FLOP, ['show', 1, ['7d', '2s']], ['show >cards1 @0']],
@@ -185,7 +185,7 @@ test('a bet that is gathered in the same view is seen going to the pot, not slid
   // The small blind's call and the big blind's check close the street in one view
   table.call(1);
   table.check(2);
-  assert.deepEqual(page.arrive(), ['chips 20 bet0>pot @0', 'chips 20 bet1>pot @0', 'chips 20 bet2>pot @0', 'board deck>board0.0 @120', 'board deck>board0.1 @180', 'board deck>board0.2 @240']);
+  assert.deepEqual(page.arrive(), ['chips 20 bet0>pot @0', 'chips 20 bet1>pot @0', 'chips 20 bet2>pot @0', 'board >board0.0 @120', 'board >board0.1 @180', 'board >board0.2 @240']);
 
   table.check(1);
   table.raise(2, 100);
@@ -240,12 +240,12 @@ test('a bomb pot sends a bare chip from every seat to the pot as the cards go ou
     'deal deck>cards1 @0',
     'deal deck>cards2 @60',
     'deal deck>cards0 @120',
-    'board deck>board0.0 @120',
-    'board deck>board0.1 @180',
-    'board deck>board0.2 @240',
-    'board deck>board1.0 @120',
-    'board deck>board1.1 @180',
-    'board deck>board1.2 @240',
+    'board >board0.0 @120',
+    'board >board0.1 @180',
+    'board >board0.2 @240',
+    'board >board1.0 @120',
+    'board >board1.1 @180',
+    'board >board1.2 @240',
   ]);
 });
 
@@ -274,8 +274,8 @@ test('a hand run twice lands each street where it belongs, the second board’s 
     landed.push(page.arrive());
   }
 
-  assert.deepEqual(landed.slice(0, 3), [['board deck>board0.3 @0'], ['board deck>board0.4 @0'], ['board deck>board1.3 @0']]);
-  assert.equal(landed[3]![0], 'board deck>board1.4 @0');
+  assert.deepEqual(landed.slice(0, 3), [['board >board0.3 @0'], ['board >board0.4 @0'], ['board >board1.3 @0']]);
+  assert.equal(landed[3]![0], 'board >board1.4 @0');
   assert.deepEqual(landed[3]!.slice(1).map((move) => move.replace(/\d+ /, '')), ['chips pot>seat0 @120'], 'both boards’ shares in one pile');
 });
 

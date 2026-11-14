@@ -67,6 +67,49 @@ export const STILL = `(() => {
   }
 })()`;
 
+// Run in the page: the box around several things on it, and the seat a card or a bet belongs to
+const AROUND = `(elements) => {
+  const boxes = elements.map((element) => element.getBoundingClientRect());
+
+  return {
+    left: Math.min(...boxes.map((box) => box.left)),
+    top: Math.min(...boxes.map((box) => box.top)),
+    right: Math.max(...boxes.map((box) => box.right)),
+    bottom: Math.max(...boxes.map((box) => box.bottom)),
+  };
+}`;
+const SEAT_OF = `(element) => element.closest('[data-seat]')?.dataset.seat ?? element.dataset.bet`;
+
+/** Where things lie on a table, by seat for what every seat has. */
+export interface Spots {
+  felt: Box;
+  /** The pot, or the result that stands where it stood once the hand is over. */
+  pot: Box;
+  plates: Record<number, Box>;
+  /** A seat's two cards together. */
+  cards: Record<number, Box>;
+  /** The place a seat keeps for its cards, which has their height and, once they are folded, no width. */
+  holes: Record<number, Box>;
+  bets: Record<number, Box>;
+}
+
+/** Run in the page: the spots of the table it shows. */
+export const SPOTS = `(() => {
+  const around = ${AROUND};
+  const seatOf = ${SEAT_OF};
+  const bySeat = (selector, parts) => Object.fromEntries([...document.querySelectorAll(selector)].map((element) => [seatOf(element), around(parts ? [...element.querySelectorAll(parts)] : [element])]));
+  const pot = document.querySelector('.pot') ?? document.querySelector('.center > .message') ?? document.querySelector('.center');
+
+  return {
+    felt: around([document.querySelector('.felt')]),
+    pot: around([pot]),
+    plates: bySeat('.seat[data-seat] .plate'),
+    cards: bySeat('.seat[data-seat] .hole:not(.none)', '.card'),
+    holes: bySeat('.seat[data-seat] .hole'),
+    bets: bySeat('.bet[data-bet]'),
+  };
+})()`;
+
 /** One thing the page set moving, as `MOTION` wrote it down. */
 export interface Flight {
   /** A card the table draws, a seat's two cards standing in for ones it no longer draws, or a pile of chips. */
@@ -111,6 +154,8 @@ export const MOTION = `(() => {
 
   const held = [];
   const animate = Element.prototype.animate;
+  const around = ${AROUND};
+  const seatOf = ${SEAT_OF};
   const number = (text) => (text === undefined ? null : Number(text));
 
   Element.prototype.animate = function (frames, options) {
@@ -119,19 +164,14 @@ export const MOTION = `(() => {
     const seen = this.classList.contains('hole') ? [...this.children] : [this];
     const whereAt = (time) => {
       animation.currentTime = time;
-      const boxes = seen.map((element) => element.getBoundingClientRect());
-      return {
-        left: Math.min(...boxes.map((box) => box.left)),
-        top: Math.min(...boxes.map((box) => box.top)),
-        right: Math.max(...boxes.map((box) => box.right)),
-        bottom: Math.max(...boxes.map((box) => box.bottom)),
-      };
+
+      return around(seen);
     };
 
     window.flights.push({
       what: this.classList.contains('bet') ? 'chips' : this.classList.contains('hole') ? 'cards' : 'card',
       standIn: this.classList.contains('stand-in'),
-      seat: number(this.closest('[data-seat]')?.dataset.seat ?? this.dataset.bet),
+      seat: number(seatOf(this)),
       board: number(this.closest('[data-run]')?.dataset.run),
       text: this.textContent.trim(),
       index: [...this.closest('.stage').querySelectorAll('*')].indexOf(this),

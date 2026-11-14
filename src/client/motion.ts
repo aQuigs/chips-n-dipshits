@@ -26,7 +26,7 @@ export type MoveName = 'deal' | 'board' | 'show' | 'bet' | 'chips' | 'muck';
 
 export interface Move {
   name: MoveName;
-  /** Where it leaves from. Left out of a move that happens where it lies, as cards turned face up. */
+  /** Where it leaves from. Left out of a move that happens where it lies: cards turned face up, a card dropped onto the board. */
   from?: Place;
   to: Place;
   /** What a pile of chips says it is worth, in the table's smallest unit. Left out, the pile is a bare chip. */

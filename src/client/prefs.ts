@@ -93,7 +93,7 @@ export const PREFERENCES = {
     default: true,
     css: 'attribute',
   },
-  // On for a new player. A device that asks for less motion has none, whatever is chosen
+  // A device that asks for less motion has none, whatever is chosen
   motion: {
     kind: 'onOff',
     label: 'Animations',

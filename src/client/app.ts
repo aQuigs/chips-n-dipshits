@@ -119,7 +119,7 @@ export class App {
     this.prefs = new Preferences(PREFERENCES, platform.memory, root);
     this.prefs.watch('theme', (id) => this.applyTheme(id));
     this.prefs.watch('deck', (deck) => this.screen?.feed.showDeck(deck));
-    this.sounds = new Sounds(pageSounds(), this.prefs, { now: () => performance.now(), inView: () => !document.hidden });
+    this.sounds = new Sounds(pageSounds(), this.prefs, { now: () => performance.now(), inView: this.watching.inView });
     this.attention = new Attention(this.prefs, pageWays({ sounds: this.sounds, touch: pageTouch(), root, ownsTab: platform.ownsTab }));
     this.abilities = { of: (key) => (key === 'motion' ? motionAbility(this.watching) : this.attention.of(key)), ask: (key) => this.attention.ask(key) };
     this.server = new ServerLine(platform.transport, platform.build, () => this.showOutdated());

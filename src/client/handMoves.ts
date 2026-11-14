@@ -55,11 +55,11 @@ const DECK: Place = { at: 'deck' };
 export const betSlide = (seat: number): Move => ({ name: 'bet', from: seatOf(seat), to: betOf(seat), after: 0 });
 
 /** A pile of chips crossing the table. With no amount it is a bare chip. */
-const chips = (from: Place, to: Place, amount?: number): Move => ({ name: 'chips', from, to, ...(amount === undefined ? {} : { amount }), after: 0 });
+const chips = (from: Place, to: Place, amount?: number): Move => ({ name: 'chips', from, to, amount, after: 0 });
 
-/** The bets in front of these seats go to the pot, as every bet does when a street ends: all but those of the seats in `gone`, which went before. */
-function gather(seats: ReplaySeat[], gone: number[]): Step[] {
-  const moves = seats.filter((seat) => seat.bet > 0 && !gone.includes(seat.seat)).map((seat) => chips(betOf(seat.seat), POT, seat.bet));
+/** The bets in front of these seats go to the pot, as every bet does when a street ends. */
+function gather(seats: ReplaySeat[]): Step[] {
+  const moves = seats.filter((seat) => seat.bet > 0).map((seat) => chips(betOf(seat.seat), POT, seat.bet));
 
   return moves.length > 0 ? [{ kind: 'gathered', moves }] : [];
 }
@@ -69,7 +69,7 @@ function gather(seats: ReplaySeat[], gone: number[]): Step[] {
  * none. When the betting ends with players all in and a vote on running it twice, the bets go to the
  * pot at once, and the events only say so when the vote is over.
  */
-function gatheredUnsaid(table: ReplayPosition | null, drawn: TableView | null): ReplaySeat[] {
+function gatheredUnsaid(table: ReplayPosition | null | undefined, drawn: TableView | null): ReplaySeat[] {
   return (table?.seats ?? []).filter((seat) => seat.bet > 0 && !drawn?.seats[seat.seat]?.bet);
 }
 
@@ -83,11 +83,10 @@ function deal(table: ReplayPosition): Move[] {
 
 /**
  * What one hand event moves, for the viewer at `viewer`: the table of which event moves what. `before`
- * and `after` are the table either side of the event, and `gone` the seats whose bets went to the pot
- * before the events said so. A new kind of event takes a case here, moves or none, and the build fails
- * until it has one.
+ * and `after` are the table either side of the event. A new kind of event takes a case here, moves or
+ * none, and the build fails until it has one.
  */
-function stepsOf(event: HandEvent, before: ReplayPosition, after: ReplayPosition, viewer: number | null, gone: number[]): Step[] {
+function stepsOf(event: HandEvent, before: ReplayPosition, after: ReplayPosition, viewer: number | null): Step[] {
   switch (event[0]) {
     case 'post': {
       const [, seat, , , , as] = event;
@@ -124,11 +123,11 @@ function stepsOf(event: HandEvent, before: ReplayPosition, after: ReplayPosition
       const first = after.boards[board]!.length - cards.length;
 
       // Two boards dealt a street together get their cards together, so two take no longer than one
-      return [...gather(before.seats, gone), { kind: 'street', moves: cards.map((_card, nth) => ({ name: 'board', from: DECK, to: { at: 'board', board, card: first + nth }, after: nth * BOARD_GAP_MS })) }];
+      return [...gather(before.seats), { kind: 'street', moves: cards.map((_card, nth) => ({ name: 'board', to: { at: 'board', board, card: first + nth }, after: nth * BOARD_GAP_MS })) }];
     }
 
     case 'runs':
-      return gather(before.seats, gone);
+      return gather(before.seats);
 
     case 'show':
       // The viewer has been looking at their own cards all along
@@ -136,7 +135,7 @@ function stepsOf(event: HandEvent, before: ReplayPosition, after: ReplayPosition
 
     // One pile to each winner, with all they won: the shares of a split pot, of side pots and of two boards leave together
     case 'win':
-      return [...gather(before.seats, gone), { kind: 'won', moves: [chips(POT, seatOf(event[1]), event[2])] }];
+      return [...gather(before.seats), { kind: 'won', moves: [chips(POT, seatOf(event[1]), event[2])] }];
 
     case 'bounty':
       return [{ kind: 'bounty', moves: event[2].map(([payer, amount]) => chips(seatOf(payer), seatOf(event[1]), amount)) }];
@@ -184,6 +183,8 @@ export function movesSeen({ before: shown, view, events }: TableChange, viewer: 
 
   const all = view.hand?.events ?? [];
   const had = all.length - events.length;
+  // The table before the first of the new events, between each and the next, and after the last
+  const tables = Array.from({ length: events.length + 1 }, (_, nth) => replayHand(all, had + nth));
   let steps: Step[] = [];
 
   const take = (made: Step[]): void => {
@@ -199,27 +200,26 @@ export function movesSeen({ before: shown, view, events }: TableChange, viewer: 
     }
   };
 
-  // Bets the table stopped drawing before this view are not gathered again when the events come to say it
-  const gone = gatheredUnsaid(replayHand(all, had), shown).map((seat) => seat.seat);
+  events.forEach((event, nth) => {
+    const [before, after] = [tables[nth], tables[nth + 1]];
 
-  for (let nth = had; nth < all.length; nth++) {
-    const before = replayHand(all, nth);
-    const after = replayHand(all, nth + 1);
+    take(before && after ? stepsOf(event, before, after, viewer) : []);
+  });
 
-    take(before && after ? stepsOf(all[nth]!, before, after, viewer, gone) : []);
-  }
+  // Bets this view stopped drawing are gathered now, though no event has said it yet
+  take(gather(gatheredUnsaid(tables.at(-1), view)));
 
-  // And bets this view stopped drawing are gathered now, though no event has said it yet
-  take(gather(gatheredUnsaid(replayHand(all), view), gone));
-
-  // A bet slides only where this view puts one. One that went to the pot in the same view is seen going
-  // there, one that came back whole is seen coming back, and one the table was drawing just so already,
-  // as a page does that shows a player's own move before the server answers, has had its slide
+  // What the table draws has the last word on its bets. One it stopped drawing before this view was seen
+  // going to the pot then. And a bet slides only where this view puts one: one that went to the pot in the
+  // same view is seen going there, one that came back whole is seen coming back, and one the table was
+  // drawing just so already, as a page does that shows a player's own move before the server answers, has had its slide
+  const gone = gatheredUnsaid(tables[0], shown).map((seat) => seat.seat);
   const gathered = steps.map((step) => step.kind).lastIndexOf('gathered');
   const betAt = (table: TableView | null, at: Place) => (at.at === 'bet' ? (table?.seats[at.seat]?.bet ?? 0) : 0);
   const slides = (move: Move, nth: number) => nth > gathered && betAt(view, move.to) > 0 && (gathered >= 0 || betAt(view, move.to) !== betAt(shown, move.to));
+  const leavesGoneBet = (move: Move) => move.from?.at === 'bet' && gone.includes(move.from.seat);
 
-  steps = steps.map((step, nth) => ({ ...step, moves: step.moves.filter((move) => move.name !== 'bet' || slides(move, nth)) })).filter((step) => step.moves.length > 0);
+  steps = steps.map((step, nth) => ({ ...step, moves: step.moves.filter((move) => (move.name === 'bet' ? slides(move, nth) : !leavesGoneBet(move))) })).filter((step) => step.moves.length > 0);
 
   // Over budget, the view is shown by how it ended
   while (steps.some((step, nth) => nth * STEP_GAP_MS + lengthOf(step) > MOST_VIEW_MS)) {

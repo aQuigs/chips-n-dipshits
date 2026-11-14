@@ -22,8 +22,8 @@ import type { Command, TableConfig, TableView } from '../src/engine/index.ts';
 import { contrast } from '../tests/colorVision.ts';
 import { boxes, overlap, Rig, SCREENS, setStageHeight, squeezed, textBoxes } from './rig.ts';
 import type { Box, RigPlayer, RigTable, ScreenName } from './rig.ts';
-import { complaints, MOTION, NOTICES, TITLES } from './pageSpies.ts';
-import type { Flight } from './pageSpies.ts';
+import { complaints, MOTION, NOTICES, SPOTS, TITLES } from './pageSpies.ts';
+import type { Flight, Spots } from './pageSpies.ts';
 import { STAND_IN_HOST } from './standInHost.ts';
 
 const OUT = fileURLToPath(new URL('../screenshots/', import.meta.url));
@@ -475,59 +475,17 @@ const BUZZ = `(() => {
   });
 })()`;
 
-interface Point {
-  x: number;
-  y: number;
-}
+const middle = (box: Box) => ({ x: (box.left + box.right) / 2, y: (box.top + box.bottom) / 2 });
 
-const middle = (box: Box): Point => ({ x: (box.left + box.right) / 2, y: (box.top + box.bottom) / 2 });
+/** Whether one thing lies with its middle on the middle of another. */
+const over = (a: Box, b: Box) => Math.hypot(middle(a).x - middle(b).x, middle(a).y - middle(b).y) <= 1.5;
 
-/** That one thing lies with its middle on the middle of another. */
 function assertOver(found: Box, wanted: Box | undefined, what: string): void {
-  assert.ok(wanted, `${what}: nothing there to lie over`);
-
-  const [a, b] = [middle(found), middle(wanted)];
-  assert.ok(Math.hypot(a.x - b.x, a.y - b.y) <= 1.5, `${what}: its middle is at ${JSON.stringify(a)}, not ${JSON.stringify(b)}`);
+  assert.ok(wanted && over(found, wanted), `${what}: its middle is at ${JSON.stringify(middle(found))}, not ${JSON.stringify(wanted && middle(wanted))}`);
 }
 
-/** Where things lie on a table, by seat for what every seat has. */
-interface Spots {
-  felt: Box;
-  /** The pot, or the result that stands where it stood once the hand is over. */
-  pot: Box;
-  plates: Record<number, Box>;
-  /** A seat's two cards together. */
-  cards: Record<number, Box>;
-  /** The place a seat keeps for its cards, which has their height and, once they are folded, no width. */
-  holes: Record<number, Box>;
-  bets: Record<number, Box>;
-}
-
-// Run in the page: the spots of the table it shows
-const SPOTS = `(() => {
-  const around = (elements) => {
-    const boxes = elements.map((element) => element.getBoundingClientRect());
-
-    return {
-      left: Math.min(...boxes.map((box) => box.left)),
-      top: Math.min(...boxes.map((box) => box.top)),
-      right: Math.max(...boxes.map((box) => box.right)),
-      bottom: Math.max(...boxes.map((box) => box.bottom)),
-    };
-  };
-  const bySeat = (selector, parts) =>
-    Object.fromEntries([...document.querySelectorAll(selector)].map((element) => [element.closest('[data-seat]')?.dataset.seat ?? element.dataset.bet, around(parts ? [...element.querySelectorAll(parts)] : [element])]));
-  const pot = document.querySelector('.pot') ?? document.querySelector('.center > .message') ?? document.querySelector('.center');
-
-  return {
-    felt: around([document.querySelector('.felt')]),
-    pot: around([pot]),
-    plates: bySeat('.seat[data-seat] .plate'),
-    cards: bySeat('.seat[data-seat] .hole:not(.none)', '.card'),
-    holes: bySeat('.seat[data-seat] .hole'),
-    bets: bySeat('.bet[data-bet]'),
-  };
-})()`;
+/** Whether two measures are the same to the browser: what one layout gives twice. */
+const same = (a: number, b: number) => Math.abs(a - b) < 0.05;
 
 /** What the page has set moving since it was last asked, once all of it has landed. Moves held in the air are let go first. */
 async function flown(page: Page): Promise<Flight[]> {
@@ -565,7 +523,7 @@ const DRAWN = `(() => {
   };
 })()`;
 
-const sameBox = (a: Box, b: Box | undefined) => b !== undefined && (['left', 'top', 'right', 'bottom'] as const).every((edge) => Math.abs(a[edge] - b[edge]) < 0.05);
+const sameBox = (a: Box, b: Box | undefined) => b !== undefined && (['left', 'top', 'right', 'bottom'] as const).every((edge) => same(a[edge], b[edge]));
 
 /**
  * That a page whose motion has landed is, to the last attribute and the last box, what a page that
@@ -689,9 +647,9 @@ async function watch(table: RigTable, name: string, layout: MotionLayout, holdAt
  */
 function assertLeavesSeat(flight: Flight, { before, after }: Seen, seat: number, what: string): void {
   const [cards, hole] = [before.cards[seat]!, after.holes[seat]!];
-  const fits = Math.abs(flight.from.top - hole.top) < 0.05 && Math.abs(flight.from.bottom - hole.bottom) < 0.05 && Math.abs(middle(flight.from).x - middle(hole).x) < 0.05;
+  const fits = same(flight.from.top, hole.top) && same(flight.from.bottom, hole.bottom) && same(middle(flight.from).x, middle(hole).x);
 
-  assert.ok(fits && Math.abs(flight.from.right - flight.from.left - (cards.right - cards.left)) < 0.05, `${what}: the folded cards start at ${JSON.stringify(flight.from)}, their place is ${JSON.stringify(hole)} and they lay at ${JSON.stringify(cards)}`);
+  assert.ok(fits && same(flight.from.right - flight.from.left, cards.right - cards.left), `${what}: the folded cards start at ${JSON.stringify(flight.from)}, their place is ${JSON.stringify(hole)} and they lay at ${JSON.stringify(cards)}`);
   assertOver(flight.to, after.felt, `${what}: the folded cards go to the middle of the table`);
 }
 
@@ -4447,7 +4405,7 @@ const CHECKS: Check[] = [
           assertOver(bet.to, seen.after.pot, where(`the bet of seat ${seat} goes to the pot`));
         });
         assert.deepEqual(cards.map((card) => [card.board, card.delay]), [0, 1, 2].map((nth) => [0, STEP_GAP_MS + nth * 60]), where('the flop'));
-        cards.forEach((card) => assert.ok(Math.abs(middle(card.from).x - middle(card.to).x) < 0.5 && card.from.top < card.to.top && card.from.bottom > card.to.top, where('a card of the flop drops onto its place from just above it')));
+        cards.forEach((card) => assert.ok(same(middle(card.from).x, middle(card.to).x) && card.from.top < card.to.top && card.from.bottom > card.to.top, where('a card of the flop drops onto its place from just above it')));
 
         seen = await step('a check', () => table.act('Quigs', { type: 'check' }));
         assert.deepEqual(seen.flights, [], where('a check moves nothing'));
@@ -4485,11 +4443,7 @@ const CHECKS: Check[] = [
         assert.deepEqual(cards.map((card) => [card.seat, card.delay]), [1, 1, 2, 2, 3, 3].map((seat) => [seat, 0]), where('the other three hands turn up'));
         cards.forEach((card) => assertOver(card.from, card.to, where('a card turns up where it lies')));
         assert.deepEqual(bets.map((bet) => [bet.text, bet.delay]), [0, 1, 2, 3].map(() => [says(big), STEP_GAP_MS]), where('a pile for each winner'));
-        assert.deepEqual(
-          bets.map((bet) => Object.keys(seen.after.plates).find((seat) => Math.hypot(middle(bet.to).x - middle(seen.after.plates[Number(seat)]!).x, middle(bet.to).y - middle(seen.after.plates[Number(seat)]!).y) <= 1.5)).sort(),
-          ['0', '1', '2', '3'],
-          where('each pile goes to a winner of its own'),
-        );
+        assert.deepEqual(bets.map((bet) => Object.keys(seen.after.plates).find((seat) => over(bet.to, seen.after.plates[Number(seat)]!))).sort(), ['0', '1', '2', '3'], where('each pile goes to a winner of its own'));
         bets.forEach((bet) => assertOver(bet.from, seen.after.pot, where('a winner’s pile leaves the middle')));
 
         // A bomb pot: a bare chip from every seat as the cards go out, then the flop

@@ -491,7 +491,7 @@ export interface DrawnTable {
   element: HTMLElement;
   /** What the table has standing at a place: a seat's cards, its bet, one card of a board. Nothing where it draws nothing. */
   standing(place: Place): HTMLElement[];
-  /** The middle of a place, whether or not anything stands there. Null for a seat nobody sits in. */
+  /** The middle of a place. Null where nothing marks it: a seat nobody sits in, a bet's place with no bet on it. */
   middle(place: Place): Point | null;
   /** The middle of something on the table, wherever it is drawn at this moment. */
   middleOf(element: Element): Point;
@@ -586,22 +586,8 @@ export function drawnTable(stage: Element): DrawnTable | null {
     },
     middle: (at) => {
       const spot = marker(at);
-      if (spot) {
-        return middleOf(spot);
-      }
 
-      if (at.at !== 'bet') {
-        return null;
-      }
-
-      // Where a bet would sit is the stylesheet's to work out, so one is laid there for a moment and measured
-      const probe = standIn('chips', at)!;
-
-      element.append(probe);
-      const middle = middleOf(probe);
-      probe.remove();
-
-      return middle;
+      return spot && middleOf(spot);
     },
     middleOf,
     standIn,

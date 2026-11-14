@@ -8,9 +8,7 @@ interface Look {
   /** What moves: what the table has standing where the move ends, or a stand-in of this kind for what it no longer draws. */
   mover: 'standing' | 'chips' | 'cards';
   easing: string;
-  /** Crosses the table to or from the other place, rather than happening where it lies. */
-  travels: boolean;
-  /** How it is shrunk or turned at the far end. */
+  /** How it is shrunk, shifted or turned at the far end. */
   shape: string;
   opacity: number;
 }
@@ -19,20 +17,20 @@ const SMALL = 'scale(0.6)';
 
 const LOOKS: Record<MoveName, Look> = {
   // Quick off the deck and slowing onto the seat
-  deal: { mover: 'standing', easing: 'cubic-bezier(0.2, 0.8, 0.3, 1)', travels: true, shape: SMALL, opacity: 0 },
+  deal: { mover: 'standing', easing: 'cubic-bezier(0.2, 0.8, 0.3, 1)', shape: SMALL, opacity: 0 },
   // The deck sits where the board does, so a board card only drops the last of the way onto its place
-  board: { mover: 'standing', easing: 'ease-out', travels: false, shape: 'translateY(-35%) scale(0.92)', opacity: 0 },
+  board: { mover: 'standing', easing: 'ease-out', shape: 'translateY(-35%) scale(0.92)', opacity: 0 },
   // Turned over on its long edge
-  show: { mover: 'standing', easing: 'ease-out', travels: false, shape: 'rotateY(90deg)', opacity: 1 },
-  bet: { mover: 'standing', easing: 'ease-out', travels: true, shape: SMALL, opacity: 0 },
-  chips: { mover: 'chips', easing: 'ease-in-out', travels: true, shape: SMALL, opacity: 0 },
-  muck: { mover: 'cards', easing: 'ease-in', travels: true, shape: SMALL, opacity: 0 },
+  show: { mover: 'standing', easing: 'ease-out', shape: 'rotateY(90deg)', opacity: 1 },
+  bet: { mover: 'standing', easing: 'ease-out', shape: SMALL, opacity: 0 },
+  chips: { mover: 'chips', easing: 'ease-in-out', shape: SMALL, opacity: 0 },
+  muck: { mover: 'cards', easing: 'ease-in', shape: SMALL, opacity: 0 },
 };
 
 // The share of a move over which what moves fades in as it leaves, or out as it lands
 const FADE = 0.3;
 
-/** One piece of a move, ready to fly: what moves, and the middle of the place at its far end. */
+/** One piece of a move, ready to fly: what moves, and the middle of the place at its far end, or null when it moves where it lies. */
 interface Piece {
   element: HTMLElement;
   look: Look;
@@ -152,7 +150,7 @@ class PageMotion implements MotionPlayer {
 
   private fly({ element, look, far, ms, after }: Piece, rest: { middle: Point; transform: string; opacity: string }): void {
     const standIn = look.mover !== 'standing';
-    const across = look.travels && far ? `translate(${far.x - rest.middle.x}px, ${far.y - rest.middle.y}px)` : '';
+    const across = far ? `translate(${far.x - rest.middle.x}px, ${far.y - rest.middle.y}px)` : '';
 
     const here = { transform: rest.transform || 'none', opacity: rest.opacity };
     const away = { transform: `${across} ${rest.transform} ${look.shape}`, opacity: String(look.opacity) };

@@ -91,28 +91,30 @@ export function leadersOf(view: TableView): Leader[] {
 }
 
 /**
- * The night's high hand, with what its bonus came to; and once that is paid, the high hand shown
- * since, which the bonus is paid for next.
+ * The night's high hand, with what the bonus has paid tonight; and once the bonus has been paid for
+ * it, the high hand shown since, which the bonus is paid for next.
  */
 function highHandLeaders(view: TableView): Leader[] {
-  const { best, next } = view.tonight.highHand;
+  const { best, next, paid } = view.tonight.highHand;
   if (!best) {
     return [];
   }
 
   const { config } = view;
   const nameOf = (id: string) => view.tonight.players.find((row) => row.playerId === id)?.name ?? 'Someone';
-  const shown = (label: string, hand: HighHandView, note: string | undefined): Leader => {
+  const shown = (label: string, hand: HighHandView, ...notes: (string | null)[]): Leader => {
     const rows = hand.playerIds.map((id) => view.tonight.players.find((row) => row.playerId === id)).filter((row) => row !== undefined);
+    const note = notes.filter(Boolean).join('. ');
 
     return { label, who: whoOf(rows), what: hand.name, cards: hand.playerIds.length === 1 ? hand.cards : null, ...(note ? { note } : {}) };
   };
 
   const bonus = formatAmount(config.highHandBonus, config);
-  const toCome = config.highHandBonus > 0 ? `Bonus: ${bonus} from everyone else seated${nightOver(view) ? ', unpaid' : ' when the night ends'}` : undefined;
-  const paid = best.paid.length > 0 ? `Bonus paid: ${best.paid.map((each) => `${formatAmount(each.amount, config)} to ${nameOf(each.playerId)}`).join(', ')}` : toCome;
+  const toCome = config.highHandBonus > 0 ? `Bonus: ${bonus} from everyone else seated${nightOver(view) ? ', unpaid' : ' when the night ends'}` : null;
+  const paidSoFar = paid.length > 0 ? `Bonus paid: ${paid.map((each) => `${formatAmount(each.amount, config)} to ${nameOf(each.playerId)}`).join(', ')}` : null;
+  const bestIsNext = next !== null && next.hand === best.hand && [...next.playerIds].sort().join() === [...best.playerIds].sort().join();
 
-  return [shown('High hand', best, paid), ...(best.paid.length > 0 && next ? [shown('High hand since', next, toCome)] : [])];
+  return [shown('High hand', best, paidSoFar, bestIsNext ? toCome : null), ...(next && !bestIsNext ? [shown('High hand since', next, toCome)] : [])];
 }
 
 /** How many times a badge was earned, after its name: nothing for once. */

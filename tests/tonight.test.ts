@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { addMember, evaluateHand, handFacts, HIGH_CARD, isSevenDeuce, isStraddle, ledgerOf, newTonight, nextHighHand, nightIsOver, SEAT_COUNT, STRADDLES, STRADDLES_IN_A_ROW, STRAIGHT_FLUSH, straddlesAllowed, tonightView } from '../src/engine/index.ts';
-import type { Card, Effect, HandRecord, HighHand, PlayerTonight, Straddle, TableState, Tonight, TonightView } from '../src/engine/index.ts';
+import type { Card, Effect, HandRecord, PlayerTonight, Straddle, TableState, Tonight, TonightView } from '../src/engine/index.ts';
 import { restoreState } from '../src/server/store.ts';
 import { ACES, BOARD, cards, checkAround, handRecords, KINGS, ledgerEntries, QUEENS, seededRng, TestTable } from './helpers.ts';
 import { assertInvariants } from './invariants.ts';
@@ -456,40 +456,22 @@ class Recount {
     if (best?.hand === record.number && score(mine.cards) === score(best.cards)) {
       best.playerIds.push(player.playerId);
     } else if (!best || score(mine.cards) > score(best.cards)) {
-      highHand.best = { playerIds: [player.playerId], cards: mine.cards, hand: record.number, paid: [] };
+      highHand.best = { playerIds: [player.playerId], cards: mine.cards, hand: record.number };
     }
   }
 
   /**
    * A line of the bonus paid: a payer's, below zero, or a collector's. A bonus is paid only for hands
-   * shown down since the last one, so a collector's line while there are some starts a new payment,
-   * which closes them, and the night's high hand with them when it was unpaid.
+   * shown down since the last one, so a collector's line closes them.
    */
   private bonusPaid(playerId: string, amount: number): void {
     const { highHand } = this.tonight;
 
-    if (amount < 0) {
-      return;
-    }
-
-    if (Object.keys(highHand.sincePaid).length > 0) {
+    if (amount > 0) {
       highHand.sincePaid = {};
-      this.paidNow = highHand.best && highHand.best.paid.length === 0 ? highHand.best : null;
-    }
-
-    if (this.paidNow) {
-      const took = this.paidNow.paid.find((paid) => paid.playerId === playerId);
-
-      if (took) {
-        took.amount += amount;
-      } else {
-        this.paidNow.paid.push({ playerId, amount });
-      }
+      highHand.paid[playerId] = (highHand.paid[playerId] ?? 0) + amount;
     }
   }
-
-  /** The night's high hand being paid by the payment whose lines are being read, or null when it was paid before. */
-  private paidNow: HighHand | null = null;
 }
 
 /**

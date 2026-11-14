@@ -956,16 +956,17 @@ test('after the longest night the fullest table still fits its row and the cache
   }
   t.state.tonight.hands = 99_999;
 
-  // A high hand all ten seated shared and were paid for, and a hand shown since by every member
+  // A high hand all ten seated shared, a hand shown since by every member, and every member paid the bonus
   const seated = t.state.seats.flatMap((seat) => (seat ? [seat.playerId] : []));
   t.state.tonight.highHand = {
-    best: { playerIds: seated, cards: ['As', 'Ks', 'Qs', 'Js', 'Ts'], hand: 99_999, paid: seated.map((playerId) => ({ playerId, amount: 10 * LIMITS.chips })) },
+    best: { playerIds: seated, cards: ['As', 'Ks', 'Qs', 'Js', 'Ts'], hand: 99_999 },
     sincePaid: Object.fromEntries(t.state.members.map((member) => [member.id, { cards: ['As', 'Ks', 'Qs', 'Js', 'Ts'], hand: 99_999 }])),
+    paid: Object.fromEntries(t.state.members.map((member) => [member.id, 10 * LIMITS.chips])),
   };
   t.state.feed = fullestChat();
 
   const numbers = JSON.stringify(t.state.tonight).length;
-  assert.ok(numbers <= LIMITS.members * 380, `the night's numbers for ${LIMITS.members} players take ${numbers} characters`);
+  assert.ok(numbers <= LIMITS.members * 400, `the night's numbers for ${LIMITS.members} players take ${numbers} characters`);
 
   save(store, t.state);
 

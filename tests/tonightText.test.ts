@@ -97,7 +97,7 @@ test('the crown says what settled it: the money alone, a tie on it broken by reb
 test('players level in something are named together while they are few, and counted when they are many', () => {
   const view = oneHandIn().view(0);
   const { highHand } = view.tonight;
-  const led = (ids: string[]) => leadersOf({ ...view, tonight: { ...view.tonight, upMost: [], biggestPot: [], mostPots: ids, highHand: { ...highHand, best: { ...highHand.best!, playerIds: ids } } } });
+  const led = (ids: string[]) => leadersOf({ ...view, tonight: { ...view.tonight, upMost: [], biggestPot: [], mostPots: ids, highHand: { ...highHand, best: { ...highHand.best!, playerIds: ids }, next: { ...highHand.next!, playerIds: ids } } } });
   const everyone = view.tonight.players.map((row) => row.playerId);
 
   assert.deepEqual(led(everyone.slice(0, 2)), [
@@ -136,7 +136,7 @@ test('the high hand says what its bonus comes to, or came to and to whom, and on
 
   assert.deepEqual(text(), ['High hand: P0, Pair of aces (A♠ A♥ J♣ 9♥ 7♦). Bonus: 5 from everyone else seated when the night ends']);
 
-  t.cmd(0, { type: 'payHighHand', hand: 1 });
+  t.cmd(0, { type: 'payHighHand', hand: 1, to: [t.ids[0]!] });
   assert.deepEqual(text(), ['High hand: P0, Pair of aces (A♠ A♥ J♣ 9♥ 7♦). Bonus paid: 10 to P0']);
 
   // P2's kings, shown since, are the next to be paid
@@ -153,5 +153,5 @@ test('the high hand says what its bonus comes to, or came to and to whom, and on
   ]);
 
   t.cmd(0, { type: 'endNight' });
-  assert.deepEqual(text(), ['High hand: P0, Pair of aces (A♠ A♥ J♣ 9♥ 7♦). Bonus paid: 10 to P0']);
+  assert.deepEqual(text(), ['High hand: P0, Pair of aces (A♠ A♥ J♣ 9♥ 7♦). Bonus paid: 10 to P0, 10 to P2']);
 });

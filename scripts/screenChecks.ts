@@ -8531,14 +8531,14 @@ const CHECKS: Check[] = [
 
           for (const [who, page] of [['host', host], ['watcher', watcher]] as const) {
             await page.waitForSelector(RECAP);
-            assert.deepEqual(await texts(page, '.tonight-leaders div:has-text("High hand")'), [`High hand\nQuigs Pair of aces A♠ A♥ J♣ 9♥ 7♦\nBonus paid: ${kind.total} to Quigs`], `${what}, ${who}`);
+            assert.deepEqual(await texts(page, '.tonight-leaders div:has-text("High hand")'), [`High hand\nQuigs Pair of aces A♠ A♥ J♣ 9♥ 7♦\nBonus paid: ${kind.total} to Quigs, ${kind.total} to Stu`], `${what}, ${who}`);
           }
 
           await host.context().grantPermissions(['clipboard-read', 'clipboard-write']);
           await press('[data-action="copy-tonight"]');
           await host.waitForSelector('[data-action="copy-tonight"]:has-text("Copied")');
           const copied = ((await host.evaluate('navigator.clipboard.readText()')) as string).split('\n');
-          assert.deepEqual(copied.filter((line) => line.startsWith('High hand')), [`High hand: Quigs, Pair of aces (A♠ A♥ J♣ 9♥ 7♦). Bonus paid: ${kind.total} to Quigs`], what);
+          assert.deepEqual(copied.filter((line) => line.startsWith('High hand')), [`High hand: Quigs, Pair of aces (A♠ A♥ J♣ 9♥ 7♦). Bonus paid: ${kind.total} to Quigs, ${kind.total} to Stu`], what);
 
           // The nets in Tonight are the ledger's, bonuses and all
           const night = await tonightNets(host);

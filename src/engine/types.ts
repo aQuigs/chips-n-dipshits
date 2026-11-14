@@ -318,8 +318,6 @@ export interface ShownDown {
 export interface HighHand extends ShownDown {
   /** Who showed it, by member id: more than one when they showed as good in the same hand. `cards` are the first one's. */
   playerIds: string[];
-  /** Who collected the bonus while this was the night's high hand, and how much each took in all. Empty while it is unpaid. */
-  paid: { playerId: string; amount: number }[];
 }
 
 /** The high hand of the night. Only `highHand.ts` changes it. */
@@ -328,6 +326,8 @@ export interface HighHands {
   best: HighHand | null;
   /** The best hand each player has shown down since the bonus was last paid, by member id. The best of them is what the bonus is paid for next. */
   sincePaid: Record<string, ShownDown>;
+  /** What each player has collected of the bonus tonight, by member id: only those who have collected some. */
+  paid: Record<string, number>;
 }
 
 /**
@@ -493,7 +493,8 @@ export type Command =
   /** Starts dealing again after the night ended. */
   | { type: 'playOn' }
   /** Pays the high-hand bonus now, for the high hand shown in hand number `hand`, as the sender saw it. */
-  | { type: 'payHighHand'; hand: number }
+  /** `hand` and `to` are the hand number and the collectors the host was shown, so a payment that has since changed is refused rather than made. */
+  | { type: 'payHighHand'; hand: number; to: string[] }
   | { type: 'forgiveBlinds'; playerId: string }
   | { type: 'updateConfig'; config: Partial<TableConfig> }
   | { type: 'transferHost'; playerId: string }

@@ -297,7 +297,7 @@ test('a table saved before the night’s numbers were kept loads with nothing co
     const state = load(file);
     const { tonight, ledger } = TestTable.adopt(state).view(0);
 
-    assert.deepEqual(state.tonight, { hands: 0, players: {}, highHand: { best: null, sincePaid: {} } }, file);
+    assert.deepEqual(state.tonight, { hands: 0, players: {}, highHand: { best: null, sincePaid: {}, paid: {} } }, file);
     assert.deepEqual([tonight.hands, tonight.missed], [0, state.handCount - (state.hand ? 1 : 0)], file);
     assert.deepEqual(tonight.players.map((row) => [row.playerId, row.net, row.hands]).sort(), ledger.map((row) => [row.playerId, row.net, 0]).sort(), file);
   }
@@ -387,8 +387,9 @@ test('a table saved before the high hand was kept has it from the best hands sho
   const flush = ['Ah', 'Jh', '9h', '7h', '2h'];
 
   assert.deepEqual(t.state.tonight.highHand, {
-    best: { playerIds: [idOf('P0'), idOf('P2')], cards: flush, hand: 0, paid: [] },
+    best: { playerIds: [idOf('P0'), idOf('P2')], cards: flush, hand: 0 },
     sincePaid: { [idOf('P0')]: { cards: flush, hand: 0 }, [idOf('P2')]: { cards: flush, hand: 0 } },
+    paid: {},
   });
   assert.deepEqual(t.view(1).tonight.highHand.next, { playerIds: [idOf('P0'), idOf('P2')], name: 'Flush, ace high', cards: flush, hand: 0 });
   assertInvariants(t.state, t.now);
@@ -402,9 +403,6 @@ test('a table saved before the high hand was kept has it from the best hands sho
     t.state.seats.slice(0, 3).map((seat, index) => seat!.stack - before[index]!),
     [2, -5, 3],
   );
-  assert.deepEqual(t.state.tonight.highHand.best!.paid, [
-    { playerId: idOf('P2'), amount: 3 },
-    { playerId: idOf('P0'), amount: 2 },
-  ]);
+  assert.deepEqual(t.state.tonight.highHand.paid, { [idOf('P2')]: 3, [idOf('P0')]: 2 });
   assertInvariants(t.state, t.now);
 });

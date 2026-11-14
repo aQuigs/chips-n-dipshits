@@ -32,6 +32,15 @@ export function wholeNumber(value: unknown, what: string, min: number, max = LIM
   return value;
 }
 
+/** A list of at most `most` ids, such as member ids. */
+export function idList(value: unknown, what: string, most: number): string[] {
+  if (!Array.isArray(value) || value.length > most || !value.every((id) => typeof id === 'string')) {
+    throw new GameError(`${what} must be a list of at most ${most}`);
+  }
+
+  return value;
+}
+
 export function yesOrNo(value: unknown, what: string): boolean {
   if (typeof value !== 'boolean') {
     throw new GameError(`${what} must be on or off`);

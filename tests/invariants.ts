@@ -302,12 +302,13 @@ export function assertHighHandHolds(state: TableState): void {
   }
 
   assert.ok(best.playerIds.length > 0 && best.playerIds.every((id) => rank(players[id]?.best ?? null) === bestShown), 'a holder of the high hand whose own best hand is another');
-  assert.ok(best.paid.every((paid) => paid.amount > 0 && players[paid.playerId]), 'a bonus paid of nothing, or to someone the night has no numbers for');
+  assert.ok(Object.entries(highHand.paid).every(([id, amount]) => amount > 0 && players[id]), 'a bonus paid of nothing, or to someone the night has no numbers for');
   assert.ok(Object.entries(sincePaid).every(([id, shown]) => players[id] && rank(shown.cards) <= rank(players[id]!.best) && shown.hand <= state.handCount), 'a hand shown since the bonus was paid that is better than the player ever showed');
 
   const next = nextHighHand(highHand);
-  if (best.paid.length === 0) {
-    assert.ok(next && next.hand.hand === best.hand && rank(next.hand.cards) === bestShown && [...next.playerIds].sort().join() === [...best.playerIds].sort().join(), 'the high hand is unpaid and is not the one the bonus is paid for next');
+  assert.ok(!next || rank(next.hand.cards) <= bestShown, 'the high hand paid for next is better than the night\'s');
+  if (Object.keys(highHand.paid).length === 0) {
+    assert.ok(next && next.hand.hand === best.hand && rank(next.hand.cards) === bestShown && [...next.playerIds].sort().join() === [...best.playerIds].sort().join(), 'nothing has been paid, and the high hand is not the one the bonus is paid for next');
   }
 }
 
@@ -682,13 +683,15 @@ export function assertLedgerAgrees(state: TableState, effects: Effect[]): void {
   const entries = ledgerEntries(effects);
 
   for (const member of state.members) {
-    const totals = { paid: 0, transfer: 0, 'high hand': 0 };
+    const totals = { paid: 0, transfer: 0, 'high hand': 0, collected: 0 };
     for (const entry of entries.filter((e) => e.playerId === member.id)) {
       totals['otherId' in entry ? entry.kind : 'paid'] += entry.amount;
+      totals.collected += entry.kind === 'high hand' && entry.amount > 0 ? entry.amount : 0;
     }
 
     assert.equal(totals.paid, member.buyIn - member.cashOut, `the ledger entries and ${member.name}'s chips bought and cashed out disagree`);
     assert.equal(totals.transfer, member.transferred, `the ledger entries and the chips moved to ${member.name} disagree`);
+    assert.equal(totals.collected, state.tonight.highHand.paid[member.id] ?? 0, `the ledger entries and the bonus ${member.name} collected disagree`);
   }
 
   entries.forEach((entry, index) => {

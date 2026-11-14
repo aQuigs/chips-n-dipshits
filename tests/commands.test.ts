@@ -121,7 +121,7 @@ const DECLARED: { [T in CommandType]: { by: 'member' | 'seat' } | { by: HostLeve
   setLastHands: { by: 'host or cohost', sample: () => ({ type: 'setLastHands', hands: 3 }) },
   endNight: { by: 'host or cohost', sample: () => ({ type: 'endNight' }) },
   playOn: { by: 'host or cohost', sample: () => ({ type: 'playOn' }), setup: (t) => t.cmd(HOST, { type: 'endNight' }) },
-  payHighHand: { by: 'host or cohost', sample: () => ({ type: 'payHighHand', hand: 1 }), setup: showDownWithBonus },
+  payHighHand: { by: 'host or cohost', sample: (ids) => ({ type: 'payHighHand', hand: 1, to: [ids[HOST]!] }), setup: showDownWithBonus },
   forgiveBlinds: { by: 'host or cohost', sample: (ids) => ({ type: 'forgiveBlinds', playerId: ids[TARGET]! }) },
   updateConfig: { by: 'host or cohost', sample: () => ({ type: 'updateConfig', config: { bigBlind: 40 } }) },
   transferHost: { by: 'host alone', sample: (ids) => ({ type: 'transferHost', playerId: ids[TARGET]! }) },

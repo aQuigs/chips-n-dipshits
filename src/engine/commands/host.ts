@@ -15,7 +15,7 @@ import { dropStraddlesNotAllowed, STRADDLES, straddlesAllowed } from '../straddl
 import { transfer } from '../transfers.ts';
 import { GameError, SEAT_COUNT } from '../types.ts';
 import type { TableConfig } from '../types.ts';
-import { wholeNumber, yesOrNo } from '../validate.ts';
+import { idList, wholeNumber, yesOrNo } from '../validate.ts';
 import type { Handler } from './handler.ts';
 
 /** Refused once the night is over, so that a Resume pressed on a page that had not yet heard does not start it again. */
@@ -171,7 +171,7 @@ export const playOn: Handler<'playOn'> = {
 /** Not tied to the night: a bonus set once the night is over can still be paid. */
 export const payHighHand: Handler<'payHighHand'> = {
   by: 'host or cohost',
-  run: ({ state, ctx, member, command }) => payHighHandNow(state, ctx, actorName(state, member), wholeNumber(command.hand, 'The hand', 0, state.handCount)),
+  run: ({ state, ctx, member, command }) => payHighHandNow(state, ctx, actorName(state, member), wholeNumber(command.hand, 'The hand', 0, state.handCount), idList(command.to, 'Who collects', SEAT_COUNT)),
 };
 
 export const forgiveBlinds: Handler<'forgiveBlinds'> = {

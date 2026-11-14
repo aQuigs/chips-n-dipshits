@@ -1,5 +1,6 @@
 import type { TableView } from '../engine/view.ts';
 import type { Attention } from './attention.ts';
+import { badgeToasts } from './effects/badgeToasts.ts';
 import { celebrations } from './effects/celebrations.ts';
 import { handMoves } from './effects/handMoves.ts';
 import { handSounds } from './effects/handSounds.ts';
@@ -35,6 +36,8 @@ export interface EffectContext {
   /** The way to move something across the table, held to the viewer's switch and to a device that asks for less motion. */
   motion: TableMotion;
   dialogs: DialogOffers;
+  /** Shows the viewer a line at the top of the screen for a few seconds. */
+  toast(message: string): void;
 }
 
 /** Something that happens on the page when the table changes: a sound, an animation, an alert. */
@@ -59,30 +62,22 @@ const TABLE_EFFECTS: (() => TableEffect)[] = [
   celebrations,
   yourTurn,
   nightRecap,
+  badgeToasts,
 ];
 
 /** The effects of one table screen. */
 export class TableEffects {
-  private readonly prefs: AppPreferences;
-  private readonly stage: HTMLElement;
-  private readonly sounds: Sounds;
-  private readonly attention: Attention;
-  private readonly motion: TableMotion;
-  private readonly dialogs: DialogOffers;
+  private readonly context: Omit<EffectContext, 'seat'>;
   private readonly effects = TABLE_EFFECTS.map((make) => make());
 
-  constructor(prefs: AppPreferences, stage: HTMLElement, sounds: Sounds, attention: Attention, motion: TableMotion, dialogs: DialogOffers) {
-    this.prefs = prefs;
-    this.stage = stage;
-    this.sounds = sounds;
-    this.attention = attention;
-    this.motion = motion;
-    this.dialogs = dialogs;
+  /** `context` is what every effect is handed but where the viewer sits, which each view says. */
+  constructor(context: Omit<EffectContext, 'seat'>) {
+    this.context = context;
   }
 
   /** Call once for every view put on screen, with what it brought. */
   run(change: TableChange): void {
-    const context: EffectContext = { prefs: this.prefs, seat: change.view.you.seat, stage: this.stage, sounds: this.sounds, attention: this.attention, motion: this.motion, dialogs: this.dialogs };
+    const context: EffectContext = { ...this.context, seat: change.view.you.seat };
 
     for (const effect of this.effects) {
       // An effect that fails must not be what stops the table from updating, or the other effects from happening

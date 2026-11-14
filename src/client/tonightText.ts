@@ -4,6 +4,8 @@
  * worded once, here.
  */
 import { formatAmount, signedAmount } from '../engine/amounts.ts';
+import { badgeOf } from '../engine/badges.ts';
+import type { EarnedBadge } from '../engine/badges.ts';
 import { prettyCards } from '../engine/cards.ts';
 import type { Card } from '../engine/cards.ts';
 import type { TonightRow } from '../engine/tonight.ts';
@@ -89,6 +91,16 @@ export function leadersOf(view: TableView): Leader[] {
   ];
 }
 
+/** How many times a badge was earned, after its name: nothing for once. */
+export const timesText = (times: number): string => (times > 1 ? ` ×${times}` : '');
+
+/** A badge in words, as "💀 Felted ×2"; nothing for one this page does not know. */
+export function badgeText(earned: EarnedBadge): string {
+  const badge = badgeOf(earned.id);
+
+  return badge ? `${badge.mark} ${badge.name}${timesText(earned.times)}` : '';
+}
+
 /** What a player did tonight besides win or lose money, in a line. */
 export function countsOf(row: TonightRow): string {
   return [counted(row.hands, 'hand'), `${counted(row.won, 'pot')} won`, row.rebuys > 0 ? counted(row.rebuys, 'rebuy') : null].filter(Boolean).join(' · ');
@@ -119,7 +131,7 @@ export function tonightText(view: TableView): string {
     ...leadersOf(view).map((leader) => `${leader.label}: ${leader.who}, ${leader.what}${leader.cards ? ` (${prettyCards(leader.cards)})` : ''}`),
   ];
 
-  const players = view.tonight.players.map((row) => `${row.name}${row.seated ? '' : ' (left)'} ${signedAmount(row.net, view.config)} · ${countsOf(row)}`);
+  const players = view.tonight.players.map((row) => [`${row.name}${row.seated ? '' : ' (left)'} ${signedAmount(row.net, view.config)} · ${countsOf(row)}`, ...row.badges.map(badgeText).filter(Boolean)].join(' · '));
 
   return [top.filter(Boolean).join('\n'), players.join('\n'), missedOf(view)].filter(Boolean).join('\n\n');
 }

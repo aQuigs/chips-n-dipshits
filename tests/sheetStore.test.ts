@@ -922,7 +922,7 @@ test('after the longest night the fullest table still fits its row and the cache
   t.state.feed = fullestChat();
 
   const numbers = JSON.stringify(t.state.tonight).length;
-  assert.ok(numbers <= LIMITS.members * 320, `the night's numbers for ${LIMITS.members} players take ${numbers} characters`);
+  assert.ok(numbers <= LIMITS.members * 310, `the night's numbers for ${LIMITS.members} players take ${numbers} characters`);
 
   save(store, t.state);
 

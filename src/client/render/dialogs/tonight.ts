@@ -5,6 +5,7 @@ import type { TonightRow } from '../../../engine/tonight.ts';
 import type { TableView } from '../../../engine/view.ts';
 import { countsOf, crownOf, leadersOf, missedOf, standingOf, tonightText } from '../../tonightText.ts';
 import { cardText, h } from '../../ui.ts';
+import { badgeList, badgeMarks } from '../badges.ts';
 import { nightOver } from '../night.ts';
 import { copyOnClick, everyone, frame } from './dialog.ts';
 import type { DialogHandlers, DialogKind } from './dialog.ts';
@@ -45,12 +46,14 @@ function playerEl(row: TonightRow, view: TableView, handlers: DialogHandlers): H
       h('b', { class: `net ${row.net > 0 ? 'up' : row.net < 0 ? 'down' : ''}` }, signedAmount(row.net, view.config)),
       h('span.fold', { 'aria-hidden': 'true' }, '▾'),
       h('small.counts', null, countsOf(row)),
+      badgeMarks(row.badges),
     ),
     h(
       'dl',
       null,
       h('div', null, h('dt', null, 'Biggest pot'), h('dd', null, row.won > 0 ? formatAmount(row.biggest, view.config) : 'None yet')),
       h('div', null, h('dt', null, 'Best hand shown'), h('dd', null, row.best ? [`${row.best.name} `, cardsEl(row.best.cards, handlers)] : 'None yet')),
+      row.badges.length > 0 ? h('div', null, h('dt', null, 'Badges'), h('dd', null, badgeList(row.badges))) : null,
     ),
   );
 
@@ -90,7 +93,7 @@ function tonight(view: TableView, handlers: DialogHandlers): HTMLElement {
 
 export const tonightDialog: DialogKind<'tonight'> = {
   kind: 'tonight',
-  menu: { label: 'Tonight', who: everyone, note: () => 'Pots won, the best hand and the dipshit of the night' },
+  menu: { label: 'Tonight', who: everyone, note: () => 'Pots won, the best hand, badges and the dipshit of the night' },
   shows: (view) => [view.tonight, nightOver(view), view.config.unit, view.config.name, view.you.id],
   draw: tonight,
 };

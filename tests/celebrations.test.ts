@@ -565,3 +565,56 @@ test('with animations off, or on a device that asks for less motion, nothing is 
     assert.deepEqual(page.moves.played, []);
   }
 });
+
+test('badges are earned once the hand is cleared, so none is drawn or told while the last card is down, and a badge that came with a held result would wait for it', async () => {
+  // Heads-up for 1000 each: the aces take every chip of a pot of 100 big blinds
+  const badgesShown = (view: TableView) => view.tonight.players.flatMap((row) => row.badges.map((badge) => badge.id));
+  const changes = allInPreflop(1000);
+  const result = changes.at(-1)!;
+  const page = holdingPage();
+
+  page.show(result);
+  assert.ok(page.suspense.turning.length > 0);
+  assert.deepEqual(badgesShown(page.suspense.shown(result.view)), []);
+  assert.deepEqual(page.told[0]!.earned, []);
+
+  // As though the result had brought one: it is told with the result, once the card is up
+  const fake = { playerId: 'P', name: 'P0', badge: { id: 'felted', times: 1 } };
+  const withBadge = holdingPage();
+  withBadge.show({ ...result, earned: [fake] });
+  assert.deepEqual(withBadge.told[0]!.earned, []);
+  withBadge.moves.land();
+  await settle();
+  assert.deepEqual(withBadge.told[1]!.earned, [fake]);
+});
+
+test('the badges of a hand are told by the view that clears it, which ends any hold first, to the page that saw the card turned and to one still waiting on it', async () => {
+  const played = async (stalled: boolean) => {
+    const { t, page: seat } = dealt([1000, 1000], { 0: ACES, 1: KINGS });
+    t.raise(0, 1000);
+    t.call(1);
+
+    const page = holdingPage();
+    page.show(runOut(t, seat).at(-1)!);
+
+    if (!stalled) {
+      page.moves.land();
+      await settle();
+    }
+
+    t.wait(t.state.hand!.deadline! - t.now);
+    const cleared = seat.change();
+    page.show(cleared);
+
+    assert.deepEqual(page.suspense.turning, []);
+    assert.equal(page.suspense.shown(cleared.view), cleared.view);
+    assert.deepEqual(page.told.at(-1)!.earned.map((news) => [news.name, news.badge.id]), [['P0', 'bigPot'], ['P0', 'felted']]);
+
+    page.moves.land();
+    await settle();
+    assert.equal(page.told.flatMap((change) => change.earned).length, 2, 'told twice');
+  };
+
+  await played(false);
+  await played(true);
+});

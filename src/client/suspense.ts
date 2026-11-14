@@ -32,7 +32,7 @@ interface Hold {
   events: number;
   held: Held;
   /** What the view brought that is told once the cards are up. */
-  later: Pick<TableChange, 'events' | 'feed'>;
+  later: Pick<TableChange, 'events' | 'feed' | 'earned'>;
   waiting: boolean;
 }
 
@@ -62,7 +62,7 @@ export class Suspense {
 
   /** What of `change` is told now. Call for every view put on screen, before it is drawn. */
   see(change: TableChange): TableChange {
-    const { before, view, events, feed } = change;
+    const { before, view, events, feed, earned } = change;
     const hold = this.hold;
 
     this.view = view;
@@ -72,7 +72,7 @@ export class Suspense {
 
       // More of the same hand: what was held is what came between, so it goes before what is new
       if (change.current && view.hand?.number === hold.hand) {
-        return { ...change, events: [...hold.later.events, ...events], feed: [...hold.later.feed, ...feed] };
+        return { ...change, events: [...hold.later.events, ...events], feed: [...hold.later.feed, ...feed], earned: [...hold.later.earned, ...earned] };
       }
     }
 
@@ -91,14 +91,14 @@ export class Suspense {
       hand: hand.number,
       events: hand.events.length,
       held: { cards, holding: withoutCards(view, hand, cards), standing: standingOf(before ?? view), line },
-      later: { events: events.slice(sweat.upTo), feed: feed.filter((entry) => !told(entry)) },
+      later: { events: events.slice(sweat.upTo), feed: feed.filter((entry) => !told(entry)), earned },
       waiting: false,
     };
 
     // Whatever follows a hand's events takes the new ones for the last of the hand's, so the view told with them ends there too
     const upTo = { ...hand, events: hand.events.slice(0, hand.events.length - events.length + sweat.upTo) };
 
-    return { ...change, view: { ...view, hand: upTo }, events: events.slice(0, sweat.upTo), feed: feed.filter(told) };
+    return { ...change, view: { ...view, hand: upTo }, events: events.slice(0, sweat.upTo), feed: feed.filter(told), earned: [] };
   }
 
   /** The last cards of a runout being turned over, which the table draws but which say nothing yet of the viewer's hand. */
@@ -135,7 +135,7 @@ export class Suspense {
       const events = view.hand?.events.length === hold.events ? hold.later.events : [];
 
       this.hold = null;
-      this.release({ before: view, view, feed: hold.later.feed, events, current: true, wentBack: false, nightEnded: false, now: view.now });
+      this.release({ before: view, view, feed: hold.later.feed, events, current: true, wentBack: false, nightEnded: false, earned: hold.later.earned, now: view.now });
     });
   }
 

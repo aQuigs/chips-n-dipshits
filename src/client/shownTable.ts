@@ -153,7 +153,7 @@ export class ShownTable {
 
     const view = this.view()!;
 
-    this.show({ before, view, feed: [], events: newEvents(before, view), current: true, wentBack: false, nightEnded: false, now: this.now() });
+    this.show({ before, view, feed: [], events: newEvents(before, view), current: true, wentBack: false, nightEnded: false, earned: [], now: this.now() });
   }
 
   private putBack(): { name: string; unanswered: boolean } | null {

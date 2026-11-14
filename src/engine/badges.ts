@@ -192,7 +192,8 @@ export function badgesIn(saved: Readonly<Record<string, number>>): EarnedBadge[]
 
 /** The line in the play-by-play that tells the table a badge was earned. */
 function earnedLine(badge: Badge, hand: HandFacts, player: PlayerFacts, times: number): string {
-  const story = badge.story?.(hand, player) ?? badge.description;
+  // Lines of the play-by-play end without a stop, as the dealer's do
+  const story = badge.story?.(hand, player) ?? badge.description.replace(/\.$/, '');
 
   return `${player.name} earned ${badge.mark} ${badge.name}${times > 1 ? ` ×${times}` : ''}: ${midSentence(story)}`;
 }

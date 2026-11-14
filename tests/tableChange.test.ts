@@ -349,3 +349,63 @@ test('a page opened on a table whose night ended long ago, or shown it again aft
   assert.equal(page.arrive(table, true).nightEnded, false);
   assert.equal(page.arrive(table).nightEnded, false);
 });
+
+/**
+ * Seat 0 takes every chip of seat 1, heads-up, and earns badges for it once the hand is cleared. The
+ * page sees each step on time but the last, which arrives `late` ms late; gives back what that brought.
+ */
+function felt(table: TestTable, page: Page, late = 0): TableChange {
+  table.deal({ button: 0, holes: { 0: 'As Ah', 1: 'Ks Kh' }, board: '2c 7d 9h Jc 3s' });
+  table.raise(0, 1000);
+  table.call(1);
+  page.arrive(table);
+
+  while (table.state.hand!.stage !== 'done') {
+    table.wait(table.state.hand!.deadline! - table.now);
+    page.arrive(table);
+  }
+
+  table.wait(table.state.hand!.deadline! - table.now);
+
+  return page.arrive(table, false, late);
+}
+
+function rebuy(table: TestTable): void {
+  table.cmd(1, { type: 'requestRebuy', amount: 1000 });
+  table.cmd(0, { type: 'approve', playerId: table.ids[1]! });
+}
+
+const earned = (change: TableChange) => change.earned.map((news) => [news.name, news.badge.id, news.badge.times]);
+
+test('a badge is told once, by the first view on time that shows it, and one earned again is told again', () => {
+  const table = new TestTable({ stacks: [1000, 1000] });
+  const page = new Page();
+  page.arrive(table);
+
+  assert.deepEqual(earned(felt(table, page)), [['P0', 'bigPot', 1], ['P0', 'felted', 1]]);
+
+  table.cmd(1, { type: 'chat', text: 'gg' });
+  assert.deepEqual(earned(page.arrive(table)), [], 'told again');
+
+  // Late on its way, the view tells nothing, and the next on time tells what it brought
+  rebuy(table);
+  assert.deepEqual(earned(felt(table, page, 30_000)), []);
+  assert.deepEqual(earned(page.arrive(table)), [['P0', 'bigPot', 2], ['P0', 'felted', 2]]);
+});
+
+test('badges earned before the page opened, or shown again after the table went back, are never told', () => {
+  const table = new TestTable({ stacks: [1000, 1000] });
+  const before = new Page();
+  before.arrive(table);
+  felt(table, before);
+
+  const opened = new Page();
+  assert.deepEqual(earned(opened.arrive(table)), []);
+  table.cmd(1, { type: 'chat', text: 'still here' });
+  assert.deepEqual(earned(opened.arrive(table)), [], 'the next view on time');
+
+  rebuy(table);
+  felt(table, before);
+  assert.deepEqual(earned(opened.arrive(table, true)), []);
+  assert.deepEqual(earned(opened.arrive(table)), []);
+});

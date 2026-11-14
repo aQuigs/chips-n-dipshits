@@ -1,5 +1,5 @@
 import { formatAmount } from '../engine/amounts.ts';
-import { liveReactions, reactionRefusal } from '../engine/reactions.ts';
+import { liveReactions, REACTION_TOO_SOON, reactionRefusal } from '../engine/reactions.ts';
 import { anteText, blindsText } from '../engine/stakes.ts';
 import type { Preset } from '../engine/presets.ts';
 import type { Command, HandRecord, TableConfig } from '../engine/types.ts';
@@ -418,7 +418,7 @@ export class App {
     });
     this.table = table;
 
-    const picker = new ReactionPicker({ react: (kind, to) => this.react(kind, to) });
+    const picker = new ReactionPicker({ react: (kind, to) => this.react(kind, to), refusal: (view) => this.reactionRefusal(view) });
     const feed = createFeed((text) => void this.send({ type: 'chat', text }), this.prefs.get('deck'), picker.toggleElement);
     const stage = new Slot(h('div.stage'));
     const overlay = new Slot(h('div.overlay', { hidden: true }));
@@ -584,7 +584,7 @@ export class App {
     const view = this.shownView();
     if (view) {
       this.drawBanners(this.screen, view);
-      this.drawPicker(this.screen, view);
+      this.screen.picker.draw(view);
     }
   }
 
@@ -612,7 +612,7 @@ export class App {
     this.drawTopbar(screen, view);
     this.drawBanners(screen, view);
     this.drawStage(screen, view);
-    this.drawPicker(screen, view);
+    screen.picker.draw(view);
     this.drawControls(screen, view);
 
     screen.feed.update(view.feed);
@@ -647,11 +647,7 @@ export class App {
   private reactionRefusal(view: TableView): string | null {
     const now = this.clock.now();
 
-    return this.table?.reacting ? 'One at a time: give it a few seconds' : reactionRefusal(liveReactions(view.reactions, now), view.you.id, now);
-  }
-
-  private drawPicker(screen: TableScreen, view: TableView): void {
-    screen.picker.draw(view, this.reactionRefusal(view));
+    return this.table?.reacting ? REACTION_TOO_SOON : reactionRefusal(liveReactions(view.reactions, now), view.you.id, now);
   }
 
   /** The player's own reaction shows at once, and is sent; one that gets no answer is simply gone. */
@@ -661,7 +657,7 @@ export class App {
       return;
     }
 
-    this.screen.shown.react({ from: view.you.id, kind, at: this.clock.now(), ...(to === undefined ? {} : { to }) });
+    this.screen.shown.react({ from: view.you.id, kind, at: this.clock.now(), to });
     void this.send({ type: 'react', kind, to });
   }
 
@@ -779,15 +775,15 @@ export class App {
       element.textContent = String(secondsUntil(Number(element.dataset.countdown), this.clock.offset));
     }
 
-    // A move that has waited too long for its answer says so by the clock, with no view to draw it
     const screen = this.screen;
     const view = this.shownView();
 
-    // Nor does the end of the wait before the next reaction
-    if (screen && view) {
-      this.drawPicker(screen, view);
+    // The wait before the next reaction ends by the clock, with no view to draw it
+    if (screen?.picker.isOpen && view) {
+      screen.picker.draw(view);
     }
 
+    // A move that has waited too long for its answer says so by the clock, with no view to draw it
     if (screen && (screen.shown.waiting === 'unconfirmed') !== screen.stage.element.hasAttribute('data-unconfirmed')) {
       this.drawShown();
     }

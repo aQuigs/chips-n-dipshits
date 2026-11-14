@@ -63,13 +63,16 @@ export function reactionKind(id: unknown): ReactionKind | null {
 /** The reactions still on the table at `now`, oldest first. */
 export const liveReactions = (reactions: readonly Reaction[], now: number): Reaction[] => reactions.filter((reaction) => now - reaction.at < REACTION_LIFE_MS);
 
+/** What a player is told who reacts again too soon; the page says it too, of one still on its way. */
+export const REACTION_TOO_SOON = 'One at a time: give it a few seconds';
+
 /**
  * Why `from` may not react at `now`, given the reactions live on the table, or null when they may.
  * The page asks the same before it offers the picker, so a player is seldom refused at all.
  */
 export function reactionRefusal(live: readonly Reaction[], from: string, now: number): string | null {
   if (live.some((reaction) => reaction.from === from && now - reaction.at < REACTION_GAP_MS)) {
-    return 'One at a time: give it a few seconds';
+    return REACTION_TOO_SOON;
   }
 
   if (live.length >= REACTIONS_LIVE) {

@@ -49,6 +49,11 @@ export class ReactionMarks implements SeatMarks {
   }
 
   follow(): void {
+    // Runs with every change of the table, where it would otherwise lay the page out for nothing
+    if (this.showing.length === 0) {
+      return;
+    }
+
     const frame = this.layer.getBoundingClientRect();
     // The page may be drawn smaller than life, as the frames of the theme showcase are
     const zoom = frame.width / this.layer.offsetWidth || 1;

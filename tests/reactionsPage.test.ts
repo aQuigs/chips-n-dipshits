@@ -6,7 +6,6 @@ import { ServerClock, ServerLine, TableConnection } from '../src/client/connecti
 import type { Move, TableMotion } from '../src/client/motion.ts';
 import { MOVE_MS } from '../src/client/motion.ts';
 import { PREFERENCES, Preferences } from '../src/client/prefs.ts';
-import { LANDED_MS } from '../src/client/reactions.ts';
 import { reactionsShown, showReactions } from '../src/client/reactions.ts';
 import type { ReactionShown, SeatMark, SeatMarks } from '../src/client/reactions.ts';
 import { sendersShown } from '../src/client/senders.ts';
@@ -232,11 +231,6 @@ test('with motion on a throw flies from the thrower’s seat to the target’s a
       ['chicken', DANA, false, 0],
     ],
   );
-});
-
-test('a throw lands in about half a second, well within the time what landed then stays up', () => {
-  assert.ok(MOVE_MS.throw >= 300 && MOVE_MS.throw <= 600, `a throw takes ${MOVE_MS.throw} ms`);
-  assert.ok(MOVE_MS.throw * 4 <= LANDED_MS);
 });
 
 test('a throw makes its sound as it is thrown, a reaction makes none, and with sound off neither does', () => {

@@ -11,11 +11,15 @@
   container-type: size;
 }
 
+.seat-reaction,
+.thrown {
+  font-size: clamp(24px, 8cqmin, 40px);
+  line-height: 1;
+}
+
 /* Held by the middle of its bottom edge at the top of its seat's plate; several on one seat stand side by side */
 .seat-reaction {
   position: absolute;
-  font-size: clamp(24px, 8cqmin, 40px);
-  line-height: 1;
   transform: translate(calc(-50% + var(--nth, 0) * 1.05em), -60%);
   filter: drop-shadow(0 2px 3px rgb(0 0 0 / 45%));
 }
@@ -82,27 +86,10 @@
   }
 }
 
-/* What a throw is while in flight: a stand-in on the table (motion.css) */
-.thrown {
-  font-size: clamp(24px, 8cqmin, 40px);
-  line-height: 1;
-}
-
-.react-picker {
-  position: absolute;
-  inset: 0;
-}
-
-.react-picker > * {
-  pointer-events: auto;
-}
-
-.react-button {
-  display: flex;
-  padding-right: 8px;
-}
 
 .react-toggle {
+  flex: none;
+  margin-right: 8px;
   width: 36px;
   height: 36px;
   border: 1px solid var(--line);
@@ -132,6 +119,7 @@
   background: var(--panel-raised);
   box-shadow: 0 8px 30px rgb(0 0 0 / 40%);
   color: var(--text);
+  pointer-events: auto;
 }
 
 .react-heading {
@@ -157,11 +145,6 @@
 
 .react-choice:hover:not(:disabled) {
   border-color: var(--line);
-}
-
-.react-choice:disabled,
-.react-targets .btn:disabled {
-  opacity: 0.45;
 }
 
 .react-targets {

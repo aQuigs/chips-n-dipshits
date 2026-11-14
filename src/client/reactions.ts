@@ -15,15 +15,6 @@ export const POPPED_MS = 3000;
 /** How long a thrown thing stays on the seat it landed on. */
 export const LANDED_MS = 2500;
 
-/** A reaction to be shown over a seat: popped up over its sender's, or landed on the one it was thrown at. */
-export interface SeatMark {
-  seat: number;
-  kind: ReactionKind;
-  /** What it says in words, for a screen reader: "Sam threw a tomato at Dana". */
-  label: string;
-  /** It arrives with a little bounce, where the table is moving; otherwise it is simply there. */
-  moving: boolean;
-}
 
 /** Where a reaction is shown: over the table, on a layer the table is never drawn into, so a new view of the hand does not take it away. */
 export interface SeatMarks {
@@ -36,12 +27,16 @@ export interface SeatMarks {
 /** A reaction as this page shows it: over which seat, and for a throw, from which. */
 export interface ReactionShown {
   kind: ReactionKind;
+  /** What it says in words, for a screen reader: "Sam threw a tomato at Dana". */
   label: string;
   /** The seat it shows over: its sender's, or the one a throw lands on. */
   seat: number;
   /** The seat a throw flies from, or null for a reaction, or a thrower no longer seated, whose throw simply lands. */
   from: number | null;
 }
+
+/** A reaction to be shown over a seat: popped up over its sender's, or landed on the one it was thrown at. `moving`: it arrives with a little bounce, where the table is moving; otherwise it is simply there. */
+export type SeatMark = Omit<ReactionShown, 'from'> & { moving: boolean };
 
 const seatOf = (view: TableView, member: string | undefined): number | null => view.seats.find((seat) => seat?.playerId === member)?.seat ?? null;
 
@@ -62,7 +57,7 @@ export function reactionsShown({ view, reactions }: TableChange, shown: (sender:
   });
 }
 
-/** What shows them: the seats' marks, the table's motion and its sounds. */
+/** What shows them: the seats' marks, the table's motion and its sounds. Kept apart from the effects' context, which needs the page, so this can be tested without one. */
 export interface ReactionStage {
   marks: SeatMarks;
   motion: TableMotion;

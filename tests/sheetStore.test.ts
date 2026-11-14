@@ -966,7 +966,7 @@ test('after the longest night the fullest table still fits its row and the cache
   t.state.feed = fullestChat();
 
   // As many reactions as the table keeps, each as long as one can be: a throw, the longest kind, between two members
-  const longest = [...REACTIONS].filter((kind) => kind.thrown).sort((a, b) => b.id.length - a.id.length)[0]!;
+  const longest = REACTIONS.filter((kind) => kind.thrown).sort((a, b) => b.id.length - a.id.length)[0]!;
   t.state.reactions = Array.from({ length: REACTIONS_LIVE }, (_reaction, index) => ({ from: t.ids[index]!, kind: longest.id, at: 9_999_999_999_999, to: t.ids[index + 1]! }));
   const reactions = JSON.stringify(t.state.reactions).length;
   assert.ok(reactions <= 300, `the reactions take ${reactions} characters`);

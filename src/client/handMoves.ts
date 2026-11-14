@@ -48,8 +48,9 @@ const DECK: Place = { at: 'deck' };
 
 /**
  * A seat's chips going in front of it: how a blind, a bet, a call or a raise is shown. Whatever else
- * puts a bet on the table, such as showing a player's own before the server has answered, plays this
- * once the bet is drawn and gets the same slide.
+ * puts a bet on the table plays this once the bet is drawn, and gets the same slide. A page that shows
+ * a player's own bet before the server has answered can: when the view that confirms it comes, the bet
+ * is lying there already and is not slid again.
  */
 export const betSlide = (seat: number): Move => ({ name: 'bet', from: seatOf(seat), to: betOf(seat), after: 0 });
 
@@ -108,8 +109,15 @@ function stepsOf(event: HandEvent, before: ReplayPosition, after: ReplayPosition
     case 'raise':
       return [{ kind: 'acted', moves: [betSlide(event[1])] }];
 
-    case 'return':
-      return [{ kind: 'acted', moves: [chips(betOf(event[1]), seatOf(event[1]), event[2])] }];
+    case 'return': {
+      const [, seat, amount] = event;
+      // A bet nobody called goes back from in front of the player. What is more than their bet is the
+      // part of an ante or a bomb pot nobody could match, which went to the pot and comes back from there
+      const fromBet = Math.min(amount, before.seats.find((player) => player.seat === seat)?.bet ?? 0);
+      const moves = [fromBet > 0 ? chips(betOf(seat), seatOf(seat), fromBet) : null, amount > fromBet ? chips(POT, seatOf(seat), amount - fromBet) : null];
+
+      return [{ kind: 'acted', moves: moves.filter((move) => move !== null) }];
+    }
 
     case 'street': {
       const [, board, cards] = event;
@@ -204,11 +212,14 @@ export function movesSeen({ before: shown, view, events }: TableChange, viewer: 
   // And bets this view stopped drawing are gathered now, though no event has said it yet
   take(gather(gatheredUnsaid(replayHand(all), view), gone));
 
-  // A bet slides only where the table still draws it. One that went to the pot in the same view is seen going there, and one that came back whole is seen coming back
+  // A bet slides only where this view puts one. One that went to the pot in the same view is seen going
+  // there, one that came back whole is seen coming back, and one the table was drawing just so already,
+  // as a page does that shows a player's own move before the server answers, has had its slide
   const gathered = steps.map((step) => step.kind).lastIndexOf('gathered');
-  const stillDrawn = (move: Move) => move.to.at === 'bet' && (view.seats[move.to.seat]?.bet ?? 0) > 0;
+  const betAt = (table: TableView | null, at: Place) => (at.at === 'bet' ? (table?.seats[at.seat]?.bet ?? 0) : 0);
+  const slides = (move: Move, nth: number) => nth > gathered && betAt(view, move.to) > 0 && (gathered >= 0 || betAt(view, move.to) !== betAt(shown, move.to));
 
-  steps = steps.map((step, nth) => ({ ...step, moves: step.moves.filter((move) => move.name !== 'bet' || (nth > gathered && stillDrawn(move))) })).filter((step) => step.moves.length > 0);
+  steps = steps.map((step, nth) => ({ ...step, moves: step.moves.filter((move) => move.name !== 'bet' || slides(move, nth)) })).filter((step) => step.moves.length > 0);
 
   // Over budget, the view is shown by how it ended
   while (steps.some((step, nth) => nth * STEP_GAP_MS + lengthOf(step) > MOST_VIEW_MS)) {

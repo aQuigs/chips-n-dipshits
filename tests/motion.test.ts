@@ -131,6 +131,8 @@ test('each kind of hand event moves what it should, or nothing', () => {
     ['a raise', DEALT, ['raise', 1, 60, 940], ['bet seat1>bet1 @0']],
     ['a clock run out', DEALT, ['timeout', 1], []],
     ['an uncalled bet going back', [...ON_THE_FLOP, ['bet', 1, 500, 480], ['call', 2, 300, 0], ['fold', 0]], ['return', 1, 200], ['chips 200 bet1>seat1 @0']],
+    ['the part of a bomb pot nobody could match going back', [DEALT[0]!, ['post', 0, 'bomb pot', 185, 815, 'contribution'], ['post', 1, 'bomb pot', 57, 943, 'contribution'], ['deal']], ['return', 0, 128], ['chips 128 pot>seat0 @0']],
+    ['a blind and part of an ante going back', [DEALT[0]!, ['post', 1, 'ante', 6, 994, 'contribution'], ['post', 1, 'small blind', 3, 991], ['deal']], ['return', 1, 7], ['chips 3 bet1>seat1 @0', 'chips 4 pot>seat1 @0']],
     ['the flop, with the bets before it', ON_THE_FLOP.slice(0, -1), ON_THE_FLOP.at(-1)!, ['chips 20 bet0>pot @0', 'chips 20 bet1>pot @0', 'chips 20 bet2>pot @0', 'board deck>board0.0 @120', 'board deck>board0.1 @180', 'board deck>board0.2 @240']],
     ['the turn after checks', [...ON_THE_FLOP, ['check', 1], ['check', 2], ['check', 0]], ['street', 0, ['9h']], ['board deck>board0.3 @0']],
     ['a vote to run it twice', ON_THE_FLOP, ['vote', 1, true], []],
@@ -192,6 +194,33 @@ test('a bet that is gathered in the same view is seen going to the pot, not slid
   table.fold(0);
   table.fold(1);
   assert.deepEqual(page.arrive(), ['muck cards0>deck @0', 'muck cards1>deck @0', 'chips 100 bet2>seat2 @0', 'chips 60 pot>seat2 @120'], 'both fold, the bet nobody called goes back, and the pot follows it');
+});
+
+test('a bet the page was already drawing, as one shown before the server answered, is not slid again when the hand’s events bring it', () => {
+  const table = new TestTable({ stacks: [1000, 1000, 1000] });
+  const page = new Page(table, 0);
+
+  page.arrive();
+  table.deal({ button: 0 });
+  page.arrive();
+
+  // The page draws the viewer's raise at once, and plays its slide itself
+  const predicted = structuredClone(page.shown!);
+  predicted.seats[0]!.bet = 60;
+  predicted.seats[0]!.stack -= 60;
+  assert.deepEqual(page.eyes.see(tableChange(page.shown, predicted, table.now), 0), []);
+  page.shown = predicted;
+
+  table.raise(0, 60);
+  assert.deepEqual(page.arrive(), [], 'the view that confirms it');
+
+  // Anyone else's bet, and the viewer's next one, slide as ever
+  table.call(1);
+  assert.deepEqual(page.arrive(), ['bet seat1>bet1 @0']);
+  table.raise(2, 200);
+  page.arrive();
+  table.call(0);
+  assert.deepEqual(page.arrive(), ['bet seat0>bet0 @0']);
 });
 
 test('a split pot, side pots and two boards send one pile to each winner, with all they won, all at once', () => {

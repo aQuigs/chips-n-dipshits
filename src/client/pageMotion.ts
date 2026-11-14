@@ -203,9 +203,12 @@ class PageMotion implements MotionPlayer {
 
     delete this.stage.dataset.moving;
 
-    for (const resolve of this.waiting.splice(0)) {
-      resolve();
-    }
+    // Told once whatever is being done to the page is done: a view that ends what was moving sets its own moving next
+    queueMicrotask(() => {
+      if (this.flights.size === 0) {
+        this.waiting.splice(0).forEach((resolve) => resolve());
+      }
+    });
   }
 }
 

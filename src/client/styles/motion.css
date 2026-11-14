@@ -6,6 +6,12 @@
   pointer-events: none;
 }
 
+/* While anything is in flight, a card or a bet crossing the table is no more in a finger's way than a stand-in:
+   a tap goes to the seat or the felt under it */
+.stage[data-moving] :is(.card, .bet) {
+  pointer-events: none;
+}
+
 /* A seat's two cards, held by the middle of the place a seat keeps for them */
 .hole.stand-in {
   position: absolute;

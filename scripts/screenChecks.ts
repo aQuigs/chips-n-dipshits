@@ -646,7 +646,8 @@ async function watch(table: RigTable, name: string, layout: MotionLayout, holdAt
   if (layout.height) {
     for (const page of [moving, still]) {
       await page.setViewportSize({ width: SCREENS[layout.screen].width, height: layout.height + 600 });
-      await page.addStyleTag({ content: `.stage { align-self: start; height: ${layout.height}px; }` });
+      // And at a width that is no whole number of pixels, as a zoomed browser gives it, which is where a rounded measure shows
+      await page.addStyleTag({ content: `.stage { align-self: start; width: calc(100% - 0.4px); height: ${layout.height}px; }` });
       await page.waitForSelector(layout.height >= JUST_STANDING ? '.table.tall' : '.table.wide');
     }
   }
@@ -4524,15 +4525,23 @@ const CHECKS: Check[] = [
         page.evaluate(`(() => {
           const animations = document.getAnimations().filter((animation) => !(animation instanceof CSSAnimation));
 
+          // What a tap would land on where each thing in flight is right now: never the thing itself
+          const inTheWay = animations.filter(({ effect: { target } }) => {
+            const box = target.getBoundingClientRect();
+
+            return target.contains(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2));
+          });
+
           return {
             moving: document.querySelector('.stage').hasAttribute('data-moving'),
             animations: animations.length,
             animated: [...new Set(animations.flatMap((animation) => animation.effect.getKeyframes().flatMap(Object.keys)))].filter((key) => !['offset', 'computedOffset', 'easing', 'composite'].includes(key)).sort(),
             standIns: document.querySelectorAll('.stand-in').length,
+            inTheWay: inTheWay.length,
           };
-        })()`) as Promise<{ moving: boolean; animations: number; animated: string[]; standIns: number }>;
-      const still = { moving: false, animations: 0, animated: [], standIns: 0 };
-      const air = (animations: number, standIns: number) => ({ moving: true, animations, animated: ['opacity', 'transform'], standIns });
+        })()`) as Promise<{ moving: boolean; animations: number; animated: string[]; standIns: number; inTheWay: number }>;
+      const still = { moving: false, animations: 0, animated: [], standIns: 0, inTheWay: 0 };
+      const air = (animations: number, standIns: number) => ({ moving: true, animations, animated: ['opacity', 'transform'], standIns, inTheWay: 0 });
 
       for (const layout of MOTION_LAYOUTS.filter((layout) => ['phone-standing', 'desktop'].includes(layout.name))) {
         const table = rig.table(MOTION_PLAYERS);
@@ -4589,7 +4598,14 @@ const CHECKS: Check[] = [
         assert.deepEqual(await inTheAir(moving), air(6, 3), where('the end of the street'));
         await shot(moving, `motion-held-flop-${layout.name}`);
 
-        if (layout.height) {
+        if (!layout.height) {
+          // A page put out of sight, as by another tab, would hold what is in the air until it came back
+          await moving.evaluate(SIGHT);
+          await moving.evaluate('window.outOfSight(true)');
+          assert.deepEqual(await inTheAir(moving), still, where('the page out of sight'));
+          await moving.evaluate('window.outOfSight(false)');
+          await assertAsStill(moving, unmoved, where('the page out of sight'));
+        } else {
           // A keyboard opening squeezes the table and a turned phone lays it down: either way what was in the air is gone at once
           for (const page of [moving, unmoved]) {
             await page.addStyleTag({ content: `.stage { height: ${layout.height - 40}px !important; }` });

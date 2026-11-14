@@ -536,8 +536,9 @@ export function drawnTable(stage: Element): DrawnTable | null {
   const middleOf = (target: Element): Point => {
     const box = target.getBoundingClientRect();
     const frame = element.getBoundingClientRect();
-    // The page may be drawn smaller than life, as the frames of the theme showcase are
-    const zoom = frame.width / element.offsetWidth || 1;
+    // The page may be drawn smaller than life, as the frames of the theme showcase are. The table's own
+    // width is asked of its style, which unlike `offsetWidth` is not rounded to a whole pixel
+    const zoom = frame.width / parseFloat(getComputedStyle(element).width) || 1;
 
     return { x: (box.left + box.width / 2 - frame.left) / zoom, y: (box.top + box.height / 2 - frame.top) / zoom };
   };

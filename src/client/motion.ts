@@ -49,12 +49,15 @@ export const MOVE_MS: Record<MoveName, number> = { deal: 260, board: 240, show: 
  * An effect reaches it as `context.motion`. The hand's own moves come from `handMoves`, held to its
  * budgets; anything else may play its own:
  *
- * - A bet shown before the server has answered gets the slide a confirmed one gets by playing
- *   `betSlide(seat)` (handMoves.ts) once the bet is drawn.
+ * - A bet drawn before the hand's events bring it, as when a player's own move is shown before the
+ *   server has answered, gets the slide a confirmed one gets by playing `betSlide(seat)`
+ *   (handMoves.ts) once it is drawn. The view that confirms it finds the bet lying there and does
+ *   not slide it again.
  * - A longer, staged piece is one list of moves with later and later `after`s. To hold a card back
  *   while it plays, give that card a move that starts late: it stays unseen until then. A move for
  *   something already moving takes the place of the one it had.
- * - What must wait for the table to be still awaits `idle()`.
+ * - What must wait for the table to be still awaits `idle()`, which is not told of a pause that
+ *   only makes way for the next thing to move.
  *
  * Whatever is played ends early when the table under it is drawn again, as every new view of the
  * hand does, so no move can outlast what it shows.

@@ -31,7 +31,7 @@ interface SavedDefaults {
  */
 export const SAVED_DEFAULTS: SavedDefaults = {
   table: () => ({ cohostIds: [], shuffleAfterHand: false }),
-  member: () => ({}),
+  member: () => ({ transferred: 0 }),
   seat: () => ({ moveTo: null }),
   hand: () => ({ events: [] }),
   handPlayer: () => ({ dead: 0 }),

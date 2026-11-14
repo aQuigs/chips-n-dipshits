@@ -574,6 +574,7 @@ test('the ledger always nets to zero, mid-hand included', () => {
     name: 'P2',
     buyIn: 400,
     cashOut: 380,
+    transferred: 0,
     stack: 0,
     net: -20,
   });

@@ -1504,6 +1504,129 @@ const CHECKS: Check[] = [
     },
   ],
   [
+    'the host transfers chips between two players, a refused amount keeps what was typed, and the ledger and the settle-up show it',
+    async (rig) => {
+      const LONG = 'WWWWWWWWWWWWWWWW';
+      const kinds = [
+        {
+          name: 'chips',
+          config: {},
+          stack: 1000,
+          tooMuch: '5000',
+          refusal: 'The amount must be a whole number from 1 to 1,000',
+          amount: '300',
+          moved: 'The host moved 300 from WWWWWWWWWWWWWWWW to Stu',
+          rows: [
+            ['Stu', '1,000', '0', '+300', '1,300', '+300'],
+            ['Quigs', '1,000', '0', '0', '1,000', '0'],
+            [LONG, '1,000', '0', '-300', '700', '-300'],
+          ],
+          settle: [`${LONG} pays Stu 300`],
+        },
+        {
+          name: 'cents',
+          config: CENTS,
+          stack: 10_000,
+          tooMuch: '150.00',
+          refusal: 'The amount must be an amount to the cent from 0.01 to 100.00',
+          amount: '12.34',
+          moved: 'The host moved 12.34 from WWWWWWWWWWWWWWWW to Stu',
+          rows: [
+            ['Stu', '100.00', '0.00', '+12.34', '112.34', '+12.34'],
+            ['Quigs', '100.00', '0.00', '0.00', '100.00', '0.00'],
+            [LONG, '100.00', '0.00', '-12.34', '87.66', '-12.34'],
+          ],
+          settle: [`${LONG} pays Stu 12.34`],
+        },
+      ];
+
+      for (const kind of kinds) {
+        for (const screen of PHONE_AND_DESKTOP) {
+          const table = rig.table(
+            ['Quigs', LONG, 'Stu'].map((name) => ({ name, stack: kind.stack })),
+            kind.config,
+          );
+          const page = await table.open('Quigs', screen);
+          const press = pressOn(page, screen);
+
+          await press('[data-action="menu"]');
+          await press('.menu [data-action="players"]');
+          assertOnScreen(await boxes(page, '.dialog [data-action="transfer"]'), screen, 'the button that starts a transfer');
+          await shot(page, `transfer-players-${kind.name}-${screen}`);
+          await press('.dialog [data-action="transfer"]');
+          assert.equal(await text(page, '.dialog h2'), 'Transfer chips');
+
+          await page.selectOption('#transfer-from', { label: LONG });
+          await page.selectOption('#transfer-to', { label: 'Stu' });
+          await page.fill('#transfer-amount', kind.name === 'cents' ? '1.234' : '2.5');
+          assert.notEqual(await complaintOf(page, '#transfer-amount'), '', 'a fraction of the smallest unit can be sent');
+
+          await page.fill('#transfer-amount', kind.tooMuch);
+          await press('[data-action="confirm-transfer"]');
+          await page.waitForSelector(`.toast:has-text("${kind.refusal}")`);
+          assert.equal(await page.inputValue('#transfer-amount'), kind.tooMuch, 'the refused amount was thrown away');
+          assert.deepEqual([await page.inputValue('#transfer-from'), await page.inputValue('#transfer-to')], [table.auth(LONG).id, table.auth('Stu').id], 'the players picked were thrown away');
+
+          await page.fill('#transfer-amount', kind.amount);
+          assert.deepEqual(await squeezed(page, '.dialog .field, .dialog .field select, .dialog .field input, .dialog .btn, .dialog h2'), [], 'part of the transfer form is cut off');
+          assertOnScreen(await boxes(page, '.dialog .field, .dialog [data-action="confirm-transfer"]'), screen, 'the transfer form');
+          await shot(page, `transfer-${kind.name}-${screen}`);
+
+          await press('[data-action="confirm-transfer"]');
+          await page.waitForSelector('.dialog [data-action="transfer"]');
+          assert.equal(await text(page, '.feed-toggle .latest'), kind.moved);
+
+          await press('[data-action="close"]');
+          await press('[data-action="menu"]');
+          await press('.menu [data-action="ledger"]');
+          await page.waitForSelector('.ledger');
+
+          assert.deepEqual(await texts(page, '.ledger th'), ['Player', 'Bought', 'Cashed out', 'Transferred', 'On table', 'Net']);
+          assert.deepEqual(await ledgerRows(page), kind.rows);
+          assert.deepEqual(await texts(page, '.settle li'), kind.settle);
+          assert.match(await text(page, '.dialog-body > .note'), /^Transferred is chips/);
+
+          assert.deepEqual(await squeezed(page, '.ledger th, .ledger td, .settle li, .dialog .note, .dialog h2'), [], 'part of the ledger is cut off');
+          assertOnScreen(await boxes(page, '.dialog, .settle li, .dialog-body > .note'), screen, 'the ledger');
+          await assertNoSidewaysScroll(page);
+          await shot(page, `transfer-ledger-${kind.name}-${screen}`);
+          await page.evaluate(`document.querySelector('.ledger td:last-child').scrollIntoView({ inline: 'end' })`);
+          assertOnScreen(await boxes(page, '.ledger tbody tr:last-child td:last-child'), screen, 'the last column of the ledger, scrolled to');
+
+          await page.context().close();
+        }
+      }
+    },
+  ],
+  [
+    'a co-host can transfer chips and a plain member cannot',
+    async (rig) => {
+      for (const screen of PHONE_AND_DESKTOP) {
+        const table = rig.table(['Quigs', 'Stu', 'Pam'].map((name) => ({ name, stack: 1000 })));
+        table.act('Quigs', { type: 'setCohost', playerId: table.auth('Stu').id, on: true });
+
+        const cohost = await table.open('Stu', screen);
+        const press = pressOn(cohost, screen);
+        await press('[data-action="menu"]');
+        await press('.menu [data-action="players"]');
+        await press('.dialog [data-action="transfer"]');
+        await cohost.selectOption('#transfer-from', { label: 'Quigs' });
+        await cohost.selectOption('#transfer-to', { label: 'Stu' });
+        await cohost.fill('#transfer-amount', '250');
+        await press('[data-action="confirm-transfer"]');
+        await cohost.waitForSelector('.dialog [data-action="transfer"]');
+        assert.equal(await text(cohost, '.feed-toggle .latest'), 'Co-host Stu moved 250 from Quigs to Stu');
+        await cohost.context().close();
+
+        const member = await table.open('Pam', screen);
+        await pressOn(member, screen)('[data-action="menu"]');
+        await member.waitForSelector('.menu');
+        assert.equal(await member.locator('[data-action="players"], [data-action="transfer"]').count(), 0, 'a plain member is offered a way to transfer chips');
+        await member.context().close();
+      }
+    },
+  ],
+  [
     'the form for a new table switches between whole chips and dollars and cents, and the table it makes plays what was picked',
     async (rig) => {
       for (const screen of PHONE_AND_DESKTOP) {

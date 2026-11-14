@@ -1,6 +1,6 @@
 import { formatAmount } from './amounts.ts';
 import { GameError, SEAT_COUNT } from './types.ts';
-import type { Ctx, FeedKind, LedgerKind, Member, TableState } from './types.ts';
+import type { Ctx, FeedKind, LedgerEntry, Member, MoneyKind, TableState } from './types.ts';
 
 export const FEED_LIMIT = 60;
 
@@ -70,17 +70,34 @@ export function addFeed(state: TableState, now: number, kind: FeedKind, from: st
   }
 }
 
-export function recordLedger(state: TableState, ctx: Ctx, member: Member, kind: LedgerKind, amount: number): void {
+/** What sets one kind of ledger line apart from another. */
+type EntryDetail<E = LedgerEntry> = E extends LedgerEntry ? Omit<E, 'at' | 'tableId' | 'playerId' | 'name'> : never;
+
+function book(state: TableState, ctx: Ctx, member: Member, detail: EntryDetail): void {
+  ctx.effects.push({
+    type: 'ledger',
+    entry: { at: ctx.now, tableId: state.id, playerId: member.id, name: member.name, ...detail },
+  });
+}
+
+/** Chips bought (a positive amount) or cashed out (a negative one). */
+export function recordLedger(state: TableState, ctx: Ctx, member: Member, kind: MoneyKind, amount: number): void {
   if (amount > 0) {
     member.buyIn += amount;
   } else {
     member.cashOut -= amount;
   }
 
-  ctx.effects.push({
-    type: 'ledger',
-    entry: { at: ctx.now, tableId: state.id, playerId: member.id, name: member.name, kind, amount },
-  });
+  book(state, ctx, member, { kind, amount });
+}
+
+/** Chips moved from one stack to another, booked for both players at once so the two lines always come as a pair. */
+export function recordTransfer(state: TableState, ctx: Ctx, from: Member, to: Member, amount: number): void {
+  from.transferred -= amount;
+  to.transferred += amount;
+
+  book(state, ctx, from, { kind: 'transfer', amount: -amount, otherId: to.id, otherName: to.name });
+  book(state, ctx, to, { kind: 'transfer', amount, otherId: from.id, otherName: from.name });
 }
 
 /**

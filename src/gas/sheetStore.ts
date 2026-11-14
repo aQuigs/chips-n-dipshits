@@ -68,7 +68,7 @@ const HEADERS: Record<SheetKey, string[]> = {
     ...Array.from({ length: STATE_CHUNKS - 1 }, () => ''),
     'Records on their way to the Ledger and Hands tabs (normally empty)',
   ],
-  ledger: ['Time', 'Table', 'Player', 'Type', 'Amount', 'Player ID', 'Record ID'],
+  ledger: ['Time', 'Table', 'Player', 'Type', 'Amount', 'Player ID', 'Record ID', 'Other player', 'Other player ID'],
   hands: ['Time', 'Table', 'Hand', 'Summary', 'Record', 'Record ID'],
 };
 
@@ -79,11 +79,18 @@ const WHOLE_NUMBER = '0';
 // An amount is written as its table writes it, 1.50 for 150 cents, and as a number so the column can be added up
 const AMOUNT: Record<Unit, string> = { chips: WHOLE_NUMBER, cents: '0.00' };
 
-/** Where each kind of record ends up, and how the cells of a row are formatted for the table it happened at. The record's id is always the last column. */
-const RECORD_SHEETS: { type: Effect['type']; sheet: SheetKey; formats(table: Denominated): string[] }[] = [
-  { type: 'ledger', sheet: 'ledger', formats: ({ unit }) => [TIMESTAMP, TEXT, TEXT, TEXT, AMOUNT[unit], TEXT, TEXT] },
-  { type: 'hand', sheet: 'hands', formats: () => [TIMESTAMP, TEXT, WHOLE_NUMBER, TEXT, TEXT, TEXT] },
+/**
+ * Where each kind of record ends up, how the cells of a row are formatted for the table it happened at,
+ * and which column holds the record's id. A column added later goes after the id, so that rows written
+ * before it keep their id where a retry looks for it.
+ */
+const RECORD_SHEETS: { type: Effect['type']; sheet: SheetKey; idColumn: number; formats(table: Denominated): string[] }[] = [
+  { type: 'ledger', sheet: 'ledger', idColumn: 7, formats: ({ unit }) => [TIMESTAMP, TEXT, TEXT, TEXT, AMOUNT[unit], TEXT, TEXT, TEXT, TEXT] },
+  { type: 'hand', sheet: 'hands', idColumn: 6, formats: () => [TIMESTAMP, TEXT, WHOLE_NUMBER, TEXT, TEXT, TEXT] },
 ];
+
+// The Ledger tab gained the other player's columns after Sheets were in use, and a tab made before then has no headers for them
+const GROWN_SHEETS: readonly SheetKey[] = ['ledger'];
 
 // The engine keeps a hand's log shorter than this. Should a longer one ever arrive, its end is kept
 // rather than the hand being refused: the record must fit a cell, and it holds the summary.
@@ -226,9 +233,10 @@ function parseRow(values: unknown[]): TableRow {
 
 function recordRow({ id, record }: Held, table: Denominated): unknown[] {
   if (record.type === 'ledger') {
-    const { at, tableId, name, kind, amount, playerId } = record.entry;
+    const entry = record.entry;
+    const other = entry.kind === 'transfer' ? [entry.otherName, entry.otherId] : ['', ''];
 
-    return [new Date(at), tableId, name, kind, asNumber(amount, table), playerId, id];
+    return [new Date(entry.at), entry.tableId, entry.name, entry.kind, asNumber(entry.amount, table), entry.playerId, id, ...other];
   }
 
   const hand = record.record;
@@ -243,6 +251,20 @@ function recordRow({ id, record }: Held, table: Denominated): unknown[] {
   }
 
   return [new Date(hand.at), hand.tableId, hand.number, fitted.summary, json, id];
+}
+
+/** Gives a tab the headers it lacks, leaving any that someone has renamed. A record matters more than its header, so a failure here stops nothing. */
+function headBlankColumns(sheet: SheetLike, headers: string[]): void {
+  try {
+    const range = sheet.getRange(1, 1, 1, headers.length);
+    const [present = []] = range.getValues();
+
+    if (headers.some((_header, index) => present[index] === '')) {
+      range.setValues([headers.map((header, index) => (present[index] === '' ? header : present[index]))]);
+    }
+  } catch (error) {
+    console.error(error);
+  }
 }
 
 /**
@@ -374,6 +396,8 @@ export class SheetStore implements TableStore {
     if (!sheet) {
       sheet = spreadsheet.insertSheet(SHEET_NAMES[key]);
       sheet.getRange(1, 1, 1, HEADERS[key].length).setValues([HEADERS[key]]);
+    } else if (GROWN_SHEETS.includes(key)) {
+      headBlankColumns(sheet, HEADERS[key]);
     }
 
     this.sheets.set(key, sheet);
@@ -468,7 +492,7 @@ export class SheetStore implements TableStore {
   private copyOut(row: number, held: Held[], retrying: boolean, table: Denominated): boolean {
     const waiting: Held[] = [];
 
-    for (const { type, sheet, formats } of RECORD_SHEETS) {
+    for (const { type, sheet, idColumn, formats } of RECORD_SHEETS) {
       const mine = held.filter((item) => item.record.type === type);
       if (mine.length === 0) {
         continue;
@@ -477,7 +501,7 @@ export class SheetStore implements TableStore {
       const rowFormats = formats(table);
 
       try {
-        const arrived = retrying ? this.recentIds(sheet, rowFormats.length) : new Set<string>();
+        const arrived = retrying ? this.recentIds(sheet, idColumn) : new Set<string>();
         const rows = mine.filter((item) => !arrived.has(item.id)).map((item) => recordRow(item, table));
 
         this.appendRows(sheet, rows, rowFormats);

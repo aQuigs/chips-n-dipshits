@@ -33,6 +33,7 @@ export function assertChipsConserved(state: TableState): void {
   const bought = state.members.reduce((sum, m) => sum + m.buyIn - m.cashOut, 0);
 
   assert.equal(onTable, bought, `chips on the table (${places.map((place) => `${place.chips} ${place.where}`).join(', ')}) should equal chips bought minus chips cashed out`);
+  assert.equal(state.members.reduce((sum, m) => sum + m.transferred, 0), 0, 'chips moved between players were given and taken in different amounts');
 
   for (const seat of state.seats) {
     if (seat) {
@@ -284,10 +285,26 @@ export function assertHandRecordsHold(effects: Effect[]): number {
   return records.length;
 }
 
-/** The ledger's entries add up to what the table says its members bought and cashed out. */
+/**
+ * The ledger's entries add up, member by member, to what the table says each bought and cashed out and
+ * had moved to them, and a transfer's two lines always come as a pair that gives and takes the same chips.
+ */
 export function assertLedgerAgrees(state: TableState, effects: Effect[]): void {
-  const entered = effects.reduce((sum, effect) => sum + (effect.type === 'ledger' ? effect.entry.amount : 0), 0);
-  const bought = state.members.reduce((sum, m) => sum + m.buyIn - m.cashOut, 0);
+  const entries = effects.flatMap((effect) => (effect.type === 'ledger' ? [effect.entry] : []));
+  const sum = (playerId: string, transfers: boolean) =>
+    entries.filter((entry) => entry.playerId === playerId && (entry.kind === 'transfer') === transfers).reduce((total, entry) => total + entry.amount, 0);
 
-  assert.equal(entered, bought, 'the ledger entries and the members\' totals disagree');
+  for (const member of state.members) {
+    assert.equal(sum(member.id, false), member.buyIn - member.cashOut, `the ledger entries and ${member.name}'s chips bought and cashed out disagree`);
+    assert.equal(sum(member.id, true), member.transferred, `the ledger entries and the chips moved to ${member.name} disagree`);
+  }
+
+  entries.forEach((entry, index) => {
+    if (entry.kind !== 'transfer') {
+      return;
+    }
+
+    const pair = entry.amount < 0 ? entries[index + 1] : entries[index - 1];
+    assert.ok(pair?.kind === 'transfer' && pair.amount === -entry.amount && pair.playerId === entry.otherId && pair.otherId === entry.playerId, 'a transfer is booked without its other half');
+  });
 }

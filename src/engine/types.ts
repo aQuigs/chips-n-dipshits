@@ -45,6 +45,11 @@ export interface Member {
   buyIn: number;
   /** Total chips taken off the table. */
   cashOut: number;
+  /**
+   * Chips the host moved to this member from other players, less those moved away. They change hands
+   * on the table, so they are already in the stack and are never counted as bought or cashed out.
+   */
+  transferred: number;
 }
 
 export interface Seat {
@@ -228,17 +233,28 @@ export interface TableState {
   feedSeq: number;
 }
 
-export type LedgerKind = 'buy-in' | 'cash-out' | 'adjustment';
+/** Chips bought or cashed out, which money is paid for: what the settle-up counts. */
+export type MoneyKind = 'buy-in' | 'cash-out' | 'adjustment';
 
-export interface LedgerEntry {
+/** Chips the host moved from one player's stack to another's. No money changes hands with the bank. */
+export type TransferKind = 'transfer';
+
+export type LedgerKind = MoneyKind | TransferKind;
+
+interface LedgerLine {
   at: number;
   tableId: string;
   playerId: string;
   name: string;
-  kind: LedgerKind;
-  /** Chips onto the table are positive, chips off it negative. */
+  /** Chips onto the player's stack are positive, chips off it negative. */
   amount: number;
 }
+
+/**
+ * One line of the ledger. A transfer is booked as two lines made together, chips off the giver's stack
+ * and onto the receiver's, each naming the other player.
+ */
+export type LedgerEntry = LedgerLine & ({ kind: MoneyKind } | { kind: TransferKind; otherId: string; otherName: string });
 
 export interface HandRecordPlayer {
   seat: number;
@@ -295,6 +311,7 @@ export type Command =
   | { type: 'setStack'; playerId: string; stack: number }
   | { type: 'moveSeat'; playerId: string; seat: number }
   | { type: 'shuffleSeats' }
+  | { type: 'transferChips'; from: string; to: string; amount: number }
   | { type: 'updateConfig'; config: Partial<TableConfig> }
   | { type: 'transferHost'; playerId: string }
   | { type: 'setCohost'; playerId: string; on: boolean };

@@ -6,6 +6,7 @@ import { actorName, dropCohost, requireMayRemove } from '../hosts.ts';
 import { movePlayer, shuffleEveryone } from '../reseating.ts';
 import { grant, isDealtIn, leaveSeat, turnAway } from '../seating.ts';
 import { addFeed, memberNamed, recordLedger, seatIndexOf } from '../seats.ts';
+import { transfer } from '../transfers.ts';
 import { GameError, SEAT_COUNT } from '../types.ts';
 import { wholeNumber, yesOrNo } from '../validate.ts';
 import type { Handler } from './handler.ts';
@@ -117,6 +118,11 @@ export const moveSeat: Handler<'moveSeat'> = {
 export const shuffleSeats: Handler<'shuffleSeats'> = {
   by: 'host or cohost',
   run: ({ state, ctx, member }) => shuffleEveryone(state, ctx, actorName(state, member)),
+};
+
+export const transferChips: Handler<'transferChips'> = {
+  by: 'host or cohost',
+  run: ({ state, ctx, member, command }) => transfer(state, ctx, actorName(state, member), command.from, command.to, command.amount),
 };
 
 export const updateConfig: Handler<'updateConfig'> = {

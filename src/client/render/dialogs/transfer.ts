@@ -24,7 +24,7 @@ function transfer(view: TableView, handlers: DialogHandlers): HTMLElement {
       pickField('transfer-from', 'From', 'Who gives the chips', players),
       pickField('transfer-to', 'To', 'Who gets them', players),
       amountField('transfer-amount', 'Chips', null, view.config, 1),
-      h('p.note', null, 'Neither player can be in the hand being played. Everyone sees it in the chat, and in the ledger the chips count as lost by one player and won by the other.'),
+      h('p.note', null, 'Neither player can be in the hand being played, so pause a running game first. Everyone sees it in the chat, and in the ledger the chips count as lost by one player and won by the other. To undo it, transfer the chips back.'),
       h('button.btn.primary', { type: 'submit', 'data-action': 'confirm-transfer' }, 'Transfer chips'),
     ),
   );

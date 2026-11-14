@@ -38,7 +38,7 @@ function ledger(view: TableView, handlers: DialogHandlers): HTMLElement {
     'Ledger',
     handlers,
     rows.length === 0 ? h('p.note', null, 'Nobody has bought in yet.') : h('div.scroll-x', null, table),
-    transfers ? h('p.note', null, 'Transferred is chips the host or a co-host moved from one player to another. They are already in On table, so they count toward Net like chips won or lost.') : null,
+    transfers ? h('p.note', null, 'Transferred is chips the host or a co-host moved from one player to another. They count toward Net like chips won or lost.') : null,
     payments.length > 0
       ? h(
           'div.settle',

@@ -23,9 +23,10 @@ function partyTo(state: TableState, playerId: string): { member: Member; seat: S
     throw new GameError(`${member.name} is leaving the table`);
   }
 
-  // The same rule as setting a stack: a stack that a hand is being played for can't change under it
+  // The same rule as setting a stack: a stack that a hand is being played for can't change under it. A
+  // running game deals the next hand as this one ends, so a player who isn't sitting out is free only once it pauses
   if (isDealtIn(state, index)) {
-    throw new GameError(`${member.name} is in the current hand, so wait until it is over`);
+    throw new GameError(`${member.name} is in the current hand. Pause the game, and once this hand is over the chips can move`);
   }
 
   return { member, seat };

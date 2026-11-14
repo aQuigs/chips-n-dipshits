@@ -324,10 +324,10 @@ test('ledger entries and finished hands are appended to their own tabs', () => {
   save(store, table('ABC234'), effects);
 
   const ledger = spreadsheet.getSheetByName('Ledger')!.cells;
-  assert.deepEqual(ledger[0], ['Time', 'Table', 'Player', 'Type', 'Amount', 'Player ID', 'Record ID', 'Other player', 'Other player ID']);
+  assert.deepEqual(ledger[0], ['Time', 'Table', 'Player', 'Type', 'Amount', 'Player ID', 'Record ID', 'Transferred', 'Other player', 'Other player ID']);
   assert.deepEqual(ledger.slice(1).map((row) => row.slice(1)), [
-    ['ABC234', '12', 'buy-in', 500, 'P1', 'ABC234:1:0', '', ''],
-    ['ABC234', '12', 'cash-out', -650, 'P1', 'ABC234:1:2', '', ''],
+    ['ABC234', '12', 'buy-in', 500, 'P1', 'ABC234:1:0', '', '', ''],
+    ['ABC234', '12', 'cash-out', -650, 'P1', 'ABC234:1:2', '', '', ''],
   ]);
   assert.ok(ledger[1]![0] instanceof Date);
 
@@ -369,28 +369,30 @@ function transfer(amount: number, tableId = 'ABC234'): Effect[] {
   ];
 }
 
-test('a transfer reaches the Ledger tab as a line for each player, each naming the other, in chips or in dollars', () => {
+test('a transfer reaches the Ledger tab as a line for each player, each naming the other, beside the Amount column so a player\'s amounts still add up to what they owe', () => {
   const { store, spreadsheet } = setup();
 
-  save(store, table('ABC234'), transfer(500));
+  save(store, table('ABC234'), [buyIn(1000), ...transfer(500)]);
   save(store, table('CNT234', 1, { unit: 'cents' }), transfer(1234, 'CNT234'));
 
   const ledger = spreadsheet.getSheetByName('Ledger')!;
-  const read = [2, 3, 4, 5].map((row) => [2, 3, 4, 5, 6, 8, 9].map((column) => ledger.shown(row, column)));
+  const read = [3, 4, 5, 6].map((row) => [2, 3, 4, 5, 6, 8, 9, 10].map((column) => ledger.shown(row, column)));
 
   assert.deepEqual(read, [
-    ['ABC234', 'Dana', 'transfer', '-500', 'D1', 'Sam', 'S1'],
-    ['ABC234', 'Sam', 'transfer', '500', 'S1', 'Dana', 'D1'],
-    ['CNT234', 'Dana', 'transfer', '-12.34', 'D1', 'Sam', 'S1'],
-    ['CNT234', 'Sam', 'transfer', '12.34', 'S1', 'Dana', 'D1'],
+    ['ABC234', 'Dana', 'transfer', '', 'D1', '-500', 'Sam', 'S1'],
+    ['ABC234', 'Sam', 'transfer', '', 'S1', '500', 'Dana', 'D1'],
+    ['CNT234', 'Dana', 'transfer', '', 'D1', '-12.34', 'Sam', 'S1'],
+    ['CNT234', 'Sam', 'transfer', '', 'S1', '12.34', 'Dana', 'D1'],
   ]);
-  assert.deepEqual(ledger.cells.slice(1).map((row) => row[4]), [-500, 500, -12.34, 12.34]);
+  assert.deepEqual(ledger.cells.slice(1).map((row) => row[7]), ['', -500, 500, -12.34, 12.34], 'numbers, so the column can be added up');
+  assert.deepEqual(ledger.cells.slice(1).map((row) => row[4]), [1000, '', '', '', '']);
 });
 
 test('a transfer whose copy reported failure after the table was saved is copied once, both lines together', () => {
   const { store, spreadsheet, failFlush } = setup();
   save(store, table('ABC234', 1), [buyIn(1000)]);
-  const { held, ledgerAmounts } = records(spreadsheet);
+  const { held } = records(spreadsheet);
+  const ledgerAmounts = () => spreadsheet.getSheetByName('Ledger')!.cells.slice(1).map((row) => row[4] || row[7]);
 
   failFlush(2);
   save(store, table('ABC234', 2), transfer(300));
@@ -412,7 +414,7 @@ test('a transfer whose copy reported failure after the table was saved is copied
   assert.equal(held(), '');
 });
 
-test('a Ledger tab made before transfers is given the other player\'s headers, and its old lines are left as they were', () => {
+test('a Ledger tab made before transfers is given the transfer columns\' headers, and its old lines are left as they were', () => {
   const { store, spreadsheet, anotherRun } = setup();
   const old = spreadsheet.insertSheet('Ledger');
   old.getRange(1, 1, 1, 7).setValues([['Time', 'Table', 'Player', 'Kind (renamed)', 'Amount', 'Player ID', 'Record ID']]);
@@ -420,12 +422,13 @@ test('a Ledger tab made before transfers is given the other player\'s headers, a
 
   // A buy-in whose copy reported failure although it landed, written the way older code wrote it
   save(store, table('ABC234', 2), [buyIn(200)]);
-  const { tables, ledgerAmounts } = records(spreadsheet);
+  const { tables } = records(spreadsheet);
+  const ledgerAmounts = () => old.cells.slice(1).map((row) => row[4] || row[7]);
   tables.cells[1]![9] = `~${JSON.stringify([{ id: 'ABC234:1:0', record: buyIn(100) }])}`;
 
   save(anotherRun(), table('ABC234', 3), transfer(50));
 
-  assert.deepEqual(old.cells[0], ['Time', 'Table', 'Player', 'Kind (renamed)', 'Amount', 'Player ID', 'Record ID', 'Other player', 'Other player ID']);
+  assert.deepEqual(old.cells[0], ['Time', 'Table', 'Player', 'Kind (renamed)', 'Amount', 'Player ID', 'Record ID', 'Transferred', 'Other player', 'Other player ID']);
   assert.deepEqual(old.cells[1], [new Date(0), 'ABC234', 'Ann', 'buy-in', 100, 'P1', 'ABC234:1:0']);
   assert.deepEqual(ledgerAmounts(), [100, 200, -50, 50], 'the line written before the new columns was found by its id and not written again');
 });

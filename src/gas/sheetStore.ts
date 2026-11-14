@@ -68,7 +68,7 @@ const HEADERS: Record<SheetKey, string[]> = {
     ...Array.from({ length: STATE_CHUNKS - 1 }, () => ''),
     'Records on their way to the Ledger and Hands tabs (normally empty)',
   ],
-  ledger: ['Time', 'Table', 'Player', 'Type', 'Amount', 'Player ID', 'Record ID', 'Other player', 'Other player ID'],
+  ledger: ['Time', 'Table', 'Player', 'Type', 'Amount', 'Player ID', 'Record ID', 'Transferred', 'Other player', 'Other player ID'],
   hands: ['Time', 'Table', 'Hand', 'Summary', 'Record', 'Record ID'],
 };
 
@@ -85,11 +85,11 @@ const AMOUNT: Record<Unit, string> = { chips: WHOLE_NUMBER, cents: '0.00' };
  * before it keep their id where a retry looks for it.
  */
 const RECORD_SHEETS: { type: Effect['type']; sheet: SheetKey; idColumn: number; formats(table: Denominated): string[] }[] = [
-  { type: 'ledger', sheet: 'ledger', idColumn: 7, formats: ({ unit }) => [TIMESTAMP, TEXT, TEXT, TEXT, AMOUNT[unit], TEXT, TEXT, TEXT, TEXT] },
+  { type: 'ledger', sheet: 'ledger', idColumn: 7, formats: ({ unit }) => [TIMESTAMP, TEXT, TEXT, TEXT, AMOUNT[unit], TEXT, TEXT, AMOUNT[unit], TEXT, TEXT] },
   { type: 'hand', sheet: 'hands', idColumn: 6, formats: () => [TIMESTAMP, TEXT, WHOLE_NUMBER, TEXT, TEXT, TEXT] },
 ];
 
-// The Ledger tab gained the other player's columns after Sheets were in use, and a tab made before then has no headers for them
+// The Ledger tab gained the transfer columns after Sheets were in use, and a tab made before then has no headers for them
 const GROWN_SHEETS: readonly SheetKey[] = ['ledger'];
 
 // The engine keeps a hand's log shorter than this. Should a longer one ever arrive, its end is kept
@@ -234,9 +234,13 @@ function parseRow(values: unknown[]): TableRow {
 function recordRow({ id, record }: Held, table: Denominated): unknown[] {
   if (record.type === 'ledger') {
     const entry = record.entry;
-    const other = entry.kind === 'transfer' ? [entry.otherName, entry.otherId] : ['', ''];
+    const amount = asNumber(entry.amount, table);
 
-    return [new Date(entry.at), entry.tableId, entry.name, entry.kind, asNumber(entry.amount, table), entry.playerId, id, ...other];
+    // Amount is what a player paid or was paid, so adding it up for one player gives what they owe. A transfer is
+    // no such thing: the chips it moved show up in that player's cash-out, so it is written beside the column instead
+    return entry.kind === 'transfer'
+      ? [new Date(entry.at), entry.tableId, entry.name, entry.kind, '', entry.playerId, id, amount, entry.otherName, entry.otherId]
+      : [new Date(entry.at), entry.tableId, entry.name, entry.kind, amount, entry.playerId, id, '', '', ''];
   }
 
   const hand = record.record;

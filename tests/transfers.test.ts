@@ -145,8 +145,8 @@ test('during a hand, only players not dealt into it can give or receive', () => 
   t.cmd(3, { type: 'sitOut' });
   t.deal({ button: 0 });
 
-  assertRefused(t, () => transfer(t, 0, 0, 2, 100), 'P0 is in the current hand, so wait until it is over');
-  assertRefused(t, () => transfer(t, 0, 2, 1, 100), 'P1 is in the current hand, so wait until it is over');
+  assertRefused(t, () => transfer(t, 0, 0, 2, 100), 'P0 is in the current hand. Pause the game, and once this hand is over the chips can move');
+  assertRefused(t, () => transfer(t, 0, 2, 1, 100), 'P1 is in the current hand. Pause the game, and once this hand is over the chips can move');
 
   transfer(t, 0, 2, 3, 100);
   assert.deepEqual(t.stacks(), [t.stacks()[0], t.stacks()[1], 900, 1100]);

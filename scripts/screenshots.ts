@@ -12,6 +12,9 @@ import type { Browser, Page } from 'playwright';
 import { THEMES } from '../src/client/themes.ts';
 import { LIMITS } from '../src/engine/index.ts';
 import { startDevServer } from '../src/dev/server.ts';
+import { MemoryStore } from '../src/server/memoryStore.ts';
+import { PokerService } from '../src/server/service.ts';
+import { seededRng } from '../tests/helpers.ts';
 import { clientPage } from './bundle.ts';
 
 const OUT = fileURLToPath(new URL('../screenshots/', import.meta.url));
@@ -139,7 +142,13 @@ async function openFromMenu(page: Page, action: string): Promise<void> {
 await mkdir(OUT, { recursive: true });
 
 const html = await clientPage({});
-const server = await startDevServer({ port: 0, page: async () => html });
+/*
+ * Every run plays the same game: the requests that draw from the rng (creating the table, joining,
+ * dealing) go one at a time in a fixed order. With this seed the first hand has one winner and the
+ * second busts players, which the rebuy pictures need.
+ */
+const service = new PokerService({ store: new MemoryStore(), clock: { now: () => Date.now() }, rng: seededRng(1) });
+const server = await startDevServer({ port: 0, page: async () => html, service });
 const browser = await chromium.launch();
 const players: Player[] = [];
 

@@ -75,9 +75,20 @@ const pressOn = (page: Page, screen: ScreenName) => (selector: string) => (scree
 const text = async (page: Page, selector: string) => ((await page.locator(selector).first().textContent()) ?? '').trim();
 
 // Run in the page: writes down each sound it plays, since a check cannot listen. A sound starts with its
-// own gain going to the speakers, at the volume it is played at, and then the notes and noise it is made of
+// own gain going to the speakers, at the volume it is played at, and then the notes and noise it is made of.
+// A headless browser allows sound without a touch, so the check holds the page to the rule itself
 const LISTEN = `(() => {
   window.played = [];
+  window.contexts = [];
+
+  // Each audio context, and whether the visitor's gesture was under way when it was set up, as a browser insists
+  const Audio = AudioContext;
+  window.AudioContext = class extends Audio {
+    constructor(...args) {
+      super(...args);
+      window.contexts.push({ audio: this, inGesture: navigator.userActivation.isActive });
+    }
+  };
 
   const connect = AudioNode.prototype.connect;
   AudioNode.prototype.connect = function (target, ...rest) {
@@ -780,6 +791,22 @@ const CHECKS: Check[] = [
       await press('.pot');
       table.play(passive, (view) => view.hand!.toAct === 2);
       assert.deepEqual(await next(2, '.turn [data-action="fold"]:enabled'), ['chips', 'turn'], 'after a touch the sounds are back');
+      assert.deepEqual(await page.evaluate('window.contexts.map((context) => context.inGesture)'), [true], 'the audio was set up outside a touch');
+
+      // A phone that slept comes back with its audio suspended: until a touch wakes it, sounds are dropped, not saved up
+      await page.evaluate('window.contexts[0].audio.suspend()');
+      table.act('Pam', { type: 'call' });
+      table.act('Quigs', { type: 'check' });
+      await page.waitForSelector('.board .card[data-card]:nth-child(3)');
+      await page.waitForSelector('.turn [data-action="check"]:enabled');
+      await press('.pot');
+      await page.waitForFunction(`window.contexts[0].audio.state === 'running'`);
+      await page.waitForTimeout(500);
+      assert.deepEqual(await playedNames(page, heard), [], 'the sounds of a suspended page played when it woke');
+
+      table.act('Pam', { type: 'check' });
+      table.act('Quigs', { type: 'raise', to: 40 });
+      assert.deepEqual(await next(1, '.bet'), ['chips'], 'a touch wakes the sound');
 
       assert.deepEqual(warnings, [], 'the page complained in its console');
       await page.context().close();

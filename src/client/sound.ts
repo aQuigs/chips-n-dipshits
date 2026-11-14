@@ -25,8 +25,8 @@ export const SOUND_GAP_MS = 120;
 // A sound that would have to wait longer than this behind others is dropped, so a burst never queues up
 export const MOST_WAIT_MS = 400;
 
-// What still plays while the page is out of sight, because it calls the player back
-const HEARD_IN_BACKGROUND: ReadonlySet<SoundName> = new Set(['turn']);
+// What calls the player back to the table: it plays while the page is out of sight, and waits behind other sounds rather than being dropped
+const CALLS_BACK: ReadonlySet<SoundName> = new Set(['turn']);
 
 // Once the volume slider rests this long, a sample plays at the new volume
 const SAMPLE_AFTER_MS = 200;
@@ -55,15 +55,16 @@ export class Sounds {
 
   play(sound: SoundName): void {
     const volume = this.prefs.get('volume') / 100;
+    const callsBack = CALLS_BACK.has(sound);
 
-    if (!this.prefs.get('sound') || volume <= 0 || (!this.listening.inView() && !HEARD_IN_BACKGROUND.has(sound))) {
+    if (!this.prefs.get('sound') || volume <= 0 || (!this.listening.inView() && !callsBack)) {
       return;
     }
 
     const now = this.listening.now();
     const at = Math.max(now, this.nextAt);
 
-    if (at - now > MOST_WAIT_MS) {
+    if (at - now > MOST_WAIT_MS && !callsBack) {
       return;
     }
 

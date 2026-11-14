@@ -187,7 +187,7 @@ test('a seven-deuce bounty rings up its chips after the pot', () => {
   assert.deepEqual(page.arrive(), ['fold', 'win', 'chips']);
 });
 
-test('nothing plays on the first view, on a table that went back, or for what happened while the viewer was away', () => {
+test('no hand sounds play on the first view, on a table that went back, or for what happened while the viewer was away', () => {
   const table = new TestTable({ stacks: [1000, 1000] });
   const page = new Page(table, 1);
   const saved = structuredClone(table.state);
@@ -240,6 +240,22 @@ test('sounds asked for together are spaced out, and one that would wait too long
   ears.now += SOUND_GAP_MS / 2;
   ears.sounds.play('chips');
   assert.equal(ears.played.at(-1)!.delay, SOUND_GAP_MS / 2 / 1000);
+});
+
+test('the chime for the viewer’s turn waits behind other sounds, however many, and is never dropped', () => {
+  const ears = new Ears();
+
+  // A street's sounds, and a moment later another view with a check and the action reaching the viewer
+  for (const sound of ['chips', 'fold', 'street'] as const) {
+    ears.sounds.play(sound);
+  }
+
+  ears.now += 50;
+  ears.sounds.play('knock');
+  ears.sounds.play('turn');
+
+  assert.deepEqual(ears.played.map((played) => played.sound), ['chips', 'fold', 'street', 'knock', 'turn']);
+  assert.ok(ears.played.at(-1)!.delay * 1000 > MOST_WAIT_MS, 'the chime had to wait longer than any other sound may');
 });
 
 test('an event this page does not know is silent, and does not stop the rest being heard', () => {

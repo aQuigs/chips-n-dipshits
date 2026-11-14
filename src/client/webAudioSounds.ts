@@ -17,9 +17,10 @@ class WebAudioSounds implements SoundMaker {
   private noise: AudioBuffer | null = null;
 
   constructor(page: Document) {
-    // A touch only counts as the visitor's own gesture once the finger lifts, which is the click
+    // A touch only counts as the visitor's own gesture once the finger lifts, which is the click. Each is
+    // heard on its way down, before what it lands on can spend the gesture the browser allows sound for
     for (const gesture of ['pointerdown', 'click', 'keydown']) {
-      page.addEventListener(gesture, () => this.wake());
+      page.addEventListener(gesture, () => this.wake(), { capture: true });
     }
   }
 
@@ -63,6 +64,7 @@ class WebAudioSounds implements SoundMaker {
       oscillator.type = voice.wave ?? 'sine';
       oscillator.frequency.value = voice.tone;
       oscillator.connect(envelope);
+      oscillator.start(begin);
       source = oscillator;
       pitch = oscillator.frequency;
     } else {
@@ -74,6 +76,8 @@ class WebAudioSounds implements SoundMaker {
       band.frequency.value = voice.noise;
       band.Q.value = voice.width ?? 1;
       noise.connect(band).connect(envelope);
+      // From a random place in the noise, so no two clicks of chips are the same
+      noise.start(begin, Math.random() * (NOISE_SECONDS - voice.length));
       source = noise;
       pitch = band.frequency;
     }
@@ -83,7 +87,6 @@ class WebAudioSounds implements SoundMaker {
       pitch.exponentialRampToValueAtTime(voice.slideTo, end);
     }
 
-    source.start(begin);
     source.stop(end);
 
     return { source, end };

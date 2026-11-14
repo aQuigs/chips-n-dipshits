@@ -3,6 +3,7 @@
  * it can be run against the stand-ins in tests/fakes.ts, how it opens a tab and takes the lock, and how
  * it reports what it carries on through.
  */
+import type { Unit } from '../engine/index.ts';
 import { NOWHERE } from '../server/errorLog.ts';
 import type { ErrorLog, Failure } from '../server/errorLog.ts';
 import { StoreBusyError } from '../server/store.ts';
@@ -44,6 +45,9 @@ export const TEXT = '@';
 export const TIMESTAMP = 'yyyy-mm-dd hh:mm:ss';
 export const WHOLE_NUMBER = '0';
 export const FIRST_DATA_ROW = 2;
+
+/** An amount is written as its table writes it, 1.50 for 150 cents, and as a number so the column can be added up. */
+export const AMOUNT: Record<Unit, string> = { chips: WHOLE_NUMBER, cents: '0.00' };
 
 const LOCK_WAIT_MS = 20_000;
 

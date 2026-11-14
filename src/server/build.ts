@@ -28,6 +28,9 @@ const OPEN_TO_ANOTHER_BUILD: Record<ApiRequest['op'], boolean> = {
   report: true,
   players: true,
   identify: false,
+  // Asking for the standings can have results written, and a page of another build may not draw them as this one means them
+  standings: false,
+  nights: false,
 };
 
 const STALE: ApiError = { ok: false, code: 'stale', error: OUTDATED_MESSAGE };

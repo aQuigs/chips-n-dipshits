@@ -5,6 +5,7 @@ import type { ApiError, Built } from '../server/api.ts';
 import { SheetErrorLog } from './sheetErrorLog.ts';
 import { SheetPlayerStore } from './sheetPlayerStore.ts';
 import { SheetPresetStore } from './sheetPresetStore.ts';
+import { SheetResultStore } from './sheetResultStore.ts';
 import { SheetStore } from './sheetStore.ts';
 
 // Set by the build when the deployed address is known; otherwise the script asks Apps Script for it
@@ -63,13 +64,16 @@ function service(): BuildGate {
   const lock = LockService.getScriptLock();
   const flush = () => SpreadsheetApp.flush();
   const rng = new ByteRng(uuidBytes);
+  const clock = { now: () => Date.now() };
+  const results = new SheetResultStore({ spreadsheet, cache, lock, flush, clock, errors: errors() });
 
   serviceForThisRun = new BuildGate(
     new PokerService({
-      store: new SheetStore({ spreadsheet, cache, lock, flush, errors: errors() }),
+      store: new SheetStore({ spreadsheet, cache, lock, flush, errors: errors(), results }),
       presets: new SheetPresetStore({ spreadsheet, lock, flush }),
       players: new SheetPlayerStore({ spreadsheet, cache, lock, flush, rng, errors: errors() }),
-      clock: { now: () => Date.now() },
+      results,
+      clock,
       rng,
       errors: errors(),
     }),

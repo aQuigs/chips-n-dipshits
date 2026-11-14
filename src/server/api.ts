@@ -1,4 +1,5 @@
-import type { Bounty, Command, HandRecord, KnownPlayer, Preset, Stakes, TableConfig, TableView } from '../engine/index.ts';
+import type { Bounty, Command, HandRecord, KnownPlayer, Preset, Stakes, TableConfig, TableView, Unit } from '../engine/index.ts';
+import type { PlayedNight, PlayerRecord } from './resultStore.ts';
 
 /**
  * Which build of the game a page or a server is. On the way between them every request carries the
@@ -61,7 +62,11 @@ export type ApiRequest =
   | { op: 'report'; tableId: string; auth: Auth; message: string; trace: string; browser: PageBrowser }
   | { op: 'players' }
   /** A member says who they are after joining. `name` is only for someone new: what the list is to call them. */
-  | { op: 'identify'; tableId: string; auth: Auth; who: Who; name?: string };
+  | { op: 'identify'; tableId: string; auth: Auth; who: Who; name?: string }
+  /** Every known player's record over the nights the game has kept. Like the list of players, for anyone with the game's address. */
+  | { op: 'standings' }
+  /** One known player's nights at tables that play one kind of money, the latest first. */
+  | { op: 'nights'; playerId: string; unit: Unit };
 
 /**
  * invalid: the request broke a rule; the message is for the player.
@@ -89,6 +94,17 @@ export interface TableInfo extends Stakes {
   players: string[];
 }
 
+/** A known player's record with the name the list of players has for them. */
+export interface PlayerStanding extends PlayerRecord {
+  name: string;
+}
+
+/** The records at tables that play one kind of money: those are never added to another kind's. */
+export interface UnitStandings {
+  unit: Unit;
+  players: PlayerStanding[];
+}
+
 export type ApiResponse =
   | ApiError
   | { ok: true; kind: 'joined'; auth: Auth; view: TableView }
@@ -98,7 +114,15 @@ export type ApiResponse =
   | { ok: true; kind: 'history'; hands: HandRecord[] }
   | { ok: true; kind: 'presets'; presets: Preset[] }
   | { ok: true; kind: 'reported' }
-  | { ok: true; kind: 'players'; players: KnownPlayer[] };
+  | { ok: true; kind: 'players'; players: KnownPlayer[] }
+  /**
+   * `asOf` is when the records were read. `units` has an entry for each kind of money somebody on the
+   * list of players has a night in, so none when nobody has one. It names nobody the list does not,
+   * and no table.
+   */
+  | { ok: true; kind: 'standings'; asOf: number; units: UnitStandings[] }
+  /** A table is told by its name and when it was made, never by its id. */
+  | { ok: true; kind: 'nights'; nights: PlayedNight[] };
 
 /** The answer to someone who made a table or joined one: who they are there, and the table as they see it. */
 export type Joined = Extract<ApiResponse, { kind: 'joined' }>;

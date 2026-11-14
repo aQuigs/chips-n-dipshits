@@ -1,14 +1,16 @@
 import { addMember, applyCommand, createTable, GameError, listedLike, playerName, presetName, presetSettings, randomId, requireLevel, setIdentity, sharedPreset, tick, viewFor } from '../engine/index.ts';
-import type { Arriving, Command, Ctx, Member, Preset, Rng, TableState } from '../engine/index.ts';
+import type { Arriving, Command, Ctx, Member, Preset, Rng, TableState, Unit } from '../engine/index.ts';
 import { HISTORY_LIMIT } from './api.ts';
-import type { ApiResponse, Auth, ErrorCode, Joined, Who } from './api.ts';
+import type { ApiResponse, Auth, ErrorCode, Joined, UnitStandings, Who } from './api.ts';
 import { NOWHERE } from './errorLog.ts';
 import type { ErrorLog, Failure } from './errorLog.ts';
-import { NameOnList } from './playerStore.ts';
+import { isPlayerId, NameOnList } from './playerStore.ts';
 import type { PlayerStore } from './playerStore.ts';
 import type { PresetStore } from './presetStore.ts';
 import { PUT_AWAY_MESSAGE } from './putAway.ts';
 import type { LastWords } from './putAway.ts';
+import { NO_RESULTS } from './resultStore.ts';
+import type { ResultStore } from './resultStore.ts';
 import { StoreBusyError } from './store.ts';
 import type { TableStore } from './store.ts';
 
@@ -20,6 +22,8 @@ export interface ServiceDeps {
   store: TableStore;
   presets: PresetStore;
   players: PlayerStore;
+  /** Where the players' records over time are read from; the store of tables is what writes them. Left out, nobody's record is kept. */
+  results?: ResultStore;
   clock: Clock;
   rng: Rng;
   /** Where failures the game carries on through are written down. Left out, only Apps Script's own log hears of them. */
@@ -160,8 +164,13 @@ export function failureOf(request: unknown, error: unknown): Failure {
   };
 }
 
-/** Nothing yet: whatever comes to want a table's last state answers here. */
-const LAST_WORDS: LastWords = () => [];
+/**
+ * A table that is put away has had its last night, ended or not, and says so: that is what has its
+ * results written as they finally stand, the way the end of a night does.
+ */
+export const LAST_WORDS: LastWords = (state, at) => [{ type: 'nightEnded', night: { at, tableId: state.id } }];
+
+const UNITS: Unit[] = ['chips', 'cents'];
 
 /**
  * Serves every request the game's clients make. It knows nothing about HTTP, Apps Script or Sheets:
@@ -172,6 +181,7 @@ export class PokerService {
   private readonly store: TableStore;
   private readonly presets: PresetStore;
   private readonly players: PlayerStore;
+  private readonly results: ResultStore;
   private readonly clock: Clock;
   private readonly rng: Rng;
   private readonly errors: ErrorLog;
@@ -180,6 +190,7 @@ export class PokerService {
     this.store = deps.store;
     this.presets = deps.presets;
     this.players = deps.players;
+    this.results = deps.results ?? NO_RESULTS;
     this.clock = deps.clock;
     this.rng = deps.rng;
     this.errors = deps.errors ?? NOWHERE;
@@ -297,6 +308,10 @@ export class PokerService {
         return { ok: true, kind: 'players', players: this.players.list() };
       case 'identify':
         return this.identify(tableIdOf(request), authOf(request), request);
+      case 'standings':
+        return this.standings();
+      case 'nights':
+        return this.nights(request);
       default:
         throw new ApiFailure('invalid', 'Unknown request');
     }
@@ -331,6 +346,18 @@ export class PokerService {
       this.store.putAwayOld(this.clock.now(), LAST_WORDS);
     } catch (error) {
       this.failed({ where: 'server put away', error });
+    }
+  }
+
+  /**
+   * Has the results written of tables whose night nobody ended, before they are read. Like putting
+   * tables away it rides on a request made for something else, which nothing that goes wrong here may fail.
+   */
+  private settleIdleTables(): void {
+    try {
+      this.store.settleIdle(this.clock.now());
+    } catch (error) {
+      this.failed({ where: 'server settle results', error });
     }
   }
 
@@ -586,6 +613,38 @@ export class PokerService {
 
       return { ok: true, kind: 'view', view: viewFor(state, auth.id, ctx.now) };
     });
+  }
+
+  /**
+   * Every known player's record. Anyone with the game's address may ask, as for the list of players,
+   * so it holds what the page shows and no more: a player by the id and name the list hands out
+   * anyway, and nothing of a table. Someone taken off the list is in no answer, whatever is kept of them.
+   */
+  private standings(): ApiResponse {
+    this.settleIdleTables();
+
+    const names = new Map(this.players.list().map((player) => [player.id, player.name]));
+    const { asOf, records } = this.results.standings();
+
+    const units = UNITS.flatMap((unit): UnitStandings[] => {
+      const players = records[unit].flatMap((record) => (names.has(record.id) ? [{ ...record, name: names.get(record.id)! }] : []));
+
+      return players.length > 0 ? [{ unit, players }] : [];
+    });
+
+    return { ok: true, kind: 'standings', asOf, units };
+  }
+
+  private nights(request: Fields): ApiResponse {
+    const { playerId, unit } = request;
+
+    if (typeof playerId !== 'string' || !isPlayerId(playerId) || !UNITS.includes(unit as Unit)) {
+      throw new ApiFailure('invalid', 'Malformed request');
+    }
+
+    const listed = this.players.list().some((player) => player.id === playerId);
+
+    return { ok: true, kind: 'nights', nights: listed ? this.results.nights(playerId, unit as Unit) : [] };
   }
 
   private tableAt(tableId: string): TableState {

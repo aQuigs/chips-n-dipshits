@@ -98,6 +98,18 @@ export function asNumber(amount: number, table: Denominated): number {
   return amount / perWhole(table);
 }
 
+/**
+ * The amount a spreadsheet cell's number stands for, the other way from `asNumber`: 150 for 1.5 at a
+ * table that plays cents. Null when it is no whole number of the table's smallest unit, as after a slip
+ * while editing the cell by hand.
+ */
+export function fromNumber(value: number, table: Denominated): number | null {
+  const amount = Math.round(value * perWhole(table));
+
+  // A number like 12.34 is not exactly its hundredths in binary, which is all the leeway this gives
+  return Number.isSafeInteger(amount) && Math.abs(value * perWhole(table) - amount) < 1e-6 ? amount : null;
+}
+
 /** Whether amounts at the table are typed with a decimal point, which decides the keypad a phone offers. */
 export function hasDecimals(table: Denominated): boolean {
   return STYLES[table.unit].decimals > 0;

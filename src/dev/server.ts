@@ -8,6 +8,7 @@ import { ByteRng } from '../server/byteRng.ts';
 import type { ErrorLog } from '../server/errorLog.ts';
 import { MemoryPlayerStore } from '../server/memoryPlayerStore.ts';
 import { MemoryPresetStore } from '../server/memoryPresetStore.ts';
+import { MemoryResultStore } from '../server/memoryResultStore.ts';
 import { MemoryStore } from '../server/memoryStore.ts';
 import { PokerService } from '../server/service.ts';
 
@@ -68,12 +69,14 @@ function sleep(ms: number): Promise<void> {
  */
 export async function startDevServer(options: DevServerOptions): Promise<DevServer> {
   const rng = new ByteRng(() => [...randomBytes(RANDOM_BATCH_BYTES)]);
+  const results = new MemoryResultStore(() => Date.now());
   const game =
     options.service ??
     new PokerService({
-      store: new MemoryStore(),
+      store: new MemoryStore(results),
       presets: new MemoryPresetStore(),
       players: new MemoryPlayerStore(rng),
+      results,
       clock: { now: () => Date.now() },
       rng,
       errors: options.errors,

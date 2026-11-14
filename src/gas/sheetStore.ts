@@ -1,11 +1,14 @@
-import { asNumber, upgradeRecord } from '../engine/index.ts';
-import type { Denominated, Effect, HandRecord, TableState, Unit } from '../engine/index.ts';
+import { asNumber, resultsOf, upgradeRecord } from '../engine/index.ts';
+import type { Denominated, Effect, HandRecord, TableState } from '../engine/index.ts';
 import type { ErrorLog } from '../server/errorLog.ts';
 import { dueToLookAt, lastWordsOf, PUT_AWAY_AT_ONCE } from '../server/putAway.ts';
 import type { LastWords } from '../server/putAway.ts';
+import { idleLongEnough, NEVER_SETTLED, SETTLE_EVERY_MS, settleIdle } from '../server/resultStore.ts';
+import type { ResultWriter, SavedTable, Settled } from '../server/resultStore.ts';
 import { peekOf, restoreState, StoreBusyError } from '../server/store.ts';
 import type { TablePeek, TableStore, Txn } from '../server/store.ts';
-import { dataRows, FIRST_DATA_ROW, HeldReports, openTab, TEXT, TIMESTAMP, underLock, WHOLE_NUMBER } from './sheets.ts';
+import { RESULTS_TAB } from './sheetResultStore.ts';
+import { AMOUNT, dataRows, FIRST_DATA_ROW, HeldReports, openTab, TEXT, TIMESTAMP, underLock, WHOLE_NUMBER } from './sheets.ts';
 import type { CacheLike, LockLike, SheetLike, SpreadsheetLike } from './sheets.ts';
 
 export interface SheetStoreDeps {
@@ -17,6 +20,8 @@ export interface SheetStoreDeps {
   flush: () => void;
   /** Where what goes wrong and is carried on through is reported. */
   errors?: ErrorLog;
+  /** Where what a table came to for its players is written. Left out, nothing is kept of the end of a night. */
+  results?: ResultWriter;
 }
 
 /** Tells of something that went wrong but stops nothing: where, and what. */
@@ -70,23 +75,38 @@ const DESCRIPTION_LENGTH = 1000;
 
 const EMPTY_ROW = Array.from({ length: TABLE_COLUMNS }, () => '');
 
-// An amount is written as its table writes it, 1.50 for 150 cents, and as a number so the column can be added up
-const AMOUNT: Record<Unit, string> = { chips: WHOLE_NUMBER, cents: '0.00' };
-
-/** What happened that has a tab to go to. The end of a night has none, so nothing of it is kept. */
-type Recorded = Extract<Effect, { type: 'ledger' | 'hand' }>;
+/** What happened that has a tab to go to. */
+type Recorded = Effect;
 
 /**
- * Where each kind of record ends up, how the cells of a row are formatted for the table it happened at,
- * and which column holds the record's id. A column added later goes after the id, so that rows written
- * before it keep their id where a retry looks for it.
+ * A kind of record that is a row of its own in a tab, added below those already there: how the cells
+ * of a row are formatted for the table it happened at, and which column holds the record's id. A
+ * column added later goes after the id, so that rows written before it keep their id where a retry looks for it.
  */
-const RECORD_SHEETS: { type: Recorded['type']; sheet: SheetKey; idColumn: number; formats(table: Denominated): string[] }[] = [
-  { type: 'ledger', sheet: 'ledger', idColumn: 7, formats: ({ unit }) => [TIMESTAMP, TEXT, TEXT, TEXT, AMOUNT[unit], TEXT, TEXT, AMOUNT[unit], TEXT, TEXT] },
-  { type: 'hand', sheet: 'hands', idColumn: 6, formats: () => [TIMESTAMP, TEXT, WHOLE_NUMBER, TEXT, TEXT, TEXT] },
-];
+interface RowOfItsOwn {
+  type: 'ledger' | 'hand';
+  tab: string;
+  sheet: SheetKey;
+  idColumn: number;
+  formats(table: Denominated): string[];
+}
 
-const hasTab = (effect: Effect): effect is Recorded => RECORD_SHEETS.some((sheet) => sheet.type === effect.type);
+/**
+ * The end of a night is no row: it has the table's results written again as the table then stands,
+ * by whoever keeps them, in place of what was kept before. However many ends wait, and however late
+ * they are seen to, that is one write of the latest figures.
+ */
+interface ResultsAgain {
+  type: 'nightEnded';
+  tab: string;
+}
+
+/** Where each kind of record ends up. */
+const RECORD_SHEETS: (RowOfItsOwn | ResultsAgain)[] = [
+  { type: 'ledger', tab: SHEET_NAMES.ledger, sheet: 'ledger', idColumn: 7, formats: ({ unit }) => [TIMESTAMP, TEXT, TEXT, TEXT, AMOUNT[unit], TEXT, TEXT, AMOUNT[unit], TEXT, TEXT] },
+  { type: 'hand', tab: SHEET_NAMES.hands, sheet: 'hands', idColumn: 6, formats: () => [TIMESTAMP, TEXT, WHOLE_NUMBER, TEXT, TEXT, TEXT] },
+  { type: 'nightEnded', tab: RESULTS_TAB },
+];
 
 // The engine keeps a hand's log shorter than this. Should a longer one ever arrive, its end is kept
 // rather than the hand being refused: the record must fit a cell, and it holds the summary.
@@ -117,6 +137,9 @@ const AWAY = 'away';
 
 // Putting old tables away can wait for the next new table, so it does not queue for the lock as a move does
 const PUT_AWAY_LOCK_WAIT_MS = 1000;
+
+// What the store remembers of the tables whose results it has seen to (`Settled`)
+const SETTLED_KEY = 'settled';
 
 const SAVED_TIME = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z$/;
 
@@ -175,9 +198,9 @@ interface Held {
   record: Recorded;
 }
 
-/** The effects that have a tab to go to, each under an id made from `made`, which says what made them, and its place among them. */
-function heldOf(effects: Effect[], made: string): Held[] {
-  return effects.flatMap((record, index) => (hasTab(record) ? [{ id: `${made}:${index}`, record }] : []));
+/** Those of the effects that `kept` says have somewhere to go, each under an id made from `made`, which says what made them, and its place among them. */
+function heldOf(effects: Effect[], made: string, kept: (effect: Effect) => boolean): Held[] {
+  return effects.flatMap((record, index) => (kept(record) ? [{ id: `${made}:${index}`, record }] : []));
 }
 
 /**
@@ -206,6 +229,10 @@ function isHeld(value: unknown): value is Held {
   const { id, record } = (value ?? {}) as Partial<Held>;
   if (typeof id !== 'string' || typeof record !== 'object' || record === null) {
     return false;
+  }
+
+  if (record.type === 'nightEnded') {
+    return typeof record.night === 'object' && record.night !== null;
   }
 
   return record.type === 'ledger'
@@ -289,6 +316,11 @@ function describe(saved: Record<string, unknown>): unknown[] {
   return [String(config?.name ?? '').slice(0, DESCRIPTION_LENGTH), Number.isNaN(created.getTime()) ? '' : created, players.join(', ').slice(0, DESCRIPTION_LENGTH)];
 }
 
+/** A table as its row in the Tables tab tells of it without its state. */
+interface Saved extends SavedTable {
+  row: number;
+}
+
 /** A table on its way to the Archive. */
 interface Leaving {
   id: string;
@@ -308,7 +340,7 @@ const saveOf = (id: unknown, version: unknown) => `${String(id)}:${String(versio
  */
 const savedAs = ([id, updated, version]: unknown[]) => `${saveOf(id, version)}:${String(savedAt(updated))}`;
 
-function recordRow({ id, record }: Held, table: Denominated, noted: Noted): unknown[] {
+function recordRow({ id, record }: Held & { record: Extract<Recorded, { type: RowOfItsOwn['type'] }> }, table: Denominated, noted: Noted): unknown[] {
   if (record.type === 'ledger') {
     const entry = record.entry;
     const amount = asNumber(entry.amount, table);
@@ -371,7 +403,7 @@ export class SheetStore implements TableStore {
 
       if (txn.save !== null) {
         // A table's version changes with every save, which makes these ids one of a kind
-        const fresh = heldOf(txn.effects, saveOf(txn.save.id, txn.save.version));
+        const fresh = heldOf(txn.effects, saveOf(txn.save.id, txn.save.version), this.kept);
 
         this.persist(txn.save, txn.at, found ? found.row : null, found ? found.held : [], fresh);
       } else if (found && found.held.length > 0) {
@@ -445,6 +477,35 @@ export class SheetStore implements TableStore {
     });
   }
 
+  settleIdle(now: number): void {
+    this.reports.after(() => {
+      try {
+        // Asked without the lock, so that a look made lately costs the standings nothing more than this
+        if (!this.deps.results || now - this.settled().at < SETTLE_EVERY_MS) {
+          return;
+        }
+
+        underLock(
+          this.deps.lock,
+          BUSY,
+          () => {
+            const tables = this.sheet('tables');
+
+            this.settleResults(tables, this.savedTimes(tables), now, true);
+          },
+          PUT_AWAY_LOCK_WAIT_MS,
+        );
+      } catch (error) {
+        // As with putting tables away, giving up on a lock that was taken is no failure: the next look does it
+        if (error instanceof StoreBusyError) {
+          console.error(error);
+        } else {
+          this.reports.failed('store settle results', error);
+        }
+      }
+    });
+  }
+
   wasPutAway(tableId: string): boolean {
     const known = this.deps.cache.get(peekKey(tableId));
     if (isGone(known)) {
@@ -454,6 +515,9 @@ export class SheetStore implements TableStore {
     // Looked for once more, under the lock: a table that has come to be there since must never be noted as gone
     return this.locked(() => !this.locate(tableId) && this.rememberGone(tableId));
   }
+
+  /** Whether an effect has somewhere to go: the end of a night only when the store was given a place for results. */
+  private readonly kept = (effect: Effect): boolean => effect.type !== 'nightEnded' || this.deps.results !== undefined;
 
   /** What notes a failure at one table. */
   private noter(tableId: string | null): Noted {
@@ -601,17 +665,21 @@ export class SheetStore implements TableStore {
     const table = state.config;
     const noted = this.noter(state.id);
 
-    for (const { type, sheet, idColumn, formats } of RECORD_SHEETS) {
-      const mine = held.filter((item) => item.record.type === type);
+    for (const kind of RECORD_SHEETS) {
+      const mine = held.filter((item) => item.record.type === kind.type);
       if (mine.length === 0) {
         continue;
       }
 
-      const rowFormats = formats(table);
-
       try {
+        if (kind.type === 'nightEnded') {
+          this.deps.results?.write([resultsOf(state)]);
+          continue;
+        }
+
+        const { sheet, idColumn } = kind;
         const arrived = this.recentIds(sheet, idColumn, triedWithin);
-        const fresh = mine.filter((item) => !arrived.has(item.id));
+        const fresh = mine.filter((item) => !arrived.has(item.id)) as (Held & { record: Extract<Recorded, { type: RowOfItsOwn['type'] }> })[];
 
         // The Ledger tab gained the columns for chips moved between players after Sheets were in use. Only such a
         // line fills them, so only then is a tab made before checked for their headers, which keeps that read off every other copy
@@ -619,11 +687,11 @@ export class SheetStore implements TableStore {
           headBlankColumns(this.sheet(sheet), HEADERS[sheet]);
         }
 
-        this.appendRows(this.sheet(sheet), fresh.map((item) => recordRow(item, table, noted)), rowFormats);
+        this.appendRows(this.sheet(sheet), fresh.map((item) => recordRow(item, table, noted)), kind.formats(table));
         this.deps.flush();
       } catch (error) {
         // Waits in the table's row for the next try
-        noted(`store copy to ${SHEET_NAMES[sheet]}`, error);
+        noted(`store copy to ${kind.tab}`, error);
         waiting.push(...mine);
       }
     }
@@ -706,9 +774,20 @@ export class SheetStore implements TableStore {
    */
   private sweep(now: number, lastWords: LastWords): void {
     const tables = this.sheet('tables');
-    const due = dueToLookAt(this.savedTimes(tables), now);
+    const saved = this.savedTimes(tables);
+    const gone = this.putAway(tables, dueToLookAt(saved, now), now, lastWords);
+
+    try {
+      this.settleResults(tables, saved.filter((table) => !gone.has(table.id)), now, false);
+    } catch (error) {
+      this.reports.failed('store settle results', error);
+    }
+  }
+
+  /** Puts away as many of the tables that are `due` as one sweep may, and gives back the ids of those that are leaving. */
+  private putAway(tables: SheetLike, due: Saved[], now: number, lastWords: LastWords): Set<string> {
     if (due.length === 0) {
-      return;
+      return new Set();
     }
 
     const archive = this.archive(false);
@@ -752,6 +831,74 @@ export class SheetStore implements TableStore {
     if (leaving.length > 0) {
       this.deps.flush();
     }
+
+    return new Set(leaving.map((table) => table.id));
+  }
+
+  /**
+   * Sees to the results of the tables nobody has changed for a while, as `settleIdle` has it, under the
+   * lock. Each table that needs writing is one read of its row and one write of its results, and what
+   * is remembered of the look spares the next one both: with nothing new to see to, this is one read of
+   * the cache. `asked` says the look was asked for by itself.
+   */
+  private settleResults(tables: SheetLike, saved: Saved[], now: number, asked: boolean): void {
+    const results = this.deps.results;
+    if (!results || (!asked && !saved.some((table) => idleLongEnough(table, now)))) {
+      return;
+    }
+
+    const before = this.settled();
+    const after = settleIdle(
+      saved,
+      now,
+      before,
+      results,
+      (table) => this.loadIdle(tables, table),
+      (error, table) => this.reports.failed('store settle results', error, table?.id),
+      asked,
+    );
+
+    if (after !== before) {
+      this.rememberSettled(after);
+    }
+  }
+
+  /** A table read from its row for its results, or null when the row does not hold a table this code can load: one saved by code too old, or cells someone changed. */
+  private loadIdle(tables: SheetLike, table: Saved): TableState | null {
+    const values = tables.getRange(table.row, 1, 1, TABLE_COLUMNS).getValues()[0]!;
+    const json = stateText(values);
+
+    if (String(values[0]) !== table.id || !savedTable(json, table.id)) {
+      return null;
+    }
+
+    try {
+      return restoreState(json);
+    } catch {
+      return null;
+    }
+  }
+
+  /** What is remembered of the tables whose results were seen to. A cache that can't be asked, or holds something else, remembers nothing. */
+  private settled(): Settled {
+    try {
+      const kept = JSON.parse(this.deps.cache.get(SETTLED_KEY) ?? 'null') as Partial<Settled> | null;
+
+      return kept && typeof kept.at === 'number' && typeof kept.seen === 'object' && kept.seen !== null ? { at: kept.at, seen: kept.seen } : NEVER_SETTLED;
+    } catch (error) {
+      this.reports.failed('store read settled tables', error);
+
+      return NEVER_SETTLED;
+    }
+  }
+
+  /** Only a memory: one that can't be kept has the same tables looked at again. */
+  private rememberSettled(settled: Settled): void {
+    try {
+      this.deps.cache.put(SETTLED_KEY, JSON.stringify(settled), CACHE_SECONDS);
+    } catch (error) {
+      this.reports.failed('store remember settled tables', error);
+    }
   }
 
   /**
@@ -773,11 +920,13 @@ export class SheetStore implements TableStore {
   }
 
   /** Every row of the Tables tab that names a table and says when it was last saved, read without its state. */
-  private savedTimes(tables: SheetLike): { id: string; row: number; changedAt: number }[] {
-    return dataRows(tables, 2).flatMap(([id, updated], index) => {
+  private savedTimes(tables: SheetLike): Saved[] {
+    return dataRows(tables, 3).flatMap(([id, updated, version], index) => {
       const changedAt = savedAt(updated);
+      const save = Number(version);
 
-      return id !== '' && changedAt !== null ? [{ id: String(id), row: FIRST_DATA_ROW + index, changedAt }] : [];
+      // A version that is no number is still told from every real one, and from itself the next time
+      return id !== '' && changedAt !== null ? [{ id: String(id), row: FIRST_DATA_ROW + index, changedAt, version: Number.isInteger(save) ? save : -1 }] : [];
     });
   }
 
@@ -811,7 +960,7 @@ export class SheetStore implements TableStore {
 
     // A table the Archive already has was asked when it got there, by the sweep that could not finish
     const waiting = new Set(held.map((item) => item.id));
-    const fresh = state && !archived ? heldOf(lastWordsOf(state, now, lastWords), `${saveOf(id, values[2])}:away`).filter((item) => !waiting.has(item.id)) : [];
+    const fresh = state && !archived ? heldOf(lastWordsOf(state, now, lastWords), `${saveOf(id, values[2])}:away`, this.kept).filter((item) => !waiting.has(item.id)) : [];
 
     if (held.length + fresh.length > 0 && !(state && this.settle(row, held, fresh, state))) {
       return null;

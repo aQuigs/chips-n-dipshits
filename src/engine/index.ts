@@ -27,6 +27,7 @@ export * from './presets.ts';
 export * from './mentions.ts';
 export * from './reactions.ts';
 export * from './replay.ts';
+export * from './results.ts';
 export * from './runVote.ts';
 export * from './seats.ts';
 export * from './seeded.ts';

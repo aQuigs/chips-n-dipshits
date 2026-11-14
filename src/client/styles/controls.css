@@ -150,3 +150,9 @@
 .prompt {
   color: var(--text);
 }
+
+/* What the bar says to the viewer alone, under what everyone is waiting for */
+.own-note {
+  color: var(--text);
+  font-weight: 600;
+}

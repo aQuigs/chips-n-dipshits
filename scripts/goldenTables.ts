@@ -236,9 +236,10 @@ for (const { schema, tables, beforeEvents = false } of SETS) {
     // Schema 2 was the same table without the bounty a hand is dealt under
     if (name === 'betting-straddle-side-pot') {
       write(`schema2-${name}`, schema, () => {
-        const { bounty: _added, ...hand } = state().hand!;
+        const built = state();
+        const { bounty: _added, ...hand } = built.hand!;
 
-        return { ...state(), schema: 2, hand };
+        return { ...built, schema: 2, hand };
       });
     }
   }

@@ -69,12 +69,9 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
         doubleBoards[t.state.config.unit] += dealt.boards === 2 ? 1 : 0;
       }
 
-      if (t.state.handCount > before.hands && t.state.hand) {
-        straddles.passedOver += t.state.hand.passedOver.length > 0 ? 1 : 0;
-      }
-
       // A hand with blinds that left someone out who was there to play: they owe, and are waiting
       if (t.state.handCount > before.hands && t.state.hand && !t.state.hand.bombPot) {
+        straddles.passedOver += t.state.hand.passedOver.length > 0 ? 1 : 0;
         blinds.keptWaiting += eligibleSeats(t.state).some((seat) => !t.state.hand!.players.some((player) => player.seat === seat)) ? 1 : 0;
       }
     }

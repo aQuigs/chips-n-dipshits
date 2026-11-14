@@ -4,7 +4,7 @@
  * in a hand. Nothing else knows one kind from another: a straddle is posted as a live forced bet under
  * its own name, and the betting starts left of the biggest of those, as it does from the big blind.
  */
-import type { Positions } from './forcedBets.ts';
+import type { HandPosts, Positions } from './forcedBets.ts';
 import { seatsClockwiseAfter } from './seats.ts';
 import type { PassedOver, Seat, Straddle, StraddlePost, TableConfig, TableState } from './types.ts';
 
@@ -127,13 +127,6 @@ export function dropStraddlesNotAllowed(state: TableState): void {
   }
 }
 
-export interface StraddleLine {
-  /** The hand's straddles, in the order they are posted. */
-  posts: StraddlePost[];
-  /** The players who asked for a straddle their seat could have posted, and post none. */
-  passedOver: PassedOver[];
-}
-
 /**
  * Who straddles in a hand, from what the table allows and what each player dealt in has asked for.
  * `spare` is what a seat has left once everything it posts before a straddle is paid.
@@ -146,27 +139,28 @@ export interface StraddleLine {
  * nobody in a hand dealt to two players. A straddle is posted whole or not at all, and a player who
  * cannot cover one is passed like one who did not ask.
  */
-export function straddleLine(state: TableState, at: Positions, spare: (seat: number) => number): StraddleLine {
+export function straddleLine(state: TableState, at: Positions, spare: (seat: number) => number): Pick<HandPosts, 'straddles' | 'passedOver'> {
   const { order, sbSeat, bbSeat, posting = [] } = at;
-  const asked = (seat: number) => straddlesAllowed(state.config).filter((kind) => state.seats[seat]!.straddles.includes(kind.what));
+  const allowed = straddlesAllowed(state.config);
+  const asked = (seat: number) => allowed.filter((kind) => state.seats[seat]!.straddles.includes(kind.what));
   const asking = order.filter((seat) => asked(seat).length > 0);
-  const posts: StraddlePost[] = [];
+  const straddles: StraddlePost[] = [];
   const passedOver: PassedOver[] = [];
 
   if (order.length <= 2) {
-    return { posts, passedOver: asking.map((seat) => ({ seat, why: 'two players' })) };
+    return { straddles, passedOver: asking.map((seat) => ({ seat, why: 'two players' })) };
   }
 
   const blinds = new Set([sbSeat, bbSeat, ...posting]);
   const byRight = [...order].reverse().filter((seat) => asking.includes(seat));
   // Only the first reason is kept, and never the same player twice in the line, so it ends whatever a kind lets follow it
-  const settled = (seat: number) => posts.some((post) => post.seat === seat) || passedOver.some((passed) => passed.seat === seat);
+  const settled = (seat: number) => straddles.some((post) => post.seat === seat) || passedOver.some((passed) => passed.seat === seat);
 
   for (;;) {
     const offers = byRight.flatMap((seat): StraddlePost[] => {
-      const kind = settled(seat) ? undefined : asked(seat).find((offered) => offered.seats(at, posts).includes(seat));
+      const kind = settled(seat) ? undefined : asked(seat).find((offered) => offered.seats(at, straddles).includes(seat));
 
-      return kind ? [{ seat, what: kind.what, amount: kind.amount(state.config.bigBlind, posts) }] : [];
+      return kind ? [{ seat, what: kind.what, amount: kind.amount(state.config.bigBlind, straddles) }] : [];
     });
     const open = offers.filter((offer) => !blinds.has(offer.seat));
     const taken = open.findIndex((offer) => spare(offer.seat) >= offer.amount);
@@ -182,9 +176,9 @@ export function straddleLine(state: TableState, at: Positions, spare: (seat: num
     });
 
     if (taken < 0) {
-      return { posts, passedOver };
+      return { straddles, passedOver };
     }
 
-    posts.push(open[taken]!);
+    straddles.push(open[taken]!);
   }
 }

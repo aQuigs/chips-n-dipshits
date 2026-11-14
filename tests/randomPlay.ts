@@ -10,6 +10,11 @@ export function chance(rng: Rng, percent: number): boolean {
   return rng.int(100) < percent;
 }
 
+export const pick = <T>(rng: Rng, from: readonly T[]) => from[rng.int(from.length)];
+
+/** The seats someone is in. */
+export const seated = (t: TestTable) => t.state.seats.flatMap((seat, index) => (seat ? [index] : []));
+
 /** Runs something the rules may refuse; a refusal must come back as a GameError, never a crash. */
 function allowRefusal(action: () => void): void {
   try {
@@ -82,9 +87,11 @@ export const FUZZ_COMMANDS: ((fuzz: Fuzz) => void)[] = [
   ({ t, rng }) => {
     // Everyone with a seat at once, about every kind the table allows: one player asking for one kind would hardly
     // ever be in the seat it is posted from
-    for (const seat of t.state.seats) {
-      for (const kind of seat ? straddlesAllowed(t.state.config) : []) {
-        attempt(t, t.ids.indexOf(seat!.playerId), { type: 'setStraddle', kind: kind.what, on: chance(rng, 75) });
+    const allowed = straddlesAllowed(t.state.config);
+
+    for (const seat of seated(t)) {
+      for (const kind of allowed) {
+        attempt(t, seatOwnerIndex(t, seat), { type: 'setStraddle', kind: kind.what, on: chance(rng, 75) });
       }
     }
   },

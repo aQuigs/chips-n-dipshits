@@ -266,7 +266,7 @@ interface OwnNote {
 function waitingEl(text: string, view: TableView, own: OwnNote | null = null): HTMLElement {
   const note = nextHandNote(view);
 
-  return h('div.waiting', null, text, note.length > 0 ? h('div.next-hand', null, note.map((part) => h('span', null, part))) : null, own ? h(`div.${own.about}-note`, null, own.text) : null);
+  return h('div.waiting', null, text, note.length > 0 ? h('div.next-hand', null, note.map((part) => h('span', null, part))) : null, own ? h(`div.own-note.${own.about}-note`, null, own.text) : null);
 }
 
 /** The viewer's own line: a player in a hand owes nothing, so there is never more than one thing to say. */

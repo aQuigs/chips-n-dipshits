@@ -10,14 +10,11 @@ import { eligibleSeats, owes, SEAT_COUNT, seatsClockwiseAfter } from '../src/eng
 import type { BlindSeats, Post, Rng, Seat } from '../src/engine/index.ts';
 import { seededRng, TestTable } from './helpers.ts';
 import { assertBlindsHold, assertChipsConserved, assertHandRecordsHold, assertInvariants } from './invariants.ts';
-import { chance } from './randomPlay.ts';
+import { chance, pick, seated } from './randomPlay.ts';
 
 const TABLES = Number(process.env.SIM_TABLES ?? 60);
 const HANDS_PER_TABLE = 60;
 const BLINDS: Post[] = ['small blind', 'big blind'];
-
-const seated = (t: TestTable) => t.state.seats.flatMap((seat, index) => (seat ? [index] : []));
-const pick = <T>(rng: Rng, from: readonly T[]) => from[rng.int(from.length)];
 
 /** A table of two to ten players in random seats, before its first hand. */
 function randomTable(rng: Rng, seed: number): TestTable {

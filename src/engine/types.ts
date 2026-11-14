@@ -139,17 +139,14 @@ export interface StraddlePost {
 }
 
 /**
- * Why a player dealt into a hand posts no straddle in it, though they asked for one their seat could
- * have posted:
+ * A player dealt into a hand who posts no straddle in it, though they asked for one their seat could
+ * have posted, and why:
  * - `two players`: nobody straddles a hand dealt to two.
  * - `blind`: they are posting a blind, which a straddle is never posted on top of.
  * - `right`: the player in seat `ahead` had the right before them, and straddles.
  * - `short`: they cannot cover the `amount` it costs.
  */
-export type NoStraddle = { why: 'two players' | 'blind' } | { why: 'right'; ahead: number } | { why: 'short'; amount: number };
-
-/** A player a hand's straddle passed over, by seat, and why. */
-export type PassedOver = { seat: number } & NoStraddle;
+export type PassedOver = { seat: number } & ({ why: 'two players' | 'blind' } | { why: 'right'; ahead: number } | { why: 'short'; amount: number });
 
 /** The terms of a bomb pot; a hand with none is an ordinary one. */
 export interface BombPot {

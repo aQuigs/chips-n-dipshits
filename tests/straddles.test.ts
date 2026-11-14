@@ -6,11 +6,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { eligibleSeats, isStraddle, owes, replayHand, SEAT_COUNT, seatsClockwiseAfter, STRADDLES, STRADDLES_IN_A_ROW } from '../src/engine/index.ts';
+import { eligibleSeats, owes, replayHand, SEAT_COUNT, seatsClockwiseAfter, straddleKind, STRADDLES, straddlesAllowed } from '../src/engine/index.ts';
 import type { Rng, Seat, Straddle, TableConfig } from '../src/engine/index.ts';
 import { handRecords, options, seededRng, TestTable } from './helpers.ts';
 import { assertChipsConserved, assertHandRecordsHold, assertInvariants } from './invariants.ts';
-import { chance } from './randomPlay.ts';
+import { chance, pick, seated } from './randomPlay.ts';
 
 const LETTERS: Record<string, Straddle> = { U: 'straddle', D: 'double straddle', B: 'button straddle', M: 'Mississippi straddle' };
 const EVERY_KIND = 'UDBM';
@@ -147,7 +147,7 @@ const CASES: Case[] = [
   { name: 'ten players: a Mississippi straddle from the middle of the table', players: 10, on: 'UDM', want: { 3: 'U', 4: 'D', 7: 'M' }, line: ['7 Mississippi straddle 40'], passed: ['3 right 7'], acts: '8 9 0 1 2 3 4 5 6 7' },
 ];
 
-function dealt({ players, on, want, stacks = {}, config = {}, lead }: Case): TestTable {
+function dealt({ players, on, want, stacks = {}, config = {}, lead }: Omit<Case, 'name' | 'line' | 'passed' | 'acts'>): TestTable {
   const t = new TestTable({ stacks: Array.from({ length: players }, (_, seat) => stacks[seat] ?? 1000), config: { ...allowing(on), ...config } });
 
   lead?.(t);
@@ -163,6 +163,11 @@ function dealt({ players, on, want, stacks = {}, config = {}, lead }: Case): Tes
 /** Every forced bet of the hand on the table, as `seat what amount`. */
 function posts(t: TestTable): string[] {
   return t.state.hand!.events.flatMap((event) => (event[0] === 'post' ? [`${event[1]} ${event[2]} ${event[3]}`] : []));
+}
+
+/** The straddles of the hand on the table as `seat what amount`, in the order of its line. */
+function lineOf(t: TestTable): string[] {
+  return t.state.hand!.straddles.map((straddle) => `${straddle.seat} ${straddle.what} ${straddle.amount}`);
 }
 
 function passedOver(t: TestTable): string[] {
@@ -195,14 +200,11 @@ for (const example of CASES) {
   test(`who straddles: ${example.name}`, () => {
     const t = dealt(example);
     const hand = t.state.hand!;
-    const { line } = example;
 
-    assert.deepEqual(hand.straddles.map((straddle) => `${straddle.seat} ${straddle.what} ${straddle.amount}`), line);
+    assert.deepEqual(lineOf(t), example.line);
     assert.deepEqual(passedOver(t), example.passed ?? []);
 
-    // Posted after every blind and ante, in the order of the line
-    assert.deepEqual(posts(t).filter((post) => isStraddle(post.split(' ').slice(1, -1).join(' '))), line);
-    assert.deepEqual(posts(t).slice(posts(t).length - line.length), line);
+    // Which holds the posts to the line: each posted whole, after every blind and ante, in its order
     assertInvariants(t.state, t.now);
 
     const biggest = hand.straddles.at(-1);
@@ -272,20 +274,19 @@ test('for every number of players and every set of kinds a table can allow, one 
   for (const players of SIZES) {
     for (const on of COMBINATIONS) {
       const where = `${players} players, allowing ${on || 'nothing'}`;
-      const table = (want: Record<number, string>) => dealt({ name: where, players, on, want, line: [], acts: '' });
-      const line = (t: TestTable) => t.state.hand!.straddles.map((straddle) => `${straddle.seat} ${straddle.what} ${straddle.amount}`);
+      const table = (want: Record<number, string>) => dealt({ players, on, want });
 
       for (let seat = 0; seat < players; seat++) {
         const alone = table({ [seat]: on });
 
-        assert.deepEqual(line(alone), postedAlone(players, seat, on), `${where}, seat ${seat} asking`);
+        assert.deepEqual(lineOf(alone), postedAlone(players, seat, on), `${where}, seat ${seat} asking`);
         assertInvariants(alone.state, alone.now);
       }
 
       const crowd = table(Object.fromEntries(Array.from({ length: players }, (_, seat) => [seat, on])));
       const expected = postedByACrowd(players, on);
 
-      assert.deepEqual(line(crowd), expected, `${where}, everyone asking`);
+      assert.deepEqual(lineOf(crowd), expected, `${where}, everyone asking`);
       assertInvariants(crowd.state, crowd.now);
 
       // The action starts left of the last of them, or of the big blind
@@ -313,7 +314,7 @@ const BETTING: { name: string; on: string; want: Record<number, string>; straddl
 ];
 
 for (const { name, on, want, straddler, biggest, first, says, toCall } of BETTING) {
-  const six = (config: Partial<TableConfig> = {}) => dealt({ name, players: 6, on, want, config, line: [], acts: '' });
+  const six = (config: Partial<TableConfig> = {}) => dealt({ players: 6, on, want, config });
   // Everyone but the straddler, in the order they act
   const others = [1, 2, 3, 4, 5].map((places) => (straddler + places) % 6);
   const posted = (seat: number) => biggest - toCall[seat]!;
@@ -405,10 +406,10 @@ for (const { name, on, want, straddler, biggest, first, says, toCall } of BETTIN
 }
 
 test('a straddle is all of it or none: a player a chip short posts no part of one, and one with exactly the amount is all in with nothing to add', () => {
-  const short = dealt({ name: 'short', players: 6, on: 'B', want: { 0: 'B' }, stacks: { 0: 39 }, line: [], acts: '' });
+  const short = dealt({ players: 6, on: 'B', want: { 0: 'B' }, stacks: { 0: 39 } });
   assert.deepEqual([short.state.hand!.straddles, passedOver(short), short.state.seats[0]!.stack], [[], ['0 short 40'], 39]);
 
-  const exact = dealt({ name: 'exact', players: 6, on: 'B', want: { 0: 'B' }, stacks: { 0: 40 }, line: [], acts: '' });
+  const exact = dealt({ players: 6, on: 'B', want: { 0: 'B' }, stacks: { 0: 40 } });
   const hand = exact.state.hand!;
   assert.deepEqual([hand.straddles, hand.players[0]!.allIn, exact.toAct], [[{ seat: 0, what: 'button straddle', amount: 40 }], true, 1]);
 
@@ -450,7 +451,7 @@ test('a double straddler all in from posting it can win what each player matched
 });
 
 test('a straddler who gets up in the middle of the hand leaves it as it was dealt, and the next hand is dealt without them', () => {
-  const t = dealt({ name: 'leaving', players: 6, on: 'UDB', want: { 3: 'U', 4: 'D', 0: 'B' }, line: [], acts: '' });
+  const t = dealt({ players: 6, on: 'UDB', want: { 3: 'U', 4: 'D', 0: 'B' } });
 
   t.cmd(0, { type: 'standUp' });
   assert.deepEqual(t.state.hand!.straddles, [{ seat: 0, what: 'button straddle', amount: 40 }]);
@@ -548,7 +549,7 @@ test('a kind the host switches off is dropped from every player’s choice, the 
 });
 
 test('only the player passed over is told so, and why', () => {
-  const t = dealt({ name: 'told', players: 6, on: 'UDB', want: { 3: 'U', 4: 'D', 0: 'B' }, line: [], acts: '' });
+  const t = dealt({ players: 6, on: 'UDB', want: { 3: 'U', 4: 'D', 0: 'B' } });
 
   assert.deepEqual(t.view(3).hand!.passedOver, { seat: 3, why: 'right', ahead: 0 });
   for (const viewer of [0, 1, 2, 4, 5]) {
@@ -559,16 +560,13 @@ test('only the player passed over is told so, and why', () => {
 const TABLES = Number(process.env.SIM_TABLES ?? 60);
 const HANDS_PER_TABLE = 40;
 
-const pick = <T>(rng: Rng, from: readonly T[]) => from[rng.int(from.length)]!;
-const seated = (t: TestTable) => t.state.seats.flatMap((seat, index) => (seat ? [index] : []));
-
 // A double is posted only where nothing has the right before the straddle under the gun, so many tables allow just those two
 const ALLOWED = ['U', 'UD', 'UD', 'UD', 'UDB', 'UDM', 'B', 'M', 'BM', EVERY_KIND, EVERY_KIND, ''];
 const EXACT_STACKS = [40, 45, 80, 85];
 
 /** What can happen between two hands of a random table. */
 const BETWEEN_HANDS: ((t: TestTable, rng: Rng) => void)[] = [
-  (t, rng) => t.cmd(t.playerIn(pick(rng, seated(t))), { type: 'sitOut' }),
+  (t, rng) => t.cmd(t.playerIn(pick(rng, seated(t))!), { type: 'sitOut' }),
   (t, rng) => {
     for (const seat of seated(t).filter((index) => t.state.seats[index]!.sittingOut || owes(t.state.seats[index]!))) {
       t.cmd(t.playerIn(seat), { type: 'comeIn', post: chance(rng, 70) });
@@ -576,19 +574,19 @@ const BETWEEN_HANDS: ((t: TestTable, rng: Rng) => void)[] = [
   },
   (t, rng) => {
     // Often a stack that a straddle, a double or one of them with the ante takes whole or leaves a chip short
-    const stack = chance(rng, 40) ? pick(rng, EXACT_STACKS) - rng.int(2) : chance(rng, 50) ? 1 + rng.int(200) : 2000;
+    const stack = chance(rng, 40) ? pick(rng, EXACT_STACKS)! - rng.int(2) : chance(rng, 50) ? 1 + rng.int(200) : 2000;
 
-    t.cmd(0, { type: 'setStack', playerId: t.state.seats[pick(rng, seated(t))]!.playerId, stack });
+    t.cmd(0, { type: 'setStack', playerId: t.state.seats[pick(rng, seated(t))!]!.playerId, stack });
   },
   (t, rng) => {
     // Everyone makes up their mind at once: one player in ten would hardly ever be where their straddle is posted from
     for (const seat of seated(t)) {
-      for (const kind of STRADDLES.filter((entry) => t.state.config[entry.setting])) {
+      for (const kind of straddlesAllowed(t.state.config)) {
         t.cmd(t.playerIn(seat), { type: 'setStraddle', kind: kind.what, on: chance(rng, 60) });
       }
     }
   },
-  (t, rng) => t.cmd(0, { type: 'updateConfig', config: allowing(pick(rng, ALLOWED)) }),
+  (t, rng) => t.cmd(0, { type: 'updateConfig', config: allowing(pick(rng, ALLOWED)!) }),
   (t, rng) => {
     if (chance(rng, 30)) {
       t.cmd(0, { type: 'setBombPot', on: true });
@@ -598,7 +596,7 @@ const BETWEEN_HANDS: ((t: TestTable, rng: Rng) => void)[] = [
     const open = t.state.seats.flatMap((seat, index) => (seat ? [] : [index]));
 
     if (open.length > 0 && chance(rng, 50)) {
-      t.cmd(0, { type: 'moveSeat', playerId: t.state.seats[pick(rng, seated(t))]!.playerId, seat: pick(rng, open) });
+      t.cmd(0, { type: 'moveSeat', playerId: t.state.seats[pick(rng, seated(t))!]!.playerId, seat: pick(rng, open)! });
     }
   },
 ];
@@ -610,12 +608,12 @@ test('whatever the table: chips are conserved, a hand has one line of straddles,
   for (let seed = 1; seed <= TABLES; seed++) {
     const rng = seededRng(seed * 611953);
     const players = 2 + rng.int(SEAT_COUNT - 1);
-    const config: Partial<TableConfig> = { ...allowing(pick(rng, ALLOWED)), ante: chance(rng, 30) ? 5 : 0, anteFrom: chance(rng, 50) ? 'everyone' : 'bigBlind' };
+    const config: Partial<TableConfig> = { ...allowing(pick(rng, ALLOWED)!), ante: chance(rng, 30) ? 5 : 0, anteFrom: chance(rng, 50) ? 'everyone' : 'bigBlind' };
     const t = new TestTable({ stacks: Array.from({ length: players }, () => 2000), seed, config });
 
     for (let dealtSoFar = 0; dealtSoFar < HANDS_PER_TABLE; dealtSoFar++) {
       for (let events = 1 + rng.int(4); events > 0; events--) {
-        pick(rng, BETWEEN_HANDS)(t, rng);
+        pick(rng, BETWEEN_HANDS)!(t, rng);
       }
 
       if (chance(rng, 10)) {
@@ -628,35 +626,28 @@ test('whatever the table: chips are conserved, a hand has one line of straddles,
 
       const before: { config: TableConfig; seats: (Seat | null)[] } = JSON.parse(JSON.stringify({ config: t.state.config, seats: t.state.seats }));
       t.deal();
-      assertChipsConserved(t.state);
+
+      // Which holds every hand to this: no chip made or lost, one line of straddles at most, each posted whole after the
+      // blinds, none from a player with a blind in front of them and none in a bomb pot
       assertInvariants(t.state, t.now);
 
       const hand = t.state.hand!;
       const where = `table ${seed}, hand ${hand.number}`;
       const dealtIn = hand.players.map((player) => player.seat);
-      const posted = hand.events.flatMap((event) => (event[0] === 'post' ? [event] : []));
-      const withABlind = new Set(posted.filter((post) => !isStraddle(post[2]) && post[2] !== 'ante').map((post) => post[1]));
 
       reached.hands += 1;
       reached.bombPots += hand.bombPot ? 1 : 0;
       reached.passedOver += hand.passedOver.length > 0 ? 1 : 0;
-      reached.withMissedBlinds += hand.straddles.length > 0 && posted.some((post) => post[2] === 'missed big blind') ? 1 : 0;
+      reached.withMissedBlinds += hand.straddles.length > 0 && hand.events.some((event) => event[0] === 'post' && event[2] === 'missed big blind') ? 1 : 0;
       reached.deadButtons += hand.straddles.length > 0 && !dealtIn.includes(hand.button) ? 1 : 0;
 
-      for (const { seat, what, amount } of hand.straddles) {
-        const was = before.seats[seat]!;
-        const kind = STRADDLES.find((entry) => entry.what === what)!;
-
+      for (const { seat, what } of hand.straddles) {
         posts.set(what, posts.get(what)! + 1);
         reached.allInStraddlers += t.state.seats[seat]!.stack === 0 ? 1 : 0;
 
-        assert.ok(before.config[kind.setting], `${where}: a ${what} at a table that does not allow it`);
-        assert.ok(was.straddles.includes(what), `${where}: seat ${seat} posts a ${what} it did not ask for`);
-        assert.ok(!withABlind.has(seat), `${where}: seat ${seat} straddles on top of a blind`);
-        assert.equal(posted.find((post) => post[1] === seat && post[2] === what)![3], amount, `${where}: a straddle posted short`);
+        assert.ok(before.config[straddleKind(what).setting], `${where}: a ${what} at a table that does not allow it`);
+        assert.ok(before.seats[seat]!.straddles.includes(what), `${where}: seat ${seat} posts a ${what} it did not ask for`);
       }
-
-      assert.ok(hand.straddles.length <= STRADDLES_IN_A_ROW && (!hand.bombPot || hand.straddles.length === 0), where);
 
       if (hand.stage === 'betting' && !hand.bombPot) {
         // Of the bets in front of the players, the biggest that was asked for, and the last of those when two are alike

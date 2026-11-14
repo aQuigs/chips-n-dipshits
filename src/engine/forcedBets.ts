@@ -109,13 +109,13 @@ export function handPosts(state: TableState, positions: Positions, bombPot: Bomb
   const owedFirst = (seat: number) => bets.filter((bet) => bet.seat === seat).reduce((sum, bet) => sum + bet.amount, 0);
 
   // A straddle has to be covered by what the antes and blinds leave its player
-  const { posts: straddles, passedOver } = straddleLine(state, positions, (seat) => state.seats[seat]!.stack - owedFirst(seat));
+  const line = straddleLine(state, positions, (seat) => state.seats[seat]!.stack - owedFirst(seat));
 
   // After the blinds and each bigger than the last, so the last straddle is the bet the betting starts from
-  return { bets: [...bets, ...straddles.map((post): ForcedBet => ({ ...post, as: 'live' }))], straddles, passedOver };
+  return { bets: [...bets, ...line.straddles.map((post): ForcedBet => ({ ...post, as: 'live' }))], ...line };
 }
 
-/** Every forced bet of the hand about to be dealt, in the order they are posted. */
+/** Every forced bet of the hand about to be dealt, in the order they are posted: the list a rule that makes players post adds to. */
 export function forcedBets(state: TableState, positions: Positions, bombPot: BombPot | null = null): ForcedBet[] {
   return handPosts(state, positions, bombPot).bets;
 }

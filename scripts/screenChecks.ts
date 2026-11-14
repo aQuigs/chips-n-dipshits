@@ -358,10 +358,10 @@ async function toggleFeed(page: Page, screen: ScreenName): Promise<void> {
   }
 }
 
-/** The bar under the table has room for what it says to a player who owes and for its buttons, and no seat's status is cut off. */
+/** The bar under the table has room for what it says to the player alone, about blinds they owe or a straddle they did not post, and for its buttons, and no seat's status is cut off. */
 async function assertOwedBarFits(page: Page, screen: ScreenName): Promise<void> {
-  assert.deepEqual(await squeezed(page, '.controls .waiting, .controls .owed-note, .controls .extras button, .seat .plate .status'), [], 'what the bar or a seat says is cut off');
-  assertOnScreen(await boxes(page, '.controls .owed-note, .controls .extras button, .controls .extras .toggle, .seat .plate'), screen, 'the table and the bar under it');
+  assert.deepEqual(await squeezed(page, '.controls .waiting, .controls .own-note, .controls .extras button, .seat .plate .status'), [], 'what the bar or a seat says is cut off');
+  assertOnScreen(await boxes(page, '.controls .own-note, .controls .extras button, .controls .extras .toggle, .seat .plate'), screen, 'the table and the bar under it');
   assertApart(await boxes(page, '.controls .waiting'), await boxes(page, '.stage, .controls .extras'), 'what the bar says and what is around it');
 }
 
@@ -859,6 +859,7 @@ const STRADDLE_TABLES = [
 type StraddleTable = (typeof STRADDLE_TABLES)[number];
 
 const WIDEST = 'WWWWWWWWWWWWWWWW';
+const STRADDLE_LABELS = ['Straddle under the gun', 'Double straddle', 'Button straddle', 'Mississippi straddle'];
 const EVERY_STRADDLE = { allowStraddle: true, allowDoubleStraddle: true, allowButtonStraddle: true, allowMississippiStraddle: true };
 
 /** Six players, Quigs in seat 0 and the host, before the first hand. Dealt with the button on Quigs, the blinds are on seats 1 and 2, Marge in seat 3 is under the gun, Stu sits next to her and Big Al is the cutoff. */
@@ -5895,7 +5896,6 @@ const CHECKS: Check[] = [
   [
     'the table settings have a switch for each kind of straddle, a change to them is told to the table, and a preset carries them to the form for a new table',
     async (rig) => {
-      const labels = ['Straddle under the gun', 'Double straddle', 'Button straddle', 'Mississippi straddle'];
       const ids = ['#table-allow-straddle', '#table-allow-double-straddle', '#table-allow-button-straddle', '#table-allow-mississippi-straddle'];
       const switches = ids.map((id) => `label[for="${id.slice(1)}"]`).join(', ');
       const ticked = (page: Page) => Promise.all(ids.map((id) => page.isChecked(id)));
@@ -5913,7 +5913,7 @@ const CHECKS: Check[] = [
 
         // As a table always was: under the gun and nothing else
         assert.deepEqual(await ticked(page), [true, false, false, false]);
-        assert.deepEqual(await texts(page, switches), labels);
+        assert.deepEqual(await texts(page, switches), STRADDLE_LABELS);
 
         await page.locator(ids[3]!).scrollIntoViewIfNeeded();
         assertOnScreen(await boxes(page, switches), screen, 'the switches for the kinds of straddle');
@@ -5989,10 +5989,7 @@ const CHECKS: Check[] = [
 
           await press('.controls [data-action="straddles"]');
           await page.waitForSelector('.dialog [data-straddle]');
-          assert.deepEqual(
-            (await texts(page, '.dialog [data-straddle]')).map((label) => label.split('\n')[0]),
-            ['Straddle under the gun', 'Double straddle', 'Button straddle', 'Mississippi straddle'],
-          );
+          assert.deepEqual((await texts(page, '.dialog [data-straddle]')).map((label) => label.split('\n')[0]), STRADDLE_LABELS);
           assert.deepEqual(await page.locator('.dialog [data-straddle]').evaluateAll((switches) => switches.map((one) => one.getAttribute('aria-checked'))), ['true', 'false', 'false', 'false']);
 
           await press('.dialog [data-straddle="button straddle"]');
@@ -6022,9 +6019,7 @@ const CHECKS: Check[] = [
             page,
             screen,
             async (shape) => {
-              assert.deepEqual(await squeezed(page, '.controls .waiting, .controls .straddle-note, .controls .extras button, .seat .plate .status'), [], 'what the bar or a seat says is cut off');
-              assertOnScreen(await boxes(page, '.controls .straddle-note, .controls .extras button, .seat .plate'), screen, 'the table and the bar under it');
-              assertApart(await boxes(page, '.controls .waiting'), await boxes(page, '.stage, .controls .extras'), 'what the bar says and what is around it');
+              await assertOwedBarFits(page, screen);
               await assertNoSidewaysScroll(page);
               await shot(page, `straddles-passed-over-${kind.name}-${screen}-${shape}`);
             },

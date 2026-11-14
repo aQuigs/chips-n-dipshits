@@ -141,7 +141,7 @@ test('the best hand stays until a better one is shown, and a hand that was mucke
   t.fold(0);
   t.raise(1, 100);
   t.fold(2);
-  t.cmd(1, { type: 'showCards' });
+  t.show(1);
   finish(t);
 
   assert.equal(numbers(t, 1).best, null);
@@ -481,7 +481,7 @@ class Recount {
 function badgesEarned(record: HandRecord, player: HandRecord['players'][number], before: Pick<PlayerTonight, 'busts' | 'streak'>, after: PlayerTonight): string[] {
   const { result } = record;
   const { seat } = player;
-  const hole = player.cards ?? [];
+  const hole = player.cards.filter((card) => card !== null);
   const awards = result.pots.flatMap((pot) => pot.awards.filter((award) => award.amount > 0));
   const took = awards.filter((award) => award.seat === seat).reduce((sum, award) => sum + award.amount, 0);
   // Won at the showdown: paid from a pot on that run that somebody else was in for too
@@ -527,7 +527,7 @@ function badgesEarned(record: HandRecord, player: HandRecord['players'][number],
     heater: every(after.streak, before.streak, 3),
     felted,
     scoop: record.boards.length > 1 && !result.uncontested && took === pot,
-    sevenDeuce: player.cards !== null && isSevenDeuce(player.cards) && outright,
+    sevenDeuce: hole.length === 2 && isSevenDeuce(hole) && outright,
     airBall: shown.some((hand) => hand.value.category === HIGH_CARD && wonOn(hand.run)),
     cooler: [...ownQuads, ...ownFlush].some((hand) => !wonOn(hand.run)),
     atm: every(after.busts, before.busts, 3),
@@ -550,13 +550,13 @@ function assertFactsAgreeWithEvents(record: HandRecord): void {
   assert.equal(total(facts.players.map((p) => p.bounty)), 0, `${where}: a bounty was paid and collected in different amounts`);
   assert.ok(facts.players.every((p) => p.putIn >= 0 && p.net === p.tookOut - p.putIn + p.bounty), `${where}: a player's chips do not add up`);
   assert.ok(facts.players.every((p) => p.busted === p.bustedBy.length > 0 && !p.bustedBy.includes(p.seat)), `${where}: a bust with nobody to thank, or thanks with no bust`);
-  assert.ok(facts.players.every((p) => p.shown.length === 0 || (!p.folded && p.cards !== null && facts.ended === 'showdown')), `${where}: a hand shown down by someone who was not there to show it`);
+  assert.ok(facts.players.every((p) => p.shown.length === 0 || (!p.folded && p.cards.every((card) => card !== null) && facts.ended === 'showdown')), `${where}: a hand shown down by someone who was not there to show it`);
 
   for (const player of facts.players) {
     const gained = (seat: number) => facts.players.find((p) => p.seat === seat)!;
 
     assert.ok(player.bustedBy.every((seat) => gained(seat).tookOut > 0 || gained(seat).bounty > 0), `${where}: a bust credited to someone who took nothing`);
-    assert.ok(player.shown.every((hand) => hand.cards.every((card) => player.cards!.includes(card) || record.boards[hand.board]!.includes(card))), `${where}: a hand shown that its cards and its board do not make`);
+    assert.ok(player.shown.every((hand) => hand.cards.every((card) => player.cards.includes(card) || record.boards[hand.board]!.includes(card))), `${where}: a hand shown that its cards and its board do not make`);
     assert.ok(player.wins.every((win) => win.between >= 1 && win.amount > 0) && player.wins.reduce((sum, win) => sum + win.amount, 0) === player.tookOut, `${where}: the pots a player was paid from do not come to what they took`);
   }
 
@@ -564,7 +564,7 @@ function assertFactsAgreeWithEvents(record: HandRecord): void {
     return;
   }
 
-  const told = new Map(record.players.map((p) => [p.seat, { putIn: 0, onStreet: 0, tookOut: 0, bounty: 0, folded: false, cards: null as string[] | null }]));
+  const told = new Map(record.players.map((p) => [p.seat, { putIn: 0, onStreet: 0, tookOut: 0, bounty: 0, folded: false, cards: [null, null] as (string | null)[] }]));
   const of = (seat: number) => told.get(seat)!;
   const newStreet = () => told.forEach((player) => (player.onStreet = 0));
 
@@ -597,7 +597,11 @@ function assertFactsAgreeWithEvents(record: HandRecord): void {
         of(event[1]).folded = true;
         break;
       case 'show':
-        of(event[1]).cards = event[2];
+        event[2].forEach((card, nth) => {
+          if (card !== null) {
+            of(event[1]).cards[nth] = card;
+          }
+        });
         break;
       case 'win':
         of(event[1]).tookOut += event[2];
@@ -650,7 +654,7 @@ test('over random games the numbers are at every step exactly what the hand reco
     for (let step = 0; step < STEPS_PER_TABLE; step++) {
       // What is face down on a hand that is over, which the step may take off the table
       const done = t.state.hand?.stage === 'done' ? t.state.hand : null;
-      const faceDown = done ? [...done.deck, ...done.players.filter((p) => !p.shown).flatMap((p) => p.cards)] : [];
+      const faceDown = done ? [...done.deck, ...done.players.flatMap((p) => p.cards.filter((_card, nth) => !p.shown[nth]))] : [];
       const over = nightIsOver(t.state);
       const effectsBefore = t.effects.length;
       const holdersBefore = nextHighHand(t.state.tonight.highHand)?.playerIds ?? [];

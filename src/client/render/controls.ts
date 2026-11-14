@@ -2,19 +2,22 @@ import { editableAmount, formatAmount, hasDecimals, parseAmount, shortAmount } f
 import type { Denominated } from '../../engine/amounts.ts';
 import type { BettingAction } from '../../engine/betting.ts';
 import { bombPotName } from '../../engine/bombPots.ts';
-import { capitalized } from '../../engine/handNames.ts';
+import { capitalized, cardWords } from '../../engine/handNames.ts';
 import { timesText } from '../../engine/runVote.ts';
 import { straddlesAllowed } from '../../engine/straddles.ts';
 import type { Command, PassedOver } from '../../engine/types.ts';
 import type { HandView, SeatView, TableView } from '../../engine/view.ts';
 import { HOTKEYS } from '../hotkeys.ts';
+import { showCommand, showOffer } from '../showing.ts';
 import type { Waiting } from '../shownTable.ts';
-import { h, holdWhile } from '../ui.ts';
+import { cardEl, h, holdWhile } from '../ui.ts';
 import { lastHandsText, nightOver, onLastHand } from './night.ts';
 
 export interface ControlHandlers {
   /** Resolves once the server has answered, or failed to. */
   send(command: Command): Promise<unknown>;
+  /** Sends a show of the player's cards (`showCommand`), and again when it got no answer, while it is still offered. Resolves as `send` does. */
+  showCards(command: Command): Promise<unknown>;
   openRebuy(): void;
   /** Opens the player's own choice of straddles, at a table that allows more than one kind. */
   openStraddles(): void;
@@ -399,7 +402,7 @@ function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandle
     main = waitingEl(waiting === 'unconfirmed' ? `Waiting for the table to confirm your ${seat.lastAction ?? 'move'}…` : waitingText(view, hand), view, ownNote(settling.note, hand, view));
   }
 
-  const showCards = hand?.canShow ? commandButton('button.chip-btn', 'show', 'Show my cards', () => handlers.send({ type: 'showCards' })) : null;
+  const showCards = showCardsEl(view, seat, handlers);
 
   // On the way out, nothing else here would still take effect: the seat is gone when the hand is
   if (seat.leaving) {
@@ -457,6 +460,38 @@ function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandle
 }
 
 /**
+ * Once the hand is over, a button for each of the player's cards still face down to the table, the
+ * card itself drawn on it, and while both are down one for both: one tap shows, and nothing takes it back.
+ */
+function showCardsEl(view: TableView, seat: SeatView, handlers: ControlHandlers): HTMLElement | null {
+  const offer = showOffer(view);
+  if (!offer) {
+    return null;
+  }
+
+  const show = (places: number[]) => () => handlers.showCards(showCommand(offer, places));
+  const buttons = offer.places.map((place) => {
+    const card = seat.cards![place]!;
+    const button = commandButton('button.chip-btn.show-card', 'show-card', '', show([place]));
+
+    button.dataset.place = String(place);
+    button.setAttribute('aria-label', `Show ${cardWords(card)}`);
+    button.append(cardEl(card));
+
+    return button;
+  });
+
+  if (offer.places.length > 1) {
+    const both = commandButton('button.chip-btn', 'show', 'Both', show(offer.places));
+
+    both.setAttribute('aria-label', 'Show both cards');
+    buttons.push(both);
+  }
+
+  return h('div.show-cards', { role: 'group', 'aria-label': 'Show your cards to the table' }, h('span.show-label', { 'aria-hidden': 'true' }, 'Show'), buttons);
+}
+
+/**
  * Everything the viewer can do right now, for the bar under the table. `waiting` says how a move of
  * theirs that is out with the server is to be taken (`ShownTable.waiting`): with no buttons for one
  * that is only sent, and with a line that says so for one the server has been slow to confirm.
@@ -497,7 +532,7 @@ export function controlsSignature(view: TableView): string {
   const hand = view.hand;
 
   return JSON.stringify([
-    seat && [seat.stack, seat.pendingAdd, seat.sittingOut, seat.away, seat.straddles, seat.alwaysChop, seat.leaving, seat.owesBigBlind, seat.owesSmallBlind, seat.comesIn],
+    seat && [seat.stack, seat.pendingAdd, seat.sittingOut, seat.away, seat.straddles, seat.alwaysChop, seat.leaving, seat.owesBigBlind, seat.owesSmallBlind, seat.comesIn, seat.shown],
     hand && [hand.number, hand.stage, hand.street, hand.toAct, hand.turn, hand.currentBet, hand.pot, hand.options, hand.canOfferChop, hand.canAnswerChop, hand.canVote, hand.canShow, hand.passedOver],
     [view.running, view.nextHandAt !== null, view.handCount === 0, nightOver(view), hand?.stage === 'done' && onLastHand(view)],
     view.requests.filter((request) => request.playerId === view.you.id),

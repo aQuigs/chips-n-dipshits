@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { betSlide, followHand, MOST_MOVE_MS, MOST_VIEW_MS, movesSeen, STEP_GAP_MS } from '../src/client/handMoves.ts';
 import { MOST_PER_VIEW, soundsPlaced } from '../src/client/handSounds.ts';
-import { Motion, motionAbility, MOVE_MS } from '../src/client/motion.ts';
+import { ASIDE_MOVES, Motion, motionAbility, MOVE_MS } from '../src/client/motion.ts';
 import type { MotionPlayer, Move, Place } from '../src/client/motion.ts';
 import { PREFERENCES, Preferences } from '../src/client/prefs.ts';
 import type { AppPreferences } from '../src/client/prefs.ts';
@@ -83,6 +83,8 @@ function where(place: Place | undefined): string {
       return place.at;
     case 'board':
       return `board${place.board}.${place.card}`;
+    case 'cards':
+      return `cards${place.seat}${place.card === undefined ? '' : `.${place.card}`}`;
     default:
       return `${place.at}${place.seat}`;
   }
@@ -209,6 +211,24 @@ test('the viewer’s own folded cards stay and their own shown cards do not turn
   // Someone only watching sees every fold and every hand turned up
   assert.deepEqual(seen(DEALT, [['fold', 0]], null), ['muck cards0>deck @0']);
   assert.deepEqual(seen(ON_THE_FLOP, [['show', 0, ['7d', '2s']]], null), ['show >cards0 @0']);
+});
+
+test('a card shown alone turns by itself, and one shown in the pause after the hand turns beside the game, holding up nothing', () => {
+  const won: HandEvent[] = [...DEALT, ['fold', 0], ['fold', 1], ['return', 2, 10], ['win', 2, 20, 0, 0]];
+  const inThePause = (had: HandEvent[], news: HandEvent[]) => {
+    const change = going(had, news);
+    change.before!.hand = { ...change.before!.hand!, number: 1, stage: 'done' };
+    change.view.hand = { ...change.view.hand!, number: 1, stage: 'done' };
+
+    return movesSeen(change, 0);
+  };
+
+  assert.deepEqual(seen(won, [['show', 1, ['As', null]]]), ['show >cards1.0 @0'], 'with the result');
+  assert.deepEqual(inThePause(won, [['show', 1, [null, 'Kd']]]).map(told), ['flip >cards1.1 @0']);
+  assert.deepEqual(inThePause(won, [['show', 1, ['As', 'Kd']]]).map(told), ['flip >cards1 @0']);
+  assert.ok(ASIDE_MOVES.has('flip'));
+  assert.ok(!ASIDE_MOVES.has('show'), 'cards turned up at a showdown are the game');
+  assert.deepEqual(inThePause(won, [['show', 0, ['Qc', null]]]), [], 'the viewer’s own card');
 });
 
 test('a new hand slides the blinds in as the cards go out, around the table from the button’s left', () => {

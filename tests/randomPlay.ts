@@ -1,7 +1,7 @@
 /* Random play on a test table: what the simulation runs, and what plays a saved table on after it is read back. */
 import assert from 'node:assert/strict';
 
-import { addMember, CONFIG_KEYS, LIMITS, mayOfferChop, MOST_RUNS, nextDeadline, owes, rabbitToHunt, REACTIONS, SEAT_COUNT, seededRng, straddlesAllowed, viewFor } from '../src/engine/index.ts';
+import { addMember, CONFIG_KEYS, fullyShown, LIMITS, mayOfferChop, MOST_RUNS, nextDeadline, owes, rabbitToHunt, REACTIONS, SEAT_COUNT, seededRng, straddlesAllowed, viewFor } from '../src/engine/index.ts';
 import type { Command, GameError, Rng } from '../src/engine/index.ts';
 import type { TestTable } from './helpers.ts';
 import { randomConfig } from './randomConfig.ts';
@@ -53,6 +53,9 @@ export interface Fuzz {
   playerId: string;
 }
 
+/** What a player asks to turn up at once: the card on their left, the other, or both, which they may name in either order. */
+const SHOWN_TOGETHER = [[0], [1], [0, 1], [1, 0]];
+
 /**
  * The commands random play sends besides betting, each of which the table may refuse. A new command
  * joins the simulation by adding an entry that sends it.
@@ -103,7 +106,8 @@ export const FUZZ_COMMANDS: ((fuzz: Fuzz) => void)[] = [
 
     attempt(t, who, chance(rng, 50) ? { type: 'offerChop' } : { type: 'answerChop', agree: chance(rng, 50) });
   },
-  ({ t, who }) => attempt(t, who, { type: 'showCards' }),
+  // For the hand on the table, or now and then one before it, which is refused
+  ({ t, rng, who }) => attempt(t, who, { type: 'showCards', hand: (t.state.hand?.number ?? t.state.handCount) - (chance(rng, 90) ? 0 : 1), cards: pick(rng, SHOWN_TOGETHER)! }),
   // For the hand on the table, or now and then one before it, which is refused
   ({ t, rng, who }) => attempt(t, who, { type: 'huntRabbit', hand: (t.state.hand?.number ?? t.state.handCount) - (chance(rng, 90) ? 0 : 1) }),
   ({ t, rng, playerId }) => attempt(t, someoneRunningTheGame(t, rng), { type: 'setStack', playerId, stack: rng.int(2000) }),
@@ -309,6 +313,16 @@ export function randomStep(t: TestTable, rng: Rng, asides = true): void {
   // A hand that ended early is over before a side event is likely to come along, so its rabbit is hunted here, by anyone dealt in
   if (hand?.stage === 'done' && rabbitToHunt(t.state, hand) && chance(rng, 50)) {
     attempt(t, seatOwnerIndex(t, pick(rng, hand.players)!.seat), { type: 'huntRabbit', hand: hand.number });
+    return;
+  }
+
+  // Cards are shown in the pause after a hand, which is often over before a side event comes along: here anyone dealt
+  // in shows a card or both, and since the pause goes on, a player who showed one often shows the other after it
+  if (hand?.stage === 'done' && chance(rng, 30)) {
+    const halfShown = hand.players.find((player) => player.shown.some(Boolean) && !fullyShown(player.shown));
+    const shower = halfShown && chance(rng, 50) ? halfShown : pick(rng, hand.players)!;
+
+    attempt(t, seatOwnerIndex(t, shower.seat), { type: 'showCards', hand: hand.number, cards: pick(rng, SHOWN_TOGETHER)! });
     return;
   }
 

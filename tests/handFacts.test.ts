@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { handFacts, isSevenDeuce, PAIR, STRAIGHT_FLUSH, THREE_OF_A_KIND, wonAPot } from '../src/engine/index.ts';
+import { fullyShown, handFacts, isSevenDeuce, PAIR, STRAIGHT_FLUSH, THREE_OF_A_KIND, wonAPot } from '../src/engine/index.ts';
 import type { HandFacts, PlayerFacts, Straddle } from '../src/engine/index.ts';
 import { ACES, BOARD, cards, checkAround, handRecords, KINGS, QUEENS, TestTable } from './helpers.ts';
 
@@ -16,7 +16,7 @@ function factsOf(t: TestTable): HandFacts {
   t.runToResult();
 
   const hand = t.state.hand!;
-  const faceDown = [...hand.deck, ...hand.players.filter((p) => !p.shown).flatMap((p) => p.cards)];
+  const faceDown = [...hand.deck, ...hand.players.flatMap((p) => p.cards.filter((_card, nth) => !p.shown[nth]))];
 
   t.finishHand();
 
@@ -97,7 +97,7 @@ test('a showdown: what each player put in and took out, who won the pot, and the
   assert.deepEqual(at(facts, 0).wins, [{ pot: 0, board: 0, amount: 50, between: 1, contested: true }]);
 
   // The kings were turned up first and lost: they are a hand shown all the same
-  assert.deepEqual(facts.players.map((p) => p.cards), [cards(ACES), null, cards(KINGS)]);
+  assert.deepEqual(facts.players.map((p) => p.cards), [cards(ACES), [null, null], cards(KINGS)]);
   assert.deepEqual(at(facts, 0).shown, [{ board: 0, rank: at(facts, 0).shown[0]!.rank, category: PAIR, name: 'Pair of aces', cards: cards('As Ah Jc 9h 7d') }]);
   assert.deepEqual(at(facts, 2).shown.map((hand) => [hand.board, hand.name]), [[0, 'Pair of kings']]);
   assert.ok(at(facts, 0).shown[0]!.rank > at(facts, 2).shown[0]!.rank, 'a better hand has the higher rank');
@@ -121,7 +121,7 @@ test('a hand everyone folds: the winner took the pot without a hand being shown,
   assert.deepEqual(chips(facts), [[60, 0, -60], [10, 0, -10], [60, 130, 70]]);
   assert.deepEqual(facts.players.map((p) => p.folded), [true, true, false]);
   assert.deepEqual(at(facts, 2).wins, [{ pot: 0, board: 0, amount: 130, between: 1, contested: false }]);
-  assert.deepEqual(facts.players.map((p) => [p.cards, p.shown]), [[null, []], [null, []], [null, []]], 'the winner mucked: aces nobody saw are no hand of the night');
+  assert.deepEqual(facts.players.map((p) => [p.cards, p.shown]), [[[null, null], []], [[null, null], []], [[null, null], []]], 'the winner mucked: aces nobody saw are no hand of the night');
 });
 
 test('cards a winner turns up by choice after everyone folded are theirs to be seen, and make no hand shown down', () => {
@@ -129,7 +129,7 @@ test('cards a winner turns up by choice after everyone folded are theirs to be s
   t.deal({ button: 0, holes: { 2: ACES } });
   t.fold(0);
   t.fold(1);
-  t.cmd(2, { type: 'showCards' });
+  t.show(2);
 
   const facts = factsOf(t);
 
@@ -298,7 +298,7 @@ test('won with seven-deuce: the cards are a fact when the bounty turned them up,
   const facts = factsOf(t);
   const winner = at(facts, 0);
 
-  assert.ok(wonAPot(winner) && winner.cards !== null && isSevenDeuce(winner.cards));
+  assert.ok(wonAPot(winner) && fullyShown(winner.cards) && isSevenDeuce(winner.cards));
   assert.deepEqual(facts.players.map((p) => [p.putIn, p.tookOut, p.bounty, p.net]), [[20, 50, 80, 110], [10, 0, -50, -60], [20, 0, -30, -50]]);
   assert.equal(facts.pot, 50, 'the bounty is paid on top, and is no part of the pot');
 
@@ -312,7 +312,7 @@ test('won with seven-deuce: the cards are a fact when the bounty turned them up,
   quiet.fold(1);
   quiet.fold(2);
 
-  assert.equal(at(factsOf(quiet), 0).cards, null);
+  assert.deepEqual(at(factsOf(quiet), 0).cards, [null, null]);
 });
 
 test('a player who wins a side pot and loses it to the bounty is busted by whoever collected, and by nobody else', () => {
@@ -358,6 +358,6 @@ test('a hand mucked at the showdown is not folded and not shown: its cards are n
   const facts = factsOf(t);
   const mucked = at(facts, 1);
 
-  assert.deepEqual([mucked.folded, mucked.cards, mucked.shown, mucked.net], [false, null, [], -60]);
+  assert.deepEqual([mucked.folded, mucked.cards, mucked.shown, mucked.net], [false, [null, null], [], -60]);
   assert.deepEqual(facts.players.map((p) => p.shown.map((hand) => hand.name)), [['Pair of aces'], [], ['Pair of kings']]);
 });

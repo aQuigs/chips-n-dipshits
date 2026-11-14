@@ -610,9 +610,13 @@ test('a table saved by the version before this one is brought up to date, and an
   const t = new TestTable({ stacks: [1000, 1000, 1000], config: { sevenDeuceBounty: 50 } });
   t.deal({ button: 0, holes: { 0: '7h 2c' } });
 
-  const saved = JSON.parse(JSON.stringify(t.state)) as { schema: number; hand: { bounty?: number } };
+  const saved = JSON.parse(JSON.stringify(t.state)) as { schema: number; hand: { bounty?: number; players: { shown: boolean | boolean[] }[] } };
   saved.schema = 2;
   delete saved.hand.bounty;
+  // As schema 2 kept it, until cards could be shown one at a time
+  for (const player of saved.hand.players) {
+    player.shown = false;
+  }
 
   assert.deepEqual(restoreState(JSON.stringify(saved)), t.state, 'the hand on the table keeps the bounty it would have paid');
 

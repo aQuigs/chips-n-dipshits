@@ -3,7 +3,7 @@ import { bettingIsClosed, bettingOptions, chipsFor, objectionTo, onTheClock, pas
 import type { BettingAction } from './betting.ts';
 import { boardsComplete, dealStreet, dealTheRest, newBoards, potShares, runOut } from './boards.ts';
 import { boardsDealt, bombPotName, claimBombPot } from './bombPots.ts';
-import { isSevenDeuce, prettyCards, shuffledDeck } from './cards.ts';
+import { HOLE_CARDS, isSevenDeuce, prettyCards, shuffledDeck } from './cards.ts';
 import type { Card } from './cards.ts';
 import { answerUnasked, chopsUnasked, mayOfferChop } from './chop.ts';
 import { takesEvent } from './events.ts';
@@ -18,6 +18,7 @@ import { buildPots, splitAmount } from './pots.ts';
 import { timesText, timesToRun, voteStory } from './runVote.ts';
 import type { Unpicked } from './runVote.ts';
 import { addFeed, clockwiseAfter, clockwiseFrom, eligibleSeats, seatsClockwiseAfter } from './seats.ts';
+import { asSeen, fullyShown } from './shown.ts';
 import { stakesText } from './stakes.ts';
 import { GameError } from './types.ts';
 import type { AnteFrom, BombPot, BountyResult, Ctx, Hand, HandPlayer, HandRecord, HandResult, PotAward, PotResult, ShownHand, Street, TableState } from './types.ts';
@@ -41,7 +42,6 @@ export const TIMING = {
   rabbitShowMs: 3000,
 };
 
-const HOLE_CARDS = 2;
 
 // A hand's log is saved with the table on every action, so a raising war can't be allowed to grow it without end
 const LOG_LIMIT = 240;
@@ -90,11 +90,29 @@ function livePlayers(hand: Hand): HandPlayer[] {
   return hand.players.filter((p) => !p.folded);
 }
 
-/** Turns a player's cards face up for the table. `made` names the hand they make, where that is known. */
-function show(state: TableState, ctx: Ctx, player: HandPlayer, made = ''): void {
-  player.shown = true;
-  record(state.hand!, ['show', player.seat, [...player.cards]]);
-  narrate(state, ctx, `${player.name} shows ${prettyCards(player.cards)}${made}`);
+/**
+ * Turns face up for the table those of a player's cards at `places` (0 for the one on their left) that
+ * are not up already: all of them, unless told which. `made` names the hand they make, where that is known.
+ */
+function show(state: TableState, ctx: Ctx, player: HandPlayer, made = '', places: readonly number[] = player.cards.map((_card, nth) => nth)): void {
+  const turned = player.cards.map((card, nth) => (places.includes(nth) && !player.shown[nth] ? card : null));
+  if (turned.every((card) => card === null)) {
+    return;
+  }
+
+  const firstShown = !player.shown.some(Boolean);
+  player.shown = player.shown.map((shown, nth) => shown || turned[nth] !== null);
+  record(state.hand!, ['show', player.seat, turned]);
+  narrate(state, ctx, `${player.name} ${showText(turned.filter((card) => card !== null), firstShown, fullyShown(player.shown))}${made}`);
+}
+
+/** What the play-by-play says a player turned up: their hand at once, one card of it, or the other one later. */
+function showText(cards: readonly Card[], firstShown: boolean, fully: boolean): string {
+  if (!fully) {
+    return `shows one card, ${prettyCards(cards)}`;
+  }
+
+  return firstShown ? `shows ${prettyCards(cards)}` : `shows the other card, ${prettyCards(cards)}`;
 }
 
 /** Takes chips from a player's stack into the hand. `as` says how they count there; a call or a raise is a live bet, like a blind. */
@@ -213,7 +231,7 @@ export function startHand(state: TableState, ctx: Ctx): void {
       folded: false,
       allIn: false,
       hasActed: false,
-      shown: false,
+      shown: Array<boolean>(HOLE_CARDS).fill(false),
       ritVote: null,
       lastAction: null,
     };
@@ -670,9 +688,7 @@ function beginRunout(state: TableState, ctx: Ctx): void {
   collectBets(hand);
 
   for (const player of live) {
-    if (!player.shown) {
-      show(state, ctx, player);
-    }
+    show(state, ctx, player);
   }
 
   // Running it more than once is offered only to a hand on one board: boards dealt apart from the start are simply dealt out
@@ -852,7 +868,7 @@ function settleShowdown(state: TableState, ctx: Ctx): void {
   const hands: ShownHand[] = [];
   hand.boards.forEach((_board, run) => {
     for (const player of live) {
-      if (player.shown) {
+      if (fullyShown(player.shown)) {
         const value = values[run]!.get(player.seat)!;
         hands.push({ seat: player.seat, run, name: madeHandName(value), cards: value.cards });
       }
@@ -932,9 +948,7 @@ function payBounty(state: TableState, ctx: Ctx, winnerSeat: number): BountyResul
     return null;
   }
 
-  if (!winner.shown) {
-    show(state, ctx, winner);
-  }
+  show(state, ctx, winner);
 
   state.seats[winnerSeat]!.stack += total;
   record(hand, ['bounty', winnerSeat, payments.map((payment): [number, number] => [payment.seat, payment.amount])]);
@@ -1056,20 +1070,30 @@ function huntedText(hunted: readonly Card[][]): string {
   return hunted.flatMap((cards, board) => (cards.length === 0 ? [] : [`${midSentence(BOARD_NAMES[board]!)} ${prettyCards(cards)}`])).join(', ');
 }
 
-/** After a hand is over, anyone who was dealt in may turn their cards face up. */
-export function showCards(state: TableState, ctx: Ctx, seatIndex: number): void {
+/**
+ * Once hand number `number` is over, anyone who was dealt into it may turn face up their cards at
+ * `places`, 0 for the one on their left: either one, or both, and the other one later. A card already
+ * face up stays as it is, so a request that got no answer can be sent again; naming the hand keeps one
+ * that arrives late from showing the cards of the next.
+ */
+export function showCards(state: TableState, ctx: Ctx, seatIndex: number, number: number, places: readonly number[]): void {
   const hand = state.hand;
-  const player = hand ? playerAt(hand, seatIndex) : undefined;
 
-  if (!hand || hand.stage !== 'done' || !player) {
+  if (!hand || hand.number !== number) {
+    throw new GameError('That hand is gone, so its cards can no longer be shown');
+  }
+
+  const player = playerAt(hand, seatIndex);
+
+  if (!player) {
+    throw new GameError('Only a player dealt into the hand can show cards');
+  }
+
+  if (hand.stage !== 'done') {
     throw new GameError('You can show your cards once the hand is over');
   }
 
-  if (player.shown) {
-    throw new GameError('Your cards are already showing');
-  }
-
-  show(state, ctx, player);
+  show(state, ctx, player, '', places);
 }
 
 /** Takes the finished hand off the table and writes it to the record, which is all that is kept of it. */
@@ -1089,7 +1113,7 @@ function clearHand(state: TableState, ctx: Ctx): HandRecord {
       name: p.name,
       startStack: p.startStack,
       endStack: state.seats[p.seat]!.stack,
-      cards: p.shown ? p.cards : null,
+      cards: asSeen(p.cards, p.shown),
     })),
     result: hand.result!,
     events: hand.events,

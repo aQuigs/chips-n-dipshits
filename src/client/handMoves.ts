@@ -89,10 +89,10 @@ function deal(table: ReplayPosition): Move[] {
 
 /**
  * What one hand event moves, for the viewer at `viewer`: the table of which event moves what. `before`
- * and `after` are the table either side of the event. A new kind of event takes a case here, moves or
- * none, and the build fails until it has one.
+ * and `after` are the table either side of the event, and `over` says the viewer was already looking
+ * at the hand's end. A new kind of event takes a case here, moves or none, and the build fails until it has one.
  */
-function stepsOf(event: HandEvent, before: ReplayPosition, after: ReplayPosition, viewer: number | null): Step[] {
+function stepsOf(event: HandEvent, before: ReplayPosition, after: ReplayPosition, viewer: number | null, over: boolean): Step[] {
   switch (event[0]) {
     case 'post': {
       const [, seat, , , , as] = event;
@@ -140,9 +140,19 @@ function stepsOf(event: HandEvent, before: ReplayPosition, after: ReplayPosition
     case 'runs':
       return gather(before.seats);
 
-    case 'show':
+    case 'show': {
+      const [, seat, turned] = event;
+      // A card turned up in the pause after the hand, which a player does by choice, is beside the game: nothing waits for it
+      const name = over ? 'flip' : 'show';
+
       // The viewer has been looking at their own cards all along
-      return event[1] === viewer ? [] : [{ moves: [{ name: 'show', to: cardsOf(event[1]), after: 0 }] }];
+      if (seat === viewer) {
+        return [];
+      }
+
+      // A hand turned up whole turns over as one; a card shown alone turns by itself, the other staying as it lies
+      return [{ moves: turned.every((card) => card !== null) ? [{ name, to: cardsOf(seat), after: 0 }] : turned.flatMap((card, nth): Move[] => (card === null ? [] : [{ name, to: { at: 'cards', seat, card: nth }, after: 0 }])) }];
+    }
 
     // One pile to each winner, with all they won: the shares of a split pot, of side pots and of several boards leave together
     case 'win':
@@ -198,6 +208,7 @@ export function movesSeen({ before: shown, view, events }: TableChange, viewer: 
 
   const all = view.hand?.events ?? [];
   const had = all.length - events.length;
+  const over = shown?.hand?.number === view.hand?.number && shown?.hand?.stage === 'done';
   // The table before the first of the new events, between each and the next, and after the last
   const tables = Array.from({ length: events.length + 1 }, (_, nth) => replayHand(all, had + nth));
   // Each step with the event it came of, counted from the first of the new ones
@@ -206,7 +217,7 @@ export function movesSeen({ before: shown, view, events }: TableChange, viewer: 
   events.forEach((event, nth) => {
     const [before, after] = [tables[nth], tables[nth + 1]];
 
-    steps.push(...(before && after ? stepsOf(event, before, after, viewer) : []).map((step) => ({ ...step, event: nth })));
+    steps.push(...(before && after ? stepsOf(event, before, after, viewer, over) : []).map((step) => ({ ...step, event: nth })));
   });
 
   // Bets this view stopped drawing are gathered now, though no event has said it yet

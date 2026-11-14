@@ -25,6 +25,7 @@ export * from './reactions.ts';
 export * from './runVote.ts';
 export * from './seats.ts';
 export * from './seeded.ts';
+export * from './shown.ts';
 export * from './stakes.ts';
 export * from './straddles.ts';
 export * from './table.ts';

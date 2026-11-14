@@ -1,6 +1,7 @@
 import { chanceFigures, chanceSteps } from '../engine/chances.ts';
 import type { ChanceFigure, Chances, Spot } from '../engine/chances.ts';
 import type { Card } from '../engine/cards.ts';
+import { fullyShown } from '../engine/shown.ts';
 import type { TableView } from '../engine/view.ts';
 import type { BoardCard, TableMotion } from './motion.ts';
 
@@ -27,7 +28,7 @@ export function spotsOf(view: TableView, turning: readonly BoardCard[] = []): Ta
     return null;
   }
 
-  const faceUp = view.seats.flatMap((seat) => (seat?.shown && seat.cards?.every((card) => card !== null) ? [{ seat, cards: seat.cards as Card[] }] : []));
+  const faceUp = view.seats.flatMap((seat) => (seat && fullyShown(seat.shown) ? [{ seat, cards: seat.cards as Card[] }] : []));
   const stillIn = view.seats.filter((seat) => seat?.inHand && !seat.folded);
   const hands = faceUp.filter(({ seat }) => seat.inHand && !seat.folded);
 

@@ -235,6 +235,11 @@ export class TestTable {
     this.cmd(seat, { type: 'raise', to });
   }
 
+  /** The player turns up their cards at these places, 0 for the one on their left, for the hand on the table: both unless told which. */
+  show(player: number, cards = [0, 1]): void {
+    this.cmd(player, { type: 'showCards', hand: this.state.hand?.number ?? this.state.handCount, cards });
+  }
+
   /** Lets time pass and applies whatever came due. */
   wait(ms: number): void {
     this.now += ms;

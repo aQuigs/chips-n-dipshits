@@ -274,7 +274,7 @@ test('showdown: the last player to bet on the river shows first, and a beaten ha
 
   t.finishHand();
   const record = handRecords(t.effects)[0]!;
-  assert.deepEqual(record.players.map((p) => p.cards), [['As', 'Ah'], null, ['Ks', 'Kh']]);
+  assert.deepEqual(record.players.map((p) => p.cards), [['As', 'Ah'], [null, null], ['Ks', 'Kh']]);
   assert.deepEqual(record.players.map((p) => p.endStack - p.startStack), [120, -60, -60]);
 });
 
@@ -316,18 +316,20 @@ test('a winner who was not called may show afterward, and so may anyone who fold
   t.deal({ button: 0, holes: { 2: ACES } });
   t.fold(0);
 
-  assert.throws(() => t.cmd(0, { type: 'showCards' }), /once the hand is over/);
+  assert.throws(() => t.show(0), /once the hand is over/);
   t.fold(1);
 
   assert.equal(t.view(2).hand!.canShow, true);
-  t.cmd(2, { type: 'showCards' });
+  t.show(2);
 
   assert.deepEqual(t.view(0).seats[2]!.cards, ['As', 'Ah']);
   assert.ok(t.feedText().includes('P2 shows A♠ A♥'));
-  assert.throws(() => t.cmd(2, { type: 'showCards' }), /already showing/);
+  const lines = t.feedText().length;
+  t.show(2);
+  assert.equal(t.feedText().length, lines, 'showing again turns nothing up');
 
-  t.cmd(0, { type: 'showCards' });
-  assert.equal(t.view(1).seats[0]!.shown, true);
+  t.show(0);
+  assert.deepEqual(t.view(1).seats[0]!.shown, [true, true]);
 });
 
 test('all in before the flop: hands turn face up and the board comes one street at a time', () => {

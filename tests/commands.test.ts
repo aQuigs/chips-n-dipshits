@@ -217,7 +217,7 @@ test('anyone at the table may chat, ask for a seat or take a request back, and t
   assert.throws(send(t, watcher, { type: 'call' }), { message: "It's not your turn" });
   assert.throws(send(t, watcher, { type: 'raise', to: 100 }), { message: "It's not your turn" });
   assert.throws(send(t, watcher, { type: 'ritVote', runs: 2 }), { message: 'There is nothing to pick for you right now' });
-  assert.throws(send(t, watcher, { type: 'showCards' }), { message: 'You can show your cards once the hand is over' });
+  assert.throws(send(t, watcher, { type: 'showCards', hand: t.state.hand!.number, cards: [0] }), { message: 'Only a player dealt into the hand can show cards' });
 
   // What was sent is read before the hand is asked, so a malformed move says what is wrong with it
   assert.throws(send(t, watcher, { type: 'fold', turn: 'now' }), { message: 'The turn must be a whole number' });

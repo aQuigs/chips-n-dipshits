@@ -478,7 +478,7 @@ test('more of the same hand during the hold, as a player showing their cards, en
   page.show(result);
   const held = page.told[0]!.events.length;
 
-  t.cmd(0, { type: 'showCards' });
+  t.show(0);
   const shown = seat.change();
   page.show(shown);
 

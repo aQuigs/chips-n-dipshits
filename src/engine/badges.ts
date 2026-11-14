@@ -5,6 +5,7 @@
  * table, never a card nobody was shown. Nothing outside this file knows one badge from another.
  */
 import { isSevenDeuce, rankOf } from './cards.ts';
+import { fullyShown } from './shown.ts';
 import { somebodyWon } from './handFacts.ts';
 import type { HandFacts, HandShown, PlayerFacts } from './handFacts.ts';
 import { listed, midSentence } from './handNames.ts';
@@ -46,7 +47,7 @@ const MAKING: Record<number, number> = { [STRAIGHT_FLUSH]: 5, [FOUR_OF_A_KIND]: 
  * Four of a kind or a straight flush on the board is everyone's, and nobody's to brag about.
  */
 function ownShown(player: PlayerFacts, category: number): HandShown[] {
-  const own = new Set(player.cards ?? []);
+  const own = new Set(player.cards);
 
   return player.shown.filter((hand) => hand.category === category && hand.cards.slice(0, MAKING[category]).some((card) => own.has(card)));
 }
@@ -148,7 +149,7 @@ export const BADGES: readonly Badge[] = [
     name: 'Seven-Deuce',
     mark: '💩',
     description: 'Won a hand outright with seven-deuce, as the bounty counts it, with the table seeing the cards.',
-    earned: (hand, player) => player.cards !== null && isSevenDeuce(player.cards) && wonOutright(hand, player),
+    earned: (hand, player) => fullyShown(player.cards) && isSevenDeuce(player.cards) && wonOutright(hand, player),
   },
   {
     id: 'airBall',

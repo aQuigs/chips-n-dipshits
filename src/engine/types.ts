@@ -7,7 +7,7 @@ export const SEAT_COUNT = 10;
  * Bumped when the shape of a saved table changes (a field renamed, retyped or removed), together with a
  * step in `upgradeState`. A field that is only added gets a default in `SAVED_DEFAULTS` instead.
  */
-export const STATE_SCHEMA = 5;
+export const STATE_SCHEMA = 6;
 
 /** What a table's amounts count, since every one of them is kept as a whole number: chips, or the cents of an amount written in dollars. */
 export type Unit = 'chips' | 'cents';
@@ -183,8 +183,8 @@ export interface HandPlayer {
   allIn: boolean;
   /** Has acted on the current street; blinds don't count. */
   hasActed: boolean;
-  /** Hole cards are face up for everyone. */
-  shown: boolean;
+  /** Which hole cards are face up for everyone, a flag for each in the order of `cards`: see `shown.ts`. */
+  shown: boolean[];
   /** How many times they picked to run the rest when everyone is all in; null until they pick. */
   ritVote: number | null;
   lastAction: PlayerAction | null;
@@ -446,8 +446,8 @@ export interface HandRecordPlayer {
   name: string;
   startStack: number;
   endStack: number;
-  /** Hole cards, only if they were shown. */
-  cards: Card[] | null;
+  /** Hole cards as the table saw them: each one shown, and null in place of one that stayed face down. */
+  cards: (Card | null)[];
 }
 
 export interface HandRecord {
@@ -505,7 +505,8 @@ export type Command =
   | { type: 'setAlwaysChop'; on: boolean }
   /** How many times the player wants the rest of an all-in hand run: see `runVote.ts`. */
   | { type: 'ritVote'; runs: number }
-  | { type: 'showCards' }
+  /** Turns face up, once hand number `hand` is over, the sender's hole cards at these places: 0 for the one on their left, 1 for the other. */
+  | { type: 'showCards'; hand: number; cards: number[] }
   /** Asks to see the cards hand number `hand` would have dealt, once it is over: see `huntRabbit` in `hand.ts`. */
   | { type: 'huntRabbit'; hand: number }
   | { type: 'chat'; text: string }

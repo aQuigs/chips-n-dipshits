@@ -689,6 +689,51 @@ try {
     await other.context().close();
   }
 
+  console.log('A card shown after the hand whose answer is lost after the table played it is sent once more, and comes out once');
+  {
+    const dealer = await open(browser);
+    const showTable = await createTable(dealer, server.url, 'Bart');
+    await sit(dealer, 0);
+
+    const other = await open(browser);
+    await other.goto(`${server.url}?table=${showTable}`);
+    await other.fill('#join-name', 'Lisa');
+    await other.click('[data-action="join-table"]');
+    await sit(other, 1);
+    await dealer.click('.banner [data-action="approve"]');
+    await other.waitForSelector('.seat.me');
+    await dealer.click('.message [data-action="start"]');
+
+    // Whoever acts first folds, and then shows the card on their left
+    const folder = await Promise.race([dealer, other].map((page) => page.waitForSelector('.turn [data-action="fold"]:enabled').then(() => page)));
+    await folder.click('.turn [data-action="fold"]');
+    const watcher = folder === dealer ? other : dealer;
+
+    let shows = 0;
+    await folder.route('**/api', async (route) => {
+      const body = JSON.parse(route.request().postData() ?? '{}') as { op?: string; command?: { type?: string } };
+
+      // The first is played by the table, and its answer never reaches the page
+      if (body.op === 'act' && body.command?.type === 'showCards' && ++shows === 1) {
+        await route.fetch();
+        return route.abort('failed');
+      }
+
+      return route.fallback();
+    });
+
+    await folder.click('.controls [data-action="show-card"][data-place="0"]');
+    await folder.waitForSelector('.seat.me .hole .card.seen');
+    await watcher.waitForSelector('.seat:not(.me) .hole .card[data-card] + .card.back');
+
+    assert.equal(shows, 2, 'the show with no answer was sent once more');
+    assert.equal(await folder.locator('.feed li:has-text("shows one card")').count(), 1, 'and the card came out once');
+    assert.equal(await folder.locator('.feed li:has-text("shows the other card")').count(), 0);
+
+    await dealer.context().close();
+    await other.context().close();
+  }
+
   // What a page of the newer build would send, for what the pages left behind can no longer do
   const asNewerBuild = async (request: object) => {
     const response = await fetch(`${server.url}api`, { method: 'POST', body: JSON.stringify({ ...request, build: NEWER_BUILD }) });

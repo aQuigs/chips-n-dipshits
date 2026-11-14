@@ -54,11 +54,12 @@ export interface PlayerFacts {
   /** Every share of a pot they were paid, by pot and by board. Empty when they won nothing. */
   wins: PotWon[];
   /**
-   * Their two cards, when the table saw them: turned up at a showdown or an all-in, for a bounty, or by
-   * choice once the hand was over. Null when they stayed face down, as a mucked or folded hand's do and
-   * those of a winner nobody called.
+   * Their two cards as the table saw them, null in place of each that stayed face down: turned up at a
+   * showdown or an all-in, for a bounty, or by choice once the hand was over, one or both. A mucked or
+   * folded hand's, and those of a winner nobody called, are face down unless shown by choice. Whether
+   * the table saw them all is `fullyShown(cards)`.
    */
-  cards: Card[] | null;
+  cards: (Card | null)[];
   /**
    * What they turned up at a showdown, a hand for each board. Empty when the hand ended without one, or
    * they had folded or mucked: cards shown by choice afterwards are in `cards` and make no hand here.

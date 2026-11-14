@@ -1,5 +1,6 @@
 import { addStreet, newBoards, runOut } from './boards.ts';
 import { boardsDealt } from './bombPots.ts';
+import { HOLE_CARDS } from './cards.ts';
 import type { Card } from './cards.ts';
 import type { AnteFrom, BombPot, Post } from './types.ts';
 
@@ -40,7 +41,12 @@ export type HandEvent =
   | [kind: 'vote', seat: number, runs: number]
   /** Betting is over with cards to come, and the rest is dealt out on this many boards: more than one when it is run more than once, or the hand was dealt on several. */
   | [kind: 'runs', count: number]
-  | [kind: 'show', seat: number, cards: Card[]]
+  /**
+   * A player's cards turned face up, at their places among the player's cards (the first on their left),
+   * null at a place left as it was: one face down still, or face up already. Shown at a showdown or
+   * all in, it is the whole hand; shown by choice once the hand is over, either card or both.
+   */
+  | [kind: 'show', seat: number, cards: (Card | null)[]]
   | [kind: 'muck', seat: number]
   /** One player's share of one pot; `pot` 0 is the main pot, and `board` is which board won it. */
   | [kind: 'win', seat: number, amount: number, pot: number, board: number]
@@ -84,8 +90,8 @@ export interface ReplaySeat {
   /** Chips in front of the player on the current street. */
   bet: number;
   folded: boolean;
-  /** Hole cards, once they are face up. */
-  cards: Card[] | null;
+  /** Hole cards as the table sees them, null in place of each one face down. */
+  cards: (Card | null)[];
 }
 
 /** The table as a hand's events leave it. */
@@ -123,7 +129,7 @@ export function replayHand(events: readonly HandEvent[], count = events.length):
     smallBlind,
     bigBlind,
     bombPot,
-    seats: players.map(([seat, name, stack]) => ({ seat, name, stack, bet: 0, folded: false, cards: null })),
+    seats: players.map(([seat, name, stack]) => ({ seat, name, stack, bet: 0, folded: false, cards: Array<Card | null>(HOLE_CARDS).fill(null) })),
     pot: 0,
     boards: table.boards,
     awards: [],
@@ -197,9 +203,12 @@ export function replayHand(events: readonly HandEvent[], count = events.length):
         runOut(table, event[1]);
         break;
 
-      case 'show':
-        at(event[1]).cards = event[2];
+      case 'show': {
+        const player = at(event[1]);
+
+        player.cards = player.cards.map((card, nth) => event[2][nth] ?? card);
         break;
+      }
 
       case 'win': {
         const [, seat, amount, pot, board] = event;

@@ -1704,6 +1704,61 @@ async function assertRabbitFits(page: Page, screen: ScreenName, what: string): P
 
   await assertNoSidewaysScroll(page);
 }
+
+const SHOW_PLAYERS: RigPlayer[] = ['Quigs', 'Stu', 'Pam', 'Ann', 'Bob', 'Cat', 'Dee', 'Eve', 'Fay'].map((name) => ({ name, stack: 1000 }));
+const PAM_HOLE = 'As Kd';
+
+/** Nine players and Kibitz watching. Quigs raises and everyone folds to him: Pam, the big blind, folds A♠ K♦, which she may now show. */
+function foldedToQuigs(rig: Rig): RigTable {
+  const table = rig.table(SHOW_PLAYERS);
+
+  table.join('Kibitz');
+  table.deal({ button: 0, holes: { 0: 'Qc Jc', 2: PAM_HOLE } });
+  table.play((_view, name) => (name === 'Quigs' ? { type: 'raise', to: 60 } : { type: 'fold' }), (view) => view.hand!.stage === 'done');
+
+  return table;
+}
+
+/** What the bar under the table offers to show: each button's spoken name, and the card drawn on it. */
+const showButtons = (page: Page) =>
+  page.evaluate(`[...document.querySelectorAll('.controls .show-cards button')].map((button) => [button.getAttribute('aria-label'), button.querySelector('.card')?.dataset.card ?? null])`) as Promise<[string, string | null][]>;
+
+/** A seat's cards as drawn on a page, left to right: each face-up card, or null for a back. */
+const holeOf = (page: Page, seat: number) => page.evaluate(`[...document.querySelectorAll('.seat[data-seat="${seat}"] .hole .card')].map((card) => card.dataset.card ?? null)`) as Promise<(string | null)[]>;
+
+/** That the offer to show is whole and on the screen, its buttons in one row, apart from each other and from the rest of the bar. */
+async function assertShowOfferFits(page: Page, screen: ScreenName, where: string): Promise<void> {
+  const buttons = await boxes(page, '.controls .show-cards button');
+  const others = await boxes(page, '.controls .extras > :not(.show-cards)');
+
+  assertOnScreen(await boxes(page, '.controls .show-cards'), screen, `${where}: the offer to show`);
+  assert.ok(buttons.every((button) => Math.abs(button.top - buttons[0]!.top) < 1), `${where}: the offer to show is split over lines`);
+  buttons.forEach((button, nth) => assertApart([button], buttons.slice(nth + 1), `${where}: two buttons to show`));
+  assertApart(await boxes(page, '.controls .show-cards'), others, `${where}: the offer to show and the switches beside it`);
+  assert.deepEqual(await squeezed(page, '.controls .show-cards .show-label, .controls .extras button, .controls .extras .toggle'), [], `${where}: something in the bar is cut off`);
+  await assertNoSidewaysScroll(page);
+}
+
+/** Ends the hand on the table, which nobody is still playing, and deals the next with the game paused: Pam, the big blind again, holds `hole`, and everyone folds to Quigs. */
+function nextFoldedToQuigs(table: RigTable, hole: string): void {
+  table.act('Quigs', { type: 'pause' });
+  table.play(() => null, (view) => view.hand === null);
+  table.deal({ button: 0, holes: { 0: 'Qc Jc', 2: hole } });
+  table.play((_view, name) => (name === 'Quigs' ? { type: 'raise', to: 60 } : { type: 'fold' }), (view) => view.hand!.stage === 'done');
+}
+
+/** That Pam's seat is drawn on another page with `cards` up and the rest down, in her order, said so to a screen reader, and clear of what the seats around it say. */
+async function assertPamShows(page: Page, screen: ScreenName, cards: (string | null)[], where: string): Promise<void> {
+  const pam = '.seat[data-seat="2"]';
+  const said = `Pam shows ${cards.filter((card) => card !== null).map((card) => (card === 'As' ? 'the ace of spades' : card === 'Kd' ? 'the king of diamonds' : card === '7c' ? 'the seven of clubs' : card)).join(' and ')}; the other card is face down`;
+
+  await page.waitForFunction(`JSON.stringify([...document.querySelectorAll('${pam} .hole .card')].map((card) => card.dataset.card ?? null)) === ${JSON.stringify(JSON.stringify(cards))}`);
+  assert.equal(await page.getAttribute(`${pam} .hole`, 'aria-label'), cards.includes(null) ? said : null, `${where}: what a screen reader says of Pam's cards`);
+  assertOnScreen(await boxes(page, `${pam} .hole .card`), screen, `${where}: Pam's cards`);
+  // What a seat says, not its plate: on a phone at nine seats any seat's cards reach over the edge of the plate above
+  const around = [...(await textBoxes(page, `.seat:not(${pam}) .plate > *`)), ...(await boxes(page, `.seat:not(${pam}) .hole .card, .board .card`)), ...(await textBoxes(page, '.message.result > div'))];
+  assertApart(await boxes(page, `${pam} .hole .card`), around, `${where}: Pam's cards and the table around them`);
+}
 // Run in the page: the chat box as the player has it, with the name picked in the list marked
 const CHAT_BOX = `(() => {
   const input = document.querySelector('#chat-input');
@@ -2181,7 +2236,7 @@ const CHECKS: Check[] = [
       await page.tap('.controls [data-action="show"]');
       await page.waitForSelector('.controls [data-action="show"]', { state: 'detached' });
       await page.waitForSelector('.seat.me .hole .card[data-card]');
-      assert.equal(table.view('Quigs').seats.find((seat) => seat?.name === 'Pam')!.shown, true);
+      assert.deepEqual(table.view('Quigs').seats.find((seat) => seat?.name === 'Pam')!.shown, [true, true]);
     },
   ],
   [
@@ -9715,6 +9770,256 @@ const CHECKS: Check[] = [
       assert.deepEqual(rig.gifs.map((asked) => asked.url), ['https://media.giphy.com/media/abc123/giphy.gif']);
       assert.equal(await page.textContent('.feed-toggle .latest'), 'Pam: GIF', 'with GIFs on the bar names the GIF');
       await shot(page, 'gifs-desktop');
+    },
+  ],
+  ...(['smallPhone', 'desktop'] as const).map(
+    (screen): Check => [
+      `on a ${screen}, after a hand a player who folded is offered each of their cards, drawn on its button, and both, in one group under the table clear of the switches beside it, standing and lying`,
+      async (rig) => {
+        const table = foldedToQuigs(rig);
+        const pam = await table.open('Pam', screen);
+
+        await pam.waitForSelector('.controls .show-cards');
+        assert.deepEqual(await showButtons(pam), [
+          ['Show the ace of spades', 'As'],
+          ['Show the king of diamonds', 'Kd'],
+          ['Show both cards', null],
+        ]);
+        assert.deepEqual(await texts(pam, '.controls .show-cards .show-label, .controls .show-cards [data-action="show"]'), ['Show', 'Both']);
+        assert.equal(await pam.locator('.seat.me .hole .card.seen').count(), 0, 'a card is marked as seen before it is shown');
+
+        await inShapesOf(
+          pam,
+          screen,
+          async (shape) => {
+            await assertShowOfferFits(pam, screen, `${screen}, ${shape}`);
+            await shot(pam, `show-offer-${screen}-${shape}`);
+          },
+          { buttonsUp: false },
+        );
+
+        // Quigs, who won without a call, is offered it too; a watcher is not
+        const quigs = await table.open('Quigs', screen);
+        const kibitz = await table.open('Kibitz', screen);
+        await quigs.waitForSelector('.controls .show-cards');
+        assert.deepEqual((await showButtons(quigs)).map(([label]) => label), ['Show the queen of clubs', 'Show the jack of clubs', 'Show both cards']);
+        assert.equal(await kibitz.locator('.controls .show-cards').count(), 0, 'a watcher is offered to show');
+
+        for (const page of [pam, quigs, kibitz]) {
+          await page.context().close();
+        }
+      },
+    ],
+  ),
+  [
+    'a player shows the card on their left, then the one on their right: their own page marks each as the table sees it and offers what is left, and another player and a watcher see one card up and one down, in her order, at nine seats on a 360 phone standing and lying and on the desktop',
+    async (rig) => {
+      const table = foldedToQuigs(rig);
+      const pam = await table.open('Pam', 'smallPhone');
+      const others = [
+        ['Stu', 'smallPhone', await table.open('Stu', 'smallPhone')],
+        ['Kibitz', 'smallPhone', await table.open('Kibitz', 'smallPhone')],
+        ['Stu', 'desktop', await table.open('Stu', 'desktop')],
+      ] as const;
+      const press = pressOn(pam, 'smallPhone');
+
+      await press('.controls [data-action="show-card"][data-place="0"]');
+      await pam.waitForSelector('.seat.me .hole .card.seen[data-card="As"]');
+      assert.equal(await pam.locator('.seat.me .hole .card.seen').count(), 1);
+      assert.equal(await pam.getAttribute('.seat.me .hole .card[data-card="As"]', 'aria-label'), 'A♠, shown to the table');
+      assert.deepEqual(await showButtons(pam), [['Show the king of diamonds', 'Kd']], 'what is left to show is the other card alone');
+      assert.deepEqual(table.view('Stu').seats[2]!.cards, ['As', null]);
+      assert.ok(!JSON.stringify(table.view('Stu')).includes('"Kd"'), 'the card still face down is in another player\'s view');
+      await inShapesOf(pam, 'smallPhone', async (shape) => {
+        await assertShowOfferFits(pam, 'smallPhone', `Pam after the ace, ${shape}`);
+        await shot(pam, `show-left-own-smallPhone-${shape}`);
+      }, { buttonsUp: false });
+
+      for (const [who, screen, page] of others) {
+        await inShapesOf(
+          page,
+          screen,
+          async (shape) => {
+            await shot(page, `show-left-${who}-${screen}-${shape}`);
+            await assertPamShows(page, screen, ['As', null], `${who} on a ${screen}, ${shape}`);
+          },
+          { buttonsUp: false },
+        );
+      }
+
+      await press('.controls [data-action="show-card"][data-place="1"]');
+      await pam.waitForSelector('.seat.me .hole .card.seen[data-card="Kd"]');
+      await pam.waitForSelector('.controls .show-cards', { state: 'detached' });
+      for (const [who, screen, page] of others) {
+        await assertPamShows(page, screen, ['As', 'Kd'], `${who} on a ${screen}, both up`);
+      }
+
+      // The next hand she shows the card on her right alone: the one face down is on her left, as she holds them
+      nextFoldedToQuigs(table, 'Qh 7c');
+      await pam.waitForSelector('.controls .show-cards [data-place="1"]');
+      await press('.controls [data-action="show-card"][data-place="1"]');
+      await pam.waitForSelector('.seat.me .hole .card.seen[data-card="7c"]');
+      assert.deepEqual(await showButtons(pam), [['Show the queen of hearts', 'Qh']]);
+
+      for (const [who, screen, page] of others) {
+        await inShapesOf(
+          page,
+          screen,
+          async (shape) => {
+            await shot(page, `show-right-${who}-${screen}-${shape}`);
+            await assertPamShows(page, screen, [null, '7c'], `${who} on a ${screen}, the right card alone, ${shape}`);
+          },
+          { buttonsUp: false },
+        );
+      }
+
+      for (const page of [pam, ...others.map(([, , page]) => page)]) {
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'the play-by-play and the hand history say a card shown alone, the other one after it, and two shown at once',
+    async (rig) => {
+      for (const screen of PHONE_AND_DESKTOP) {
+        const table = foldedToQuigs(rig);
+        table.act('Pam', { type: 'showCards', hand: 1, cards: [0] });
+        table.act('Pam', { type: 'showCards', hand: 1, cards: [1] });
+        table.act('Quigs', { type: 'showCards', hand: 1, cards: [0, 1] });
+
+        const lines = ['Pam shows one card, A♠', 'Pam shows the other card, K♦', 'Quigs shows Q♣ J♣'];
+        const stu = await table.open('Stu', screen);
+        await toggleFeed(stu, screen);
+        await stu.waitForSelector('.entries li:has-text("Quigs shows")');
+        assert.deepEqual((await texts(stu, '.entries li')).slice(-3), lines);
+        assert.deepEqual(await squeezed(stu, '.entries li'), [], 'a line of the play-by-play is cut off');
+        await shot(stu, `show-play-by-play-${screen}`);
+        await toggleFeed(stu, screen);
+
+        clear(rig, table);
+        const press = pressOn(stu, screen);
+        await press('[data-action="menu"]');
+        await press('.menu [data-action="history"]');
+        await stu.waitForSelector('.history summary');
+        await press('.history summary');
+        assert.deepEqual((await text(stu, '.history pre')).split('\n').slice(-3), lines);
+        await shot(stu, `show-history-${screen}`);
+
+        await stu.context().close();
+      }
+    },
+  ],
+  [
+    'a show held on its way is marked nowhere until the table has it; one refused gives the button back and shows nothing; one lost before the table heard it is sent again and shows the card once; one lost as the hand moves on is not sent again',
+    async (rig) => {
+      const table = foldedToQuigs(rig);
+      const pam = await table.open('Pam', 'smallPhone');
+      const stu = await table.open('Stu', 'smallPhone');
+      const shows = await Gate.on(pam, 'shows');
+      const sent = { count: 0 };
+      pam.on('request', (request) => {
+        if (request.url().endsWith('/api') && (JSON.parse(request.postData() ?? '{}') as { command?: { type?: string } }).command?.type === 'showCards') {
+          sent.count += 1;
+        }
+      });
+      const press = pressOn(pam, 'smallPhone');
+      const ace = '.controls [data-action="show-card"][data-place="0"]';
+      const king = '.controls [data-action="show-card"][data-place="1"]';
+
+      // Held: the button waits, nothing is marked, and the table has not seen the card
+      await shows.close('requests');
+      await press(ace);
+      await shows.holding();
+      assert.equal(await pam.isDisabled(ace), true, 'the button can be pressed again while its show is out');
+      assert.equal(await pam.locator('.seat.me .hole .card.seen').count(), 0, 'a card is marked as seen before the table has it');
+      assert.deepEqual(table.view('Stu').seats[2]!.cards, [null, null]);
+      await shot(pam, 'show-held-smallPhone');
+      await shows.open();
+      await pam.waitForSelector('.seat.me .hole .card.seen[data-card="As"]');
+      await assertPamShows(stu, 'smallPhone', ['As', null], 'Stu, once the held show went through');
+
+      // Refused: the button is back, and the card is still face down
+      await shows.close('requests');
+      await press(king);
+      await shows.holding();
+      await shows.refuse();
+      await pam.waitForSelector(`${king}:not([disabled])`);
+      await pam.waitForSelector('.toast:has-text("The table is busy, try again")');
+      assert.deepEqual(table.view('Stu').seats[2]!.cards, ['As', null]);
+      assert.equal(await pam.locator('.seat.me .hole .card.seen').count(), 1);
+      await shot(pam, 'show-refused-smallPhone');
+
+      // Lost before the table heard it: sent once more, which the gate holds in turn, and the card comes out once
+      const before = sent.count;
+      await press(king);
+      await shows.holding();
+      await shows.lose();
+      await shows.holding();
+      assert.equal(sent.count, before + 2, 'a show lost on its way was not sent again');
+      await shows.open();
+      await pam.waitForSelector('.seat.me .hole .card.seen[data-card="Kd"]');
+      await assertPamShows(stu, 'smallPhone', ['As', 'Kd'], 'Stu, once the lost show was sent again');
+      assert.equal(table.view('Stu').feed.filter((line) => line.text.startsWith('Pam shows')).length, 2);
+
+      // Lost as the hand moves on: the next view offers nothing of the hand it was for, so it is not sent again
+      nextFoldedToQuigs(table, 'Qh 7c');
+      await pam.waitForSelector(ace);
+      await shows.close('requests');
+      await press(ace);
+      await shows.holding();
+      clear(rig, table);
+      await pam.waitForSelector('.controls .show-cards', { state: 'detached' });
+      const lostAt = sent.count;
+      await shows.lose();
+      await pam.waitForSelector('.toast:has-text("No answer from the table")');
+      await pam.waitForTimeout(500);
+      assert.equal(sent.count, lostAt, 'a show for a hand that is gone was sent again');
+      assert.ok(table.view('Stu').seats[2]!.cards!.every((card) => card === null), 'a card of the next hand was shown');
+
+      await pam.context().close();
+      await stu.context().close();
+    },
+  ],
+  [
+    'a card shown at the last moment of the pause holds up nothing of the game: with it stopped mid-turn the table reads as still, and the next hand is dealt just as after a hand nobody showed',
+    async (rig) => {
+      const table = foldedToQuigs(rig);
+      const page = await table.open('Stu', 'smallPhone', MOTION, { moving: true });
+      playOut(table);
+
+      const nextDeal = async (showing: boolean) => {
+        nextFoldedToQuigs(table, PAM_HOLE);
+        await page.waitForSelector('.message.result');
+        await dealt(page);
+
+        if (showing) {
+          rig.advance(table.view('Stu').hand!.deadline! - rig.now() - 1);
+          await page.evaluate('window.holdAt = 0.5');
+          table.act('Pam', { type: 'showCards', hand: table.view('Stu').hand!.number, cards: [0] });
+          await page.waitForFunction(`window.flights.filter((flight) => flight.name === 'flip').length === 1`);
+          await page.evaluate(`window.holdAt = null; window.flipping = document.getAnimations().filter((animation) => animation.id === 'flip')`);
+          assert.deepEqual(await page.evaluate(`window.flights.filter((flight) => flight.name === 'flip').map((flight) => [flight.seat, flight.text])`), [[2, 'A♠']], 'what turned over');
+          await dealt(page);
+        }
+
+        await page.evaluate('window.flights.splice(0)');
+        table.act('Quigs', { type: 'pause' });
+        table.play(() => null, (view) => view.hand === null);
+        table.deal({ button: 0, holes: { 0: 'Qc Jc', 2: PAM_HOLE } });
+
+        await page.waitForFunction(`window.flights.filter((flight) => flight.name === 'deal').length === ${2 * SHOW_PLAYERS.length}`);
+        await dealt(page);
+        const flights = await flown(page);
+        playOut(table);
+
+        return flights.filter((flight) => flight.name === 'deal').map(({ seat, delay, duration }) => [seat, delay, duration]);
+      };
+
+      const quiet = await nextDeal(false);
+      const shown = await nextDeal(true);
+      assert.deepEqual(shown, quiet, 'the deal after a card shown went out otherwise');
+      assert.deepEqual(await page.evaluate('window.flipping.map((animation) => animation.playState)').then((states) => (states as string[]).filter((state) => state === 'finished')), []);
+      await page.evaluate('window.land()');
     },
   ],
 ];

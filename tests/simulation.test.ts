@@ -76,6 +76,8 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
   const reactions = { shown: 0, thrown: 0, full: 0 };
   // Hands whose rabbit was hunted, and of those how many on two boards
   const hunts = { hunted: 0, onTwoBoards: 0 };
+  // Hands in which a player showed by choice one card, the other one after it, or both at once
+  const shownByChoice = { oneCard: 0, otherAfter: 0, both: 0 };
   const straddles: Record<Straddle | 'passedOver' | 'overAnAnte' | 'shownDown', number> = { straddle: 0, 'double straddle': 0, 'button straddle': 0, 'Mississippi straddle': 0, passedOver: 0, overAnAnte: 0, shownDown: 0 };
 
   const sent = new Set<CommandType>();
@@ -151,6 +153,13 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
       const hunt = record.events.find((event) => event[0] === 'hunt');
       hunts.hunted += hunt ? 1 : 0;
       hunts.onTwoBoards += hunt && record.boards.length === 2 ? 1 : 0;
+
+      // What is turned up once the pots and any bounty are paid is shown by choice
+      const ended = record.events.reduce((last, event, nth) => (event[0] === 'win' || event[0] === 'chop' || event[0] === 'bounty' ? nth : last), -1);
+      const chosen = record.events.slice(ended + 1).flatMap((event) => (event[0] === 'show' ? [event] : []));
+      shownByChoice.oneCard += chosen.some((event) => event[2].includes(null)) ? 1 : 0;
+      shownByChoice.otherAfter += chosen.some((event, nth) => chosen.slice(nth + 1).some((later) => later[1] === event[1])) ? 1 : 0;
+      shownByChoice.both += chosen.some((event) => !event[2].includes(null)) ? 1 : 0;
 
       const answers = chopAnswers(record);
       chops.offered += record.events.some((event) => event[0] === 'chopOffer') ? 1 : 0;
@@ -233,6 +242,9 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
 
   const hunting = `rabbits hunted: ${JSON.stringify(hunts)}`;
   assert.ok(hunts.hunted >= TABLES && hunts.onTwoBoards >= TABLES / 20, hunting);
+
+  const showing = `hands with cards shown by choice: ${JSON.stringify(shownByChoice)}`;
+  assert.ok(shownByChoice.oneCard >= TABLES * 2 && shownByChoice.otherAfter >= TABLES / 2 && shownByChoice.both >= TABLES * 2, showing);
 
   const doubles = `double-board bomb pots: ${JSON.stringify(doubleBoards)}`;
   assert.ok(doubleBoards.chips >= TABLES / 2 && doubleBoards.cents >= TABLES / 2, doubles);

@@ -8,6 +8,7 @@ import type { HandRead } from '../../engine/handNames.ts';
 import type { PotAward } from '../../engine/types.ts';
 import type { HandView, Holding, SeatView, TableView } from '../../engine/view.ts';
 import type { BoardCard, Place } from '../motion.ts';
+import { halfShownLabel } from '../showing.ts';
 import type { ShownChances } from '../tableChances.ts';
 import { cardEl, h } from '../ui.ts';
 import { nightOver } from './night.ts';
@@ -168,6 +169,23 @@ function shownLabel(seat: SeatView, hand: HandView): string | null {
   return hand.result?.hands.find((entry) => entry.seat === seat.seat)?.name ?? null;
 }
 
+/**
+ * A seat's cards, each face up or down for the viewer. Once the hand is over, the viewer's own that the
+ * table can see are marked as seen, which is how a player who shows one card knows which.
+ */
+function holeCards(seat: SeatView, markSeen: boolean): HTMLElement[] {
+  return seat.cards!.map((card, nth) => {
+    const drawn = cardEl(card);
+
+    if (markSeen && seat.shown[nth]) {
+      drawn.classList.add('seen');
+      drawn.setAttribute('aria-label', `${drawn.getAttribute('aria-label') ?? ''}, shown to the table`);
+    }
+
+    return drawn;
+  });
+}
+
 /** A hand's name with what follows its kind set apart, so that where a line has no room for it the kind can stand alone. */
 function nameEl(name: string): HTMLElement {
   const [kind, ...ranks] = name.split(', ');
@@ -271,9 +289,9 @@ function seatEl(view: TableView, seat: SeatView, slot: number, shape: Shape, clo
     moving === seat.playerId && 'moving',
   ].filter(Boolean);
 
-  // Folded hands leave the table, except the viewer's own, which stays to look at
-  const showCards = seat.cards !== null && (!seat.folded || isMe || seat.shown);
-  const hole = showCards ? h('div.hole', null, markPlaying(seat.cards!.map((card) => cardEl(card)), holding?.reads ?? [])) : h('div.hole.none');
+  // Folded hands leave the table, except the viewer's own, which stays to look at, and one turned up after the hand
+  const showCards = seat.cards !== null && (!seat.folded || isMe || seat.shown.some(Boolean));
+  const hole = showCards ? h('div.hole', { 'aria-label': isMe ? null : halfShownLabel(seat) }, markPlaying(holeCards(seat, isMe && hand?.stage === 'done'), holding?.reads ?? [])) : h('div.hole.none');
 
   let timer: HTMLElement | null = null;
   if (acting && hand.deadline !== null && view.config.actionSeconds > 0) {
@@ -673,8 +691,11 @@ export function drawnTable(stage: Element): DrawnTable | null {
         return element.querySelector('.pot') ?? element.querySelector('.center > .message') ?? element.querySelector('.center');
       case 'seat':
         return seatEl(place.seat)?.querySelector('.plate') ?? null;
-      case 'cards':
-        return seatEl(place.seat)?.querySelector('.hole') ?? null;
+      case 'cards': {
+        const hole = seatEl(place.seat)?.querySelector('.hole') ?? null;
+
+        return place.card === undefined ? hole : (hole?.children[place.card] ?? null);
+      }
       case 'bet':
         return element.querySelector(`.bet[data-bet="${place.seat}"]`);
       case 'board':
@@ -732,11 +753,11 @@ export function drawnTable(stage: Element): DrawnTable | null {
     standing: (at) => {
       const spot = marker(at);
 
-      if (at.at === 'cards') {
+      if (at.at === 'cards' && at.card === undefined) {
         return [...(spot?.querySelectorAll<HTMLElement>('.card') ?? [])];
       }
 
-      const stands = at.at === 'bet' || (at.at === 'board' && spot?.matches('[data-card]'));
+      const stands = at.at === 'bet' || ((at.at === 'board' || at.at === 'cards') && spot?.matches('[data-card]'));
 
       return stands && spot instanceof HTMLElement ? [spot] : [];
     },

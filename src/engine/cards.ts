@@ -37,6 +37,9 @@ export function shuffledDeck(rng: Rng): Card[] {
   return shuffle(freshDeck(), rng);
 }
 
+/** How many cards each player is dealt. */
+export const HOLE_CARDS = 2;
+
 /** How many community cards the flop deals. */
 export const FLOP_SIZE = 3;
 

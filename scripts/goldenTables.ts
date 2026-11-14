@@ -229,7 +229,7 @@ function doneWithCardsShown(): TestTable {
   t.fold(0);
   t.fold(1);
   t.fold(2);
-  t.cmd(1, { type: 'showCards' });
+  t.show(1);
 
   return t;
 }

@@ -26,8 +26,9 @@ const LOOKS: Record<MoveName, Look> = {
   board: { mover: 'standing', easing: 'ease-out', shape: 'translateY(-35%) scale(0.92)', opacity: 0 },
   // As a board card does, a little slower and askew, settling into the faded look of a card that did not count
   hunt: { mover: 'standing', easing: 'ease-out', shape: 'translateY(-35%) scale(0.92) rotate(-8deg)', opacity: 0 },
-  // Turned over on its long edge
+  // Turned over on its long edge, a hand at a showdown or a card a player shows after it alike
   show: { mover: 'standing', easing: 'ease-out', shape: 'rotateY(90deg)', opacity: 1 },
+  flip: { mover: 'standing', easing: 'ease-out', shape: 'rotateY(90deg)', opacity: 1 },
   bet: { mover: 'standing', easing: 'ease-out', shape: SMALL, opacity: 0 },
   chips: { mover: 'chips', easing: 'ease-in-out', shape: SMALL, opacity: 0 },
   muck: { mover: 'cards', easing: 'ease-in', shape: SMALL, opacity: 0 },

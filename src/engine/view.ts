@@ -16,6 +16,7 @@ import { handsLeft, nightIsOver, onLastHand } from './night.ts';
 import { buildPots } from './pots.ts';
 import type { Pot } from './pots.ts';
 import { liveReactions } from './reactions.ts';
+import { asSeen, fullyShown } from './shown.ts';
 import { memberOf, seatIndexOf } from './seats.ts';
 import { tonightView } from './tonight.ts';
 import type { TonightView } from './tonight.ts';
@@ -52,8 +53,8 @@ export interface SeatView {
   lastAction: PlayerAction | null;
   /** Null when the seat has no cards. */
   cards: VisibleCard[] | null;
-  /** The cards are face up for the whole table, not just for this viewer. */
-  shown: boolean;
+  /** Which of the cards are face up for the whole table, not just for this viewer, a flag for each in the order of `cards`. Empty when the seat has none. */
+  shown: boolean[];
   /** How many times they picked to run the rest, for everyone to see as at a real table; null until they pick. */
   ritVote: number | null;
 }
@@ -101,7 +102,7 @@ export interface HandView {
   canAnswerChop: boolean;
   /** The viewer has yet to pick how many times to run the rest, up to `maxRuns`. */
   canVote: boolean;
-  /** The viewer may turn their cards face up. */
+  /** The viewer may turn face up those of their cards that are not (`shown` on their seat), one at a time or together. */
   canShow: boolean;
   /** The viewer may ask to see the cards that would have come: see `huntRabbit`. */
   canHunt: boolean;
@@ -186,7 +187,6 @@ export function viewFor(state: TableState, playerId: string, now: number): Table
     }
 
     const player = hand?.players.find((p) => p.seat === index);
-    const visible = player ? player.shown || index === mySeat : false;
 
     return {
       seat: index,
@@ -208,8 +208,8 @@ export function viewFor(state: TableState, playerId: string, now: number): Table
       folded: player?.folded ?? false,
       allIn: player?.allIn ?? false,
       lastAction: player?.lastAction ?? null,
-      cards: player ? player.cards.map((card) => (visible ? card : null)) : null,
-      shown: player?.shown ?? false,
+      cards: player ? (index === mySeat ? player.cards : asSeen(player.cards, player.shown)) : null,
+      shown: player ? [...player.shown] : [],
       ritVote: player?.ritVote ?? null,
     };
   });
@@ -244,7 +244,7 @@ export function viewFor(state: TableState, playerId: string, now: number): Table
       foldChops: mySeat >= 0 && foldChops(state, mySeat),
       canAnswerChop: hand.stage === 'chop' && mine !== undefined && hand.toAct === mySeat,
       canVote: hand.stage === 'ritVote' && mine !== undefined && !mine.folded && mine.ritVote === null,
-      canShow: hand.stage === 'done' && mine !== undefined && !mine.shown,
+      canShow: hand.stage === 'done' && mine !== undefined && !fullyShown(mine.shown),
       canHunt: mySeat >= 0 && mayHunt(state, mySeat),
       hunted: hand.hunted,
       result: hand.result,

@@ -7,8 +7,8 @@ export type Place =
   | { at: 'pot' }
   /** A player's plate, with their name and stack. */
   | { at: 'seat'; seat: number }
-  /** A player's two cards. */
-  | { at: 'cards'; seat: number }
+  /** A player's two cards, or with `card` one of them: 0 for the one on the player's left. */
+  | { at: 'cards'; seat: number; card?: number }
   /** Where a seat's bet sits, whether or not one is there now. */
   | { at: 'bet'; seat: number }
   /** One card's place on a board. */
@@ -23,9 +23,10 @@ export interface BoardCard {
 /**
  * Every move there is, by name. How each looks is the page's business (`LOOKS` in pageMotion.ts):
  *
- * - `deal`, `board`, `hunt`, `show` and `bet` move what the table has standing at `to` once the view is
- *   drawn: a seat's cards, one card of a board, a card that would have come on a board (rabbit hunting),
- *   a seat's bet. Where the table draws nothing there, nothing moves.
+ * - `deal`, `board`, `hunt`, `show`, `flip` and `bet` move what the table has standing at `to` once the
+ *   view is drawn: a seat's cards, one card of a board, a card that would have come on a board (rabbit
+ *   hunting), a seat's card turned up by choice once the hand is over, a seat's bet. Where the table
+ *   draws nothing there, nothing moves.
  * - `chips` and `muck` move a stand-in for what the table no longer draws: a pile of chips, or a
  *   seat's cards face down. It is drawn at `from`, travels to `to` and is gone when it lands.
  * - `facedown` is a stand-in for a board card face down, lying at `from` until it turns onto its edge,
@@ -35,7 +36,7 @@ export interface BoardCard {
  * - `throw` is something a player throws at another's seat: `mark` drawn at `from`, spinning across to
  *   `to` and gone when it lands, where whoever threw it shows what landed.
  */
-export type MoveName = 'deal' | 'board' | 'hunt' | 'show' | 'bet' | 'chips' | 'muck' | 'facedown' | 'reveal' | 'confetti' | 'throw';
+export type MoveName = 'deal' | 'board' | 'hunt' | 'show' | 'flip' | 'bet' | 'chips' | 'muck' | 'facedown' | 'reveal' | 'confetti' | 'throw';
 
 export interface Move {
   name: MoveName;
@@ -56,14 +57,14 @@ export interface Move {
 }
 
 /**
- * Moves that are decoration beside the game, such as a throw or the cards a rabbit hunt lays out: they play in a lane of their own, which
+ * Moves that are decoration beside the game, such as a throw, the cards a rabbit hunt lays out or a card a player turns up after the hand: they play in a lane of their own, which
  * `idle()` and the stage's `data-moving` leave out, so a held card, a hand's chances or a deal never
  * wait for one, however many are flying.
  */
-export const ASIDE_MOVES: ReadonlySet<MoveName> = new Set<MoveName>(['throw', 'hunt']);
+export const ASIDE_MOVES: ReadonlySet<MoveName> = new Set<MoveName>(['throw', 'hunt', 'flip']);
 
 /** How long each move takes, from leaving to landing. */
-export const MOVE_MS: Record<MoveName, number> = { deal: 260, board: 240, hunt: 280, show: 200, bet: 200, chips: 280, muck: 220, facedown: 150, reveal: 210, confetti: 1100, throw: 550 };
+export const MOVE_MS: Record<MoveName, number> = { deal: 260, board: 240, hunt: 280, show: 200, flip: 200, bet: 200, chips: 280, muck: 220, facedown: 150, reveal: 210, confetti: 1100, throw: 550 };
 
 /**
  * What moves things across the table. Motion is decoration over a table that is already drawn as it

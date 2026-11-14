@@ -282,7 +282,8 @@ export function assertNumbersHold(state: TableState): void {
     assert.ok(numbers.hands <= tonight.hands && numbers.won <= numbers.hands, 'a player has more hands than the night, or more pots than hands');
     assert.equal(numbers.biggest > 0, numbers.won > 0, 'a biggest pot without a pot won, or a pot won of nothing');
     assert.ok(numbers.best === null || numbers.best.length === 5, 'a best hand that is not five cards');
-    assert.ok(numbers.busts <= numbers.hands && numbers.streak <= numbers.won, 'more busts than hands, or a streak longer than the pots won');
+    // A run of hands won counts a bounty collected with nothing in the pot, as a big blind walked to holding seven-deuce does, which is no pot won
+    assert.ok(numbers.busts <= numbers.hands && numbers.streak <= numbers.hands, 'more busts or a longer streak than hands');
     assert.ok(Object.entries(numbers.badges).every(([badge, times]) => badgeOf(badge) && Number.isInteger(times) && times >= 1 && times <= numbers.hands), 'a badge this code does not know, or earned more times than hands played');
   }
 
@@ -387,16 +388,17 @@ export function assertViewsKeepSecrets(state: TableState, now: number): void {
     // The night's numbers hold cards of hands that are over, the best hand each player has shown, and such a card
     // can be face down again in the hand on the table without being a secret. So they are looked at apart: they are
     // the same whoever asks, and tests/tonight.test.ts holds them at every step to what the hand records say
-    const faceDown = new Set([...(hand?.deck ?? []), ...(hand?.players ?? []).filter((p) => !p.shown && p.playerId !== viewer.id).flatMap((p) => p.cards)]);
+    const faceDown = new Set([...(hand?.deck ?? []), ...(hand?.players ?? []).filter((p) => p.playerId !== viewer.id).flatMap((p) => p.cards.filter((_card, nth) => !p.shown[nth]))]);
     const leaked = secretIn({ ...view, tonight: null }, faceDown);
     assert.equal(leaked, undefined, `${viewer.name}'s view holds a card that is face down for them`);
     assert.deepEqual(view.tonight, tonight, `${viewer.name} is shown other numbers for the night than the rest of the table`);
 
     for (const player of hand?.players ?? []) {
       const seen = view.seats[player.seat]!.cards!;
-      const allowed = player.shown || viewer.id === player.playerId;
+      const mine = viewer.id === player.playerId;
 
-      assert.deepEqual(seen, allowed ? player.cards : [null, null], 'a view shows the wrong cards');
+      assert.deepEqual(seen, player.cards.map((card, nth) => (mine || player.shown[nth] ? card : null)), 'a view shows the wrong cards');
+      assert.deepEqual(view.seats[player.seat]!.shown, player.shown, 'a view says other cards are face up than are');
     }
 
     // The hint reads the viewer's own cards and the board, and is there only while those cards are live
@@ -496,7 +498,7 @@ export function assertRecordBalances(record: HandRecord): void {
   assert.equal(awarded, pots, `hand ${record.number} did not award every pot in full`);
   assert.equal(won, pots);
   assert.ok(record.boards.every((board) => board.length === 0 || board.length >= 3));
-  assert.equal(new Set([...record.boards.flat(), ...record.players.flatMap((p) => p.cards ?? [])]).size >= record.boards[0]!.length, true);
+  assert.equal(new Set([...record.boards.flat(), ...record.players.flatMap((p) => p.cards)]).size >= record.boards[0]!.length, true);
 }
 
 /**
@@ -567,7 +569,7 @@ export function assertEventsRetellTheHand(record: HandRecord): void {
   assert.equal(end.pot, 0, `hand ${record.number}: the events leave chips in the middle`);
   assert.ok(end.seats.every((seat) => seat.bet === 0), `hand ${record.number}: the events leave a bet out`);
 
-  const faceUp = new Set([...record.boards.flat(), ...record.players.flatMap((p) => p.cards ?? [])]);
+  const faceUp = new Set([...record.boards.flat(), ...record.players.flatMap((p) => p.cards).filter((card) => card !== null)]);
 
   events.forEach((event, index) => {
     if (event[0] === 'post' || event[0] === 'call' || event[0] === 'bet' || event[0] === 'raise') {
@@ -578,7 +580,7 @@ export function assertEventsRetellTheHand(record: HandRecord): void {
     }
 
     if (event[0] === 'street' || event[0] === 'show') {
-      assert.ok(event[2].every((card) => faceUp.has(card)), `hand ${record.number}: event ${index} holds a card nobody was shown`);
+      assert.ok(event[2].every((card) => card === null || faceUp.has(card)), `hand ${record.number}: event ${index} holds a card nobody was shown`);
     }
   });
 
@@ -652,7 +654,7 @@ export function assertRunAsPicked(record: HandRecord): void {
 /**
  * A chopped hand gave each blind back to the seat that posted it, the small blind and the big blind
  * and nothing else, and ended there: every stack as it was dealt, no pot, no winner, no bounty, nothing
- * shown, no flop. Only a chopped hand has a chop among its events.
+ * shown but by choice afterwards, no flop. Only a chopped hand has a chop among its events.
  */
 export function assertChopIsWhole(record: HandRecord): void {
   const { events, result } = record;
@@ -665,14 +667,19 @@ export function assertChopIsWhole(record: HandRecord): void {
   }
 
   assert.ok(result.uncontested && result.pots.length === 0 && result.winnings.length === 0 && result.hands.length === 0 && result.bounty === null, `${where} was chopped and has a result`);
-  assert.ok(record.players.length >= 3 && record.players.every((player) => player.endStack === player.startStack && player.cards === null), `${where} was chopped and moved chips or showed cards`);
+  assert.ok(record.players.length >= 3 && record.players.every((player) => player.endStack === player.startStack), `${where} was chopped and moved chips`);
   assert.deepEqual(record.boards, [[]], `${where} was chopped after the flop`);
 
   // A hand that outgrew what is recorded has no events to go by, which a chopped hand never does
   const posts = events.flatMap((event) => (event[0] === 'post' ? [[event[1], event[3], event[2]]] : []));
   assert.ok(chop?.[0] === 'chop', `${where} was chopped and its events do not say so`);
   assert.deepEqual(chop[1].map(([seat, amount], nth) => [seat, amount, nth === 0 ? 'small blind' : 'big blind']), posts, `${where} chopped other chips than the two blinds`);
-  assert.equal(chop, events.at(-1), `${where} went on after the chop`);
+  // Nothing comes after it but cards shown by choice, which anyone dealt in may do once the hand is over
+  assert.ok(
+    events.slice(events.indexOf(chop) + 1).every((event) => event[0] === 'show'),
+    `${where} went on after the chop`,
+  );
+  assert.ok(!events.slice(0, events.indexOf(chop)).some((event) => event[0] === 'show'), `${where} was chopped and showed cards`);
   assert.deepEqual(result.chopped, chop[1].map(([seat]) => seat), `${where} names other seats as the blinds than the chop`);
 
   // In the facts, a hand played by everyone, which both blinds were still in and nobody won

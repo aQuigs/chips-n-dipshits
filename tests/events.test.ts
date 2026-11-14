@@ -37,7 +37,7 @@ test('a hand is told in events from the blinds to the pot, with what every bet l
 
   t.raise(2, 300);
   t.fold(3);
-  t.cmd(3, { type: 'showCards' });
+  t.show(3);
 
   const expected: HandEvent[] = [
     ['start', 1, 0, 10, 20, [[0, 'P0', 1000], [1, 'P1', 1000], [2, 'P2', 1000], [3, 'P3', 1000]]],
@@ -93,7 +93,7 @@ test('a hand can be followed one event at a time from its events alone', () => {
     smallBlind: 10,
     bigBlind: 20,
     bombPot: null,
-    seats: [0, 1, 2, 3].map((seat) => ({ seat, name: `P${seat}`, stack: 1000, bet: 0, folded: false, cards: null })),
+    seats: [0, 1, 2, 3].map((seat) => ({ seat, name: `P${seat}`, stack: 1000, bet: 0, folded: false, cards: [null, null] })),
     pot: 0,
     boards: [[]],
     awards: [],

@@ -38,6 +38,7 @@ import { voiceLinkEl } from './render/voiceLink.ts';
 import type { Shape } from './render/table.ts';
 import { Attention } from './attention.ts';
 import { pageWays } from './pageAttention.ts';
+import { showStillOffered } from './showing.ts';
 import { ShownTable } from './shownTable.ts';
 import { Sounds } from './sound.ts';
 import { fontsUrl, themeById } from './themes.ts';
@@ -598,6 +599,17 @@ export class App {
     }
   }
 
+  /**
+   * Shows the player's cards, as `showCommand` names them. Like a hunt, a show that got no answer is sent
+   * once more, since showing a card twice turns up nothing new and the pause after a hand is short; but
+   * only while the page still offers those cards of that hand, as one that went through shows with the next poll.
+   */
+  private async showCards(command: Command): Promise<void> {
+    if ((await this.send(command)) === 'unanswered' && showStillOffered(this.shownView(), command)) {
+      await this.send(command);
+    }
+  }
+
   private offersHunt(hand: number): boolean {
     const shown = this.shownView()?.hand;
 
@@ -695,6 +707,7 @@ export class App {
         view,
         {
           send: (command) => this.send(command),
+          showCards: (command) => this.showCards(command),
           openRebuy: () => this.openDialog({ kind: 'rebuy' }),
           openStraddles: () => this.openDialog({ kind: 'straddles' }),
           sizing: screen.sizing,

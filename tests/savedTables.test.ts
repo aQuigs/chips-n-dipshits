@@ -434,3 +434,43 @@ test('every saved table loads with rabbit hunting off and nothing hunted', () =>
     assert.equal(state.hand?.hunted ?? null, null, file);
   }
 });
+
+test('every saved table loads in one go with what was shown as a flag for each card: a hand shown is both, one not shown is neither', () => {
+  for (const file of FILES) {
+    const saved = JSON.parse(readFileSync(new URL(file, FOLDER), 'utf8')) as { state?: TableState } & TableState;
+    const raw = (saved.state ?? saved).hand?.players.map((player) => player.shown as unknown as boolean) ?? [];
+    const state = load(file);
+
+    assert.equal(state.schema, STATE_SCHEMA, file);
+    assert.deepEqual(
+      state.hand?.players.map((player) => player.shown) ?? [],
+      raw.map((shown) => [shown, shown]),
+      file,
+    );
+  }
+});
+
+test('a table saved in the pause after a hand with one player’s cards shown: theirs stay up and are offered no more, and the others may still show one card or both', () => {
+  const t = TestTable.adopt(load('schema5-done-cards-shown.json'));
+  const index = (seat: number) => t.ids.indexOf(t.state.hand!.players.find((player) => player.seat === seat)!.playerId);
+  const watcher = t.ids.indexOf(t.state.members.find((member) => !t.state.hand!.players.some((player) => player.playerId === member.id))!.id);
+
+  assert.equal(t.state.hand!.stage, 'done');
+  assert.deepEqual(t.view(watcher).seats[1]!.cards, ['9c', '9d']);
+  assert.equal(t.view(index(1)).hand!.canShow, false);
+  assert.equal(t.view(index(2)).hand!.canShow, true);
+
+  const lines = t.state.feed.length;
+  t.show(index(1), [0]);
+  assert.equal(t.state.feed.length, lines, 'cards shown before the save turned up again');
+
+  t.show(index(2), [1]);
+  assert.deepEqual(t.view(watcher).seats[2]!.cards, [null, '5s']);
+  assert.equal(t.state.feed.at(-1)!.text, 'P2 shows one card, 5♠');
+});
+
+test('a hand record saved when cards never shown were kept as none reads them as two face down, and one shown as it was', () => {
+  const record = upgradeRecord({ players: [{ seat: 0, cards: null }, { seat: 1, cards: ['As', 'Kd'] }], events: [] } as unknown as HandRecord);
+
+  assert.deepEqual(record.players.map((player) => player.cards), [[null, null], ['As', 'Kd']]);
+});

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { addMember, TIMING } from '../src/engine/index.ts';
+import { addMember, fullyShown, TIMING } from '../src/engine/index.ts';
 import type { TableConfig } from '../src/engine/index.ts';
 import { ACES, BOARD, checkAround, chipsIn, handRecords, KINGS, options, QUEENS, TestTable } from './helpers.ts';
 import type { DealOptions, TableOptions } from './helpers.ts';
@@ -480,7 +480,7 @@ test('a bomb pot that puts everyone all in is run twice when the table plays tha
   const hand = t.state.hand!;
 
   assert.deepEqual([hand.stage, hand.street, hand.boards], ['ritVote', 'flop', [['2c', '7d', '9h']]], 'the question comes with the flop out and the hands up');
-  assert.ok(hand.players.every((p) => p.shown));
+  assert.ok(hand.players.every((p) => fullyShown(p.shown)));
   assert.equal(t.view(2).hand!.canVote, true);
 
   for (const voter of [0, 1, 2]) {

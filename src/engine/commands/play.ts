@@ -3,6 +3,7 @@
  * their pick of how many times to run it or their cards to show is for the hand to say, in its own words.
  */
 import type { BettingAction } from '../betting.ts';
+import { HOLE_CARDS } from '../cards.ts';
 import { act, answerChop as answerChopIn, huntRabbit as huntRabbitIn, offerChop as offerChopIn, pickRuns, showCards as showCardsOf } from '../hand.ts';
 import { MOST_RUNS } from '../runVote.ts';
 import { seatIndexOf } from '../seats.ts';
@@ -51,9 +52,21 @@ export const ritVote: Handler<'ritVote'> = {
   run: ({ state, ctx, member, command }) => pickRuns(state, ctx, seatIndexOf(state, member.id), wholeNumber(command.runs, 'How many times to run it', 1, MOST_RUNS)),
 };
 
+/** Which of a player's cards a command names: one place or more among them, each once, 0 for the one on the left. */
+function holePlaces(value: unknown): number[] {
+  const places: unknown[] = Array.isArray(value) ? value : [];
+  const known = places.every((place) => typeof place === 'number' && Number.isInteger(place) && place >= 0 && place < HOLE_CARDS);
+
+  if (places.length === 0 || !known || new Set(places).size !== places.length) {
+    throw new GameError('Say which of your cards to show');
+  }
+
+  return places as number[];
+}
+
 export const showCards: Handler<'showCards'> = {
   by: 'member',
-  run: ({ state, ctx, member }) => showCardsOf(state, ctx, seatIndexOf(state, member.id)),
+  run: ({ state, ctx, member, command }) => showCardsOf(state, ctx, seatIndexOf(state, member.id), wholeNumber(command.hand, 'The hand', 1), holePlaces(command.cards)),
 };
 
 export const huntRabbit: Handler<'huntRabbit'> = {

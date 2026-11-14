@@ -55,6 +55,13 @@ export function madeHandName(value: HandValue): string {
   return MADE_NAMES[value.category]!(ranks[0]!, ranks[SECOND_AT[value.category] ?? 0]!);
 }
 
+const SUIT_WORDS: Record<string, string> = { c: 'clubs', d: 'diamonds', h: 'hearts', s: 'spades' };
+
+/** A card as it is said aloud: "the ace of spades". */
+export function cardWords(card: Card): string {
+  return `the ${one(rankOf(card))} of ${SUIT_WORDS[suitOf(card)]!}`;
+}
+
 /** Names in a sentence: "Ann", "Ann and Bob", "Ann, Bob and Cat". */
 export function listed(names: readonly string[]): string {
   return names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;

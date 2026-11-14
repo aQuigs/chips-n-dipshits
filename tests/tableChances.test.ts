@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import type { Move } from '../src/client/motion.ts';
 import { SLICE_MS, spotsOf, TableChances } from '../src/client/tableChances.ts';
 import type { TableSpots } from '../src/client/tableChances.ts';
-import { addMember, chanceFigures, chancesOf, SAMPLED_BOARDS } from '../src/engine/index.ts';
+import { addMember, chanceFigures, chancesOf, fullyShown, SAMPLED_BOARDS } from '../src/engine/index.ts';
 import type { TableView } from '../src/engine/index.ts';
 import { ACES, BOARD, cards, KINGS, QUEENS, TestTable } from './helpers.ts';
 
@@ -43,11 +43,11 @@ test('a spot is made of what the whole table sees: the same for a player in the 
   // The player who folded still has their own cards before them, which nobody else can see: they are no part of it
   const folded = t.view(2);
   assert.deepEqual(folded.seats[2]!.cards, cards(QUEENS));
-  assert.equal(folded.seats[2]!.shown, false);
+  assert.deepEqual(folded.seats[2]!.shown, [false, false]);
   assert.ok(!everyCardOf(spotsOf(folded)!).some((card) => cards(QUEENS).includes(card)));
 
   // And nothing in it is face down for anyone: every card is on the board or in a hand turned up for the table
-  const faceUp = [...t.state.hand!.boards.flat(), ...t.state.hand!.players.filter((player) => player.shown).flatMap((player) => player.cards)];
+  const faceUp = [...t.state.hand!.boards.flat(), ...t.state.hand!.players.filter((player) => fullyShown(player.shown)).flatMap((player) => player.cards)];
   assert.ok(everyCardOf(spotsOf(folded)!).every((card) => faceUp.includes(card)));
 });
 
@@ -79,12 +79,12 @@ test('there are spots from the moment hands are turned up with cards to come, a 
 test('a hand still in that the table cannot see leaves no spot at all, and neither does one hand alone', () => {
   const { t } = allInBeforeTheFlop();
   const view = t.view(0);
-  const hidden: TableView = { ...view, seats: view.seats.map((seat) => (seat?.seat === 1 ? { ...seat, shown: false, cards: [null, null] } : seat)) };
+  const hidden: TableView = { ...view, seats: view.seats.map((seat) => (seat?.seat === 1 ? { ...seat, shown: [false, false], cards: [null, null] } : seat)) };
 
   assert.equal(spotsOf(hidden), null);
 
   // Face up for this viewer alone is not face up
-  const mine: TableView = { ...view, seats: view.seats.map((seat) => (seat?.seat === 0 ? { ...seat, shown: false } : seat)) };
+  const mine: TableView = { ...view, seats: view.seats.map((seat) => (seat?.seat === 0 ? { ...seat, shown: [false, false] } : seat)) };
   assert.equal(spotsOf(mine), null);
 });
 

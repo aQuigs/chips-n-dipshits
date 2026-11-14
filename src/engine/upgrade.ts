@@ -1,3 +1,4 @@
+import { HOLE_CARDS } from './cards.ts';
 import { startingConfig, withRetiredSettings } from './config.ts';
 import type { HandEvent } from './events.ts';
 import { highHandsFrom } from './highHand.ts';
@@ -63,6 +64,14 @@ const STEPS: Record<number, (state: TableState) => void> = {
       }
 
       state.hand.events = votesAsRuns(state.hand.events ?? []);
+    }
+  },
+  5: (state) => {
+    // Shown was the whole hand or none of it
+    for (const player of state.hand?.players ?? []) {
+      const shown = player.shown as unknown as boolean;
+
+      player.shown = player.cards.map(() => shown);
     }
   },
 };
@@ -157,13 +166,16 @@ export function upgradeState(saved: TableState): TableState {
   return saved;
 }
 
-/** Gives a hand record saved by older code the fields added since. */
+/** Gives a hand record saved by older code the fields added since. Records keep no schema, so what changed shape is read either way. */
 export function upgradeRecord(saved: HandRecord): HandRecord {
   fillMissing(saved, SAVED_DEFAULTS.record());
   saved.events = votesAsRuns(saved.events);
 
   for (const player of saved.players) {
     fillMissing(player, SAVED_DEFAULTS.recordPlayer());
+
+    // Cards that were never shown were once kept as none at all
+    player.cards ??= Array<null>(HOLE_CARDS).fill(null);
   }
 
   return saved;

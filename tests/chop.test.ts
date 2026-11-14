@@ -249,7 +249,7 @@ test('offered and agreed: each takes back their blind, nobody wins, and nothing 
   assert.equal(hand.stage, 'done');
   assert.deepEqual(hand.result, { uncontested: true, chopped: [SB, BB], pots: [], winnings: [], hands: [], bounty: null });
   assert.deepEqual(t.stacks(), [1000, 1000, 1000, 1000]);
-  assert.ok(hand.players.every((player) => player.bet === 0 && player.committed === 0 && !player.shown));
+  assert.ok(hand.players.every((player) => player.bet === 0 && player.committed === 0 && !player.shown.some(Boolean)));
   assert.deepEqual(hand.boards, [[]]);
   assert.deepEqual(kinds(t).slice(-3), ['chopOffer', 'chopAnswer', 'chop']);
   assert.deepEqual(hand.events.at(-1), ['chop', [[SB, 10], [BB, 20]]]);
@@ -259,7 +259,7 @@ test('offered and agreed: each takes back their blind, nobody wins, and nothing 
   t.finishHand();
   const [record] = handRecords(t.effects);
   assert.deepEqual(record!.result!.chopped, [SB, BB]);
-  assert.ok(record!.players.every((player) => player.endStack === player.startStack && player.cards === null));
+  assert.ok(record!.players.every((player) => player.endStack === player.startStack && player.cards.every((card) => card === null)));
   assertHandRecordsHold(t.effects);
 });
 
@@ -495,7 +495,7 @@ test('no seven-deuce bounty is paid on a chop: nobody won', () => {
 
   assert.equal(t.state.hand!.result!.bounty, null);
   assert.deepEqual(t.stacks(), [1000, 1000, 1000, 1000]);
-  assert.ok(!t.state.hand!.players[SB]!.shown);
+  assert.ok(!t.state.hand!.players[SB]!.shown.some(Boolean));
 });
 
 test('two blinds who always chop chop the moment it folds to them, without anyone being asked', () => {

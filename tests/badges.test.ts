@@ -544,7 +544,7 @@ test('no badge is earned from a card nobody was shown: seven-deuce that won with
     t.fold(2);
 
     if (show) {
-      t.cmd(0, { type: 'showCards' });
+      t.show(0);
     }
 
     t.finishHand();
@@ -554,7 +554,7 @@ test('no badge is earned from a card nobody was shown: seven-deuce that won with
 
   const mucked = play(false);
   const winner = mucked.facts.players.find((player) => player.seat === 0)!;
-  assert.equal(winner.cards, null);
+  assert.deepEqual(winner.cards, [null, null]);
   assert.ok(!JSON.stringify(mucked.facts).includes('"7s"'));
 
   const night = { before: { hands: 0, won: 0, biggest: 0, best: null, rebuys: 0, busts: 0, streak: 0 }, after: { hands: 1, won: 1, biggest: 30, best: null, rebuys: 0, busts: 0, streak: 1 } };

@@ -134,7 +134,7 @@ test('a hand mucked, a winner nobody called and cards shown by choice are not sh
   t.fold(1);
   t.fold(2);
   t.fold(3);
-  t.cmd(0, { type: 'showCards' });
+  t.show(0);
   t.finishHand();
 
   // Folded round to the blinds, who chop

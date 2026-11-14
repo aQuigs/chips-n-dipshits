@@ -9475,6 +9475,15 @@ const CHECKS: Check[] = [
         assert.deepEqual(said.mentions?.map(([id]) => id), [table.auth('Al Smith').id, table.auth('Ann').id], 'the table names the two picked');
         assert.deepEqual(await texts(page, '.entries li:last-child .mention'), ['@Al Smith', '@Ann']);
 
+        // With no room left in the line for the name, Enter closes the list and sends the line as typed
+        const full = `${'x'.repeat(LIMITS.chatLength - 4)} @a`;
+        await page.fill('#chat-input', full.slice(0, -1));
+        await page.keyboard.type('a');
+        assert.equal(((await page.evaluate(CHAT_BOX)) as { open: boolean }).open, true);
+        await page.keyboard.press('Enter');
+        await page.waitForSelector(`.entries li:last-child:has-text("${full}")`, { state: 'attached' });
+        assert.deepEqual(await page.evaluate(CHAT_BOX), { value: '', caret: 0, focused: true, open: false, names: [] });
+
         await page.context().close();
       }
     },
@@ -9527,6 +9536,14 @@ const CHECKS: Check[] = [
       assert.match(await text(page, '.menu [data-action="mute"]'), /Mute players/);
       await page.tap('.menu [data-action="mute"]');
       assert.deepEqual(await texts(page, '.dialog li b'), ['Al', 'Bo', 'Dot', 'Kai', 'Lu', 'Pam', 'Sam', 'Stu']);
+
+      // Muting someone with nothing in the chat draws no line again, which a screen reader would read out again
+      await page.evaluate(`document.querySelector('.entries li').dataset.untouched = 'yes'`);
+      await page.tap('.dialog li:has(b:text-is("Kai")) [data-action="mute"]');
+      await page.waitForSelector('.dialog li:has(b:text-is("Kai")) [data-action="unmute"]');
+      await page.tap('.dialog li:has(b:text-is("Kai")) [data-action="unmute"]');
+      await page.waitForSelector('.dialog li:has(b:text-is("Kai")) [data-action="mute"]');
+      assert.equal(await page.locator('.entries li[data-untouched]').count(), 1, 'the chat was drawn again for a mute that hid nothing');
 
       const pamRow = '.dialog li:has(b:text-is("Pam"))';
       await page.tap(`${pamRow} [data-action="mute"]`);
@@ -9625,6 +9642,7 @@ const CHECKS: Check[] = [
       table.act('Pam', { type: 'chat', text: 'https://i.imgur.com/tall.gif' });
       table.act('Pam', { type: 'chat', text: 'https://media.tenor.com/xyz/missing.gif' });
       table.act('Lu', { type: 'chat', text: 'https://i.imgur.com/fromLu.gif' });
+      table.act('Pam', { type: 'chat', text: 'https://i.imgur.com/named.gif#@Quigs' });
 
       const page = await table.open('Quigs', 'smallPhone');
       await page.evaluate(`localStorage.setItem('cnd.mute.${table.id}', JSON.stringify(['${table.auth('Lu').id}']))`);
@@ -9632,7 +9650,7 @@ const CHECKS: Check[] = [
       await page.waitForSelector('.stage .table');
       await page.waitForTimeout(500);
       assert.equal(rig.gifs.length, 0, 'a picture was fetched for a closed chat');
-      assert.equal(await text(page, '.feed-toggle .latest'), 'Pam: https://media.tenor.com/xyz/missing.gif');
+      assert.equal(await text(page, '.feed-toggle .latest'), 'Pam: https://i.imgur.com/named.gif#@Quigs');
       assert.equal(await page.locator('.feed-toggle img').count(), 0, 'the bar shows a picture');
 
       await page.tap('.feed-toggle');
@@ -9651,6 +9669,8 @@ const CHECKS: Check[] = [
       assert.equal(await text(page, '.entries li[data-gif="failed"] .gif-link'), 'https://media.tenor.com/xyz/missing.gif');
       assert.equal(await page.locator('.entries li[data-gif="failed"] img').count(), 0);
       assert.equal(await page.getAttribute('.entries img.gif >> nth=0', 'alt'), 'A GIF from Pam');
+      assert.deepEqual(await texts(page, '.entries li[data-names-you] .mention[data-you]'), ['@Quigs'], 'a GIF’s address that names someone shows its words, the name marked');
+      assert.equal(await page.locator('.entries li[data-names-you] img').count(), 0);
       await assertNoSidewaysScroll(page);
       await page.locator('.entries').evaluate((list) => (list.scrollTop = 0));
       await shot(page, 'gifs-open-chat-smallPhone');

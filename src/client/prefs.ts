@@ -113,7 +113,7 @@ export const PREFERENCES = {
   // The ways of getting a player's attention (attentionWays.ts) beside the chime, each left out where the device can't do it. Being named in the chat uses them too, but for the flash
   // After the cards, so they stay in sight when Preferences opens on a small phone
   buzz: { kind: 'onOff', label: 'Buzz', hint: 'Two short buzzes on a phone', group: 'Your turn and @mentions', compact: true, default: true },
-  flash: { kind: 'onOff', label: 'Flash', hint: 'The table lights up for a moment', group: 'Your turn and @mentions', compact: true, default: true },
+  flash: { kind: 'onOff', label: 'Flash', hint: 'The table lights up for a moment when it is your turn', group: 'Your turn and @mentions', compact: true, default: true },
   notify: { kind: 'onOff', label: 'Notification', hint: 'While the game is in another tab', group: 'Your turn and @mentions', compact: true, default: true },
   tabTitle: { kind: 'onOff', label: 'Tab title', hint: 'The tab’s name flashes while you are in another tab', group: 'Your turn and @mentions', compact: true, default: true },
   // Off, a GIF stays a link, so nothing is fetched for it: for data on a phone, or for anyone who would rather

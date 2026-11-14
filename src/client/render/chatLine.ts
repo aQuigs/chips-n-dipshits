@@ -16,6 +16,12 @@ export interface ChatLook {
   pictures: boolean;
 }
 
+/** The address of the GIF a chat line shows as, or null when it shows its words. */
+export function gifOf(entry: FeedEntry, pictures: boolean): string | null {
+  // A line that names someone shows its words, the name marked, even when the rest of it, as an address's #@name, made it a GIF's
+  return pictures && !entry.mentions?.length ? gifAddress(entry.text) : null;
+}
+
 /** The mentions that fit in `text`, in order and none overlapping: the table wrote them, but a page draws only what makes sense. */
 function fitting(text: string, mentions: readonly Mention[]): Mention[] {
   let end = 0;
@@ -52,7 +58,7 @@ function wordsOf(entry: FeedEntry, you: string): (string | HTMLElement)[] {
  */
 export function chatLineEl(entry: FeedEntry, look: ChatLook): ChatLine {
   const namesYou = (entry.mentions ?? []).some(([id]) => id === look.you) && entry.by !== look.you;
-  const gif = look.pictures ? gifAddress(entry.text) : null;
+  const gif = gifOf(entry, look.pictures);
 
   const element = h(
     'li',

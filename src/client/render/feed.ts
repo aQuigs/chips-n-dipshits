@@ -3,7 +3,7 @@ import type { TableView } from '../../engine/view.ts';
 import { chatLineShown } from '../senders.ts';
 import { cardText, h, marksCards } from '../ui.ts';
 import { createChatBox } from './chatBox.ts';
-import { chatLineEl, showPicture } from './chatLine.ts';
+import { chatLineEl, gifOf, showPicture } from './chatLine.ts';
 
 // How close to the bottom still counts as following the conversation
 const FOLLOW_SLACK_PX = 40;
@@ -24,7 +24,7 @@ export interface FeedLook {
 export interface Feed {
   element: HTMLElement;
   update(view: TableView): void;
-  /** Draws every line again, for what the look has changed: who is muted, or whether GIFs show. */
+  /** Draws every line again when what the look has changed, who is muted or whether GIFs show, changes how any line shows. */
   redraw(): void;
   /** Draws every line again if the deck now chosen writes cards differently. */
   showDeck(): void;
@@ -61,6 +61,8 @@ export function createFeed(onChat: (text: string) => void, look: () => FeedLook,
   // Every line had, shown or not, so it can be drawn again for another look
   const had: FeedEntry[] = [];
   const gifs = new Map<Element, { address: string; from: string | null }>();
+  // How each line had is drawn, by its number, so a change of look that changes no line draws nothing again
+  const drawnAs = new Map<number, string>();
 
   /** Changes the list, and keeps it at the bottom if that is where the reader was. */
   function keepFollowing(change: () => void): void {
@@ -89,6 +91,7 @@ export function createFeed(onChat: (text: string) => void, look: () => FeedLook,
   );
 
   const isShown = (entry: FeedEntry, current: FeedLook) => chatLineShown(entry, current.shown);
+  const howDrawn = (entry: FeedEntry, current: FeedLook) => (!isShown(entry, current) ? 'hidden' : entry.kind === 'chat' && gifOf(entry, current.pictures) !== null ? 'gif' : 'words');
 
   const lineEl = (entry: FeedEntry, current: FeedLook): HTMLElement => {
     if (entry.kind !== 'chat') {
@@ -109,13 +112,20 @@ export function createFeed(onChat: (text: string) => void, look: () => FeedLook,
     latest.replaceChildren(...(newest ? latestText(newest, current.deck) : []));
   };
 
+  /** Notes how `entries` are drawn now, and gives back those that show. */
+  const drawing = (entries: readonly FeedEntry[], current: FeedLook): FeedEntry[] => {
+    entries.forEach((entry) => drawnAs.set(entry.seq, howDrawn(entry, current)));
+
+    return entries.filter((entry) => isShown(entry, current));
+  };
+
   const drawAll = () => {
     const current = look();
 
     drawnDeck = current.deck;
     gifs.clear();
     sight.disconnect();
-    keepFollowing(() => list.replaceChildren(...had.filter((entry) => isShown(entry, current)).map((entry) => lineEl(entry, current))));
+    keepFollowing(() => list.replaceChildren(...drawing(had, current).map((entry) => lineEl(entry, current))));
     showLatest(current);
   };
 
@@ -137,11 +147,11 @@ export function createFeed(onChat: (text: string) => void, look: () => FeedLook,
 
       lastSeq = fresh[fresh.length - 1]!.seq;
       had.push(...fresh);
-      had.splice(0, Math.max(0, had.length - MAX_ENTRIES));
+      had.splice(0, Math.max(0, had.length - MAX_ENTRIES)).forEach((gone) => drawnAs.delete(gone.seq));
 
       const current = look();
       keepFollowing(() => {
-        list.append(...fresh.filter((entry) => isShown(entry, current)).map((entry) => lineEl(entry, current)));
+        list.append(...drawing(fresh, current).map((entry) => lineEl(entry, current)));
 
         while (list.childElementCount > MAX_ENTRIES) {
           const oldest = list.firstElementChild!;
@@ -153,7 +163,16 @@ export function createFeed(onChat: (text: string) => void, look: () => FeedLook,
       });
       showLatest(current);
     },
-    redraw: drawAll,
+    redraw() {
+      // Rewriting the list has a screen reader read it all again, so only when a line shows otherwise
+      const current = look();
+
+      if (had.some((entry) => drawnAs.get(entry.seq) !== howDrawn(entry, current))) {
+        drawAll();
+      } else {
+        showLatest(current);
+      }
+    },
     showDeck() {
       // Rewriting the list has a screen reader read it all again, so only when the cards are written differently
       if (marksCards(look().deck) !== marksCards(drawnDeck)) {

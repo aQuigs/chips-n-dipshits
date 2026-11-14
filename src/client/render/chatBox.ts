@@ -75,16 +75,18 @@ export function createChatBox(onChat: (text: string) => void): ChatBox {
 
   const look = () => show(input.selectionStart === input.selectionEnd ? completionAt(input.value, input.selectionStart ?? input.value.length, names) : null);
 
-  const pick = (name: string) => {
+  /** Writes the name out, or, where the line has no room for it, closes the list and leaves the line as typed. Says which. */
+  const pick = (name: string): boolean => {
     const result = open && completed(input.value, input.selectionStart ?? input.value.length, open, name);
-    if (!result) {
-      return;
+
+    if (result) {
+      input.value = result.text;
+      input.setSelectionRange(result.caret, result.caret);
+      input.focus();
     }
 
-    input.value = result.text;
-    input.setSelectionRange(result.caret, result.caret);
-    input.focus();
     show(null);
+    return result !== null;
   };
 
   input.addEventListener('input', look);
@@ -94,7 +96,8 @@ export function createChatBox(onChat: (text: string) => void): ChatBox {
   input.addEventListener('blur', () => show(null));
 
   input.addEventListener('keydown', (event) => {
-    if (!open) {
+    // A key that is picking a word in an input method, as for Japanese or Chinese, is the method's
+    if (!open || event.isComposing) {
       return;
     }
 
@@ -105,7 +108,10 @@ export function createChatBox(onChat: (text: string) => void): ChatBox {
       active = (active + steps[event.key]!) % count;
       mark();
     } else if (event.key === 'Enter' || event.key === 'Tab') {
-      pick(open.names[active]!);
+      // With no room for the name, the key does what it would have with no list
+      if (!pick(open.names[active]!)) {
+        return;
+      }
     } else if (event.key === 'Escape') {
       show(null);
     } else {

@@ -37,8 +37,9 @@ function decode(text: string | null): string[] | null {
 
 /**
  * The mutes of one table, kept in the browser. As with the preferences, what the browser has comes first,
- * so a mute made in another tab holds here too, and a browser that keeps nothing costs only that the
- * mutes last for the visit.
+ * so a mute made in another tab holds here for whatever is drawn after it (lines already drawn here stay
+ * until this page draws the chat again), and a browser that keeps nothing costs only that the mutes last
+ * for the visit.
  */
 export class Mutes implements MuteList {
   private readonly memory: PrefMemory;

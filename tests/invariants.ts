@@ -4,7 +4,7 @@
  */
 import assert from 'node:assert/strict';
 
-import { blindsOnly, BOARD_SIZE, boardsDealt, evaluateHand, FEED_LIMIT, FLOP_SIZE, handFacts, isStraddle, LIMITS, nightIsOver, owes, PLAYING_THE_BOARD, reaches, replayHand, roleOf, STRADDLES, STRADDLES_IN_A_ROW, straddlesAllowed, viewFor, wonAPot } from '../src/engine/index.ts';
+import { badgeOf, blindsOnly, BOARD_SIZE, boardsDealt, evaluateHand, FEED_LIMIT, FLOP_SIZE, handFacts, isStraddle, LIMITS, nightIsOver, owes, PLAYING_THE_BOARD, reaches, replayHand, roleOf, STRADDLES, STRADDLES_IN_A_ROW, straddlesAllowed, viewFor, wonAPot } from '../src/engine/index.ts';
 import type { Effect, FeedEntry, HandPlayer, HandRecord, TableState } from '../src/engine/index.ts';
 import { CACHE_VALUE_BYTES, utf8Bytes } from '../src/gas/sheetStore.ts';
 import { restoreState } from '../src/server/store.ts';
@@ -255,6 +255,8 @@ export function assertNumbersHold(state: TableState): void {
     assert.ok(numbers.hands <= tonight.hands && numbers.won <= numbers.hands, 'a player has more hands than the night, or more pots than hands');
     assert.equal(numbers.biggest > 0, numbers.won > 0, 'a biggest pot without a pot won, or a pot won of nothing');
     assert.ok(numbers.best === null || numbers.best.length === 5, 'a best hand that is not five cards');
+    assert.ok(numbers.busts <= numbers.hands && numbers.streak <= numbers.won, 'more busts than hands, or a streak longer than the pots won');
+    assert.ok(Object.entries(numbers.badges).every(([badge, times]) => badgeOf(badge) && Number.isInteger(times) && times >= 1 && times <= numbers.hands), 'a badge this code does not know, or earned more times than hands played');
   }
 }
 

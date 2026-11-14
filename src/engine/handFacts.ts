@@ -97,6 +97,11 @@ export function wonAPot(player: PlayerFacts): boolean {
   return player.tookOut > 0;
 }
 
+/** Whether anybody took chips from the pots. Nobody did in a hand whose pot went back to its players, or that had nothing in it. */
+export function somebodyWon(facts: HandFacts): boolean {
+  return facts.players.some(wonAPot);
+}
+
 /** The seats still in the hand when it ended. A pot always holds a chip of every player who did not fold, so they are the ones in for the main pot. */
 function seatsStillIn(result: HandResult): number[] {
   if (result.chopped) {

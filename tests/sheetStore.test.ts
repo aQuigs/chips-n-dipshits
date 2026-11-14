@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { addMember, createTable, DEFAULT_CONFIG, LIMITS, presetSettings } from '../src/engine/index.ts';
+import { addMember, BADGES, createTable, DEFAULT_CONFIG, LIMITS, presetSettings } from '../src/engine/index.ts';
 import type { Effect, HandRecord, TableConfig, TableState } from '../src/engine/index.ts';
 import { SheetPresetStore } from '../src/gas/sheetPresetStore.ts';
 import { SheetStore } from '../src/gas/sheetStore.ts';
@@ -913,15 +913,16 @@ test('after the longest night the fullest table still fits its row and the cache
     t.call(t.playerIn(t.toAct!));
   }
 
-  // More hands than any night has, a pot of every chip ten players can hold, and a best hand for everyone
+  // More hands than any night has, a pot of every chip ten players can hold, a best hand and every badge for everyone
+  const everyBadge = Object.fromEntries(BADGES.map((badge) => [badge.id, 9_999]));
   for (const member of t.state.members) {
-    t.state.tonight.players[member.id] = { hands: 99_999, won: 99_999, biggest: 10 * LIMITS.chips, best: ['As', 'Ks', 'Qs', 'Js', 'Ts'], rebuys: 9_999 };
+    t.state.tonight.players[member.id] = { hands: 99_999, won: 99_999, biggest: 10 * LIMITS.chips, best: ['As', 'Ks', 'Qs', 'Js', 'Ts'], rebuys: 9_999, busts: 9_999, streak: 9_999, badges: { ...everyBadge } };
   }
   t.state.tonight.hands = 99_999;
   t.state.feed = fullestChat();
 
   const numbers = JSON.stringify(t.state.tonight).length;
-  assert.ok(numbers <= LIMITS.members * 110, `the night's numbers for ${LIMITS.members} players take ${numbers} characters`);
+  assert.ok(numbers <= LIMITS.members * 320, `the night's numbers for ${LIMITS.members} players take ${numbers} characters`);
 
   save(store, t.state);
 

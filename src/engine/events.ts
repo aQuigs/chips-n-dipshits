@@ -43,7 +43,13 @@ export type HandEvent =
   | [kind: 'muck', seat: number]
   /** One player's share of one pot; `pot` 0 is the main pot, and `board` is which board won it. */
   | [kind: 'win', seat: number, amount: number, pot: number, board: number]
-  | [kind: 'bounty', seat: number, payments: [seat: number, amount: number][]];
+  | [kind: 'bounty', seat: number, payments: [seat: number, amount: number][]]
+  /** The small blind offers to chop the blinds. */
+  | [kind: 'chopOffer', seat: number]
+  /** The big blind's answer. A no follows a `timeout` when the clock ran out, and stands for any answer they could not give. */
+  | [kind: 'chopAnswer', seat: number, agree: boolean]
+  /** The blinds chop: each goes back from in front of the seat that posted it, and the hand is over with no winner. */
+  | [kind: 'chop', returned: [seat: number, amount: number][]];
 
 /**
  * Events are saved with the table on every action, and unlike the play-by-play they are no use with
@@ -206,12 +212,21 @@ export function replayHand(events: readonly HandEvent[], count = events.length):
         break;
       }
 
+      case 'chop':
+        for (const [seat, amount] of event[1]) {
+          at(seat).bet -= amount;
+          at(seat).stack += amount;
+        }
+        break;
+
       case 'start':
       case 'deal':
       case 'check':
       case 'timeout':
       case 'vote':
       case 'muck':
+      case 'chopOffer':
+      case 'chopAnswer':
         break;
 
       default:

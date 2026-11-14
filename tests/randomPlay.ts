@@ -1,7 +1,7 @@
 /* Random play on a test table: what the simulation runs, and what plays a saved table on after it is read back. */
 import assert from 'node:assert/strict';
 
-import { addMember, CONFIG_KEYS, LIMITS, nextDeadline, owes, SEAT_COUNT, straddlesAllowed, viewFor } from '../src/engine/index.ts';
+import { addMember, CONFIG_KEYS, LIMITS, mayOfferChop, nextDeadline, owes, SEAT_COUNT, straddlesAllowed, viewFor } from '../src/engine/index.ts';
 import type { Command, GameError, Rng } from '../src/engine/index.ts';
 import type { TestTable } from './helpers.ts';
 import { randomConfig } from './randomConfig.ts';
@@ -95,6 +95,14 @@ export const FUZZ_COMMANDS: ((fuzz: Fuzz) => void)[] = [
       }
     }
   },
+  ({ t, rng, who }) => {
+    // Everyone at once, as with straddles, and someone offers or answers a chop, which is refused unless it is theirs to do now
+    for (const seat of seated(t)) {
+      attempt(t, seatOwnerIndex(t, seat), { type: 'setAlwaysChop', on: chance(rng, 30) });
+    }
+
+    attempt(t, who, chance(rng, 50) ? { type: 'offerChop' } : { type: 'answerChop', agree: chance(rng, 50) });
+  },
   ({ t, who }) => attempt(t, who, { type: 'showCards' }),
   ({ t, rng, playerId }) => attempt(t, someoneRunningTheGame(t, rng), { type: 'setStack', playerId, stack: rng.int(2000) }),
   ({ t, rng, playerId }) => attempt(t, someoneRunningTheGame(t, rng), { type: 'kick', playerId }),
@@ -167,6 +175,12 @@ function playRandomAction(t: TestTable, rng: Rng): void {
   const options = viewFor(t.state, t.ids[seatOwnerIndex(t, seat)]!, t.now).hand!.options!;
   const roll = rng.int(100);
 
+  // Before the flop, with nobody in yet but the blinds, play folds round to them often enough for the blinds to chop
+  if (hand.street === 'preflop' && hand.lastAggressor === null && seat !== hand.sbSeat && seat !== hand.bbSeat && roll < 25) {
+    t.fold(seatOwnerIndex(t, seat));
+    return;
+  }
+
   if (options.canRaise && roll < 30) {
     const allIn = chance(rng, 20);
     const to = allIn ? options.maxRaiseTo : options.minRaiseTo + rng.int(Math.min(options.maxRaiseTo - options.minRaiseTo, 300) + 1);
@@ -204,8 +218,21 @@ export function randomStep(t: TestTable, rng: Rng): void {
 
     if (deadline !== null && chance(rng, 4)) {
       t.wait(deadline - t.now);
+    } else if (mayOfferChop(t.state, hand.toAct!) && chance(rng, 50)) {
+      t.cmd(seatOwnerIndex(t, hand.toAct!), { type: 'offerChop' });
     } else {
       playRandomAction(t, rng);
+    }
+    return;
+  }
+
+  if (hand?.stage === 'chop') {
+    assert.equal(hand.toAct, hand.bbSeat, 'someone other than the big blind is answering a chop');
+
+    if (deadline !== null && chance(rng, 10)) {
+      t.wait(deadline - t.now);
+    } else {
+      t.cmd(seatOwnerIndex(t, hand.toAct!), { type: 'answerChop', agree: chance(rng, 60) });
     }
     return;
   }

@@ -136,7 +136,7 @@ function turnPanel(table: Denominated, hand: HandView, stack: number, handlers: 
     }
   });
   // What is in the box is kept as a move goes out: should the move come off again, the panel drawn then has the bet as it was left
-  const play = (move: BettingAction): void => {
+  const play = (move: BettingAction | { type: 'offerChop' }): void => {
     handlers.sizing.keep(turn, amount.value);
     void handlers.send({ ...move, turn });
   };
@@ -163,6 +163,11 @@ function turnPanel(table: Denominated, hand: HandView, stack: number, handlers: 
   presetButtons.push(h('button.chip-btn', { type: 'button', onclick: () => choose(maxRaiseTo) }, 'All in'));
   HOTKEYS.sizes.forEach((key, index) => presetButtons[index]?.setAttribute('data-hotkey', key));
 
+  // Beside Fold, the other way to leave the hand without playing it: the small blind with only the blinds in, folded to
+  const chopButton = hand.canOfferChop
+    ? h('button.btn.chop', { type: 'button', 'data-action': 'offer-chop', onclick: () => play({ type: 'offerChop' }) }, 'Chop')
+    : null;
+
   const callLabel = callAmount >= stack ? 'Call all in' : 'Call';
   const passButton = options.canCheck
     ? h('button.btn.call', { type: 'button', 'data-action': 'check', 'data-hotkey': HOTKEYS.pass, onclick: () => play({ type: 'check' }) }, 'Check')
@@ -176,8 +181,26 @@ function turnPanel(table: Denominated, hand: HandView, stack: number, handlers: 
       'div.buttons',
       null,
       h('button.btn.fold', { type: 'button', 'data-action': 'fold', 'data-hotkey': HOTKEYS.fold, onclick: () => play({ type: 'fold' }) }, 'Fold'),
+      chopButton,
       passButton,
       options.canRaise ? raiseButton : null,
+    ),
+  );
+}
+
+/** The big blind's question when the small blind offers to chop: an answer is a move, like any on the clock. */
+function chopQuestion(view: TableView, hand: HandView, handlers: ControlHandlers): HTMLElement {
+  const answer = (agree: boolean) => () => void handlers.send({ type: 'answerChop', agree, turn: hand.turn });
+
+  return h(
+    'div.turn.chop-question',
+    null,
+    h('div.prompt', null, `${view.seats[hand.sbSeat]?.name ?? 'The small blind'} offers to chop: you each take back your blind and the hand ends`),
+    h(
+      'div.buttons',
+      null,
+      h('button.btn.call', { type: 'button', 'data-action': 'chop-no', onclick: answer(false) }, 'Play on'),
+      h('button.btn.chop', { type: 'button', 'data-action': 'chop-yes', onclick: answer(true) }, 'Chop'),
     ),
   );
 }
@@ -212,6 +235,12 @@ function waitingText(view: TableView, hand: HandView | null): string {
     return hand.toAct === null || hand.toAct === view.you.seat ? 'Waiting for the dealer' : `Waiting for ${view.seats[hand.toAct]?.name ?? 'the next player'}`;
   }
 
+  if (hand.stage === 'chop') {
+    const big = view.seats[hand.bbSeat]?.name ?? 'the big blind';
+
+    return view.you.seat === hand.sbSeat ? `You offered to chop. Waiting for ${big}` : `${view.seats[hand.sbSeat]?.name ?? 'The small blind'} offered to chop. Waiting for ${big}`;
+  }
+
   if (hand.stage === 'ritVote') {
     return 'Waiting for the run-it-twice votes';
   }
@@ -229,7 +258,7 @@ function waitingText(view: TableView, hand: HandView | null): string {
  * a bomb pot or changing the count never redraws a bet being sized.
  */
 function nextHandNote(view: TableView): string[] {
-  const deciding = view.hand?.options || view.hand?.canVote;
+  const deciding = view.hand?.options || view.hand?.canVote || view.hand?.canAnswerChop;
   if (deciding) {
     return [];
   }
@@ -332,6 +361,8 @@ function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandle
     main = waitingEl(waitingText(view, hand), view, ownNote(settling.note, hand, view));
   } else if (hand?.options) {
     main = turnPanel(view.config, hand, seat.stack, handlers);
+  } else if (hand?.canAnswerChop) {
+    main = chopQuestion(view, hand, handlers);
   } else if (hand?.canVote) {
     main = h(
       'div.turn',
@@ -384,6 +415,10 @@ function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandle
     const on = seat.straddles.length;
 
     extras.push(h('button.chip-btn', { type: 'button', 'data-action': 'straddles', onclick: handlers.openStraddles }, `Straddles: ${on > 0 ? `${on} on` : 'off'}`));
+  }
+
+  if (view.config.allowChop) {
+    extras.push(toggle('Always chop', seat.alwaysChop, 'always-chop', (on) => handlers.send({ type: 'setAlwaysChop', on })));
   }
 
   if (showCards) {
@@ -442,11 +477,11 @@ export function controlsSignature(view: TableView): string {
   const hand = view.hand;
 
   return JSON.stringify([
-    seat && [seat.stack, seat.pendingAdd, seat.sittingOut, seat.away, seat.straddles, seat.leaving, seat.owesBigBlind, seat.owesSmallBlind, seat.comesIn],
-    hand && [hand.number, hand.stage, hand.street, hand.toAct, hand.turn, hand.currentBet, hand.pot, hand.options, hand.canVote, hand.canShow, hand.passedOver],
+    seat && [seat.stack, seat.pendingAdd, seat.sittingOut, seat.away, seat.straddles, seat.alwaysChop, seat.leaving, seat.owesBigBlind, seat.owesSmallBlind, seat.comesIn],
+    hand && [hand.number, hand.stage, hand.street, hand.toAct, hand.turn, hand.currentBet, hand.pot, hand.options, hand.canOfferChop, hand.canAnswerChop, hand.canVote, hand.canShow, hand.passedOver],
     [view.running, view.nextHandAt !== null, view.handCount === 0, nightOver(view), hand?.stage === 'done' && onLastHand(view)],
     view.requests.filter((request) => request.playerId === view.you.id),
-    [straddlesAllowed(view.config).map((kind) => kind.what), view.config.maxBuyIn, view.config.smallBlind, view.config.bigBlind],
+    [straddlesAllowed(view.config).map((kind) => kind.what), view.config.allowChop, view.config.maxBuyIn, view.config.smallBlind, view.config.bigBlind],
     nextHandNote(view),
   ]);
 }

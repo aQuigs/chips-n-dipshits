@@ -178,6 +178,7 @@ export const CONFIG_SPECS: { [K in ConfigKey]-?: SpecFor<TableConfig[K]> } = {
   allowButtonStraddle: straddleSwitch('allowButtonStraddle'),
   allowMississippiStraddle: straddleSwitch('allowMississippiStraddle'),
   allowRunItTwice: { kind: 'toggle', label: 'Offer run it twice when everyone is all in', subject: 'Run it twice', default: true, group: 'house' },
+  allowChop: { kind: 'toggle', label: 'Let the blinds chop when it folds to them', subject: 'Chopping the blinds', default: false, group: 'house' },
   missedBlinds: {
     kind: 'choice',
     label: 'Missed blinds',

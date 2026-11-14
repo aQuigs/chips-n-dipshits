@@ -1,0 +1,8 @@
+/* ---- Chopping the blinds ---- */
+
+/* An offer to end the hand, not a bet: drawn apart from the colored moves beside it */
+.btn.chop {
+  border-color: var(--accent);
+  background: var(--panel-raised);
+  color: var(--text);
+}

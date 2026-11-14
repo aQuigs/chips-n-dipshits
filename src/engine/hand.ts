@@ -1,9 +1,10 @@
 import { formatAmount } from './amounts.ts';
-import { bettingIsClosed, bettingOptions, chipsFor, objectionTo, passesTo } from './betting.ts';
+import { bettingIsClosed, bettingOptions, chipsFor, objectionTo, onTheClock, passesTo } from './betting.ts';
 import type { BettingAction } from './betting.ts';
 import { boardsComplete, dealStreet, newBoards, potShares, runOut } from './boards.ts';
 import { boardsDealt, bombPotName, claimBombPot } from './bombPots.ts';
 import { isSevenDeuce, prettyCards, shuffledDeck } from './cards.ts';
+import { answerUnasked, chopsUnasked, mayOfferChop } from './chop.ts';
 import { takesEvent } from './events.ts';
 import type { HandEvent } from './events.ts';
 import { openingBet } from './forcedBets.ts';
@@ -230,6 +231,7 @@ export function startHand(state: TableState, ctx: Ctx): void {
     passedOver: plan.passedOver,
     bounty: sevenDeuceBounty,
     bombPot,
+    chopOffered: false,
     deck,
     ...newBoards(boardsDealt(bombPot)),
     street: 'preflop',
@@ -296,7 +298,7 @@ function actionDeadline(state: TableState, now: number): number | null {
 export function restartActionClock(state: TableState, now: number): void {
   const hand = state.hand;
 
-  if (hand && hand.stage === 'betting' && hand.toAct !== null) {
+  if (hand && onTheClock(hand) !== null) {
     hand.deadline = actionDeadline(state, now);
   }
 }
@@ -338,6 +340,11 @@ function advance(state: TableState, ctx: Ctx, afterSeat: number): void {
 
     const next = passesTo(hand, from)!;
     const seat = state.seats[next.seat]!;
+
+    if (chopsUnasked(state, hand, next.seat)) {
+      chopTheBlinds(state, ctx);
+      return;
+    }
 
     if (seat.away || seat.leaving) {
       checkOrFold(state, ctx, next);
@@ -480,18 +487,23 @@ function checkOrFold(state: TableState, ctx: Ctx, player: HandPlayer): void {
 }
 
 /**
- * A player's own decision when the action is on them. `turn` is the decision they were looking at:
- * an answer that was slow to arrive, or sent twice, must not be played on a later one they never saw.
+ * Refuses a decision sent for another than the one open. `turn` is the decision the player was looking
+ * at: an answer that was slow to arrive, or sent twice, must not be played on a later one they never saw.
  */
+function requireTurn(state: TableState, turn: number | undefined): void {
+  if (turn !== undefined && turn !== state.turn) {
+    throw new GameError('The hand moved on before that arrived, so it was not played');
+  }
+}
+
+/** A player's own decision when the action is on them, for the decision `turn` when it is given. */
 export function act(state: TableState, ctx: Ctx, seatIndex: number, action: BettingAction, turn?: number): void {
   const hand = state.hand;
   if (!hand || hand.stage !== 'betting' || hand.toAct !== seatIndex) {
     throw new GameError("It's not your turn");
   }
 
-  if (turn !== undefined && turn !== state.turn) {
-    throw new GameError('The hand moved on before that arrived, so it was not played');
-  }
+  requireTurn(state, turn);
 
   perform(state, ctx, playerAt(hand, seatIndex)!, action);
 
@@ -505,7 +517,102 @@ export function act(state: TableState, ctx: Ctx, seatIndex: number, action: Bett
   advance(state, ctx, seatIndex);
 }
 
-/** The clock ran out on the player to act: they check or fold and sit out until they come back. */
+/**
+ * The small blind offers to chop the blinds instead of a move, on their turn (`turn`, when given). The
+ * big blind is asked, unless what they would say is already known (`answerUnasked`).
+ */
+export function offerChop(state: TableState, ctx: Ctx, seatIndex: number, turn?: number): void {
+  const hand = state.hand;
+  if (!hand || hand.stage !== 'betting' || hand.toAct !== seatIndex) {
+    throw new GameError("It's not your turn");
+  }
+
+  requireTurn(state, turn);
+
+  if (!state.config.allowChop) {
+    throw new GameError("This table doesn't chop the blinds");
+  }
+
+  if (hand.chopOffered) {
+    throw new GameError('You already offered to chop in this hand');
+  }
+
+  if (!mayOfferChop(state, seatIndex)) {
+    throw new GameError('Only the small blind can offer to chop, when everyone else has folded and the pot is just the blinds');
+  }
+
+  const big = playerAt(hand, hand.bbSeat)!;
+
+  hand.chopOffered = true;
+  record(hand, ['chopOffer', seatIndex]);
+  narrate(state, ctx, `${playerAt(hand, seatIndex)!.name} offers to chop the blinds`);
+
+  const unasked = answerUnasked(state.seats[big.seat]!);
+  if (unasked !== null) {
+    settleChop(state, ctx, big, unasked, false);
+    return;
+  }
+
+  hand.stage = 'chop';
+  hand.toAct = big.seat;
+  state.turn += 1;
+  hand.deadline = actionDeadline(state, ctx.now);
+}
+
+/** The big blind answers the offer to chop, for the decision `turn` when it is given. */
+export function answerChop(state: TableState, ctx: Ctx, seatIndex: number, agree: boolean, turn?: number): void {
+  const hand = state.hand;
+  if (!hand || hand.stage !== 'chop' || hand.toAct !== seatIndex) {
+    throw new GameError('There is no chop for you to answer');
+  }
+
+  requireTurn(state, turn);
+  settleChop(state, ctx, playerAt(hand, seatIndex)!, agree, true);
+}
+
+/**
+ * The offer to chop is answered: by the big blind (`given`), or for them by their standing choice, the
+ * clock or their leaving. Yes chops the blinds. No takes the offer off for the hand and puts the small
+ * blind back on a fresh clock with the usual choices, or folds for them if they are away or leaving.
+ */
+function settleChop(state: TableState, ctx: Ctx, big: HandPlayer, agree: boolean, given: boolean): void {
+  const hand = state.hand!;
+
+  record(hand, ['chopAnswer', big.seat, agree]);
+
+  if (agree) {
+    narrate(state, ctx, `${big.name} agrees to chop`);
+    chopTheBlinds(state, ctx);
+    return;
+  }
+
+  narrate(state, ctx, given ? `${big.name} says no to the chop` : `${big.name} did not answer, so there is no chop`);
+  hand.stage = 'betting';
+
+  // The small blind is the one player after the big blind still to act
+  advance(state, ctx, big.seat);
+}
+
+/** Each blind goes back to the seat that posted it, and the hand is over with no winner and nothing shown. */
+function chopTheBlinds(state: TableState, ctx: Ctx): void {
+  const hand = state.hand!;
+  const blinds = [playerAt(hand, hand.sbSeat)!, playerAt(hand, hand.bbSeat)!];
+
+  record(hand, ['chop', blinds.map((player): [number, number] => [player.seat, player.committed])]);
+
+  for (const player of blinds) {
+    state.seats[player.seat]!.stack += player.committed;
+    player.bet = 0;
+    player.committed = 0;
+    player.allIn = false;
+  }
+
+  narrate(state, ctx, `${blinds[0]!.name} and ${blinds[1]!.name} chop the blinds: each takes back their own`);
+
+  finishHand(state, ctx, { uncontested: true, chopped: true, pots: [], winnings: [], hands: [], bounty: null });
+}
+
+/** The clock ran out on the player it was on: they check or fold, or say no to a chop, and sit out until they come back. */
 function timeOut(state: TableState, ctx: Ctx): void {
   const hand = state.hand!;
   const player = playerAt(hand, hand.toAct!)!;
@@ -515,6 +622,11 @@ function timeOut(state: TableState, ctx: Ctx): void {
   seat.sittingOut = true;
   record(hand, ['timeout', player.seat]);
   narrate(state, ctx, `${player.name} ran out of time`);
+
+  if (hand.stage === 'chop') {
+    settleChop(state, ctx, player, false, false);
+    return;
+  }
 
   checkOrFold(state, ctx, player);
   advance(state, ctx, player.seat);
@@ -531,6 +643,8 @@ export function stopWaitingFor(state: TableState, ctx: Ctx, seatIndex: number): 
   if (hand.stage === 'betting' && hand.toAct === seatIndex) {
     checkOrFold(state, ctx, player);
     advance(state, ctx, seatIndex);
+  } else if (hand.stage === 'chop' && hand.toAct === seatIndex) {
+    settleChop(state, ctx, player, answerUnasked(state.seats[seatIndex]!) ?? false, false);
   } else if (hand.stage === 'ritVote' && !player.folded && player.ritVote === null) {
     narrate(state, ctx, `${player.name} left without voting, so it runs once`);
     startRunout(state, ctx, 1);
@@ -878,6 +992,7 @@ export function stepHand(state: TableState, ctx: Ctx): HandRecord | null {
 
   switch (hand.stage) {
     case 'betting':
+    case 'chop':
       timeOut(state, ctx);
       return null;
     case 'ritVote':

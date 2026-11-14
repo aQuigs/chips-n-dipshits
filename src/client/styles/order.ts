@@ -38,4 +38,5 @@ export const STYLESHEETS = [
   'straddles.css',
   'tonight.css',
   'unconfirmed.css',
+  'chop.css',
 ];

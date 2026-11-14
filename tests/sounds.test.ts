@@ -84,6 +84,9 @@ const BY_SOMEONE_ELSE: [HandEvent, SoundName | null][] = [
   [['muck', 1], null],
   [['win', 1, 400, 0, 0], 'win'],
   [['bounty', 1, [[0, 20]]], 'chips'],
+  [['chopOffer', 1], null],
+  [['chopAnswer', 1, true], null],
+  [['chop', [[1, 10], [2, 20]]], 'chips'],
 ];
 
 test('each kind of hand event makes its sound, or none', () => {

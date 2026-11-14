@@ -34,8 +34,9 @@ function soundOf(event: HandEvent, viewer: number | null, dealtOn: number): Soun
     case 'win':
       return byOther(event[1]) ? 'win' : 'myWin';
 
-    // The bounty's chips changing hands, after the pot it was won with
+    // The bounty's chips changing hands, after the pot it was won with. A chop is the blinds' chips going back
     case 'bounty':
+    case 'chop':
       return 'chips';
 
     // The cards coming out is what announces a new hand, whatever was posted for it (blinds, antes, a bomb pot), and the fold or check made for a player who ran out of time is what is heard of it
@@ -47,6 +48,11 @@ function soundOf(event: HandEvent, viewer: number | null, dealtOn: number): Soun
     case 'runs':
     case 'show':
     case 'muck':
+      return null;
+
+    // The big blind hears the offer as their turn coming, and an answer is followed by what it leads to: the chop, or the small blind's turn again
+    case 'chopOffer':
+    case 'chopAnswer':
       return null;
 
     default:

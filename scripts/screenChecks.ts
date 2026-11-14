@@ -21,7 +21,7 @@ import { KEYS_SETTLE_MS } from '../src/client/hotkeys.ts';
 import { RECIPES } from '../src/client/soundRecipes.ts';
 import { THEMES } from '../src/client/themes.ts';
 import { shortAmount, signedAmount } from '../src/engine/amounts.ts';
-import { DEFAULT_CONFIG, LIMITS, presetSettings } from '../src/engine/index.ts';
+import { DEFAULT_CONFIG, LIMITS, onTheClock, presetSettings } from '../src/engine/index.ts';
 import type { Command, Straddle, TableConfig, TableView } from '../src/engine/index.ts';
 import { contrast } from '../tests/colorVision.ts';
 import { boxes, Gate, overlap, Rig, RigTable, SCREENS, setStageHeight, squeezed, textBoxes } from './rig.ts';
@@ -648,7 +648,7 @@ async function caughtUp(page: Page, view: TableView): Promise<void> {
   const hand = view.hand;
   const seats = view.seats.filter((seat) => seat !== null);
   const wanted = [
-    hand?.stage === 'betting' ? hand.toAct : null,
+    hand ? onTheClock(hand) : null,
     hand?.boards.flat().length ?? 0,
     seats.filter((seat) => seat.bet > 0).length,
     seats.filter((seat) => seat.folded).length,
@@ -1147,6 +1147,199 @@ const typedAs = (amount: number, view: TableView) => (view.config.unit === 'cent
 const TAP_FIRST_LAYOUTS: (MotionLayout & { moving?: boolean })[] = [{ ...MOTION_LAYOUTS[0]!, moving: true }, MOTION_LAYOUTS[1]!, MOTION_LAYOUTS[2]!];
 
 type Check = [name: string, run: (rig: Rig) => Promise<void>];
+
+/**
+ * A table of whole chips and one of dollars and cents for the checks of chops, with the amounts as each
+ * writes them: the blinds, what the small blind has to call, the smallest raise, and a whole stack.
+ */
+const CHOP_TABLES = [
+  { name: 'chips', config: { allowChop: true, actionSeconds: 30 } as Partial<TableConfig>, stack: 1000, blinds: '10/20', small: '10', big: '20', call: '10', raiseTo: '40', whole: '1,000' },
+  { name: 'cents', config: { ...CENTS, allowChop: true, actionSeconds: 30 } as Partial<TableConfig>, stack: 10_000, blinds: '0.25/0.50', small: '0.25', big: '0.50', call: '0.25', raiseTo: '1.00', whole: '100.00' },
+];
+
+type ChopTable = (typeof CHOP_TABLES)[number];
+
+const UNICODE = LONG_NAMES[2]!;
+
+/** Four players, Quigs the host on the button: the widest name has the small blind, Ünïcödé the big blind, and Marge and Quigs fold to them. */
+function foldedToTheBlinds(rig: Rig, kind: ChopTable): RigTable {
+  const table = rig.table(
+    LONG_NAMES.slice(0, 4).map((name) => ({ name, stack: kind.stack })),
+    kind.config,
+  );
+
+  table.deal({ button: 0, holes: { 1: 'Ks Qd', 2: '9c 8c' } });
+  table.act(MARGE, { type: 'fold' });
+  table.act('Quigs', { type: 'fold' });
+
+  return table;
+}
+
+/** What the buttons of the turn are, in the order they are drawn. */
+const turnActions = (page: Page) => page.locator('.turn .buttons button').evaluateAll((buttons) => buttons.map((button) => button.getAttribute('data-action')));
+
+/** The buttons of the turn, and what the bar says above them, are whole, on the screen and apart, and the table above them still fits. */
+async function assertTurnFits(page: Page, what: string): Promise<void> {
+  const { width, height } = page.viewportSize()!;
+  const buttons = await boxes(page, '.turn .buttons button');
+
+  assert.deepEqual(await squeezed(page, '.turn .buttons button, .turn .buttons button span, .turn .prompt, .plate .stack, .plate .status, .bet, .pot'), [], `${what}: a button, an amount or a status is cut off`);
+  assert.ok(buttons.length > 0, `${what}: no buttons`);
+  for (const box of [...buttons, ...(await boxes(page, '.turn .prompt, .seat .plate'))]) {
+    assert.ok(box.left >= -1 && box.right <= width + 1 && box.top >= -1 && box.bottom <= height + 1, `${what}: something runs off the screen: ${JSON.stringify(box)} on ${width}x${height}`);
+  }
+
+  buttons.forEach((one, index) => assertApart([one], buttons.slice(index + 1), `${what}: two buttons`));
+  assertApart(await boxes(page, '.turn .prompt'), buttons, `${what}: the question and its buttons`);
+  await assertBetsApart(page);
+  await assertNoSidewaysScroll(page);
+}
+
+/** The play-by-play of a hand folded round to the blinds, up to the offer. */
+const chopLines = (kind: ChopTable) => [`Hand #1 · blinds ${kind.blinds} · Quigs has the button`, `${WIDEST} posts small blind ${kind.small}`, `${UNICODE} posts big blind ${kind.big}`, `${MARGE} folds`, 'Quigs folds', `${WIDEST} offers to chop the blinds`];
+
+/** The small blind offers, the big blind is asked, and the others see the offer stand; then the big blind says yes, and the play-by-play and the history tell it. */
+const chopAgreedCheck = (kind: ChopTable): Check => [
+  `folded to the blinds at a table of ${kind.name}, the small blind is offered a chop beside Fold, the big blind is asked, the others see the offer stand, and a yes gives each blind back and is told in the play-by-play and the history`,
+  async (rig) => {
+    for (const screen of PHONE_AND_DESKTOP) {
+      const table = foldedToTheBlinds(rig, kind);
+      const small = await table.open(WIDEST, screen);
+
+      // The small blind's turn: Chop beside Fold, and the usual call and raise
+      await small.waitForSelector('.turn [data-action="offer-chop"]');
+      assert.deepEqual(await turnActions(small), ['fold', 'offer-chop', 'call', 'raise']);
+      assert.equal(await text(small, '.turn [data-action="offer-chop"]'), 'Chop');
+      assert.equal(await text(small, '.turn [data-action="call"]'), `Call ${kind.call}`);
+      assert.equal(await text(small, '.turn [data-action="raise"]'), `Raise to ${kind.raiseTo}`);
+      await inShapesOf(small, screen, async (shape) => {
+        await assertTurnFits(small, `the small blind's turn, ${shape}`);
+        await shot(small, `chop-offer-${kind.name}-${screen}-${shape}`);
+      });
+
+      await pressOn(small, screen)('.turn [data-action="offer-chop"]');
+      await small.waitForSelector('.controls .waiting:has-text("You offered to chop")');
+      assert.equal(await text(small, '.controls .waiting'), `You offered to chop. Waiting for ${UNICODE}`);
+      assert.equal(await small.locator('.turn').count(), 0, 'the small blind still has a turn after offering');
+
+      // The big blind is on the clock to answer, with the question in place of a turn
+      const big = await table.open(UNICODE, screen);
+      await big.waitForSelector('.chop-question');
+      assert.equal(await text(big, '.chop-question .prompt'), `${WIDEST} offers to chop: you each take back your blind and the hand ends`);
+      assert.deepEqual(await turnActions(big), ['chop-no', 'chop-yes']);
+      assert.deepEqual(await texts(big, '.turn .buttons button'), ['Play on', 'Chop']);
+      assert.equal(await big.locator('.seat.me.acting .status.clock').count(), 1, 'the big blind has no clock running');
+      await inShapesOf(big, screen, async (shape) => {
+        await assertTurnFits(big, `the big blind's question, ${shape}`);
+        await shot(big, `chop-question-${kind.name}-${screen}-${shape}`);
+      });
+
+      // Everyone else: the offer on the small blind's seat and under the table, the big blind's clock, and the pot as one total
+      const other = await table.open(MARGE, screen);
+      await other.waitForSelector('.controls .waiting:has-text("offered to chop")');
+      assert.equal(await text(other, '.controls .waiting'), `${WIDEST} offered to chop. Waiting for ${UNICODE}`);
+      assert.equal(await other.locator('.message, .sidepots').count(), 0, 'the middle of the table says more than the pot');
+      assert.equal(await text(other, '.seat[data-seat="1"] .status'), 'Chop?');
+      assert.equal(await other.locator('.seat.acting').getAttribute('data-seat'), '2');
+      await inShapesOf(
+        other,
+        screen,
+        async (shape) => {
+          assert.deepEqual(await squeezed(other, '.controls .waiting, .plate .status, .bet, .pot'), [], 'what the table or the bar says of the offer is cut off');
+          await assertBetsApart(other);
+          await assertNoSidewaysScroll(other);
+          await shot(other, `chop-waiting-${kind.name}-${screen}-${shape}`);
+        },
+        { buttonsUp: false },
+      );
+
+      // Yes: the hand is over with each blind back on its seat and nobody a winner
+      await pressOn(big, screen)('.turn [data-action="chop-yes"]');
+      const result = `${WIDEST} and ${UNICODE} chop the blinds`;
+
+      for (const page of [small, big, other]) {
+        await page.waitForSelector(`.message.result:has-text("${result}")`);
+        assert.deepEqual(await stacksBySeat(page, 4), [kind.whole, kind.whole, kind.whole, kind.whole]);
+        assert.equal(await page.locator('.bet, .seat.winner, .status.won').count(), 0, 'chips are left in front of a seat, or someone is shown winning');
+      }
+
+      await inShapesOf(
+        other,
+        screen,
+        async (shape) => {
+          assert.deepEqual(await squeezed(other, '.message.result > div'), [], 'the result is cut off');
+          assertApart(await textBoxes(other, '.message.result > div'), await boxes(other, '.seat .plate, .seat .hole .card'), 'the result and the seats');
+          await shot(other, `chop-agreed-${kind.name}-${screen}-${shape}`);
+        },
+        { buttonsUp: false },
+      );
+
+      const lines = [...chopLines(kind), `${UNICODE} agrees to chop`, `${WIDEST} and ${UNICODE} chop the blinds: each takes back their own`];
+      await toggleFeed(other, screen);
+      const said = await texts(other, '.entries li');
+      const from = said.indexOf(lines[0]!);
+      assert.deepEqual(said.slice(from, from + lines.length), lines);
+      assert.deepEqual(await squeezed(other, '.entries li'), [], 'a line of the play-by-play is cut off');
+      await assertNoSidewaysScroll(other);
+      await shot(other, `chop-play-by-play-${kind.name}-${screen}`);
+      await toggleFeed(other, screen);
+
+      playOut(table);
+      const press = pressOn(other, screen);
+      await press('[data-action="menu"]');
+      await press('.menu [data-action="history"]');
+      await other.waitForSelector('.history summary');
+      assert.equal(await text(other, '.history summary small'), 'Blinds chopped');
+      await press('.history summary');
+      assert.deepEqual((await text(other, '.history pre')).split('\n'), lines);
+      assert.deepEqual(await squeezed(other, '.history summary, .history summary small'), [], 'the hand\'s line in the history is cut off');
+      await shot(other, `chop-history-${kind.name}-${screen}`);
+
+      for (const page of [small, big, other]) {
+        await page.context().close();
+      }
+    }
+  },
+];
+
+/** The big blind says no: the small blind is back on the clock with the usual buttons and no second offer. */
+const chopTurnedDownCheck = (kind: ChopTable): Check => [
+  `at a table of ${kind.name}, a big blind who says no to a chop puts the small blind back on the clock with Fold, Call and Raise, and the table is told`,
+  async (rig) => {
+    for (const screen of PHONE_AND_DESKTOP) {
+      const table = foldedToTheBlinds(rig, kind);
+      const small = await table.open(WIDEST, screen);
+      await small.waitForSelector('.turn [data-action="offer-chop"]');
+      table.act(WIDEST, { type: 'offerChop' });
+
+      const big = await table.open(UNICODE, screen);
+      await pressOn(big, screen)('.turn [data-action="chop-no"]');
+      await big.waitForSelector('.chop-question', { state: 'detached' });
+      assert.equal(await text(big, '.controls .waiting'), `Waiting for ${WIDEST}`);
+
+      await small.waitForSelector('.turn [data-action="call"]');
+      assert.deepEqual(await turnActions(small), ['fold', 'call', 'raise']);
+      assert.equal(await text(small, '.turn [data-action="call"]'), `Call ${kind.call}`);
+      assert.equal(await small.locator('.seat.me.acting .status.clock').count(), 1, 'the small blind has no clock running');
+      await inShapesOf(small, screen, async (shape) => {
+        await assertTurnFits(small, `the small blind's turn after a no, ${shape}`);
+        await shot(small, `chop-turned-down-${kind.name}-${screen}-${shape}`);
+      });
+
+      await toggleFeed(small, screen);
+      const said = await texts(small, '.entries li');
+      const lines = [...chopLines(kind), `${UNICODE} says no to the chop`];
+      const from = said.indexOf(lines[0]!);
+      assert.deepEqual(said.slice(from, from + lines.length), lines);
+      assert.deepEqual(await squeezed(small, '.entries li'), [], 'a line of the play-by-play is cut off');
+      await shot(small, `chop-turned-down-play-by-play-${kind.name}-${screen}`);
+
+      await small.context().close();
+      await big.context().close();
+    }
+  },
+];
+
 
 /** For a check that looks at the presets more than once, as in a round for each screen: the lobby of the next round would offer the ones the last saved. */
 const forgetPresets = (rig: Rig) => rig.presets.list().forEach((preset) => rig.presets.delete(preset.name));
@@ -6942,6 +7135,69 @@ const CHECKS: Check[] = [
       assert.deepEqual(ownComplaints(said), [], where('the console'));
     },
   ]),
+  ...CHOP_TABLES.flatMap((kind) => [chopAgreedCheck(kind), chopTurnedDownCheck(kind)]),
+  [
+    'the table settings switch chops on and off, the table is told, and with them on a player switches Always chop under the table, which chops at once when both blinds have it',
+    async (rig) => {
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        const table = rig.table(LONG_NAMES.slice(0, 4).map((name) => ({ name, stack: 1000 })));
+        const host = await table.open('Quigs', screen);
+        const press = pressOn(host, screen);
+        const switchFor = 'label[for="table-allow-chop"]';
+
+        // Off as a table starts, and nobody has a switch for it under the table
+        assert.equal(await host.locator('.controls [data-action="always-chop"]').count(), 0);
+        await press('[data-action="menu"]');
+        await press('.menu [data-action="settings"]');
+        await host.waitForSelector('#table-allow-chop');
+        assert.equal(await host.isChecked('#table-allow-chop'), false);
+        assert.equal(await text(host, switchFor), 'Let the blinds chop when it folds to them');
+        await host.locator('#table-allow-chop').scrollIntoViewIfNeeded();
+        assertOnScreen(await boxes(host, switchFor), screen, 'the switch for chops');
+        assert.deepEqual(await squeezed(host, `${switchFor} span`), [], 'the name of the switch is cut off');
+        await assertNoSidewaysScroll(host);
+        await shot(host, `chop-settings-${screen}`);
+
+        await press(switchFor);
+        await press('[data-action="save-settings"]');
+        await host.waitForSelector('.dialog', { state: 'detached' });
+        assert.equal(table.view('Quigs').config.allowChop, true);
+
+        await toggleFeed(host, screen);
+        await host.waitForSelector('.entries li:has-text("The blinds may chop")');
+        assert.equal((await texts(host, '.entries li')).at(-1), 'The blinds may chop when it folds to them');
+        await toggleFeed(host, screen);
+
+        // The switch under the table, beside the others, for each player to set
+        const small = await table.open(WIDEST, screen);
+        await small.waitForSelector('.controls [data-action="always-chop"]');
+        assert.deepEqual(await texts(small, '.controls .extras button'), ['Sit out next hand', 'Straddle', 'Always chop', 'Add chips']);
+        await pressOn(small, screen)('.controls [data-action="always-chop"]');
+        await small.waitForSelector('.controls [data-action="always-chop"][aria-checked="true"]');
+        assert.equal(table.view(WIDEST).seats[1]!.alwaysChop, true);
+        await assertOwedBarFits(small, screen);
+        await assertNoSidewaysScroll(small);
+        await shot(small, `chop-always-${screen}`);
+
+        // Both blinds always chop: folded to them, the hand is chopped with nobody asked
+        table.act(UNICODE, { type: 'setAlwaysChop', on: true });
+        table.deal({ button: 0 });
+        table.act(MARGE, { type: 'fold' });
+        table.act('Quigs', { type: 'fold' });
+        await small.waitForSelector(`.message.result:has-text("${WIDEST} and ${UNICODE} chop the blinds")`);
+        assert.equal(await small.locator('.turn').count(), 0);
+        await shot(small, `chop-unasked-${screen}`);
+
+        // Switched off again, everyone's Always chop goes with it
+        table.act('Quigs', { type: 'updateConfig', config: { allowChop: false } });
+        await small.waitForSelector('.controls [data-action="always-chop"]', { state: 'detached' });
+        assert.ok(table.view('Quigs').seats.every((seat) => !seat?.alwaysChop));
+
+        await host.context().close();
+        await small.context().close();
+      }
+    },
+  ],
 ];
 
 await mkdir(OUT, { recursive: true });

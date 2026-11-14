@@ -24,8 +24,9 @@ function history(table: Denominated, handlers: DialogHandlers): HTMLElement {
               });
 
               const title = `Hand #${hand.number}${hand.bombPot ? ` · ${bombPotName(hand.bombPot)}` : ''}`;
+              const outcome = hand.result.chopped ? 'Blinds chopped' : winners.join(', ');
 
-              return h('details', null, h('summary', null, title, h('small', null, winners.join(', '))), h('pre', null, cardText(hand.summary, handlers.prefs.get('deck'))));
+              return h('details', null, h('summary', null, title, h('small', null, outcome)), h('pre', null, cardText(hand.summary, handlers.prefs.get('deck'))));
             })),
       );
     },

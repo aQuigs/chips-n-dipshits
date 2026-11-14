@@ -3,6 +3,7 @@ import type { BettingOptions } from './betting.ts';
 import { bombPotDue, bombPotHangsOnCall } from './bombPots.ts';
 import { isSevenDeuce } from './cards.ts';
 import type { Card } from './cards.ts';
+import { mayOfferChop } from './chop.ts';
 import type { HandEvent } from './events.ts';
 import { readHand } from './handNames.ts';
 import type { HandRead } from './handNames.ts';
@@ -31,6 +32,8 @@ export interface SeatView {
   leaving: boolean;
   /** The kinds of straddle they post whenever one is theirs to post. */
   straddles: Straddle[];
+  /** They chop the blinds whenever the other blind would too. Said aloud at a real table, so for everyone to see. */
+  alwaysChop: boolean;
   pendingAdd: number;
   /** The seat the host is moving them to when the hand ends. */
   moveTo: number | null;
@@ -85,6 +88,10 @@ export interface HandView {
   deadline: number | null;
   /** What the viewer may do, when the action is on them. */
   options: BettingOptions | null;
+  /** The viewer is the small blind on the clock and may offer to chop instead of a move. */
+  canOfferChop: boolean;
+  /** The viewer is the big blind, on the clock to answer an offer to chop. */
+  canAnswerChop: boolean;
   /** The viewer still owes a run-it-twice vote. */
   canVote: boolean;
   /** The viewer may turn their cards face up. */
@@ -177,6 +184,7 @@ export function viewFor(state: TableState, playerId: string, now: number): Table
       away: seat.away,
       leaving: seat.leaving,
       straddles: seat.straddles,
+      alwaysChop: seat.alwaysChop,
       pendingAdd: seat.pendingAdd,
       moveTo: seat.moveTo,
       owesBigBlind: seat.owesBigBlind,
@@ -218,6 +226,8 @@ export function viewFor(state: TableState, playerId: string, now: number): Table
       turn: state.turn,
       deadline: hand.deadline,
       options: myTurn ? bettingOptions(state, hand, mine) : null,
+      canOfferChop: mySeat >= 0 && mayOfferChop(state, mySeat),
+      canAnswerChop: hand.stage === 'chop' && mine !== undefined && hand.toAct === mySeat,
       canVote: hand.stage === 'ritVote' && mine !== undefined && !mine.folded && mine.ritVote === null,
       canShow: hand.stage === 'done' && mine !== undefined && !mine.shown,
       result: hand.result,

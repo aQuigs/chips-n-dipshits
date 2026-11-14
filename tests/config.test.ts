@@ -23,6 +23,7 @@ test('the default settings are the registry\'s defaults, and the table accepts t
     allowButtonStraddle: false,
     allowMississippiStraddle: false,
     allowRunItTwice: true,
+    allowChop: false,
     sevenDeuceBounty: 0,
     bombPotAmount: 100,
     bombPotEvery: 0,

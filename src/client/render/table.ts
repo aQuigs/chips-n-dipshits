@@ -1,5 +1,6 @@
 import { formatAmount, shortAmount } from '../../engine/amounts.ts';
 import type { Denominated } from '../../engine/amounts.ts';
+import { onTheClock } from '../../engine/betting.ts';
 import { BOARD_SIZE } from '../../engine/boards.ts';
 import { midSentence } from '../../engine/handNames.ts';
 import type { HandRead } from '../../engine/handNames.ts';
@@ -117,6 +118,11 @@ function statusOf(seat: SeatView, hand: HandView | null): string | null {
     return 'All in';
   }
 
+  // The small blind's offer stands until the big blind answers it
+  if (hand?.stage === 'chop' && seat.seat === hand.sbSeat) {
+    return 'Chop?';
+  }
+
   // The player on the clock is making a new decision, so their earlier one this street is old news
   if (seat.inHand && seat.lastAction && hand?.stage === 'betting' && hand.toAct !== seat.seat) {
     return ACTION_LABELS[seat.lastAction] ?? null;
@@ -208,7 +214,7 @@ function markPlaying(cards: HTMLElement[], reads: readonly HandRead[]): HTMLElem
 function seatEl(view: TableView, seat: SeatView, slot: number, shape: Shape, clockOffset: number, moving: string | null): HTMLElement[] {
   const hand = view.hand;
   const isMe = view.you.seat === seat.seat;
-  const acting = hand?.stage === 'betting' && hand.toAct === seat.seat;
+  const acting = hand !== null && onTheClock(hand) === seat.seat;
   const result = hand?.result;
   const won = sum(result?.winnings.filter((win) => win.seat === seat.seat).map((win) => win.amount) ?? []);
   const bounty = result?.bounty?.seat === seat.seat ? sum(result.bounty.payments.map((payment) => payment.amount)) : 0;
@@ -352,6 +358,10 @@ function resultLines(view: TableView, hand: HandView): string[] {
   const nameAt = (seat: number) => view.seats[seat]?.name ?? 'Someone';
   const amountOf = (chips: number) => formatAmount(chips, view.config);
   const runs = boardsWonOn(hand);
+
+  if (result.chopped) {
+    return [`${nameAt(hand.sbSeat)} and ${nameAt(hand.bbSeat)} chop the blinds`];
+  }
   const lines: string[] = [];
   let fits = true;
 
@@ -459,7 +469,9 @@ function potEl(table: Denominated, hand: HandView): HTMLElement | null {
     return null;
   }
 
-  const sidePots = hand.pots.length > 1 && hand.stage !== 'betting';
+  // While bets are still out, an uncalled one looks like a side pot of its own
+  const betsOut = hand.stage === 'betting' || hand.stage === 'chop';
+  const sidePots = hand.pots.length > 1 && !betsOut;
   const breakdown = sidePots ? hand.pots.map((pot, index) => `${index === 0 ? 'Main' : `Side ${index}`} ${formatAmount(pot.amount, table)}`).join(' · ') : null;
 
   return h('div.pot', null, h('span.label', null, hand.bombPot ? 'Bomb pot' : 'Pot'), formatAmount(hand.pot, table), breakdown ? h('div.sidepots', null, breakdown) : null);

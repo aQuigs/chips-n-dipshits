@@ -8,6 +8,10 @@ const TYPICAL_SPAN = 20;
 
 const ATTEMPTS = 1000;
 
+function word(rng: Rng, length: number): string {
+  return Array.from({ length }, () => LETTERS[rng.int(LETTERS.length)]).join('');
+}
+
 /**
  * A value a host might give one setting. Numbers come out at their default or their lowest about as
  * often as anywhere else, since "off" and "untouched" are the cases most worth playing; the rest are
@@ -15,11 +19,11 @@ const ATTEMPTS = 1000;
  */
 export function randomSetting(spec: ConfigSpec, rng: Rng): string | number | boolean {
   switch (spec.kind) {
-    case 'text': {
-      const length = 1 + rng.int(spec.maxLength);
+    case 'text':
+      return word(rng, 1 + rng.int(spec.maxLength));
 
-      return Array.from({ length }, () => LETTERS[rng.int(LETTERS.length)]).join('');
-    }
+    case 'link':
+      return rng.int(3) === 0 ? '' : `https://${word(rng, 1 + rng.int(12))}.example/${word(rng, rng.int(12))}`;
 
     case 'chips':
     case 'count':

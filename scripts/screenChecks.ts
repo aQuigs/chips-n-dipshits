@@ -675,6 +675,119 @@ const CHECKS: Check[] = [
       await page.context().close();
     },
   ],
+  [
+    'the voice chat button fits the top bar beside everything already there, and leaves it as it was when taken away',
+    async (rig) => {
+      const link = 'https://meet.google.com.a-very-long-subdomain.example/abc-defg-hij';
+      const shown = '…-long-subdomain.example';
+
+      for (const screen of ['smallPhone', 'phone', 'phoneSideways', 'desktop'] as const) {
+        const table = rig.table(
+          [
+            { name: 'Quigs', stack: 1000 },
+            { name: 'Stu', stack: 1000 },
+          ],
+          { name: 'Friday night at the Quigleys, every week' },
+        );
+        table.join('Lurker');
+        table.deal({ button: 0 });
+
+        const page = await table.open('Lurker', screen);
+        const bar = '.topbar > *';
+        const before = await boxes(page, bar);
+        assert.equal(await page.locator('.voice-link').count(), 0, 'a button with no call to go to');
+
+        table.act('Quigs', { type: 'updateConfig', config: { voiceLink: link } });
+        await page.waitForSelector('.voice-link');
+
+        const button = page.locator('.voice-link');
+        assert.equal(await button.getAttribute('href'), link);
+        assert.equal(await button.getAttribute('target'), '_blank');
+        assert.equal(await button.getAttribute('rel'), 'noopener noreferrer');
+        assert.equal(await text(page, '.voice-link'), `Voice · ${shown}`, 'the button names where it leads, keeping the end of the host');
+
+        const [voice] = await boxes(page, '.voice-link');
+        assertOnScreen([voice!], screen, 'the voice chat button');
+        for (const other of ['.menu-button', '.topbar .title', '.topbar .pill', '[data-action="invite"]']) {
+          assertApart(await boxes(page, other), [voice!], `the voice chat button and ${other}`);
+        }
+
+        const [title] = await boxes(page, '.topbar .title b');
+        assert.ok(title!.right - title!.left >= 120, `the table's name is squeezed to ${title!.right - title!.left}px`);
+        assert.deepEqual(await squeezed(page, '.voice-link, .topbar .pill, [data-action="invite"]'), [], 'a part of the top bar is cut off');
+        assertOnScreen(await boxes(page, bar), screen, 'the top bar');
+
+        const [stage] = await boxes(page, '.stage');
+        assertOnScreen(await boxes(page, '.seat .plate'), screen, 'a seat');
+        for (const seat of await boxes(page, '.seat .plate')) {
+          assert.ok(seat.top >= stage!.top - 1, `a seat is drawn under the top bar: ${JSON.stringify(seat)}`);
+        }
+        await shot(page, `voice-link-${screen}`);
+
+        table.act('Quigs', { type: 'updateConfig', config: { voiceLink: '' } });
+        await page.waitForSelector('.voice-link', { state: 'detached' });
+        assert.deepEqual(await boxes(page, bar), before, 'the top bar is not as it was before the call was set');
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'a co-host sets the voice chat link in the settings, a bad address is refused with the reason, and a plain member cannot change it',
+    async (rig) => {
+      const table = rig.table([
+        { name: 'Quigs', stack: 1000 },
+        { name: 'Stu', stack: 1000 },
+        { name: 'Pam', stack: 1000 },
+      ]);
+      table.act('Quigs', { type: 'setCohost', playerId: table.auth('Stu').id, on: true });
+
+      // The host has the settings open from before the link was set, and saves something else after
+      const host = await table.open('Quigs', 'desktop');
+      await host.click('[data-action="menu"]');
+      await host.click('.menu [data-action="settings"]');
+      await host.waitForSelector('#table-voice-link');
+
+      const cohost = await table.open('Stu', 'phone');
+      await cohost.tap('[data-action="menu"]');
+      await cohost.tap('.menu [data-action="settings"]');
+
+      const typed = 'http://meet.google.com/abc-defg-hij';
+      await cohost.fill('#table-voice-link', typed);
+      await cohost.tap('[data-action="save-settings"]');
+      await cohost.waitForSelector('.toast:has-text("The voice chat link must start with https://")');
+      assert.equal(await cohost.inputValue('#table-voice-link'), typed, 'a refused save threw away what was typed');
+      await cohost.locator('#table-voice-link').scrollIntoViewIfNeeded();
+      assertOnScreen(await boxes(cohost, '#table-voice-link'), 'phone', 'the voice chat link field');
+      await shot(cohost, 'voice-link-refused-phone');
+
+      await cohost.fill('#table-voice-link', ' https://meet.google.com/abc-defg-hij ');
+      await cohost.tap('[data-action="save-settings"]');
+      await cohost.waitForSelector('.dialog', { state: 'detached' });
+      await cohost.waitForSelector('.voice-link');
+      assert.equal(await cohost.getAttribute('.voice-link', 'href'), 'https://meet.google.com/abc-defg-hij');
+      assert.equal(await text(cohost, '.voice-link'), 'Voice · meet.google.com');
+      assert.match(await text(cohost, '.feed-toggle .latest'), /Co-host Stu set the voice chat link/);
+      await cohost.context().close();
+
+      await host.fill('#table-big-blind', '40');
+      await host.click('[data-action="save-settings"]');
+      await host.waitForSelector('.dialog', { state: 'detached' });
+      assert.equal(table.view('Quigs').config.bigBlind, 40);
+      assert.equal(table.view('Quigs').config.voiceLink, 'https://meet.google.com/abc-defg-hij', 'a settings form opened earlier undid the co-host\'s link');
+      await host.context().close();
+
+      const member = await table.open('Pam', 'phone');
+      assert.equal(await member.getAttribute('.voice-link', 'href'), 'https://meet.google.com/abc-defg-hij', 'a player at the table has the button too');
+      await member.tap('[data-action="menu"]');
+      await member.waitForSelector('.menu');
+      assert.equal(await member.locator('.menu [data-action="settings"]').count(), 0, 'a plain member is offered the settings');
+      await member.context().close();
+
+      const answer = table.tryAct('Pam', { type: 'updateConfig', config: { voiceLink: 'https://evil.example' } });
+      assert.equal(answer.ok, false, 'a plain member changed the voice chat link');
+      assert.equal(table.view('Quigs').config.voiceLink, 'https://meet.google.com/abc-defg-hij');
+    },
+  ],
 ];
 
 await mkdir(OUT, { recursive: true });

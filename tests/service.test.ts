@@ -92,6 +92,25 @@ test('anyone with the table id can look it up and join under a free name', () =>
   });
 });
 
+test('every member sees the voice chat link, and someone who has not joined learns nothing of it', () => {
+  const { service, act, poll, tableId, players } = seatedTable();
+  const link = 'https://meet.google.com/abc-defg-hij';
+
+  viewOf(act(0, { type: 'updateConfig', config: { voiceLink: link } }));
+  const watcher = joined(service.handle({ op: 'join', tableId, name: 'Cat' }));
+
+  assert.deepEqual(
+    [0, 1, 2].map((who) => viewOf(poll(who)).config.voiceLink),
+    [link, link, link],
+  );
+  assert.equal(watcher.view.config.voiceLink, link, 'a member who is only watching');
+  assert.equal(players.length, 3);
+
+  const info = service.handle({ op: 'info', tableId });
+  assert.ok(info.ok && info.kind === 'info');
+  assert.ok(!JSON.stringify(info).includes('meet.google.com'), 'the join screen is not handed the call');
+});
+
 test('bad requests come back as errors, not exceptions', () => {
   const { service } = setup();
   const host = joined(service.handle({ op: 'create', name: 'Quigs' }));

@@ -11,6 +11,8 @@ export const STATE_SCHEMA = 3;
 
 export interface TableConfig {
   name: string;
+  /** The group's call, opened from a button on the table; '' for none. */
+  voiceLink: string;
   smallBlind: number;
   bigBlind: number;
   minBuyIn: number;

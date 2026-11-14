@@ -9,6 +9,7 @@ import { randomConfig, randomSetting } from './randomConfig.ts';
 test('the default settings are the registry\'s defaults, and the table accepts them', () => {
   assert.deepEqual(DEFAULT_CONFIG, {
     name: "Chips n' Dipshits",
+    voiceLink: '',
     smallBlind: 10,
     bigBlind: 20,
     minBuyIn: 400,

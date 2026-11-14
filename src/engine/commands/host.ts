@@ -102,7 +102,7 @@ export const setStack: Handler<'setStack'> = {
 
 export const updateConfig: Handler<'updateConfig'> = {
   by: 'host or cohost',
-  run: ({ state, ctx, command }) => {
+  run: ({ state, ctx, member, command }) => {
     const before = state.config;
     state.config = validatedConfig(command.config, before);
 
@@ -115,6 +115,11 @@ export const updateConfig: Handler<'updateConfig'> = {
     if (state.config.sevenDeuceBounty !== before.sevenDeuceBounty) {
       const bounty = state.config.sevenDeuceBounty;
       addFeed(state, ctx.now, 'system', null, bounty > 0 ? `The seven-deuce bounty is ${formatChips(bounty)}${when}` : `The seven-deuce bounty is off${when}`);
+    }
+
+    if (state.config.voiceLink !== before.voiceLink) {
+      const change = before.voiceLink === '' ? 'set' : state.config.voiceLink === '' ? 'removed' : 'changed';
+      addFeed(state, ctx.now, 'system', null, `${actorName(state, member)} ${change} the voice chat link`);
     }
 
     const { minBuyIn, maxBuyIn } = state.config;

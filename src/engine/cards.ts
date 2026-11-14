@@ -37,6 +37,9 @@ export function shuffledDeck(rng: Rng): Card[] {
   return shuffle(freshDeck(), rng);
 }
 
+/** How many community cards the flop deals. */
+export const FLOP_SIZE = 3;
+
 /** 2 for a deuce up to 14 for an ace. */
 export function rankOf(card: Card): number {
   return RANKS.indexOf(card[0]!) + 2;

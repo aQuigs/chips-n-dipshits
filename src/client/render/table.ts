@@ -129,12 +129,8 @@ function statusOf(seat: SeatView, hand: HandView | null): string | null {
   return null;
 }
 
-/** The line under a seat for the hand it showed down. Run twice, a seat makes a hand per board, which is too much for one label; the result in the middle names them. */
-function shownLabel(seat: SeatView, hand: HandView | null): string | null {
-  if (hand?.stage !== 'done' || hand.boards.length > 1) {
-    return null;
-  }
-
+/** The line under a seat for the hand it showed down. */
+function shownLabel(seat: SeatView, hand: HandView): string | null {
   return hand.result?.hands.find((entry) => entry.seat === seat.seat)?.name ?? null;
 }
 
@@ -164,8 +160,8 @@ function hintEl(holding: Holding): HTMLElement {
  * Picks out, among cards that could make the viewer's hand, the ones that do and the ones that don't,
  * given the reads they belong to. A hole card under two boards is marked only when the boards agree on it.
  */
-function markPlaying(cards: HTMLElement[], reads: readonly (HandRead | undefined)[]): HTMLElement[] {
-  const made = reads.filter((read): read is HandRead => read !== undefined && read.plays.length > 0);
+function markPlaying(cards: HTMLElement[], reads: readonly HandRead[]): HTMLElement[] {
+  const made = reads.filter((read) => read.plays.length > 0);
   if (made.length === 0) {
     return cards;
   }
@@ -191,10 +187,11 @@ function seatEl(view: TableView, seat: SeatView, slot: number, shape: Shape, clo
   const won = sum(result?.winnings.filter((win) => win.seat === seat.seat).map((win) => win.amount) ?? []);
   const bounty = result?.bounty?.seat === seat.seat ? sum(result.bounty.payments.map((payment) => payment.amount)) : 0;
   const status = statusOf(seat, hand);
-  const label = shownLabel(seat, hand);
+  // A seat makes a hand per board when run twice, and once it is over the result in the middle names them: on a phone it needs the room
+  const middleNamesHands = hand?.stage === 'done' && hand.boards.length > 1;
+  const label = hand?.stage === 'done' && !middleNamesHands ? shownLabel(seat, hand) : null;
   const holding = isMe ? (hand?.holding ?? null) : null;
-  // Once a hand run twice is over, the result in the middle names the hands on each board, and on a phone it needs the room
-  const hint = holding && !(hand!.stage === 'done' && holding.reads.length > 1) ? hintEl(holding) : null;
+  const hint = holding && !middleNamesHands ? hintEl(holding) : null;
   const place = seatPlace(shape, slot);
 
   const classes = [
@@ -281,7 +278,7 @@ function openSeatEl(view: TableView, seat: number, slot: number, shape: Shape, h
 
 function boardEl(hand: HandView): HTMLElement {
   const boards = hand.boards.map((board, run) => {
-    const dealt = markPlaying(board.map((card) => cardEl(card)), [hand.holding?.reads[run]]);
+    const dealt = markPlaying(board.map((card) => cardEl(card)), hand.holding?.reads.slice(run, run + 1) ?? []);
     const slots = Array.from({ length: BOARD_SIZE }, (_slot, index) => dealt[index] ?? h('div.card.slot'));
 
     return h('div.board', { 'data-run': run }, slots);

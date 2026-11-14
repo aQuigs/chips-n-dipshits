@@ -117,8 +117,11 @@ const FACE_DOWN = '.seat:not(.me) .card.back';
 const CENTS = { unit: 'cents', smallBlind: 25, bigBlind: 50 } as const;
 const PHONE_AND_DESKTOP = ['phone', 'desktop'] as const;
 
-// The least height at which a phone's table stands up: its width over WIDE_ASPECT in src/client/app.ts
-const JUST_STANDING = Math.ceil(SCREENS.phone.width / 1.15) + 1;
+// How much wider than tall a table must be to lie down: WIDE_ASPECT in src/client/app.ts
+const WIDE_ASPECT = 1.15;
+
+// The least height at which a phone's table stands up
+const JUST_STANDING = Math.ceil(SCREENS.phone.width / WIDE_ASPECT) + 1;
 
 /**
  * Pins the table's shape for a check about what sits on its seats: a phone's standing up at the least
@@ -170,6 +173,9 @@ function movesSent(page: Page): string[] {
 
 const HINT = '.seat.me .hint';
 
+/** Waits for the cards just dealt to land where they will sit. */
+const dealt = (page: Page) => page.waitForFunction(`document.getAnimations().every((animation) => animation.animationName !== 'deal')`);
+
 /** The cards on the table the hand hint picks out as making the viewer's hand, and the ones it says do not. */
 const marking = (page: Page) =>
   page.evaluate(`({
@@ -179,10 +185,10 @@ const marking = (page: Page) =>
 
 const sortedCards = (text: string) => text.split(' ').sort();
 
-/** Waits for the hint to name a hand, and for the cards just dealt to land, so the page shows the street the check moved the table to. */
+/** Waits for the hint to name a hand and the cards to land, so the page shows the street the check moved the table to. */
 async function hintSays(page: Page, ...names: string[]): Promise<void> {
   await page.waitForFunction(`JSON.stringify([...document.querySelectorAll(${JSON.stringify(`${HINT} .name`)})].map((name) => name.textContent)) === ${JSON.stringify(JSON.stringify(names))}`);
-  await page.waitForFunction(`document.getAnimations().every((animation) => animation.animationName !== 'deal')`);
+  await dealt(page);
 }
 
 /** That the hint is whole, inside the table's part of the screen and clear of everything else on the table, and the seat's own text is not squeezed by it. */
@@ -212,8 +218,8 @@ async function assertHintFits(page: Page): Promise<void> {
 async function inEveryShape(page: Page, look: (shape: string) => Promise<void>, { buttonsUp = true } = {}): Promise<void> {
   const { width } = page.viewportSize()!;
   const shapes: [string, number][] = [
-    ['tall', Math.ceil(width / 1.15) + 1],
-    ['wide', Math.floor(width / 1.15) - 1],
+    ['tall', Math.ceil(width / WIDE_ASPECT) + 1],
+    ['wide', Math.floor(width / WIDE_ASPECT) - 1],
   ];
 
   if (buttonsUp) {
@@ -223,7 +229,7 @@ async function inEveryShape(page: Page, look: (shape: string) => Promise<void>, 
   for (const [shape, height] of shapes) {
     await setStageHeight(page, height);
     await page.waitForSelector(`.table.${shape}`);
-    await page.waitForFunction(`document.getAnimations().every((animation) => animation.animationName !== 'deal')`);
+    await dealt(page);
     await look(`${shape}-${height}`);
   }
 }
@@ -711,6 +717,8 @@ const CHECKS: Check[] = [
       await page.click('[data-action="menu"]');
       await page.click('.menu [data-action="preferences"]');
       assert.match(await text(page, '[data-glossary="hotkeys"]'), /F\s*Fold/);
+      // The dialog scrolls once its preferences outgrow the screen, as they do in a wider font
+      await page.locator('[data-glossary="hotkeys"]').scrollIntoViewIfNeeded();
       assertOnScreen(await boxes(page, '[data-glossary="hotkeys"] div'), 'desktop', 'the list of keys');
       await shot(page, 'hotkeys-preferences-desktop');
       await page.click('#pref-hotkeys');
@@ -2052,6 +2060,7 @@ const CHECKS: Check[] = [
       }
 
       await choose(page, { theme: 'cardroom', deck: 'four' });
+      await hintSays(page, 'Two pair, kings and sevens');
       await assertMarked(page);
       await shot(page, 'hint-four-color-phone');
 

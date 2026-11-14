@@ -1,6 +1,6 @@
 import { formatAmount } from './amounts.ts';
 import { bettingIsClosed, bettingOptions, owesAction } from './betting.ts';
-import { isSevenDeuce, prettyCards, shuffledDeck } from './cards.ts';
+import { FLOP_SIZE, isSevenDeuce, prettyCards, shuffledDeck } from './cards.ts';
 import type { Card } from './cards.ts';
 import type { HandEvent } from './events.ts';
 import { madeHandName, midSentence } from './handNames.ts';
@@ -24,7 +24,6 @@ export const TIMING = {
 
 const HOLE_CARDS = 2;
 const BOARD_SIZE = 5;
-const FLOP_SIZE = 3;
 const STRADDLE_BIG_BLINDS = 2;
 
 // A hand's log is saved with the table on every action, so a raising war can't be allowed to grow it without end

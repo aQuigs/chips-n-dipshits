@@ -1,6 +1,6 @@
-import { rankOf, suitOf } from './cards.ts';
+import { FLOP_SIZE, rankOf, suitOf } from './cards.ts';
 import type { Card } from './cards.ts';
-import { FLUSH, FOUR_OF_A_KIND, FULL_HOUSE, HIGH_CARD, PAIR, playerHand, STRAIGHT, STRAIGHT_FLUSH, THREE_OF_A_KIND, TWO_PAIR } from './handRank.ts';
+import { ACE, FLUSH, FOUR_OF_A_KIND, FULL_HOUSE, HIGH_CARD, PAIR, playerHand, STRAIGHT, STRAIGHT_FLUSH, THREE_OF_A_KIND, TWO_PAIR } from './handRank.ts';
 import type { HandValue } from './handRank.ts';
 
 /*
@@ -8,9 +8,6 @@ import type { HandValue } from './handRank.ts';
  * name short enough for the line under a seat on a small phone: the hint lifts the cards that play,
  * which already shows whether a kicker of one's own is among them.
  */
-
-const ACE = 14;
-const FLOP_SIZE = 3;
 
 const RANK_WORDS: Record<number, [one: string, many: string]> = {
   2: ['deuce', 'deuces'],

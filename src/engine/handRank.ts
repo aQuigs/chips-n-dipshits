@@ -20,7 +20,7 @@ export interface HandValue {
 }
 
 const HAND_SIZE = 5;
-const ACE = 14;
+export const ACE = 14;
 const WHEEL_HIGH = 5;
 
 // One more than the highest rank, so each tiebreak rank is one base-15 digit below the category

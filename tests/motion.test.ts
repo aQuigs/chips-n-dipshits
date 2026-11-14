@@ -238,6 +238,19 @@ test('a winner everyone folded to who chose to show turns up beside the game wit
   assert.deepEqual(seen(river, [['show', 1, ['Ac', 'Ad']], ['show', 2, ['7d', '2s']], ['muck', 0], ['win', 1, 60, 0, 0]]), ['show >cards1 @0', 'show >cards2 @0', 'chips 60 pot>seat1 @0']);
 });
 
+test('seven-deuce turned up for its bounty after everyone folded turns beside the game but on the same beat as ever: with the pot, before the bounty’s chips and its sound, with no sound of its own', () => {
+  const folded: HandEvent[] = [...DEALT, ['fold', 0], ['fold', 1], ['return', 2, 10]];
+  const ended: HandEvent[] = [['win', 2, 20, 0, 0], ['show', 2, ['7s', '2d']], ['bounty', 2, [[0, 50], [1, 50]]]];
+  const moves = movesSeen(going(folded, ended), 0);
+  const startOf = (name: string, from?: string) => moves.filter((move) => move.name === name && (from === undefined || where(move.from) === from)).map((move) => move.after);
+
+  assert.deepEqual(startOf('flip'), [0]);
+  assert.deepEqual(startOf('chips', 'pot'), [0]);
+  assert.deepEqual(startOf('chips', 'seat0'), [STEP_GAP_MS]);
+  assert.deepEqual(startOf('show'), [], 'nothing of it moves in the game’s lane');
+  assert.deepEqual(soundsPlaced(ended, 0, 1).map(({ sound, event }) => [sound, event]), [['win', 0], ['chips', 2]]);
+});
+
 test('a new hand slides the blinds in as the cards go out, around the table from the button’s left', () => {
   assert.deepEqual(seen([], DEALT), ['bet seat1>bet1 @0', 'bet seat2>bet2 @0', 'deal deck>cards1 @0', 'deal deck>cards2 @60', 'deal deck>cards0 @120']);
 

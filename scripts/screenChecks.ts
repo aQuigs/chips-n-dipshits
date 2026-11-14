@@ -10672,6 +10672,37 @@ const CHECKS: Check[] = [
       await page.evaluate('window.flipping.forEach((animation) => animation.finish())');
     },
   ],
+  [
+    'with animations on and nobody choosing to show, seven-deuce everyone folded to turns up for its bounty with the pot, before the bounty’s chips, and the badge’s toast comes only once the hand is cleared',
+    async (rig) => {
+      const table = rig.table(SHOW_PLAYERS, { sevenDeuceBounty: 10 });
+      const stu = await table.open('Stu', 'smallPhone', MOTION, { moving: true });
+      const quigs = await table.open('Quigs', 'smallPhone');
+
+      table.deal({ button: 0, holes: { 0: '7s 2d', 2: PAM_HOLE } });
+      table.play((_view, name) => (name === 'Quigs' ? { type: 'raise', to: 60 } : { type: 'fold' }), (view) => view.hand!.stage === 'done');
+      assert.ok(table.view('Stu').hand!.result!.bounty, 'no bounty was paid');
+
+      await stu.waitForSelector('.entries li:has-text("collects a bounty")', { state: 'attached' });
+      await stu.waitForFunction(`window.flights.some((flight) => flight.name === 'flip')`);
+      await dealt(stu);
+      const flights = (await flown(stu)).filter((flight) => flight.name === 'flip' || flight.name === 'show' || flight.name === 'chips');
+      const startOf = (name: string) => flights.filter((flight) => flight.name === name).map((flight) => flight.delay);
+      // On the beat of the pot going to Quigs, as before they moved beside the game, and a beat before the bounty's chips
+      const [flip] = new Set(startOf('flip'));
+      assert.ok(startOf('chips').includes(flip!) && flip! < Math.max(...startOf('chips')), `the cards turn at ${flip} ms, the chips at ${startOf('chips').join(', ')}`);
+      assert.deepEqual(startOf('show'), []);
+      assert.deepEqual(await drawnCards(stu, 0), ['7s', '2d']);
+
+      // The badge is earned as the hand is cleared, seconds after the cards were seen
+      assert.equal(await quigs.locator('.toast:not([hidden])').count(), 0, 'a toast came with the result');
+      clear(rig, table);
+      await quigs.waitForSelector('.toast:not([hidden]):has-text("Seven-Deuce")');
+
+      await stu.context().close();
+      await quigs.context().close();
+    },
+  ],
 ];
 
 await mkdir(OUT, { recursive: true });

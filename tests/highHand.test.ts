@@ -84,6 +84,31 @@ test('the high hand is the best hand on any board the hand was run on, and is th
   assert.deepEqual(tonight.players.find((row) => row.name === 'Sam')!.best, { name: 'Three kings', cards: highHand(t).best!.cards });
 });
 
+/** Heads-up, both all in before the flop and run three times on the boards given. */
+function runThreeTimes(holes: Record<number, string>, boards: [string, string, string]): TestTable {
+  const t = table([1000, 1000], { maxRuns: 3 });
+  t.deal({ button: 0, holes, board: boards[0], secondBoard: boards[1], thirdBoard: boards[2] });
+  t.raise(0, 1000);
+  t.call(1);
+  t.cmd(0, { type: 'ritVote', runs: 3 });
+  t.cmd(1, { type: 'ritVote', runs: 3 });
+  t.finishHand();
+
+  return t;
+}
+
+test('run three times, the high hand is the best hand on any of the boards, and as good a hand on two boards keeps the first board\'s cards', () => {
+  // The third board gives Dana aces full of sixes
+  const full = runThreeTimes({ 0: ACES, 1: KINGS }, [BOARD, 'Kd 4c 5h 8s Td', 'Ac 6c 6h 8d Qh']);
+  assert.equal(full.state.hand, null);
+  assert.deepEqual([holders(full), full.view(1).tonight.highHand.best!.name], [[0], 'Full house, aces over sixes']);
+
+  // Dana's aces with jack, nine and seven on the first two boards, and smaller on the third
+  const level = runThreeTimes({ 0: ACES, 1: '5c 5d' }, [BOARD, 'Jd 9s 7h 4c 2h', 'Td 8c 6h 4s 3h']);
+  assert.deepEqual([holders(level), highHand(level).best!.cards], [[0], cards('As Ah Jc 9h 7d')]);
+  assertInvariants(level.state, level.now);
+});
+
 test('two players who show as good a hand in the same hand share it', () => {
   const t = table([1000, 1000, 1000]);
 

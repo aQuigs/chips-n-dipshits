@@ -612,11 +612,12 @@ export interface DrawnTable {
   middleOf(element: Element): Point;
   /**
    * Makes a stand-in for what the table no longer draws, to be put on `element`: a pile of chips, saying
-   * `amount` or bare, a seat's two cards face down, or one card of a board face down, laid out at `place`
-   * as the table would draw it there. It lies over everything and under no finger, and taking it off
-   * again leaves the table as it was drawn. Null where there is no such place.
+   * `amount` or bare, a seat's two cards face down, one card of a board face down, or a thrown thing
+   * drawn as its emoji `mark`, laid out at `place` as the table would draw it there. It lies over
+   * everything and under no finger, and taking it off again leaves the table as it was drawn. Null where
+   * there is no such place.
    */
-  standIn(what: 'chips' | 'cards' | 'card', place: Place, amount?: number): HTMLElement | null;
+  standIn(what: 'chips' | 'cards' | 'card' | 'mark', place: Place, amount?: number, mark?: string): HTMLElement | null;
 }
 
 /** The table drawn in `stage` right now, or null while there is none. */
@@ -672,13 +673,20 @@ export function drawnTable(stage: Element): DrawnTable | null {
     return middle && { left: `${middle.x}px`, top: `${middle.y}px` };
   };
 
-  const standIn = (what: 'chips' | 'cards' | 'card', at: Place, amount?: number): HTMLElement | null => {
+  const standIn = (what: 'chips' | 'cards' | 'card' | 'mark', at: Place, amount?: number, mark?: string): HTMLElement | null => {
     const style = lies(at);
     if (!style) {
       return null;
     }
 
-    const made = what === 'chips' ? chipsEl(amount, drawing.config, style) : what === 'cards' ? h('div.hole', { style }, cardEl(null), cardEl(null)) : h('div.board-card', { style }, cardEl(null));
+    const made =
+      what === 'chips'
+        ? chipsEl(amount, drawing.config, style)
+        : what === 'cards'
+          ? h('div.hole', { style }, cardEl(null), cardEl(null))
+          : what === 'mark'
+            ? h('div.thrown', { style }, mark ?? '')
+            : h('div.board-card', { style }, cardEl(null));
 
     made.classList.add('stand-in');
     made.setAttribute('aria-hidden', 'true');

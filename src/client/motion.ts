@@ -31,8 +31,10 @@ export interface BoardCard {
  *   and `reveal` turns the card the table draws at `to` face up from its edge, unseen until it starts:
  *   one after the other, a card turned over where it lies.
  * - `confetti` is a burst of pieces thrown from `from`, laid out from `seed`, gone when they land.
+ * - `throw` is something a player throws at another's seat: `mark` drawn at `from`, spinning across to
+ *   `to` and gone when it lands, where whoever threw it shows what landed.
  */
-export type MoveName = 'deal' | 'board' | 'show' | 'bet' | 'chips' | 'muck' | 'facedown' | 'reveal' | 'confetti';
+export type MoveName = 'deal' | 'board' | 'show' | 'bet' | 'chips' | 'muck' | 'facedown' | 'reveal' | 'confetti' | 'throw';
 
 export interface Move {
   name: MoveName;
@@ -43,6 +45,8 @@ export interface Move {
   amount?: number;
   /** What a burst is laid out from, so the same win throws the same one. */
   seed?: number;
+  /** What is thrown, as the emoji drawn for it. */
+  mark?: string;
   /**
    * Milliseconds from now until it starts. Until then what moves waits where it starts from: cards
    * still to be dealt are not yet seen, and a pile of chips sits where it will leave from.
@@ -51,7 +55,7 @@ export interface Move {
 }
 
 /** How long each move takes, from leaving to landing. */
-export const MOVE_MS: Record<MoveName, number> = { deal: 260, board: 240, show: 200, bet: 200, chips: 280, muck: 220, facedown: 150, reveal: 210, confetti: 1100 };
+export const MOVE_MS: Record<MoveName, number> = { deal: 260, board: 240, show: 200, bet: 200, chips: 280, muck: 220, facedown: 150, reveal: 210, confetti: 1100, throw: 550 };
 
 /**
  * What moves things across the table. Motion is decoration over a table that is already drawn as it

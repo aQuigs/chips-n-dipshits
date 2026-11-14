@@ -404,8 +404,8 @@ test('a view that brings a burst is seen as it is heard, by how it ended: each t
 });
 
 test('no move is longer than a move may be, and the most beats a view has leave room for the longest step', () => {
-  // Confetti is thrown over the table, not moved by the hand, and is held to its own bound (celebrations.test.ts)
-  for (const [name, ms] of Object.entries(MOVE_MS).filter(([name]) => name !== 'confetti')) {
+  // Confetti and a thrown thing cross the table but are not moved by the hand, and are held to bounds of their own (celebrations.test.ts, reactionsPage.test.ts)
+  for (const [name, ms] of Object.entries(MOVE_MS).filter(([name]) => name !== 'confetti' && name !== 'throw')) {
     assert.ok(ms <= MOST_MOVE_MS, `${name} takes ${ms} ms`);
   }
 

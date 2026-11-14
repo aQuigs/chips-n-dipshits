@@ -102,6 +102,14 @@ export const PREFERENCES = {
     group: 'Cards',
     default: true,
   },
+  // A filter by sender (`sendersShown`): a player's own are always shown
+  reactions: {
+    kind: 'onOff',
+    label: 'Others’ reactions',
+    hint: 'The emoji other players pop up over their seats and throw at each other',
+    group: 'Cards',
+    default: true,
+  },
   // The ways of getting a player's attention (attentionWays.ts) beside the chime, each left out where the device can't do it.
   // After the cards, so they stay in sight when Preferences opens on a small phone
   buzz: { kind: 'onOff', label: 'Buzz', hint: 'Two short buzzes on a phone', group: 'When it’s your turn', compact: true, default: true },

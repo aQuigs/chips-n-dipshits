@@ -1,7 +1,7 @@
 import type { AppPreferences } from './prefs.ts';
 
 /** Every sound the page can make. Each is one short recipe in `soundRecipes.ts`. */
-export type SoundName = 'deal' | 'chips' | 'knock' | 'fold' | 'allIn' | 'street' | 'win' | 'myWin' | 'turn';
+export type SoundName = 'deal' | 'chips' | 'knock' | 'fold' | 'allIn' | 'street' | 'win' | 'myWin' | 'turn' | 'whoosh';
 
 /**
  * What makes the sounds: the Web Audio synthesizer in a browser, or silence where there is none. Sounds

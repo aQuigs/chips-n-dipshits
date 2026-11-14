@@ -8,7 +8,7 @@ import { h } from './ui.ts';
 /** How a move looks at its far end: the end away from where what moves is drawn. */
 interface Look {
   /** What moves: what the table has standing where the move ends, a stand-in of this kind for what it no longer draws, or a piece of confetti. */
-  mover: 'standing' | 'chips' | 'cards' | 'card' | 'confetti';
+  mover: 'standing' | 'chips' | 'cards' | 'card' | 'mark' | 'confetti';
   /** A stand-in that shows only once it sets off, where others lie at their start while they wait. */
   appears?: boolean;
   easing: string;
@@ -34,6 +34,8 @@ const LOOKS: Record<MoveName, Look> = {
   reveal: { mover: 'standing', easing: 'ease-out', shape: 'rotateY(90deg)', opacity: 0 },
   // Thrown out fast and slowing, each piece with a spin of its own (`burst`)
   confetti: { mover: 'confetti', easing: 'cubic-bezier(0.1, 0.7, 0.3, 1)', shape: '', opacity: 0, appears: true },
+  // Lobbed hard and tumbling all the way, whole until it hits
+  throw: { mover: 'mark', easing: 'cubic-bezier(0.3, 0, 0.6, 1)', shape: 'rotate(-540deg) scale(1.3)', opacity: 1 },
 };
 
 // The share of a move over which what moves fades in as it leaves, or out as it lands
@@ -169,7 +171,7 @@ class PageMotion implements MotionPlayer {
     }
 
     const far = table.middle(move.to);
-    const element = far && move.from ? table.standIn(look.mover, move.from, move.amount) : null;
+    const element = far && move.from ? table.standIn(look.mover, move.from, move.amount, move.mark) : null;
 
     return element ? [{ name: move.name, element, look, far, ms, after: move.after }] : [];
   }

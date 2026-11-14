@@ -142,7 +142,7 @@ export class Suspense {
       const events = view.hand?.events.length === hold.events ? hold.later.events : [];
 
       this.hold = null;
-      this.release({ before: view, view, feed: hold.later.feed, events, current: true, wentBack: false, nightEnded: false, earned: hold.later.earned, tookHighHand: hold.later.tookHighHand, now: view.now });
+      this.release({ before: view, view, feed: hold.later.feed, events, current: true, wentBack: false, nightEnded: false, earned: hold.later.earned, tookHighHand: hold.later.tookHighHand, reactions: [], now: view.now });
     });
   }
 

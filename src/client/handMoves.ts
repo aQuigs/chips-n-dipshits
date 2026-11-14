@@ -217,12 +217,19 @@ export function movesSeen({ before: shown, view, events }: TableChange, viewer: 
   const beatOf = (event: number) => Math.max(0, heard.filter((at) => at <= event).length - 1);
   const lastOf = (kind: Step['kind']) => steps.filter((step) => step.kind === kind).at(-1)!.event;
   const seenWith = ({ kind, event }: (typeof steps)[number]) => (kind === 'gathered' ? event - 1 : kind ? lastOf(kind) : event);
-  const beats: Move[][] = Array.from({ length: Math.max(1, heard.length) }, () => []);
+  // A slow view can bring a street and the bets after it before any sound of its own: a bet then slides in a
+  // beat after the last ones left for the pot, not onto the place they are leaving
+  const afterGather = gathered >= 0 ? beatOf(seenWith(steps[gathered]!)) + 1 : 0;
+  const beats: Move[][] = [];
 
   steps.forEach((step, nth) => {
-    const moves = step.moves.filter((move) => (move.name === 'bet' ? slides(move, nth) : !leavesGoneBet(move)));
+    const beat = beatOf(seenWith(step));
 
-    moves.forEach((move) => add(beats[beatOf(seenWith(step))]!, move));
+    for (const move of step.moves) {
+      if (move.name === 'bet' ? slides(move, nth) : !leavesGoneBet(move)) {
+        add((beats[move.name === 'bet' ? Math.max(beat, afterGather) : beat] ??= []), move);
+      }
+    }
   });
 
   return beats.flatMap((moves, beat) => moves.map((move) => ({ ...move, after: beat * STEP_GAP_MS + move.after })));

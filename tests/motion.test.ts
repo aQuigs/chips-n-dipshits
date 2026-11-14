@@ -329,6 +329,17 @@ test('no move is longer than a move may be, and the most beats a view has leave 
   const longest = Math.max(...movesSeen(going([], full), 0).map((move) => move.after + MOVE_MS[move.name]));
 
   assert.ok((MOST_PER_VIEW - 1) * STEP_GAP_MS + longest <= MOST_VIEW_MS, `a deal on the last of ${MOST_PER_VIEW} beats would land ${(MOST_PER_VIEW - 1) * STEP_GAP_MS + longest} ms after its view`);
+  // A bet that waits for the last ones to leave can come a beat after the last sound
+  assert.ok(MOST_PER_VIEW * STEP_GAP_MS + MOVE_MS.bet <= MOST_VIEW_MS);
+});
+
+test('a bet made after a street in the same view slides in a beat after the last bets left its place for the pot', () => {
+  // A call ends the street and two bets follow before the page hears of any of it: the three are one sound of chips, after the street's
+  const had: HandEvent[] = [...ON_THE_FLOP, ['bet', 1, 40, 940], ['fold', 2]];
+  const news: HandEvent[] = [['call', 0, 40, 940], ['street', 0, ['9h']], ['bet', 1, 60, 880], ['raise', 0, 150, 790]];
+
+  assert.deepEqual(soundsPlaced(news, 2), [{ sound: 'street', event: 1 }, { sound: 'chips', event: 3 }]);
+  assert.deepEqual(seen(had, news, 2), ['chips 40 bet0>pot @0', 'chips 40 bet1>pot @0', 'board >board0.3 @0', `bet seat1>bet1 @${STEP_GAP_MS}`, `bet seat0>bet0 @${STEP_GAP_MS}`]);
 });
 
 test('each thing is seen in the moment it is heard: after another player’s move a beat later, after the viewer’s own at once', () => {
@@ -554,10 +565,18 @@ test('whatever random play brings, in views of one event or many, stays in budge
       // Whatever is both heard and seen starts in the moment its sound does
       for (const { sound, event, at } of heardAt(change, change.view.you.seat)) {
         const [kind, seat] = change.events[event]!;
-        const its = (move: Move) => (kind === 'deal' && move.name === 'deal') || (kind === 'street' && move.name === 'board') || (kind === 'fold' && move.name === 'muck' && where(move.from) === `cards${seat}`) || (kind === 'win' && where(move.from) === 'pot' && where(move.to) === `seat${seat}`);
-        const starts = moves.filter(its).map((move) => move.after);
+        const to = (move: Move) => where(move.to) === `seat${seat}`;
+        // A pile from the pot may also be the part of an ante coming back, earlier in the view
+        const its: Record<string, (move: Move) => boolean> = {
+          deal: (move) => move.name === 'deal',
+          street: (move) => move.name === 'board',
+          fold: (move) => move.name === 'muck' && where(move.from) === `cards${seat}`,
+          win: (move) => where(move.from) === 'pot' && to(move),
+          bounty: (move) => move.from?.at === 'seat' && to(move),
+        };
+        const starts = its[kind] ? moves.filter(its[kind]).map((move) => move.after) : [at];
 
-        assert.ok(starts.length === 0 || Math.min(...starts) === at, `${sound} is heard ${at} ms after the view and seen ${Math.min(...starts)} ms after it: ${change.events.map((each) => each[0]).join(', ')}`);
+        assert.ok(starts.includes(at), `${sound} is heard ${at} ms after the view and what it goes with is seen ${starts.join(', ') || 'never'} ms after it: ${change.events.map((each) => each[0]).join(', ')}`);
       }
 
       for (const move of moves) {

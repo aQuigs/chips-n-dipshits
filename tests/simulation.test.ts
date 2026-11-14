@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { SEAT_COUNT } from '../src/engine/index.ts';
+import { nightIsOver, SEAT_COUNT } from '../src/engine/index.ts';
 import { handRecords, ledgerEntries, seededRng, TestTable } from './helpers.ts';
 import { assertChipsConserved, assertHandRecordsHold, assertInvariants, assertLedgerAgrees } from './invariants.ts';
 import { fixedSettings, randomConfig } from './randomConfig.ts';
@@ -26,6 +26,7 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
   const transfersIn = { chips: 0, cents: 0 };
   const bombPots = { chips: 0, cents: 0, called: 0, byCount: 0, overAnAnte: 0, short: 0, allInWhenDealt: 0 };
   const doubleBoards = { chips: 0, cents: 0, shownDown: 0, ranOut: 0, withSidePots: 0, wonUncontested: 0 };
+  const nights = { afterLastHand: 0, endedOutright: 0, startedAgain: 0, signals: 0 };
 
   for (let seed = 1; seed <= TABLES; seed++) {
     const rng = seededRng(seed * 7919);
@@ -47,8 +48,12 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
         assertInvariants(t.state, t.now);
       }
 
-      const before = { hands: t.state.handCount, called: t.state.bombPotCalled };
+      const before = { hands: t.state.handCount, called: t.state.bombPotCalled, inHand: t.state.hand !== null, over: nightIsOver(t.state) };
       randomStep(t, rng);
+
+      if (before.over !== nightIsOver(t.state)) {
+        nights[before.over ? 'startedAgain' : before.inHand ? 'afterLastHand' : 'endedOutright'] += 1;
+      }
 
       // A hand is dealt by time passing, never by the step that called a bomb pot or changed a setting
       const dealt = t.state.handCount > before.hands ? t.state.hand?.bombPot : null;
@@ -66,6 +71,7 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
     assertLedgerAgrees(t.state, t.effects);
     assert.deepEqual(fixedSettings(t.state.config), fixedSettings(config), 'a setting chosen for good was changed along the way');
     handsPlayed += assertHandRecordsHold(t.effects);
+    nights.signals += t.effects.filter((effect) => effect.type === 'nightEnded').length;
     transfersIn[config.unit] += ledgerEntries(t.effects).filter((entry) => entry.kind === 'transfer' && entry.amount > 0).length;
 
     for (const record of handRecords(t.effects)) {
@@ -104,6 +110,10 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
   assert.ok(shortAntes >= TABLES / 4, antes);
 
   assert.ok(transfersIn.chips >= TABLES && transfersIn.cents >= TABLES, `${transfersIn.chips} transfers at whole-chip tables and ${transfersIn.cents} at tables of dollars and cents`);
+
+  const ended = `nights: ${JSON.stringify(nights)}`;
+  assert.ok(nights.afterLastHand >= TABLES / 2 && nights.endedOutright >= TABLES / 4 && nights.startedAgain >= TABLES, ended);
+  assert.equal(nights.signals, nights.afterLastHand + nights.endedOutright, `every night that ended said so once: ${ended}`);
 
   const bombs = `bomb pots: ${JSON.stringify(bombPots)}`;
   assert.ok(bombPots.chips >= TABLES && bombPots.cents >= TABLES, bombs);

@@ -4,6 +4,7 @@ import { bombPotName, bombPotOf } from '../bombPots.ts';
 import { validatedConfig } from '../config.ts';
 import { restartActionClock } from '../hand.ts';
 import { actorName, dropCohost, requireMayRemove } from '../hosts.ts';
+import { callLastHands, endNight, nightIsOver, restartNight } from '../night.ts';
 import { movePlayer, shuffleEveryone } from '../reseating.ts';
 import { grant, isDealtIn, leaveSeat, turnAway } from '../seating.ts';
 import { addFeed, memberNamed, recordLedger, seatedMember, seatIndexOf } from '../seats.ts';
@@ -15,8 +16,10 @@ import type { Handler } from './handler.ts';
 
 export const start: Handler<'start'> = {
   by: 'host or cohost',
-  run: ({ state, ctx }) => {
-    if (!state.running) {
+  run: ({ state, ctx, member }) => {
+    if (nightIsOver(state)) {
+      restartNight(state, ctx, actorName(state, member));
+    } else if (!state.running) {
       state.running = true;
       addFeed(state, ctx.now, 'system', null, 'The game is on');
     }
@@ -118,6 +121,7 @@ export const transferChips: Handler<'transferChips'> = {
 
 export const setBombPot: Handler<'setBombPot'> = {
   by: 'host or cohost',
+  inPlayOnly: true,
   run: ({ state, ctx, member, command }) => {
     const on = yesOrNo(command.on, 'A bomb pot');
     if (on === state.bombPotCalled) {
@@ -127,6 +131,27 @@ export const setBombPot: Handler<'setBombPot'> = {
     // The amount is left out: like the blinds, it is whatever the table plays when the hand is dealt
     state.bombPotCalled = on;
     addFeed(state, ctx.now, 'system', null, on ? `${actorName(state, member)} called a bomb pot for the next hand` : `${actorName(state, member)} called off the bomb pot`);
+  },
+};
+
+export const setLastHands: Handler<'setLastHands'> = {
+  by: 'host or cohost',
+  inPlayOnly: true,
+  run: ({ state, ctx, member, command }) => callLastHands(state, ctx, actorName(state, member), command.hands),
+};
+
+export const endTheNight: Handler<'endNight'> = {
+  by: 'host or cohost',
+  run: ({ state, ctx, member }) => {
+    if (nightIsOver(state)) {
+      throw new GameError('The night is already over');
+    }
+
+    if (state.hand) {
+      throw new GameError('The night can end once this hand is over: make it the last hand');
+    }
+
+    endNight(state, ctx, `${actorName(state, member)} ended the night`);
   },
 };
 

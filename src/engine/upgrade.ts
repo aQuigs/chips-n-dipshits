@@ -30,7 +30,7 @@ interface SavedDefaults {
  * the config registry. Each entry is a function so that no two tables are handed the same list.
  */
 export const SAVED_DEFAULTS: SavedDefaults = {
-  table: () => ({ cohostIds: [], shuffleAfterHand: false, bombPotCalled: false, handsSinceBombPot: 0 }),
+  table: () => ({ cohostIds: [], shuffleAfterHand: false, bombPotCalled: false, handsSinceBombPot: 0, lastHand: null, nightEndedAt: null }),
   member: () => ({ transferred: 0 }),
   seat: () => ({ moveTo: null }),
   hand: () => ({ events: [], bombPot: null }),

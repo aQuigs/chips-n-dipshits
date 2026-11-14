@@ -1,4 +1,4 @@
-import type { HandRecord, LedgerEntry, TableState } from '../engine/index.ts';
+import type { HandRecord, LedgerEntry, NightEnd, TableState } from '../engine/index.ts';
 import { peekOf, restoreState } from './store.ts';
 import type { TablePeek, TableStore, Txn } from './store.ts';
 
@@ -9,6 +9,7 @@ import type { TablePeek, TableStore, Txn } from './store.ts';
 export class MemoryStore implements TableStore {
   readonly ledger: LedgerEntry[] = [];
   readonly hands: HandRecord[] = [];
+  readonly nightsEnded: NightEnd[] = [];
   private readonly tables = new Map<string, string>();
 
   transact<T>(tableId: string, fn: (state: TableState | null) => Txn<T>): T {
@@ -20,8 +21,10 @@ export class MemoryStore implements TableStore {
       for (const effect of txn.effects) {
         if (effect.type === 'ledger') {
           this.ledger.push(effect.entry);
-        } else {
+        } else if (effect.type === 'hand') {
           this.hands.push(effect.record);
+        } else {
+          this.nightsEnded.push(effect.night);
         }
       }
     }

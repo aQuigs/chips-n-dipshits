@@ -180,3 +180,11 @@ test('a bomb pot saved in the middle by the code before there were two boards go
   restored.deal();
   assert.deepEqual([restored.state.hand!.bombPot, restored.state.hand!.boards.length], [{ amount: 100, boards: 2 }, 2]);
 });
+
+test('a table saved before the last hands could be called has none called, and its night goes on', () => {
+  for (const file of FILES) {
+    const state = load(file);
+
+    assert.deepEqual([state.lastHand, state.nightEndedAt], [null, null], file);
+  }
+});

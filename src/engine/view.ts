@@ -8,6 +8,7 @@ import { readHand } from './handNames.ts';
 import type { HandRead } from './handNames.ts';
 import { reaches, roleOf } from './hosts.ts';
 import type { Role } from './hosts.ts';
+import { handsLeft } from './night.ts';
 import { buildPots } from './pots.ts';
 import type { Pot } from './pots.ts';
 import { memberOf, seatIndexOf } from './seats.ts';
@@ -124,6 +125,10 @@ export interface TableView {
   nextBombPot: BombPot | null;
   /** That bomb pot is one only because it was called: called off, the next hand is an ordinary one. */
   bombPotCalled: boolean;
+  /** Hands still to be dealt before the night ends, not counting the one on the table; null while no last hands are called. */
+  handsLeft: number | null;
+  /** When the night ended, or null while it goes on: `nightIsOver` reads it. */
+  nightEndedAt: number | null;
   feed: FeedEntry[];
   /** Requests waiting on the host: all of them for the host and co-hosts, only their own for everyone else. */
   requests: RequestView[];
@@ -219,6 +224,8 @@ export function viewFor(state: TableState, playerId: string, now: number): Table
     shuffleAfterHand: state.shuffleAfterHand,
     nextBombPot: bombPotDue(state),
     bombPotCalled: bombPotHangsOnCall(state),
+    handsLeft: handsLeft(state),
+    nightEndedAt: state.nightEndedAt,
     feed: state.feed,
     requests: visibleRequests.map((request) => ({ ...request, name: memberOf(state, request.playerId).name })),
     ledger: ledgerOf(state),

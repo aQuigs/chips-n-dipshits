@@ -103,6 +103,8 @@ const DECLARED: { [T in CommandType]: { by: 'member' | 'seat' } | { by: HostLeve
   shuffleSeats: { by: 'host or cohost', sample: () => ({ type: 'shuffleSeats' }) },
   transferChips: { by: 'host or cohost', sample: (ids) => ({ type: 'transferChips', from: ids[TARGET]!, to: ids[HOST]!, amount: 5 }) },
   setBombPot: { by: 'host or cohost', sample: () => ({ type: 'setBombPot', on: true }) },
+  setLastHands: { by: 'host or cohost', sample: () => ({ type: 'setLastHands', hands: 3 }) },
+  endNight: { by: 'host or cohost', sample: () => ({ type: 'endNight' }) },
   updateConfig: { by: 'host or cohost', sample: () => ({ type: 'updateConfig', config: { bigBlind: 40 } }) },
   transferHost: { by: 'host alone', sample: (ids) => ({ type: 'transferHost', playerId: ids[TARGET]! }) },
   setCohost: { by: 'host alone', sample: (ids) => ({ type: 'setCohost', playerId: ids[TARGET]!, on: true }) },

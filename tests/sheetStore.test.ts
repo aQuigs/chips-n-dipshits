@@ -342,6 +342,18 @@ test('ledger entries and finished hands are appended to their own tabs', () => {
   assert.deepEqual(hands[1]!.slice(1, 4), ['ABC234', 1, 'Hand #1']);
 });
 
+test('the end of a night has no tab yet, so the Sheet keeps nothing of it, and what comes with it is still copied out', () => {
+  const { store, spreadsheet } = setup();
+
+  save(store, table('ABC234'), [{ type: 'nightEnded', night: { at: 1_700_000_000_000, tableId: 'ABC234' } }, buyIn(500)]);
+  const sheet = records(spreadsheet);
+
+  assert.equal(sheet.held(), '');
+  assert.deepEqual(sheet.ledgerAmounts(), [500]);
+  assert.equal(sheet.ledger.cells[1]![6], 'ABC234:1:1', 'a record is known by its place among everything the save made');
+  assert.deepEqual([...spreadsheet.sheets.keys()].sort(), ['Ledger', 'Tables']);
+});
+
 test('the Ledger tab reads in dollars for a table that plays dollars and cents, and in chips for one that plays chips', () => {
   const { store, spreadsheet } = setup();
 

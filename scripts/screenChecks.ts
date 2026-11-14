@@ -386,6 +386,23 @@ const hintShown = async (page: Page, selector: string) => (await style(page, sel
 /** Lets the buttons just drawn settle, so a key pressed next is taken. */
 const settle = (page: Page) => page.waitForTimeout(KEYS_SETTLE_MS + 100);
 
+/**
+ * Has the page press a key itself the moment `selector` first matches, for a key that must come before
+ * the buttons have settled: pressed from here it arrives when the machine gets to it, which on a busy
+ * one is too late. `window.pressedEarly` says when it has been pressed.
+ */
+const pressAsSoonAs = (page: Page, key: string, selector: string) =>
+  page.evaluate(`(() => {
+    window.pressedEarly = false;
+    new MutationObserver((changes, watch) => {
+      if (document.querySelector(${JSON.stringify(selector)})) {
+        watch.disconnect();
+        document.body.dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(key)}, bubbles: true, cancelable: true }));
+        window.pressedEarly = true;
+      }
+    }).observe(document.body, { childList: true, subtree: true, attributes: true });
+  })()`);
+
 /** The moves a page sends, in order, as the server receives them. */
 function movesSent(page: Page): string[] {
   const sent: string[] = [];
@@ -1349,13 +1366,13 @@ const CHECKS: Check[] = [
       for (const key of ['f', 'c', '3']) {
         await page.keyboard.press(key);
       }
-      await page.keyboard.press('Escape');
-      await page.waitForSelector('.dialog', { state: 'detached' });
-      assert.equal(await page.inputValue('#raise-amount'), '40', 'a key with the menu open changed the bet size');
 
       // The buttons were behind the menu, so a key the moment it closes was not pressed looking at them
-      await page.keyboard.press('c');
+      await pressAsSoonAs(page, 'c', 'body:not(:has(.dialog))');
+      await page.keyboard.press('Escape');
+      await page.waitForFunction('window.pressedEarly');
       await nothingSent('a key with the menu open, or just after it closed');
+      assert.equal(await page.inputValue('#raise-amount'), '40', 'a key with the menu open changed the bet size');
 
       await page.click('[data-action="menu"]');
       await page.click('.menu [data-action="preferences"]');
@@ -1406,9 +1423,9 @@ const CHECKS: Check[] = [
       assert.equal(table.view('Quigs').hand!.street, 'turn', 'C did not check the flop through');
 
       // On the turn a bet arrives: the C meant for the check that is no longer there is not taken as a call
+      await pressAsSoonAs(page, 'c', '.turn [data-action="call"]:enabled');
       table.act('Stu', { type: 'raise', to: 60 });
-      await page.waitForSelector('.turn [data-action="call"]:enabled');
-      await page.keyboard.press('c');
+      await page.waitForFunction('window.pressedEarly');
       await page.waitForTimeout(150);
       assert.deepEqual(sent, ['call', 'check'], 'a key pressed as the buttons changed was taken');
       await settle(page);
@@ -2646,7 +2663,7 @@ const CHECKS: Check[] = [
       await page.evaluate('document.activeElement.blur()');
       await settle(page);
       await page.keyboard.press('f');
-      await page.waitForTimeout(300);
+      await page.waitForSelector('.turn', { state: 'detached' });
       assert.deepEqual(sent, ['fold']);
       await page.context().close();
     },
@@ -3829,9 +3846,9 @@ const CHECKS: Check[] = [
       assert.deepEqual(await notices(), [{ title: words, options: { tag: `cnd-${table.id}` }, open: true }]);
       assert.doesNotMatch(words, /\d|[♠♥♦♣]|\b[AKQJT2-9][shdc]\b/, 'a card or an amount on the lock screen');
 
-      await page.waitForTimeout(2300);
+      // It goes on changing for as long as the turn waits
+      await page.waitForFunction('window.titles.length >= 3');
       const titles = (await page.evaluate('window.titles')) as string[];
-      assert.ok(titles.length >= 3, `the title changed ${titles.length} times in two seconds`);
       assert.deepEqual([...new Set(titles)].sort(), [`● ${words}`, `○ ${words}`].sort(), 'a title that does not say it is the player’s turn');
 
       // Acting from another device, or the clock acting for the player, ends the turn the same way

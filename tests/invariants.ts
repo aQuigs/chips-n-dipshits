@@ -54,6 +54,26 @@ export function assertRolesHold(state: TableState): void {
   assert.ok(state.cohostIds.every((id) => members.has(id)), 'a co-host is no longer at the table');
 }
 
+/** Nobody sits in two seats, and a move or shuffle waits only while there is a hand for it to wait for. */
+export function assertSeatingHolds(state: TableState): void {
+  const seated = state.seats.flatMap((seat) => (seat ? [seat.playerId] : []));
+
+  assert.equal(new Set(seated).size, seated.length, 'a player sits in two seats');
+  assert.ok(seated.every((id) => state.members.some((member) => member.id === id)), 'a seat belongs to nobody at the table');
+
+  state.seats.forEach((seat, index) => {
+    if (seat?.moveTo === null || !seat) {
+      return;
+    }
+
+    assert.ok(state.hand, 'a move is still waiting with no hand on the table');
+    assert.ok(Number.isInteger(seat.moveTo) && seat.moveTo >= 0 && seat.moveTo < state.seats.length && seat.moveTo !== index, 'a move waits for a seat that makes no sense');
+    assert.ok(!seat.leaving && !state.shuffleAfterHand, 'a move waits for a player who is leaving, or alongside a shuffle');
+  });
+
+  assert.ok(state.hand || !state.shuffleAfterHand, 'a shuffle is still waiting with no hand on the table');
+}
+
 /** The table comes back from being saved exactly as it was. */
 export function assertSurvivesSaving(state: TableState): void {
   const json = JSON.stringify(state);
@@ -163,6 +183,7 @@ export function assertFitsTheStore(state: TableState): void {
 export function assertInvariants(state: TableState, now: number): void {
   assertChipsConserved(state);
   assertRolesHold(state);
+  assertSeatingHolds(state);
   assertSurvivesSaving(state);
   assertViewsKeepSecrets(state, now);
   assertFitsTheStore(state);

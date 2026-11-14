@@ -50,7 +50,6 @@ export class RigTable {
   private readonly rig: Rig;
   private readonly host: string;
   private readonly auths = new Map<string, Auth>();
-  private readonly seats = new Map<number, string>();
 
   constructor(rig: Rig, id: string, host: string, auth: Auth) {
     this.rig = rig;
@@ -79,8 +78,6 @@ export class RigTable {
     if (name !== this.host) {
       this.act(this.host, { type: 'approve', playerId: this.auth(name).id });
     }
-
-    this.seats.set(seat, name);
   }
 
   /** Does what a player's page would send, and fails the check if the table refuses it or it leaves the table in a state no table may be in. */
@@ -143,7 +140,8 @@ export class RigTable {
 
       const hand = view.hand;
       const voter = hand?.stage === 'ritVote' ? view.seats.find((seat) => seat && seat.inHand && !seat.folded && seat.ritVote === null) : null;
-      const name = hand?.stage === 'betting' && hand.toAct !== null ? this.seats.get(hand.toAct) : voter ? this.seats.get(voter.seat) : undefined;
+      // Named from the table, not from where players were first seated: the host may have moved them since
+      const name = hand?.stage === 'betting' && hand.toAct !== null ? view.seats[hand.toAct]?.name : voter?.name;
       const command = name ? move(this.view(name), name) : null;
 
       if (name && command) {

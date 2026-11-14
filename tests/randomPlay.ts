@@ -73,6 +73,14 @@ export const FUZZ_COMMANDS: ((fuzz: Fuzz) => void)[] = [
   ({ t, who }) => attempt(t, who, { type: 'showCards' }),
   ({ t, rng, playerId }) => attempt(t, someoneRunningTheGame(t, rng), { type: 'setStack', playerId, stack: rng.int(2000) }),
   ({ t, rng, playerId }) => attempt(t, someoneRunningTheGame(t, rng), { type: 'kick', playerId }),
+  ({ t, rng, playerId }) => {
+    // Mostly to a seat that is open, which is the only kind a move can be made to
+    const open = t.state.seats.flatMap((seat, index) => (seat ? [] : [index]));
+    const seat = open.length > 0 && chance(rng, 80) ? open[rng.int(open.length)]! : rng.int(SEAT_COUNT);
+
+    attempt(t, someoneRunningTheGame(t, rng), { type: 'moveSeat', playerId, seat });
+  },
+  ({ t, rng }) => attempt(t, chance(rng, 80) ? someoneRunningTheGame(t, rng) : rng.int(t.ids.length), { type: 'shuffleSeats' }),
   ({ t, rng, who }) => attempt(t, who, { type: 'ritVote', agree: chance(rng, 70) }),
 
   ({ t, rng }) => {

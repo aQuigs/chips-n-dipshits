@@ -26,4 +26,5 @@ export const STYLESHEETS = [
   'deck.css',
   'voice.css',
   'hotkeys.css',
+  'seat-moves.css',
 ];

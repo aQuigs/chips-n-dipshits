@@ -1,5 +1,5 @@
 import { formatAmount } from '../../../engine/amounts.ts';
-import type { TableView } from '../../../engine/view.ts';
+import type { SeatView, TableView } from '../../../engine/view.ts';
 import { h } from '../../ui.ts';
 import { roleOf } from '../../../engine/hosts.ts';
 import { hostAlone, hostOrCohost, roleMark } from '../roles.ts';
@@ -82,6 +82,12 @@ function players(view: TableView, handlers: DialogHandlers): HTMLElement {
 
   const nameOf = (playerId: string, name: string) => h('b', null, name, roleMark(view, playerId));
 
+  // Only to an open seat, and not for a player already on their way out
+  const move = (seat: SeatView) =>
+    view.seats.includes(null) && !seat.leaving
+      ? h('button.btn.small', { type: 'button', 'data-action': 'move', onclick: () => handlers.pickSeat(seat.playerId) }, 'Move')
+      : null;
+
   const seatedIds = new Set(view.seats.flatMap((seat) => (seat ? [seat.playerId] : [])));
   const seated = view.seats.flatMap((seat) =>
     seat
@@ -89,11 +95,18 @@ function players(view: TableView, handlers: DialogHandlers): HTMLElement {
           h(
             'li',
             null,
-            h('span', null, nameOf(seat.playerId, seat.name), ` · seat ${seat.seat + 1} · ${formatAmount(seat.stack, view.config)}`),
+            h(
+              'span',
+              null,
+              nameOf(seat.playerId, seat.name),
+              ` · seat ${seat.seat + 1} · ${formatAmount(seat.stack, view.config)}`,
+              seat.moveTo !== null ? h('small.move-note', null, `Moves to seat ${seat.moveTo + 1} after this hand`) : null,
+            ),
             h(
               'span.row-actions',
               null,
               h('button.btn.small', { type: 'button', 'data-action': 'set-stack', onclick: () => handlers.open({ kind: 'setStack', playerId: seat.playerId }) }, 'Set stack'),
+              move(seat),
               roleButtons(seat.playerId, seat.name),
               remove(seat.playerId, seat.name, 'They lose their seat and their chips are cashed out in the ledger. They can ask for a seat again.', false),
             ),
@@ -133,7 +146,7 @@ export const playersDialog: DialogKind<'players'> = {
   menu: {
     label: 'Players',
     who: hostOrCohost,
-    note: (view) => (view.requests.length > 0 ? `${view.requests.length} waiting for you` : 'Approve, adjust stacks, remove'),
+    note: (view) => (view.requests.length > 0 ? `${view.requests.length} waiting for you` : 'Approve, adjust stacks, move, remove'),
   },
   // Stacks move with every bet. Redrawn that often, a button here would be gone before a tap on it landed,
   // so during a hand the list keeps the stacks it was drawn with
@@ -143,7 +156,7 @@ export const playersDialog: DialogKind<'players'> = {
     view.hostId,
     view.cohostIds,
     view.hand?.number,
-    view.seats.map((seat) => seat && [seat.playerId, seat.name, seat.seat, view.hand ? null : seat.stack]),
+    view.seats.map((seat) => seat && [seat.playerId, seat.name, seat.seat, seat.moveTo, seat.leaving, view.hand ? null : seat.stack]),
   ],
   draw: players,
 };

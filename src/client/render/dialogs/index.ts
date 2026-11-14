@@ -10,6 +10,7 @@ import { preferencesDialog } from './preferences.ts';
 import { rebuyDialog } from './rebuy.ts';
 import { setStackDialog } from './setStack.ts';
 import { settingsDialog } from './settings.ts';
+import { shuffleSeats } from './shuffle.ts';
 import { sitDialog } from './sit.ts';
 import { themeDialog } from './theme.ts';
 
@@ -25,6 +26,7 @@ const REGISTERED = [
   ledgerDialog,
   historyDialog,
   playersDialog,
+  shuffleSeats,
   settingsDialog,
   pauseGame,
   startGame,

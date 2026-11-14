@@ -22,6 +22,8 @@ export interface SeatView {
   leaving: boolean;
   straddle: boolean;
   pendingAdd: number;
+  /** The seat the host is moving them to when the hand ends. */
+  moveTo: number | null;
   /** Dealt into the hand on the table. */
   inHand: boolean;
   bet: number;
@@ -99,6 +101,8 @@ export interface TableView {
   you: { id: string; name: string; role: Role; seat: number | null };
   seats: (SeatView | null)[];
   hand: HandView | null;
+  /** The seats are shuffled when the hand ends. */
+  shuffleAfterHand: boolean;
   feed: FeedEntry[];
   /** Requests waiting on the host: all of them for the host and co-hosts, only their own for everyone else. */
   requests: RequestView[];
@@ -131,6 +135,7 @@ export function viewFor(state: TableState, playerId: string, now: number): Table
       leaving: seat.leaving,
       straddle: seat.straddle,
       pendingAdd: seat.pendingAdd,
+      moveTo: seat.moveTo,
       inHand: player !== undefined,
       bet: player?.bet ?? 0,
       folded: player?.folded ?? false,
@@ -188,6 +193,7 @@ export function viewFor(state: TableState, playerId: string, now: number): Table
     you: { id: me.id, name: me.name, role, seat: mySeat >= 0 ? mySeat : null },
     seats,
     hand: handView,
+    shuffleAfterHand: state.shuffleAfterHand,
     feed: state.feed,
     requests: visibleRequests.map((request) => ({ ...request, name: memberOf(state, request.playerId).name })),
     ledger: ledgerOf(state),

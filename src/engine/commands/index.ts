@@ -4,7 +4,7 @@ import { GameError } from '../types.ts';
 import type { Command, Ctx, TableState } from '../types.ts';
 import { chat } from './anyone.ts';
 import type { Call, CommandType, Handler, SeatedCall } from './handler.ts';
-import { approve, deny, kick, pause, setCohost, setStack, start, transferHost, updateConfig } from './host.ts';
+import { approve, deny, kick, moveSeat, pause, setCohost, setStack, shuffleSeats, start, transferHost, updateConfig } from './host.ts';
 import { call, check, fold, raise, ritVote, showCards } from './play.ts';
 import { cancelRequest, requestRebuy, requestSeat, setStraddle, sitIn, sitOut, standUp } from './seat.ts';
 
@@ -33,6 +33,8 @@ export const HANDLERS: { [T in CommandType]: Handler<T> } = {
   deny,
   kick,
   setStack,
+  moveSeat,
+  shuffleSeats,
   updateConfig,
   transferHost,
   setCohost,

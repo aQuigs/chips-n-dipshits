@@ -1,0 +1,42 @@
+/* ---- Moving players to other seats: picking a seat, dragging one, and a move that waits ---- */
+
+@media (pointer: fine) {
+  .table.movable .seat[data-seat] .plate {
+    cursor: grab;
+  }
+}
+
+/* Lets the pointer through to the open seat underneath, which is where it will land */
+.seat.dragging {
+  z-index: 5;
+  translate: var(--drag-x) var(--drag-y);
+  opacity: 0.85;
+  pointer-events: none;
+}
+
+.seat.dragging .plate,
+.seat.moving .plate {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.seat.open.target .plate,
+.seat.open.drop .plate {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, var(--panel));
+  color: var(--accent);
+  opacity: 1;
+}
+
+.seat.open.drop .plate {
+  border-style: solid;
+}
+
+.tag.move-note {
+  color: var(--accent);
+}
+
+.dialog .move-note {
+  display: block;
+  color: var(--muted);
+}

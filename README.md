@@ -8,6 +8,7 @@ No-limit hold'em for a group of friends, played in the browser. There is no serv
 - Straddles, run it twice and a seven-deuce bounty, each switched on or off per table.
 - Stakes in whole chips or in dollars and cents, such as 0.25/0.50, chosen per table.
 - The host approves seats and rebuys, pauses the game, changes blinds and settings, adjusts stacks, removes players and can hand the table to someone else.
+- The host moves a player to an open seat (Move in the Players dialog, then tap the seat; on a desktop, dragging the seat works too) or shuffles everyone into random seats.
 - The host can add a link to the group's Meet, Discord or Zoom call, and everyone at the table gets a button that opens it, saying which site it leads to.
 - The host can name co-hosts, who can do all of that too except name co-hosts, hand the table over or remove the host. The host has a ★ by their name and co-hosts a ☆.
 - A ledger with who pays whom to settle up, hand history, table chat with the dealer's play-by-play.
@@ -21,6 +22,7 @@ The choices the code makes where poker rooms differ:
 
 - A table plays whole chips or dollars and cents, chosen when it is created and fixed from then on. Nothing is smaller than a chip or a cent. There are no antes.
 - The button moves to the next seat with a player in the hand. Heads-up, the button posts the small blind and acts first before the flop.
+- A player moved to another seat leaves the button where it was, on the seat. A shuffle gives everyone a random one of the seats already taken, and the next hand draws the button afresh, as a table's first hand does. A player dealt into the hand in play moves when it ends, and a shuffle waits for it too; a move whose seat is taken by then is dropped.
 - A big blind who is short still sets the full big blind as the price to call.
 - The smallest raise is the size of the last full raise. An all-in for less does not reopen the betting for players who have already acted.
 - The odd chip, or the odd cent, of a split pot goes to the first winner clockwise from the button.

@@ -54,6 +54,8 @@ export interface Seat {
   straddle: boolean;
   /** Approved chips waiting for the current hand to end. */
   pendingAdd: number;
+  /** The seat the host is moving this player to once the hand they are dealt into ends; null for none. */
+  moveTo: number | null;
 }
 
 export type RequestKind = 'seat' | 'rebuy';
@@ -209,6 +211,8 @@ export interface TableState {
    */
   turn: number;
   hand: Hand | null;
+  /** The host has shuffled the seats, which happens once the hand on the table ends. */
+  shuffleAfterHand: boolean;
   feed: FeedEntry[];
   feedSeq: number;
 }
@@ -278,6 +282,8 @@ export type Command =
   | { type: 'deny'; playerId: string }
   | { type: 'kick'; playerId: string }
   | { type: 'setStack'; playerId: string; stack: number }
+  | { type: 'moveSeat'; playerId: string; seat: number }
+  | { type: 'shuffleSeats' }
   | { type: 'updateConfig'; config: Partial<TableConfig> }
   | { type: 'transferHost'; playerId: string }
   | { type: 'setCohost'; playerId: string; on: boolean };

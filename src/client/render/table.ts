@@ -65,6 +65,8 @@ const ACTION_LABELS: Record<string, string> = {
 export interface TableHandlers {
   onSit(seat: number): void;
   onStart(): void;
+  /** While the host picks a new seat for a player: who, and where a pick goes. */
+  moving?: { playerId: string; to(seat: number): void };
 }
 
 function seatPlace(shape: Shape, slot: number): { class: string; style: Record<string, string> } {
@@ -150,7 +152,7 @@ function handLabel(seat: SeatView, hand: HandView | null, isMe: boolean): string
   return isMe ? holdingName(seat, hand) : null;
 }
 
-function seatEl(view: TableView, seat: SeatView, slot: number, shape: Shape, clockOffset: number): HTMLElement[] {
+function seatEl(view: TableView, seat: SeatView, slot: number, shape: Shape, clockOffset: number, moving: string | null): HTMLElement[] {
   const hand = view.hand;
   const isMe = view.you.seat === seat.seat;
   const acting = hand?.stage === 'betting' && hand.toAct === seat.seat;
@@ -168,6 +170,7 @@ function seatEl(view: TableView, seat: SeatView, slot: number, shape: Shape, clo
     seat.folded && 'folded',
     !seat.inHand && (seat.sittingOut || seat.stack === 0) && 'out',
     won > 0 && 'winner',
+    moving === seat.playerId && 'moving',
   ].filter(Boolean);
 
   // Folded hands leave the table, except the viewer's own, which stays to look at
@@ -207,6 +210,7 @@ function seatEl(view: TableView, seat: SeatView, slot: number, shape: Shape, clo
     hand?.button === seat.seat ? h('div.dealer-button', { title: 'Dealer button' }, 'D') : null,
     vote,
     label ? h('div.tag', null, label) : null,
+    seat.moveTo !== null ? h('div.tag.move-note', null, `Moves to seat ${seat.moveTo + 1} after this hand`) : null,
   );
 
   const nodes = [seatNode];
@@ -220,20 +224,22 @@ function seatEl(view: TableView, seat: SeatView, slot: number, shape: Shape, clo
 function openSeatEl(view: TableView, seat: number, slot: number, shape: Shape, handlers: TableHandlers): HTMLElement {
   const myRequest = view.requests.find((request) => request.playerId === view.you.id && request.kind === 'seat');
   const place = seatPlace(shape, slot);
+  const open = (kind: string, plate: HTMLElement) => h('div', { class: `${place.class} open ${kind}`, style: place.style, 'data-open-seat': seat }, plate);
+  const moving = handlers.moving;
+
+  if (moving) {
+    return open('target', h('button.plate', { type: 'button', 'data-move-to': seat, onclick: () => moving.to(seat) }, 'Move here'));
+  }
 
   if (myRequest?.seat === seat) {
-    return h('div', { class: `${place.class} open requested`, style: place.style }, h('div.plate', null, 'Waiting for the host…'));
+    return open('requested', h('div.plate', null, 'Waiting for the host…'));
   }
 
   if (view.you.seat !== null || myRequest) {
-    return h('div', { class: `${place.class} open idle`, style: place.style }, h('div.plate', { 'aria-hidden': 'true' }, 'Open'));
+    return open('idle', h('div.plate', { 'aria-hidden': 'true' }, 'Open'));
   }
 
-  return h(
-    'div',
-    { class: `${place.class} open`, style: place.style },
-    h('button.plate', { type: 'button', 'data-sit': seat, onclick: () => handlers.onSit(seat) }, 'Sit here'),
-  );
+  return open('', h('button.plate', { type: 'button', 'data-sit': seat, onclick: () => handlers.onSit(seat) }, 'Sit here'));
 }
 
 function boardEl(hand: HandView): HTMLElement {
@@ -353,7 +359,7 @@ export function tableEl(view: TableView, shape: Shape, clockOffset: number, hand
     const slot = (index - hero + seatCount) % seatCount;
 
     if (seat) {
-      nodes.push(...seatEl(view, seat, slot, shape, clockOffset));
+      nodes.push(...seatEl(view, seat, slot, shape, clockOffset, handlers.moving?.playerId ?? null));
     } else {
       nodes.push(openSeatEl(view, index, slot, shape, handlers));
     }
@@ -361,9 +367,12 @@ export function tableEl(view: TableView, shape: Shape, clockOffset: number, hand
 
   const hand = view.hand;
 
+  // Those who may move players can drag a seat to an open one
+  const movable = hostOrCohost(view) && view.seats.includes(null);
+
   return h(
     'div',
-    { class: `table ${shape}` },
+    { class: `table ${shape}${movable ? ' movable' : ''}` },
     h('div.felt'),
     h('div.center', null, hand ? boardEl(hand) : null, hand ? potEl(view.config, hand) : null, messageEl(view, handlers)),
     nodes,

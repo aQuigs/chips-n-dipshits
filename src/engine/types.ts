@@ -49,7 +49,7 @@ export interface TableConfig {
   bombPotAmount: number;
   /** One hand in this many is a bomb pot without being called; 0 for only when one is called. */
   bombPotEvery: number;
-  /** On two boards, each board wins half of every pot. */
+  /** How many boards a bomb pot is dealt on: on two, each board wins half of every pot. */
   bombPotBoards: BombPotBoards;
   missedBlinds: MissedBlinds;
   /** When everyone else folds before the flop, the small blind may offer the big blind to take the blinds back: see `chop.ts`. */

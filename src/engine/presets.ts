@@ -29,9 +29,9 @@ export function sameName(a: string, b: string): boolean {
 
 const NOT_KEPT = CONFIG_KEYS.filter((key) => !PRESET_KEYS.includes(key));
 
-/** Only the settings a preset keeps, of whatever was sent or saved. */
+/** Only the settings a preset keeps, of whatever was sent or saved, with a retired one read as the setting that took its place. */
 function keptOf(settings: Record<string, unknown>): Record<string, unknown> {
-  return Object.fromEntries(Object.entries(settings).filter(([key]) => PRESET_KEYS.includes(key as ConfigKey)));
+  return Object.fromEntries(Object.entries(withRetiredSettings(settings)).filter(([key]) => PRESET_KEYS.includes(key as ConfigKey)));
 }
 
 /**

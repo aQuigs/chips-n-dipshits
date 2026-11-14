@@ -803,16 +803,16 @@ function settleShowdown(state: TableState, ctx: Ctx): void {
     const awards: PotAward[] = [];
 
     potShares(hand, pot.amount).forEach((amount, run) => {
-      if (amount === 0) {
-        return;
-      }
-
       const best = Math.max(...pot.eligible.map((seat) => values[run]!.get(seat)!.score));
       const winners = pot.eligible.filter((seat) => values[run]!.get(seat)!.score === best);
 
-      // Taken from the hands, not the payouts: in a tie over a single chip only one player is paid
+      // Taken from the hands, not the payouts: a board whose share is nothing, or a tie over a single chip, still names who won it
       if (potIndex === 0) {
         winners.forEach((seat) => mainPotWinners.add(seat));
+      }
+
+      if (amount === 0) {
+        return;
       }
 
       const runLabel = hand.runs > 1 ? ` on the ${midSentence(BOARD_NAMES[run]!)}` : '';

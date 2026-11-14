@@ -16,7 +16,7 @@ import type { BombPot, HandRecord, HandResult } from './types.ts';
 export interface PotWon {
   /** 0 for the main pot, then the side pots in order. */
   pot: number;
-  /** 0, or 1 for the second board of a hand played on two. */
+  /** The board, counted from 0 in the order the boards were dealt. */
   board: number;
   amount: number;
   /** How many players were paid from that pot on that board, this one among them: more than 1 is a split. A tie over a single chip pays one of them, and is 1. */

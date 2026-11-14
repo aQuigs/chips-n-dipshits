@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { DEFAULT_CONFIG, fromPreset, matchingPreset, newConfig, PRESET_KEYS, presetSettings, startingConfig } from '../src/engine/index.ts';
+import { DEFAULT_CONFIG, fromPreset, matchingPreset, newConfig, PRESET_KEYS, presetSettings, sharedPreset, startingConfig } from '../src/engine/index.ts';
 import type { TableConfig } from '../src/engine/index.ts';
 import type { ApiResponse, Auth } from '../src/server/api.ts';
 import { BuildGate } from '../src/server/build.ts';
@@ -55,11 +55,13 @@ test('a preset saved when run it twice was a switch runs it as it did: on is up 
   const { maxRuns: _runs, ...beforeThree } = kept({});
 
   for (const [on, runs] of [[true, 2], [false, 1]] as const) {
-    const used = fromPreset({ ...beforeThree, allowRunItTwice: on });
+    const saved = { ...beforeThree, allowRunItTwice: on };
+    const used = fromPreset(saved);
 
     assert.deepEqual(used.notes, []);
     assert.equal(used.config.maxRuns, runs);
     assert.ok(!('allowRunItTwice' in used.config));
+    assert.equal(fromPreset(sharedPreset({ name: 'Old', settings: saved }).settings).config.maxRuns, runs, 'as the page has it from the server');
   }
 
   assert.equal(fromPreset(beforeThree).config.maxRuns, 3, 'a preset older than either starts where a new table does');

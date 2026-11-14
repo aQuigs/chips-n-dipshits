@@ -467,6 +467,21 @@ test('run three times, the seven-deuce bounty is for winning the main pot on eve
   assert.deepEqual(twoOfThree.stacks(), [680, 340, 980]);
 });
 
+test('a board whose share of the main pot comes to nothing still counts for the bounty: losing it is not winning the whole pot', () => {
+  const t = new TestTable({ stacks: [1, 500], config: { smallBlind: 1, bigBlind: 2, sevenDeuceBounty: 50, maxRuns: 3 } });
+  t.deal({ button: 0, holes: { 0: '7h 2c', 1: 'Jh Td' }, board: '7d 7s 2h 9c 4d', secondBoard: '7c 2d 5s 8h Ad', thirdBoard: 'Js Kc Qd 5c 3h' });
+  while (t.state.hand!.stage === 'betting') {
+    t.call(t.toAct!);
+  }
+  t.cmd(0, { type: 'ritVote', runs: 3 });
+  t.cmd(1, { type: 'ritVote', runs: 3 });
+  t.runToResult();
+
+  assert.deepEqual(t.state.hand!.result!.pots[0]!.awards.map((award) => [award.run, award.amount]), [[0, 1], [1, 1]]);
+  assert.equal(t.state.hand!.result!.bounty, null);
+  assertChipsConserved(t.state);
+});
+
 test('run it twice from the flop keeps the flop and deals a second turn and river', () => {
   const t = new TestTable({ stacks: [500, 500], config: { maxRuns: 2 } });
   t.deal({ button: 0, holes: { 0: ACES, 1: KINGS }, board: BOARD, secondBoard: 'Kd Kc' });

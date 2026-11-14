@@ -26,6 +26,8 @@ const OPEN_TO_ANOTHER_BUILD: Record<ApiRequest['op'], boolean> = {
   deletePreset: false,
   // A failure a page saw is worth hearing of whatever build it is, and changes no table
   report: true,
+  players: true,
+  identify: false,
 };
 
 const STALE: ApiError = { ok: false, code: 'stale', error: OUTDATED_MESSAGE };

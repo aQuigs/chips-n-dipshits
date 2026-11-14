@@ -74,6 +74,12 @@ export interface Member {
    * on the table, so they show up in the stack and in what is cashed out, never as bought.
    */
   transferred: number;
+  /**
+   * Which of the players the game knows from night to night this member is, by that player's id on the
+   * game's list (`PlayerStore`), or null for nobody the list knows. A label and never a key: anyone may
+   * say they are anyone, and nothing of a seat, a token or a card follows from it.
+   */
+  identity: string | null;
 }
 
 export interface Seat {

@@ -3,6 +3,7 @@ import { ByteRng } from '../server/byteRng.ts';
 import { failureOf, PokerService } from '../server/service.ts';
 import type { ApiError, Built } from '../server/api.ts';
 import { SheetErrorLog } from './sheetErrorLog.ts';
+import { SheetPlayerStore } from './sheetPlayerStore.ts';
 import { SheetPresetStore } from './sheetPresetStore.ts';
 import { SheetStore } from './sheetStore.ts';
 
@@ -58,15 +59,18 @@ function service(): BuildGate {
   }
 
   const spreadsheet = () => SpreadsheetApp.getActiveSpreadsheet();
+  const cache = CacheService.getScriptCache();
   const lock = LockService.getScriptLock();
   const flush = () => SpreadsheetApp.flush();
+  const rng = new ByteRng(uuidBytes);
 
   serviceForThisRun = new BuildGate(
     new PokerService({
-      store: new SheetStore({ spreadsheet, cache: CacheService.getScriptCache(), lock, flush, errors: errors() }),
+      store: new SheetStore({ spreadsheet, cache, lock, flush, errors: errors() }),
       presets: new SheetPresetStore({ spreadsheet, lock, flush }),
+      players: new SheetPlayerStore({ spreadsheet, cache, lock, flush, rng }),
       clock: { now: () => Date.now() },
-      rng: new ByteRng(uuidBytes),
+      rng,
       errors: errors(),
     }),
     BUILD_ID,

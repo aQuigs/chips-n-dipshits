@@ -24,6 +24,7 @@ import { boardsDealt } from '../src/engine/index.ts';
 import type { Command, HandEvent, TableConfig, TableState, TableView } from '../src/engine/index.ts';
 import type { ApiRequest, ApiResponse, Auth, Built } from '../src/server/api.ts';
 import { BuildGate } from '../src/server/build.ts';
+import { MemoryPlayerStore } from '../src/server/memoryPlayerStore.ts';
 import { MemoryPresetStore } from '../src/server/memoryPresetStore.ts';
 import { MemoryStore } from '../src/server/memoryStore.ts';
 import { PokerService } from '../src/server/service.ts';
@@ -48,7 +49,7 @@ class Server {
   private readonly auths = new Map<string, Auth>();
 
   constructor(players: { name: string; stack: number }[], config: Partial<TableConfig> = {}) {
-    this.game = new PokerService({ store: this.store, presets: new MemoryPresetStore(), clock: { now: () => this.now }, rng: seededRng(7) });
+    this.game = new PokerService({ store: this.store, presets: new MemoryPresetStore(), players: new MemoryPlayerStore(seededRng(8)), clock: { now: () => this.now }, rng: seededRng(7) });
     this.gate = new BuildGate(this.game, BUILD);
 
     const [host, ...others] = players;

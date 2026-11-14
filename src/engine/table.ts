@@ -3,19 +3,18 @@ import { dispatch } from './commands/index.ts';
 import { newConfig } from './config.ts';
 import { startHand, stepHand, TIMING } from './hand.ts';
 import { handEnded } from './handEnd.ts';
-import { addFeed, eligibleSeats } from './seats.ts';
+import { numberedName, playerName, readAlike } from './names.ts';
+import type { KnownPlayer } from './players.ts';
+import { addFeed, eligibleSeats, memberOf } from './seats.ts';
 import { newTonight } from './tonight.ts';
 import { GameError, SEAT_COUNT, STATE_SCHEMA } from './types.ts';
 import type { Command, Ctx, Member, TableState } from './types.ts';
-import { LIMITS, text } from './validate.ts';
+import { LIMITS } from './validate.ts';
 
 // Without look-alike characters, so an id read aloud or retyped survives
 const ID_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const PLAYER_ID_LENGTH = 8;
 const TOKEN_LENGTH = 24;
-
-// Starting with a letter or digit keeps a name from being read as a formula when it lands in a spreadsheet
-const NAME_PATTERN = /^[\p{L}\p{N}][\p{L}\p{N} _.'!?-]*$/u;
 
 // A tick that cascades through more steps than this means a deadline is not moving forward
 const MAX_STEPS_PER_TICK = 200;
@@ -31,61 +30,50 @@ export function randomId(rng: Rng, length: number): string {
 }
 
 /**
- * Letters of other alphabets drawn like a Latin one, each followed by the letter it passes for.
- * Cyrillic and Greek are the two that are on every keyboard and stand in for Latin letter by letter;
- * this is not Unicode's whole list of look-alikes.
+ * Who a new member is, as far as the game's list of players goes. `identity` is their id on the list,
+ * or null for nobody it knows. `keepsName` says the name is the list's and not theirs to change, so a
+ * table that has the name already makes room for them as "Bob 2" instead of turning them away.
  */
-const LOOKALIKE_PAIRS = [
-  '\u0410A\u0412B\u0415E\u0401E\u041AK\u041CM\u041DH\u041EO\u0420P\u0421C\u0422T\u0423Y\u0425X\u0405S\u0406I\u0408J\u0430a\u0432b\u0435e\u0451e\u043Ak\u043Cm\u043Dh\u043Eo\u0440p\u0441c\u0442t\u0443y\u0445x\u0455s\u0456i\u0458j\u0433r\u043Fn',
-  '\u0391A\u0392B\u0395E\u0396Z\u0397H\u0399I\u039AK\u039CM\u039DN\u039FO\u03A1P\u03A4T\u03A5Y\u03A7X\u03B1a\u03B2b\u03B5e\u03B7n\u03B9i\u03BAk\u03BCu\u03BDv\u03BFo\u03C1p\u03C4t\u03C5u\u03C7x',
-].join('');
-const LOOKALIKES = new Map<string, string>();
-for (let index = 0; index < LOOKALIKE_PAIRS.length; index += 2) {
-  LOOKALIKES.set(LOOKALIKE_PAIRS[index]!, LOOKALIKE_PAIRS[index + 1]!);
+export interface Arriving {
+  identity: string | null;
+  keepsName: boolean;
 }
+
+const NOBODY_KNOWN: Arriving = { identity: null, keepsName: false };
 
 /**
- * What a name comes down to when read at a glance: two names with the same skeleton can't be told
- * apart at the table or in who pays whom. Besides other alphabets, a capital I, a small l and a 1 are
- * one stroke in most fonts ("Big AI" for "Big Al"), and so are O and 0.
+ * The name someone would go by as a new member of this table, or the reason the table can't take
+ * them: a name it already has, or no room. It changes nothing, so it also answers before anyone joins.
  */
-function skeleton(name: string): string {
-  const latin = [...name.normalize('NFKC')].map((letter) => LOOKALIKES.get(letter) ?? letter).join('');
-
-  return latin.replace(/[I1]/g, 'l').replace(/0/g, 'o').toLowerCase();
-}
-
-function playerName(value: unknown): string {
-  const name = text(value, 'Your name', LIMITS.nameLength);
-
-  if (!NAME_PATTERN.test(name)) {
-    throw new GameError('Names start with a letter or number and use only letters, numbers, spaces and . _ - \' ! ?');
-  }
-
-  // One letter borrowed from another alphabet is how a name is made to read as someone else's, and
-  // no list of look-alikes covers every alphabet there is
-  if (/\p{Script=Latin}/u.test(name) && /(?!\p{Script=Latin})\p{L}/u.test(name)) {
-    throw new GameError('Names use one alphabet, not a mix');
-  }
-
-  return name;
-}
-
-function newMember(state: TableState, rawName: unknown, rng: Rng): Member {
+export function joiningName(state: TableState, rawName: unknown, keepsName = false): string {
   const name = playerName(rawName);
+  const holderOf = (wanted: string) => state.members.find((m) => readAlike(m.name, wanted));
 
-  const taken = state.members.find((m) => skeleton(m.name) === skeleton(name));
-  if (taken) {
+  const holder = holderOf(name);
+  if (holder && !keepsName) {
     throw new GameError(
-      taken.name.toLowerCase() === name.toLowerCase()
+      holder.name.toLowerCase() === name.toLowerCase()
         ? `Someone at this table is already called ${name}`
-        : `That name reads too much like ${taken.name}, who is already at this table`,
+        : `That name reads too much like ${holder.name}, who is already at this table`,
     );
   }
 
   if (state.members.length >= LIMITS.members) {
     throw new GameError('This table is full. The host can make room by removing someone who is only watching');
   }
+
+  // A table has fewer members than there are numbers to try, so one of them is free
+  let free = name;
+  for (let number = 2; holderOf(free); number++) {
+    free = numberedName(name, number);
+  }
+
+  return free;
+}
+
+function newMember(state: TableState, rawName: unknown, rng: Rng, arriving: Arriving): Member {
+  // Settled before anything is drawn, so a join the table turns away takes nothing from its randomness
+  const name = joiningName(state, rawName, arriving.keepsName);
 
   const member: Member = {
     id: randomId(rng, PLAYER_ID_LENGTH),
@@ -94,13 +82,14 @@ function newMember(state: TableState, rawName: unknown, rng: Rng): Member {
     buyIn: 0,
     cashOut: 0,
     transferred: 0,
+    identity: arriving.identity,
   };
   state.members.push(member);
 
   return member;
 }
 
-export function createTable(id: string, hostName: unknown, configInput: unknown, ctx: Ctx): { state: TableState; host: Member } {
+export function createTable(id: string, hostName: unknown, configInput: unknown, ctx: Ctx, arriving: Arriving = NOBODY_KNOWN): { state: TableState; host: Member } {
   const state: TableState = {
     schema: STATE_SCHEMA,
     id,
@@ -130,18 +119,36 @@ export function createTable(id: string, hostName: unknown, configInput: unknown,
     reactions: [],
   };
 
-  const host = newMember(state, hostName, ctx.rng);
+  const host = newMember(state, hostName, ctx.rng, arriving);
   state.hostId = host.id;
   addFeed(state, ctx.now, 'system', null, `${host.name} opened the table`);
 
   return { state, host };
 }
 
-export function addMember(state: TableState, name: unknown, ctx: Ctx): Member {
-  const member = newMember(state, name, ctx.rng);
+export function addMember(state: TableState, name: unknown, ctx: Ctx, arriving: Arriving = NOBODY_KNOWN): Member {
+  const member = newMember(state, name, ctx.rng, arriving);
   addFeed(state, ctx.now, 'system', null, `${member.name} joined`);
 
   return member;
+}
+
+/**
+ * Notes which known player a member says they are. It changes nothing else of them: the name they go
+ * by here stays, so when the list has them under another the table is told, as it would have seen had
+ * they joined under it.
+ */
+export function setIdentity(state: TableState, playerId: string, known: KnownPlayer, ctx: Ctx): void {
+  const member = memberOf(state, playerId);
+  if (member.identity === known.id) {
+    return;
+  }
+
+  member.identity = known.id;
+
+  if (member.name !== known.name) {
+    addFeed(state, ctx.now, 'system', null, `${member.name} is ${known.name} on the list of players`);
+  }
 }
 
 /** With no hand on the table, the next one is dealt shortly after two players are able to play. */

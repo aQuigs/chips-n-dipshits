@@ -44,9 +44,10 @@ export class Calls {
  * if it looks like one. A cell takes 50,000 characters and no more, and half an emoji does not survive
  * being stored. A number shows only as many decimals as its cell's format has. Given a lock, it refuses
  * a write made without holding it, since the store keeps the cache in step with the sheet only that way.
- * Given a row limit, it refuses a write below it. A leading apostrophe makes the rest of a string
- * text in a cell that isn't formatted as text, and stays in one that is. A tab that is written without
- * the lock by design (`lockFree`) takes any write without it.
+ * Given a row limit, it refuses a write below it. Given a text limit, it refuses longer text in any cell
+ * below the headers. A leading apostrophe makes the rest of a string text in a cell that isn't formatted
+ * as text, and stays in one that is. A tab that is written without the lock by design (`lockFree`) takes
+ * any write without it.
  */
 export class FakeSheet implements SheetLike {
   cells: unknown[][] = [];
@@ -60,14 +61,19 @@ export class FakeSheet implements SheetLike {
   private readonly calls: Calls | null;
   private readonly name: string;
   private readonly lockFree: boolean;
+  private readonly textLimit: number;
 
-  /** `rowLimit` is the most rows, headers included, the store may ever write to. `calls` is told of every call, under the tab's `name`. */
-  constructor(lock: FakeLock | null = null, rowLimit = Infinity, calls: Calls | null = null, name = 'Sheet', lockFree = false) {
+  /**
+   * `rowLimit` is the most rows, headers included, the store may ever write to. `calls` is told of every
+   * call, under the tab's `name`. `textLimit` is the most characters the store may write to a cell below the headers.
+   */
+  constructor(lock: FakeLock | null = null, rowLimit = Infinity, calls: Calls | null = null, name = 'Sheet', lockFree = false, textLimit = Infinity) {
     this.lock = lock;
     this.rowLimit = rowLimit;
     this.calls = calls;
     this.name = name;
     this.lockFree = lockFree;
+    this.textLimit = textLimit;
   }
 
   private note(call: string): void {
@@ -125,6 +131,10 @@ export class FakeSheet implements SheetLike {
       setValues: (values: unknown[][]): void => {
         this.note('setValues');
         this.mustBeWritable(row - 1 + numRows, values.flat());
+
+        if (values.some((line, i) => row + i > 1 && line.some((value) => typeof value === 'string' && value.length > this.textLimit))) {
+          throw new Error(`Text longer than the ${this.textLimit} characters a cell of this tab may hold`);
+        }
 
         each(values, (r, c, i, j) => {
           (this.cells[r] ??= [])[c] = this.interpret(values[i]![j], this.formats[r]?.[c]);
@@ -246,17 +256,20 @@ export class FakeSpreadsheet implements SpreadsheetLike {
   private readonly rowLimits: Record<string, number>;
   private readonly calls: Calls | null;
   private readonly lockFree: Set<string>;
+  private readonly textLimits: Record<string, number>;
 
   /**
    * With a lock, every sheet in it refuses writes made without holding it, but for the tabs named in
    * `lockFree`, which are made and written without it by design. `rowLimits` caps the rows of the tabs
-   * it names. `calls` is told of every call to it and to its tabs.
+   * it names, and `textLimits` the text in each of their cells below the headers. `calls` is told of
+   * every call to it and to its tabs.
    */
-  constructor(lock: FakeLock | null = null, rowLimits: Record<string, number> = {}, calls: Calls | null = null, lockFree: string[] = []) {
+  constructor(lock: FakeLock | null = null, rowLimits: Record<string, number> = {}, calls: Calls | null = null, lockFree: string[] = [], textLimits: Record<string, number> = {}) {
     this.lock = lock;
     this.rowLimits = rowLimits;
     this.calls = calls;
     this.lockFree = new Set(lockFree);
+    this.textLimits = textLimits;
   }
 
   getSheetByName(name: string): FakeSheet | null {
@@ -276,7 +289,7 @@ export class FakeSpreadsheet implements SpreadsheetLike {
       throw new Error(`A sheet with the name "${name}" already exists. Please enter another name.`);
     }
 
-    const sheet = new FakeSheet(this.lock, this.rowLimits[name], this.calls, name, this.lockFree.has(name));
+    const sheet = new FakeSheet(this.lock, this.rowLimits[name], this.calls, name, this.lockFree.has(name), this.textLimits[name]);
     this.sheets.set(name, sheet);
 
     return sheet;

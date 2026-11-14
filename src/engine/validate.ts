@@ -18,6 +18,12 @@ export const LIMITS = {
   lastHands: 10,
   /** How many presets the group may keep. Few enough to pick from on a phone. */
   presets: 20,
+  /**
+   * How many players the game knows by name from night to night. More than a home game sees in years, and
+   * few enough that the whole list is one small read of the Sheet and one cache value, however many
+   * strangers find the game's address.
+   */
+  knownPlayers: 200,
 };
 
 export function isWholeIn(value: unknown, min: number, max: number): value is number {

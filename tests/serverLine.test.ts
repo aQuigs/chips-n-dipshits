@@ -6,6 +6,7 @@ import type { TableListener } from '../src/client/connection.ts';
 import type { Transport } from '../src/client/transport.ts';
 import type { ApiError, ApiRequest, ApiResponse, Auth, Built } from '../src/server/api.ts';
 import { BuildGate } from '../src/server/build.ts';
+import { MemoryPlayerStore } from '../src/server/memoryPlayerStore.ts';
 import { MemoryPresetStore } from '../src/server/memoryPresetStore.ts';
 import { MemoryStore } from '../src/server/memoryStore.ts';
 import { PUT_AWAY_AFTER_MS, PUT_AWAY_MESSAGE } from '../src/server/putAway.ts';
@@ -18,7 +19,7 @@ const NEWER_BUILD = 'cccccccccccc';
 /** A server the test can update under the page and move the clock of, and everything the page sent it. */
 function server() {
   let ahead = 0;
-  const game = new PokerService({ store: new MemoryStore(), presets: new MemoryPresetStore(), clock: { now: () => Date.now() + ahead }, rng: seededRng(3) });
+  const game = new PokerService({ store: new MemoryStore(), presets: new MemoryPresetStore(), players: new MemoryPlayerStore(seededRng(4)), clock: { now: () => Date.now() + ahead }, rng: seededRng(3) });
   const sent: (ApiRequest & Built)[] = [];
   let gate = new BuildGate(game, PAGE_BUILD);
 

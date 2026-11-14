@@ -80,6 +80,9 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
   const shownByChoice = { oneCard: 0, otherAfter: 0, both: 0 };
   const straddles: Record<Straddle | 'passedOver' | 'overAnAnte' | 'shownDown', number> = { straddle: 0, 'double straddle': 0, 'button straddle': 0, 'Mississippi straddle': 0, passedOver: 0, overAnAnte: 0, shownDown: 0 };
 
+  // Tables that ended with a member the list of players knows, one it does not, and two who said they were the same player
+  const identities = { known: 0, nobody: 0, shared: 0 };
+
   const sent = new Set<CommandType>();
 
   for (let seed = 1; seed <= TABLES; seed++) {
@@ -129,6 +132,11 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
     }
 
     blinds.forgivenTables += t.state.config.missedBlinds === 'forgiven' ? 1 : 0;
+
+    const saidWho = t.state.members.flatMap((member) => (member.identity === null ? [] : [member.identity]));
+    identities.known += saidWho.length > 0 ? 1 : 0;
+    identities.nobody += saidWho.length < t.state.members.length ? 1 : 0;
+    identities.shared += new Set(saidWho).size < saidWho.length ? 1 : 0;
 
     assertChipsConserved(t.state);
     assertLedgerAgrees(t.state, t.effects);
@@ -251,6 +259,10 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
   assert.ok(doubleBoards.shownDown >= TABLES && doubleBoards.wonUncontested >= TABLES / 4, doubles);
   // A side pot in a double-board bomb pot comes about once in a dozen random tables, which is tested by the hundred in tests/doubleBoard.test.ts
   assert.ok(doubleBoards.ranOut >= TABLES / 4 && doubleBoards.withSidePots >= TABLES / 20, doubles);
+
+  // Who a member says they are changes nothing of the game, which every count above being what it was shows
+  const known = `members by who they said they are: ${JSON.stringify(identities)}`;
+  assert.ok(identities.known >= TABLES / 4 && identities.nobody === TABLES && identities.shared >= TABLES / 20, known);
 
   // Every command the table takes is sent, as part of the game or beside it, but those named as not yet
   const unsent = Object.keys(HANDLERS).filter((type) => !sent.has(type as CommandType) && !NOT_SENT_AT_RANDOM.has(type as CommandType));

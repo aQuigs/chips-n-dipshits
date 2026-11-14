@@ -6,20 +6,22 @@ import type { Command, Rng, TableView } from '../src/engine/index.ts';
 import { SheetStore } from '../src/gas/sheetStore.ts';
 import type { ApiResponse, Auth } from '../src/server/api.ts';
 import { ByteRng } from '../src/server/byteRng.ts';
+import { MemoryPlayerStore } from '../src/server/memoryPlayerStore.ts';
 import { MemoryPresetStore } from '../src/server/memoryPresetStore.ts';
 import { MemoryStore } from '../src/server/memoryStore.ts';
 import { PUT_AWAY_MESSAGE } from '../src/server/putAway.ts';
+import type { PlayerStore } from '../src/server/playerStore.ts';
 import { PokerService } from '../src/server/service.ts';
 import type { TableStore } from '../src/server/store.ts';
 import { FakeCache, FakeLock, FakeSpreadsheet } from './fakes.ts';
 import { DAY_MS, seededRng } from './helpers.ts';
 
-function setup(store: TableStore = new MemoryStore()) {
+function setup(store: TableStore = new MemoryStore(), players: PlayerStore = new MemoryPlayerStore(seededRng(12))) {
   const clock = { time: 1_000_000, now: () => clock.time };
   const presets = new MemoryPresetStore();
-  const service = new PokerService({ store, presets, clock, rng: seededRng(11) });
+  const service = new PokerService({ store, presets, players, clock, rng: seededRng(11) });
 
-  return { service, store, presets, clock };
+  return { service, store, presets, players, clock };
 }
 
 type Joined = Extract<ApiResponse, { kind: 'joined' }>;
@@ -72,7 +74,7 @@ test('creating a table makes the creator its host and hands back their credentia
 
   assert.match(response.view.id, /^[A-Z2-9]{6}$/);
   assert.equal(response.view.version, 1);
-  assert.deepEqual(response.view.you, { id: response.auth.id, name: 'Quigs', role: 'host', seat: null });
+  assert.deepEqual(response.view.you, { id: response.auth.id, name: 'Quigs', role: 'host', seat: null, identity: null });
   assert.equal(response.view.config.bigBlind, 2);
   assert.equal(store.read(response.view.id)!.members[0]!.token, response.auth.token);
 });

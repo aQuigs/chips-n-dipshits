@@ -2,16 +2,20 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { addMember, BADGES, createTable, DEFAULT_CONFIG, LIMITS, prettyCards, presetSettings, REACTIONS, REACTIONS_LIVE } from '../src/engine/index.ts';
-import type { Effect, HandRecord, TableConfig, TableState } from '../src/engine/index.ts';
+import type { Effect, HandRecord, KnownPlayer, Rng, TableConfig, TableState } from '../src/engine/index.ts';
 import { ERRORS_TAB, REPORTS_PER_RUN, SheetErrorLog } from '../src/gas/sheetErrorLog.ts';
+import { SheetPlayerStore } from '../src/gas/sheetPlayerStore.ts';
 import { SheetPresetStore } from '../src/gas/sheetPresetStore.ts';
 import { TEXT, TIMESTAMP, WHOLE_NUMBER } from '../src/gas/sheets.ts';
 import type { SpreadsheetLike } from '../src/gas/sheets.ts';
 import { SheetStore } from '../src/gas/sheetStore.ts';
 import { ERROR_LIMITS, NOWHERE } from '../src/server/errorLog.ts';
 import { MemoryErrorLog } from '../src/server/memoryErrorLog.ts';
+import { MemoryPlayerStore } from '../src/server/memoryPlayerStore.ts';
 import { MemoryPresetStore } from '../src/server/memoryPresetStore.ts';
 import { MemoryStore } from '../src/server/memoryStore.ts';
+import { SEEN_EVERY_MS } from '../src/server/playerStore.ts';
+import type { PlayerStore } from '../src/server/playerStore.ts';
 import type { PresetStore, SavedPreset } from '../src/server/presetStore.ts';
 import type { LastWords } from '../src/server/putAway.ts';
 import { PokerService } from '../src/server/service.ts';
@@ -2050,7 +2054,7 @@ function sheetGame(logged: boolean) {
   const clock = { now: () => NOW };
   const errors = logged ? new SheetErrorLog({ spreadsheet: () => book, cache: new FakeCache(logCalls), clock, build: 'thisbuild123' }) : NOWHERE;
   const sheetStore = new SheetStore({ spreadsheet: () => store.spreadsheet, cache: store.cache, lock: store.lock, flush: () => store.calls.note('flush'), errors });
-  const game = new PokerService({ store: sheetStore, presets: new MemoryPresetStore(), clock, rng: seededRng(9), errors });
+  const game = new PokerService({ store: sheetStore, presets: new MemoryPresetStore(), players: new MemoryPlayerStore(seededRng(10)), clock, rng: seededRng(9), errors });
   const host = game.handle({ op: 'create', name: 'Host', config: { minBuyIn: 100 } });
   assert.ok(host.ok && host.kind === 'joined');
 
@@ -2170,4 +2174,440 @@ test('two runs that fail first at the same moment make one Errors tab with one h
   const first = logOn(lookedEarly(between, () => second.report({ where: 'server poll', error: 'second' })));
   assert.doesNotThrow(() => first.report({ where: 'server act', error: 'first' }));
   assert.deepEqual(written(between), ['Where', 'server act']);
+});
+
+// ---- The players the game knows ----
+
+const PLAYER_ROWS = 1 + LIMITS.knownPlayers;
+const PLAYER_HEADERS = ['ID (the game knows a player by this, so leave it as it is)', 'Name', 'First seen', 'Last seen'];
+const PLAYER_ID = /^[A-HJ-NP-Z2-9]{10}$/;
+
+function playerSetup(rng: Rng = seededRng(77)) {
+  const lock = new FakeLock();
+  const calls = new Calls();
+  const spreadsheet = new FakeSpreadsheet(lock, { Players: PLAYER_ROWS }, calls, [], { Players: LIMITS.nameLength });
+  const cache = new FakeCache(calls);
+
+  /** A script run of its own, as every request of the deployed game is: nothing is carried over but the Sheet and the cache. */
+  const run = () => new SheetPlayerStore({ spreadsheet: () => spreadsheet, cache, lock, flush: () => calls.note('flush'), rng });
+
+  // Looked at without a call of its own, which the counts and the failures below would take for the store's
+  const tab = () => spreadsheet.sheets.get('Players')!;
+
+  /** What the store says with the cache as it is, held to what the tab alone gives: the cache must never be behind it. */
+  const assertCacheNotBehind = (when: string): KnownPlayer[] => {
+    const said = run().list();
+
+    cache.entries.clear();
+    assert.deepEqual(said, run().list(), `${when}: the cache was behind the tab`);
+
+    return said;
+  };
+
+  return { run, spreadsheet, cache, lock, calls, tab, assertCacheNotBehind };
+}
+
+/** The calls made to the Sheet itself, by kind, which are the slow ones. */
+function sheetCalls(calls: Calls) {
+  return {
+    opens: calls.count('.getSheetByName'),
+    made: calls.count('.insertSheet'),
+    lastRows: calls.count('.getLastRow'),
+    reads: calls.count('.getValues'),
+    formats: calls.count('.setNumberFormats'),
+    writes: calls.count('.setValues'),
+    flushes: calls.count('flush'),
+  };
+}
+
+const NO_SHEET_CALLS = { opens: 0, made: 0, lastRows: 0, reads: 0, formats: 0, writes: 0, flushes: 0 };
+
+const playerNames = (store: PlayerStore) => store.list().map((player) => player.name);
+
+for (const [kind, make] of [
+  ['in the Sheet', () => playerSetup().run()],
+  ['in memory', () => new MemoryPlayerStore(seededRng(77))],
+] as [string, () => PlayerStore][]) {
+  test(`players ${kind}: someone new gets an id for good, and the list has the most recently seen first`, () => {
+    const store = make();
+    const ann = store.add('Ann', NOW);
+    const bob = store.add('  Big   Bob ', NOW + 1000);
+
+    assert.match(ann.id, PLAYER_ID);
+    assert.notEqual(ann.id, bob.id);
+    assert.deepEqual(bob, { id: bob.id, name: 'Big Bob' }, 'a name is kept as a table would keep it');
+    assert.deepEqual(store.list(), [bob, ann]);
+
+    // Seen again the same night changes nothing; the next night it moves them to the front
+    assert.deepEqual(store.seen(ann.id, NOW + SEEN_EVERY_MS - 1), ann);
+    assert.deepEqual(store.list(), [bob, ann]);
+    assert.deepEqual(store.seen(ann.id, NOW + SEEN_EVERY_MS), ann);
+    assert.deepEqual(store.list(), [ann, bob]);
+
+    assert.equal(store.seen('NOBODY2345', NOW), null);
+    assert.equal(store.seen('', NOW), null);
+    assert.deepEqual(store.list(), [ann, bob]);
+  });
+
+  test(`players ${kind}: a name that reads like one on the list is refused, naming whose it is`, () => {
+    const store = make();
+    store.add('Big Al', NOW);
+    store.add('Bob', NOW);
+
+    for (const [name, holder] of [['big al', 'Big Al'], ['BIG  AL', 'Big Al'], ['BigAl', 'Big Al'], ['Big AI', 'Big Al'], [' bob ', 'Bob'], ['B0b', 'Bob'], ['B o b', 'Bob']]) {
+      assert.throws(() => store.add(name!, NOW), { name: 'NameOnList', message: `${holder} is already on the list of players. If that is you, pick ${holder} from the list. If not, add something to your name` }, name);
+    }
+
+    assert.deepEqual(playerNames(store).sort(), ['Big Al', 'Bob']);
+    assert.equal(store.add('Bob K', NOW).name, 'Bob K');
+  });
+
+  test(`players ${kind}: only what a table takes for a name gets on the list, up to the longest`, () => {
+    const store = make();
+
+    for (const name of ['=1+1', '+1', '-1', '@home', '=SUM(A1)', '', '   ', 'x'.repeat(LIMITS.nameLength + 1), 'Alеx']) {
+      assert.throws(() => store.add(name, NOW), { name: 'GameError' }, name);
+    }
+
+    assert.deepEqual(store.list(), []);
+
+    const longest = 'W'.repeat(LIMITS.nameLength);
+    assert.deepEqual(playerNames(store.add(longest, NOW) && store), [longest]);
+  });
+
+  test(`players ${kind}: the list takes ${LIMITS.knownPlayers} players and then nobody new, and those on it are still found`, () => {
+    const store = make();
+    const first = store.add('Player 0', NOW);
+
+    for (let index = 1; index < LIMITS.knownPlayers; index++) {
+      store.add(`Player ${index}`, NOW);
+    }
+
+    assert.throws(() => store.add('One more', NOW), { name: 'ListFull', message: `The list of players is full at ${LIMITS.knownPlayers}. Whoever runs the game can make room in its Sheet` });
+    assert.throws(() => store.add('player 7', NOW), { name: 'NameOnList' }, 'a name on the list is still told so, full or not');
+    assert.equal(store.list().length, LIMITS.knownPlayers);
+    assert.deepEqual(store.seen(first.id, NOW + DAY_MS), first);
+    assert.deepEqual(store.list()[0], first);
+  });
+}
+
+test('players in a Sheet that has never had one: asking finds nobody and makes no tab, and the first to join makes it, with its headers and their row', () => {
+  const { run, spreadsheet, tab } = playerSetup();
+
+  assert.deepEqual(run().list(), []);
+  assert.equal(run().seen('ABCDEFGH23', NOW), null);
+  assert.equal(spreadsheet.sheets.has('Players'), false, 'reading made the tab');
+
+  const quigs = run().add('Quigs', NOW);
+
+  assert.deepEqual(tab().cells, [PLAYER_HEADERS, [quigs.id, 'Quigs', new Date(NOW), new Date(NOW)]]);
+  assert.deepEqual(tab().formats[1], ['@', '@', 'yyyy-mm-dd hh:mm:ss', 'yyyy-mm-dd hh:mm:ss']);
+  assert.deepEqual(run().list(), [quigs]);
+});
+
+test('a Players tab with nothing in it, as when making it failed halfway, reads as nobody known and gets its headers with the first player', () => {
+  const { run, spreadsheet, tab, lock } = playerSetup();
+
+  lock.held = true;
+  spreadsheet.insertSheet('Players');
+  lock.held = false;
+
+  assert.deepEqual(run().list(), []);
+
+  const quigs = run().add('Quigs', NOW);
+  assert.deepEqual(tab().cells, [PLAYER_HEADERS, [quigs.id, 'Quigs', new Date(NOW), new Date(NOW)]]);
+});
+
+test('a Players tab under other headers is read by where things are, and its headers are left as someone wrote them', () => {
+  const { run, tab } = playerSetup();
+  const quigs = run().add('Quigs', NOW);
+
+  tab().cells[0] = ['Who', 'Called', 'Since', 'Lately', 'Notes'];
+  tab().cells[1]![4] = 'owes me a beer';
+
+  const ann = run().add('Ann', NOW + 1000);
+
+  assert.deepEqual(tab().cells[0], ['Who', 'Called', 'Since', 'Lately', 'Notes']);
+  assert.deepEqual(tab().cells[1]![4], 'owes me a beer');
+  assert.deepEqual(run().list(), [ann, quigs]);
+});
+
+test('ids and names that a spreadsheet would take for a number or a date are kept as the text they are', () => {
+  // An id spelled 2E56789234, which a cell not formatted as text keeps as 2 followed by 56789234 zeros
+  const letters = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const spelled = [...'2E56789234', ...['A', 'B', 'C', 'D'].map((letter) => letter.repeat(10)).join('')].map((letter) => letters.indexOf(letter));
+  const { run, cache, tab } = playerSetup({ int: () => spelled.shift()! });
+  const names = ['1E5', '007', '3.14', '1-2', '12'];
+
+  const added = names.map((name, index) => run().add(name, NOW + index));
+  assert.equal(added[0]!.id, '2E56789234');
+
+  cache.entries.clear();
+  assert.deepEqual(run().list(), [...added].reverse(), 'read back from the tab itself');
+  assert.deepEqual(tab().cells.slice(1).map((row) => row[1]), names);
+  assert.equal(tab().cells[1]![0], '2E56789234');
+});
+
+test('rows of the Players tab changed by hand: a renamed player keeps their id, a removed one is nobody, and what can no longer be read is skipped and keeps its place', () => {
+  const { run, cache, tab } = playerSetup();
+  const [ann, bob, cat, dee, eve, flo] = ['Ann', 'Bob', 'Cat', 'Dee', 'Eve', 'Flo'].map((name, index) => run().add(name, NOW + index));
+
+  const cells = tab().cells;
+  cells[1]![1] = 'Annie';
+  cells[2] = ['', '', '', ''];
+  cells[3]![0] = 'not an id';
+  cells[4]![1] = 'A name far too long to be one';
+  cells[5]![0] = ann!.id;
+  cells[6]![1] = 'ANNIE';
+  cells.push(['', 'Typed in by hand', '', '']);
+  cells[40] = ['', '', '', '', '', 'ask Stu who this was'];
+
+  // Until the cache entry runs out the game goes on with the list as it was
+  assert.deepEqual(run().seen(bob!.id, NOW), bob);
+  cache.entries.clear();
+
+  assert.deepEqual(run().list(), [{ id: ann!.id, name: 'Annie' }]);
+  assert.deepEqual(run().seen(ann!.id, NOW), { id: ann!.id, name: 'Annie' });
+  for (const gone of [bob, cat, dee, eve, flo]) {
+    assert.equal(run().seen(gone!.id, NOW), null, gone!.name);
+  }
+
+  // Someone new takes the row that was cleared, and nothing else is touched
+  const before = JSON.stringify(cells.filter((_row, index) => index !== 2));
+  const gus = run().add('Gus', NOW + 100);
+  assert.equal(cells[2]![0], gus.id);
+  assert.equal(JSON.stringify(cells.filter((_row, index) => index !== 2)), before);
+
+  // A row that can't be read is nobody by any name, and still counts toward how many the list holds
+  assert.equal(run().add('Cat', NOW + 200).name, 'Cat');
+  for (let index = 0; run().list().length + 5 < LIMITS.knownPlayers; index++) {
+    run().add(`Player ${index}`, NOW);
+  }
+
+  assert.throws(() => run().add('One more', NOW), { name: 'ListFull' });
+  assert.ok(tab().getLastRow() <= PLAYER_ROWS);
+});
+
+test('a player\'s last-seen cell that is empty or says something else counts as never seen, and is written the next time they are', () => {
+  const { run, cache, tab } = playerSetup();
+  const ann = run().add('Ann', NOW);
+  const bob = run().add('Bob', NOW + 1);
+
+  tab().cells[2]![3] = 'last Friday';
+  cache.entries.clear();
+  assert.deepEqual(run().list(), [ann, bob]);
+
+  assert.deepEqual(run().seen(bob.id, NOW + 2), bob);
+  assert.deepEqual(tab().cells[2]![3], new Date(NOW + 2));
+  assert.deepEqual(run().list(), [bob, ann]);
+});
+
+test('what a join costs the Sheet: nothing while the list is cached, one read when it is not, and a fixed handful of calls for someone new or a note that a player was seen, however many are known', () => {
+  for (const known of [0, 50, LIMITS.knownPlayers - 1]) {
+    const { run, cache, calls } = playerSetup();
+    const players = Array.from({ length: known }, (_player, index) => run().add(`Player ${index}`, NOW));
+    const counted = (work: () => void) => {
+      calls.made = [];
+      work();
+
+      return { ...sheetCalls(calls), cacheGets: calls.count('cache.get'), cachePuts: calls.count('cache.put') };
+    };
+    const at = `with ${known} known`;
+
+    cache.entries.clear();
+    assert.deepEqual(counted(() => run().list()), { ...NO_SHEET_CALLS, opens: 1, lastRows: known > 0 ? 1 : 0, reads: known > 0 ? 1 : 0, cacheGets: 2, cachePuts: 1 }, `${at}: the list, not cached`);
+    assert.deepEqual(counted(() => run().list()), { ...NO_SHEET_CALLS, cacheGets: 1, cachePuts: 0 }, `${at}: the list, cached`);
+
+    if (known > 0) {
+      const player = players[known - 1]!;
+
+      assert.deepEqual(counted(() => run().seen(player.id, NOW + 1000)), { ...NO_SHEET_CALLS, cacheGets: 1, cachePuts: 0 }, `${at}: a known player joins on a night they were already seen`);
+      assert.deepEqual(counted(() => run().seen('NOBODY2345', NOW)), { ...NO_SHEET_CALLS, cacheGets: 1, cachePuts: 0 }, `${at}: an id the list does not have`);
+      assert.deepEqual(
+        counted(() => run().seen(player.id, NOW + SEEN_EVERY_MS)),
+        { opens: 1, made: 0, lastRows: 1, reads: 1, formats: 1, writes: 1, flushes: 1, cacheGets: 1, cachePuts: 1 },
+        `${at}: a known player joins on a new night`,
+      );
+    }
+
+    assert.deepEqual(
+      counted(() => run().add('Someone new', NOW)),
+      { opens: 1, made: known > 0 ? 0 : 1, lastRows: 1, reads: 1, formats: 1, writes: known > 0 ? 1 : 2, flushes: 1, cacheGets: 0, cachePuts: 1 },
+      `${at}: someone new`,
+    );
+  }
+});
+
+test('the list of players is refilled once when everyone opening the game finds the cache empty at the same moment', () => {
+  const { run, cache, calls, lock } = playerSetup();
+  const ann = run().add('Ann', NOW);
+  cache.entries.clear();
+
+  // The second request found the cache empty, waited for the lock, and by then the first had refilled it
+  const second = run();
+  const emptyOnce = cache.get.bind(cache);
+  let asked = 0;
+  cache.get = (key) => (asked++ === 0 ? null : emptyOnce(key));
+
+  assert.deepEqual(run().list(), [ann]);
+  calls.made = [];
+  asked = 0;
+  assert.deepEqual(second.list(), [ann]);
+  assert.deepEqual(sheetCalls(calls), NO_SHEET_CALLS);
+  assert.equal(lock.held, false);
+});
+
+test('the Players tab is written only under the script lock, which this store waits for three seconds: without it someone new is not added, a player already known is still found, and nothing fails for a note that could not be made', () => {
+  const { run, cache, lock, tab } = playerSetup();
+  const ann = run().add('Ann', NOW);
+  assert.equal(lock.held, false, 'the lock was kept');
+  assert.deepEqual(lock.waits, [3000]);
+
+  lock.busy = true;
+  assert.throws(() => run().add('Bob', NOW), StoreBusyError);
+  assert.deepEqual(run().list(), [ann], 'the cached list needs no lock');
+  assert.deepEqual(run().seen(ann.id, NOW + DAY_MS), ann, 'nor does finding a player, whose note is left for the next time');
+  assert.deepEqual(tab().cells[1]![3], new Date(NOW));
+
+  cache.entries.clear();
+  assert.throws(() => run().list(), StoreBusyError, 'a list that has to be read from the tab does');
+
+  lock.busy = false;
+  assert.deepEqual(run().seen(ann.id, NOW + DAY_MS), ann);
+  assert.deepEqual(tab().cells[1]![3], new Date(NOW + DAY_MS));
+  assert.throws(() => tab().getRange(2, 1, 1, 1).setValues([['x']]), /without holding the script lock/);
+});
+
+test('two people new under one name at the same moment: the second sees the first under the lock, and is told the name is taken', () => {
+  const { run, tab } = playerSetup();
+  const [first, second] = [run(), run()];
+
+  // Both pages had the list before either joined, and neither found the name on it
+  assert.deepEqual([first.list(), second.list()], [[], []]);
+
+  first.add('Bob', NOW);
+  assert.throws(() => second.add('bob', NOW), { name: 'NameOnList' });
+  assert.equal(tab().getLastRow(), 2);
+});
+
+test('whichever call fails while someone new is added, a player is noted as seen or the list is read, the cache is never left behind the tab, the lock is let go, and the next try works', () => {
+  const tried: Record<string, (context: ReturnType<typeof playerSetup>, ann: KnownPlayer | null) => unknown> = {
+    'the first player ever': ({ run }) => run().add('Quigs', NOW),
+    'someone new': ({ run }) => run().add('Quigs', NOW),
+    'a player seen on a new night': ({ run }, ann) => run().seen(ann!.id, NOW + DAY_MS),
+    'the list, not cached': ({ run, cache }) => {
+      cache.entries.clear();
+      return run().list();
+    },
+  };
+
+  for (const [what, attempt] of Object.entries(tried)) {
+    const fresh = () => {
+      const context = playerSetup();
+      const ann = what === 'the first player ever' ? null : context.run().add('Ann', NOW);
+      context.calls.made = [];
+
+      return { context, ann };
+    };
+
+    // Once with nothing failing, to learn every call it makes
+    const clean = fresh();
+    attempt(clean.context, clean.ann);
+    const steps = [...clean.context.calls.made];
+    assert.ok(steps.length >= 3, `${what} makes only ${steps.length} calls`);
+
+    for (let failing = 1; failing <= steps.length; failing++) {
+      const { context, ann } = fresh();
+      const step = `${what}, call ${failing}, ${steps[failing - 1]}`;
+      let threw = false;
+
+      context.calls.failNth(failing);
+      try {
+        attempt(context, ann);
+      } catch {
+        threw = true;
+      }
+
+      assert.equal(context.lock.held, false, step);
+      if (what === 'a player seen on a new night') {
+        assert.equal(threw && steps[failing - 1] !== 'cache.get', false, `${step}: a note that a player was seen failed the request it rode on`);
+      }
+
+      const listed = context.assertCacheNotBehind(step);
+      assert.equal(new Set(listed.map((player) => player.id)).size, listed.length, step);
+
+      // What the failed try did or did not leave behind, the next ones go through and leave the tab whole
+      if (!listed.some((player) => player.name === 'Quigs')) {
+        context.run().add('Quigs', NOW);
+      }
+
+      const zoe = context.run().add('Zoe', NOW + 2 * DAY_MS);
+      assert.deepEqual(context.run().seen(zoe.id, NOW + 2 * DAY_MS), zoe, step);
+      assert.deepEqual(context.assertCacheNotBehind(step).map((player) => player.name).sort(), [...(ann ? ['Ann'] : []), 'Quigs', 'Zoe'], step);
+      assert.deepEqual(context.tab().cells[0], PLAYER_HEADERS, `${step}: the tab was left without its headers`);
+    }
+  }
+});
+
+test('the Sheet\'s list of players and the one in memory agree after every step of random joins by known players and new ones, with the cache emptied at any moment', () => {
+  const seenIt = { added: 0, refused: 0, movedUp: 0, refills: 0 };
+
+  for (let seed = 1; seed <= 20; seed++) {
+    const rng = seededRng(seed);
+    const memory = new MemoryPlayerStore(seededRng(1000 + seed));
+    const { run, cache, assertCacheNotBehind } = playerSetup(seededRng(1000 + seed));
+    const ids: string[] = [];
+    let now = NOW;
+
+    const both = <T>(what: string, ask: (store: PlayerStore) => T): T => {
+      const answers = [run(), memory].map((store) => {
+        try {
+          return { answer: ask(store) };
+        } catch (error) {
+          return { refused: (error as Error).name };
+        }
+      });
+      assert.deepEqual(answers[0], answers[1], what);
+
+      return (answers[1] as { answer: T }).answer;
+    };
+
+    for (let step = 0; step < 200; step++) {
+      const at = `seed ${seed}, step ${step}`;
+      const roll = rng.int(100);
+
+      if (rng.int(6) === 0) {
+        seenIt.refills += cache.entries.size;
+        cache.entries.clear();
+      }
+
+      if (roll < 25) {
+        // Now and then a name the list has already, in other letters
+        const name = rng.int(4) === 0 ? `player ${rng.int(ids.length + 1)}` : `Player ${ids.length}`;
+        const added = both(`${at}: adding ${name}`, (store) => store.add(name, now));
+
+        seenIt.added += added ? 1 : 0;
+        seenIt.refused += added ? 0 : 1;
+        if (added) {
+          ids.push(added.id);
+        }
+      } else if (roll < 70 && ids.length > 0) {
+        const id = ids[rng.int(ids.length)]!;
+        const first = memory.list()[0]?.id;
+
+        both(`${at}: ${id} is seen`, (store) => store.seen(id, now));
+        seenIt.movedUp += memory.list()[0]?.id === id && first !== id ? 1 : 0;
+      } else if (roll < 80) {
+        both(`${at}: someone nobody knows is looked for`, (store) => store.seen(`NOBODY${1000 + step}`, now));
+      } else {
+        now += [1000, 3_600_000, SEEN_EVERY_MS, DAY_MS][rng.int(4)]!;
+      }
+
+      both(`${at}: the list`, (store) => store.list());
+    }
+
+    assert.deepEqual(assertCacheNotBehind(`seed ${seed}`), memory.list());
+  }
+
+  assert.ok(seenIt.added > 500 && seenIt.refused > 100 && seenIt.movedUp > 300 && seenIt.refills > 100, JSON.stringify(seenIt));
 });

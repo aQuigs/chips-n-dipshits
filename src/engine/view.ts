@@ -148,7 +148,7 @@ export interface TableView {
   /** Hands dealt at this table so far. */
   handCount: number;
   /** `role` says which of the host's powers the viewer has: whether a command needs them is its handler's `by`. */
-  you: { id: string; name: string; role: Role; seat: number | null };
+  you: { id: string; name: string; role: Role; seat: number | null; identity: string | null };
   seats: (SeatView | null)[];
   hand: HandView | null;
   /** The seats are shuffled when the hand ends. */
@@ -169,7 +169,8 @@ export interface TableView {
   ledger: LedgerRow[];
   /** The night's numbers and who leads in what, the same for every viewer. */
   tonight: TonightView;
-  members: { id: string; name: string }[];
+  /** Everyone at the table, each with the known player they said they are, or null: see `Member.identity`. */
+  members: { id: string; name: string; identity: string | null }[];
 }
 
 /** The table as one member is allowed to see it. Never includes the deck, tokens, or face-down cards. */
@@ -267,7 +268,7 @@ export function viewFor(state: TableState, playerId: string, now: number): Table
     running: state.running,
     nextHandAt: state.nextHandAt,
     handCount: state.handCount,
-    you: { id: me.id, name: me.name, role, seat: mySeat >= 0 ? mySeat : null },
+    you: { id: me.id, name: me.name, role, seat: mySeat >= 0 ? mySeat : null, identity: me.identity },
     seats,
     hand: handView,
     shuffleAfterHand: state.shuffleAfterHand,
@@ -280,7 +281,7 @@ export function viewFor(state: TableState, playerId: string, now: number): Table
     requests: visibleRequests.map((request) => ({ ...request, name: memberOf(state, request.playerId).name })),
     ledger,
     tonight: tonightView(state, ledger, nightIsOver(state)),
-    members: state.members.map((m) => ({ id: m.id, name: m.name })),
+    members: state.members.map((m) => ({ id: m.id, name: m.name, identity: m.identity })),
   };
 }
 

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
-import { owes, replayHand, STATE_SCHEMA, TIMING, upgradeRecord } from '../src/engine/index.ts';
+import { owes, replayHand, setIdentity, STATE_SCHEMA, TIMING, upgradeRecord } from '../src/engine/index.ts';
 import type { HandRecord, TableState } from '../src/engine/index.ts';
 import { restoreState } from '../src/server/store.ts';
 import { checkAround, handRecords, seededRng, TestTable } from './helpers.ts';
@@ -74,6 +74,24 @@ FILES.forEach((file, index) => {
     assert.equal(handsFinished(t), HANDS_TO_PLAY, 'the game stalled');
     assertHandRecordsHold(t.effects);
   });
+});
+
+test('every table saved before the game knew its players loads with members nobody knows, one of whom can then say who they are', () => {
+  for (const file of FILES) {
+    const raw = JSON.parse(readFileSync(new URL(file, FOLDER), 'utf8')) as { members: object[] };
+    assert.ok(raw.members.length > 0 && raw.members.every((member) => !('identity' in member)), `${file} was saved with identities`);
+
+    const state = load(file);
+    assert.ok(state.members.every((member) => member.identity === null), file);
+
+    const t = TestTable.adopt(state);
+    const first = state.members[0]!;
+    setIdentity(state, first.id, { id: 'KNOWN23456', name: first.name }, t.ctx());
+
+    assert.deepEqual(state.members.map((member) => member.identity), ['KNOWN23456', ...state.members.slice(1).map(() => null)], file);
+    assertInvariants(state, t.now);
+    assert.deepEqual(restoreState(JSON.stringify(state)), state, `${file}: a table with an identity in it did not load as it was saved`);
+  }
 });
 
 test('the table from schema 2 comes out the same as the one saved a schema later', () => {

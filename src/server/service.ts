@@ -1,8 +1,10 @@
-import { addMember, applyCommand, createTable, GameError, presetName, presetSettings, randomId, requireLevel, sharedPreset, tick, viewFor } from '../engine/index.ts';
-import type { Command, Ctx, Member, Preset, Rng, TableState } from '../engine/index.ts';
-import type { ApiResponse, Auth, ErrorCode } from './api.ts';
+import { addMember, applyCommand, createTable, GameError, joiningName, listedLike, newConfig, playerName, presetName, presetSettings, randomId, requireLevel, setIdentity, sharedPreset, tick, viewFor } from '../engine/index.ts';
+import type { Arriving, Command, Ctx, Member, Preset, Rng, TableState } from '../engine/index.ts';
+import type { ApiResponse, Auth, ErrorCode, Who } from './api.ts';
 import { NOWHERE } from './errorLog.ts';
 import type { ErrorLog, Failure } from './errorLog.ts';
+import { NameOnList } from './playerStore.ts';
+import type { PlayerStore } from './playerStore.ts';
 import type { PresetStore } from './presetStore.ts';
 import { PUT_AWAY_MESSAGE } from './putAway.ts';
 import type { LastWords } from './putAway.ts';
@@ -16,6 +18,7 @@ export interface Clock {
 export interface ServiceDeps {
   store: TableStore;
   presets: PresetStore;
+  players: PlayerStore;
   clock: Clock;
   rng: Rng;
   /** Where failures the game carries on through are written down. Left out, only Apps Script's own log hears of them. */
@@ -99,6 +102,30 @@ function authenticate(state: TableState, auth: Auth): Member {
   return member;
 }
 
+/** What a request says of who its sender is on the list of players, or null when it says nothing. */
+function whoOf(request: Fields): Who | null {
+  if (request.who === undefined || request.who === null) {
+    return null;
+  }
+
+  const who = fieldsOf(request.who);
+
+  if (who.as === 'new') {
+    return { as: 'new' };
+  }
+
+  if (who.as === 'known' && typeof who.id === 'string') {
+    return { as: 'known', id: who.id };
+  }
+
+  throw new ApiFailure('invalid', 'Malformed request');
+}
+
+/** Someone about to become a member of a table: what they are called there, and who the list of players says they are. */
+interface Arrival extends Arriving {
+  name: unknown;
+}
+
 /** Anyone with the game's address may list the presets, so they are handed out holding only what presets keep. */
 function presetsAnswer(presets: Preset[]): ApiResponse {
   return { ok: true, kind: 'presets', presets: presets.map(sharedPreset) };
@@ -141,6 +168,7 @@ const LAST_WORDS: LastWords = () => [];
 export class PokerService {
   private readonly store: TableStore;
   private readonly presets: PresetStore;
+  private readonly players: PlayerStore;
   private readonly clock: Clock;
   private readonly rng: Rng;
   private readonly errors: ErrorLog;
@@ -148,6 +176,7 @@ export class PokerService {
   constructor(deps: ServiceDeps) {
     this.store = deps.store;
     this.presets = deps.presets;
+    this.players = deps.players;
     this.clock = deps.clock;
     this.rng = deps.rng;
     this.errors = deps.errors ?? NOWHERE;
@@ -246,7 +275,7 @@ export class PokerService {
       case 'info':
         return this.info(tableIdOf(request));
       case 'join':
-        return this.join(tableIdOf(request), request.name);
+        return this.join(tableIdOf(request), request);
       case 'poll':
         return this.poll(tableIdOf(request), authOf(request), request.since);
       case 'act':
@@ -261,6 +290,10 @@ export class PokerService {
         return this.deletePreset(tableIdOf(request), authOf(request), request.name);
       case 'report':
         return this.reportFromPage(tableIdOf(request), authOf(request), request);
+      case 'players':
+        return { ok: true, kind: 'players', players: this.players.list() };
+      case 'identify':
+        return this.identify(tableIdOf(request), authOf(request), request);
       default:
         throw new ApiFailure('invalid', 'Unknown request');
     }
@@ -298,7 +331,77 @@ export class PokerService {
     }
   }
 
+  /**
+   * Who is arriving at a table, from what their request says of it. Being known is only a label, so
+   * nothing here stops a game: when the list of players can't be asked or written to, or has no such
+   * player, or is full, they arrive all the same, as nobody it knows. Only a name is refused: a new
+   * one that the list already has, since its holder may be the one asking.
+   *
+   * `mayArrive` throws whatever else would turn someone new away under that name. It is asked before
+   * the list is written to, so that nobody is put on it by an arrival that then comes to nothing.
+   */
+  private arrival(request: Fields, mayArrive: (name: string) => void): Arrival {
+    const who = whoOf(request);
+    const now = this.clock.now();
+
+    if (!who) {
+      return { name: request.name, identity: null, keepsName: false };
+    }
+
+    if (who.as === 'known') {
+      let known = null;
+
+      try {
+        known = this.players.seen(who.id, now);
+      } catch (error) {
+        console.error(error);
+      }
+
+      // The name is the list's whether or not the list could say so, and not the player's to change
+      return { name: known?.name ?? request.name, identity: known?.id ?? null, keepsName: true };
+    }
+
+    const name = playerName(request.name);
+    this.refuseNameOnList(name);
+    mayArrive(name);
+
+    try {
+      const added = this.players.add(name, now);
+
+      return { name: added.name, identity: added.id, keepsName: false };
+    } catch (error) {
+      if (error instanceof NameOnList) {
+        throw error;
+      }
+
+      console.error(error);
+
+      return { name, identity: null, keepsName: false };
+    }
+  }
+
+  /**
+   * Turns away a name for someone new that the list has, as adding them would, but before the table has
+   * its say: where both have the name, "pick yourself from the list" is the answer that gets its holder
+   * in. A list that can't be read turns nobody away.
+   */
+  private refuseNameOnList(name: string): void {
+    let holder = null;
+
+    try {
+      holder = listedLike(this.players.list(), name);
+    } catch (error) {
+      console.error(error);
+    }
+
+    if (holder) {
+      throw new NameOnList(holder.name);
+    }
+  }
+
   private create(request: Fields): ApiResponse {
+    const arriving = this.arrival(request, () => void newConfig(request.config));
+
     for (let attempt = 0; attempt < CREATE_ATTEMPTS; attempt++) {
       const tableId = randomId(this.rng, TABLE_ID_LENGTH);
 
@@ -308,7 +411,7 @@ export class PokerService {
         }
 
         const ctx = this.ctx();
-        const { state, host } = createTable(tableId, request.name, request.config, ctx);
+        const { state, host } = createTable(tableId, arriving.name, request.config, ctx, arriving);
         state.version = 1;
 
         const auth: Auth = { id: host.id, token: host.token };
@@ -328,11 +431,7 @@ export class PokerService {
   }
 
   private info(tableId: string): ApiResponse {
-    const state = this.store.read(tableId);
-    if (!state) {
-      throw new NoSuchTable(tableId);
-    }
-
+    const state = this.tableAt(tableId);
     const players = state.seats.flatMap((seat) => (seat ? [state.members.find((m) => m.id === seat.playerId)!.name] : []));
 
     return {
@@ -351,9 +450,11 @@ export class PokerService {
     };
   }
 
-  private join(tableId: string, name: unknown): ApiResponse {
+  private join(tableId: string, request: Fields): ApiResponse {
+    const arriving = this.arrival(request, (name) => void joiningName(this.tableAt(tableId), name));
+
     return this.mutate(tableId, (state, ctx) => {
-      const member = addMember(state, name, ctx);
+      const member = addMember(state, arriving.name, ctx, arriving);
 
       return { ok: true, kind: 'joined', auth: { id: member.id, token: member.token }, view: viewFor(state, member.id, ctx.now) };
     });
@@ -440,11 +541,44 @@ export class PokerService {
     return { ok: true, kind: 'reported' };
   }
 
-  private memberOf(tableId: string, auth: Auth): { state: TableState; member: Member } {
+  /**
+   * A member says who they are on the list of players, after joining: someone on it, or someone new
+   * under the name given or else the one they go by here. It is the whole of what was asked, so unlike
+   * an arrival it is refused when the list can't oblige.
+   */
+  private identify(tableId: string, auth: Auth, request: Fields): ApiResponse {
+    const { member } = this.memberOf(tableId, auth);
+    const who = whoOf(request);
+    const now = this.clock.now();
+
+    if (!who) {
+      throw new ApiFailure('invalid', 'The request does not say who you are');
+    }
+
+    const known = who.as === 'known' ? this.players.seen(who.id, now) : this.players.add(playerName(request.name ?? member.name), now);
+    if (!known) {
+      throw new GameError('That player is no longer on the list. Pick again');
+    }
+
+    return this.mutate(tableId, (state, ctx) => {
+      authenticate(state, auth);
+      setIdentity(state, auth.id, known, ctx);
+
+      return { ok: true, kind: 'view', view: viewFor(state, auth.id, ctx.now) };
+    });
+  }
+
+  private tableAt(tableId: string): TableState {
     const state = this.store.read(tableId);
     if (!state) {
       throw new NoSuchTable(tableId);
     }
+
+    return state;
+  }
+
+  private memberOf(tableId: string, auth: Auth): { state: TableState; member: Member } {
+    const state = this.tableAt(tableId);
 
     return { state, member: authenticate(state, auth) };
   }

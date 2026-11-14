@@ -16,6 +16,7 @@ import { onTheClock } from '../src/engine/index.ts';
 import type { Command, TableConfig, TableState, TableView } from '../src/engine/index.ts';
 import type { ApiRequest, ApiResponse, Auth } from '../src/server/api.ts';
 import { MemoryErrorLog } from '../src/server/memoryErrorLog.ts';
+import { MemoryPlayerStore } from '../src/server/memoryPlayerStore.ts';
 import { MemoryPresetStore } from '../src/server/memoryPresetStore.ts';
 import { MemoryStore } from '../src/server/memoryStore.ts';
 import { PokerService } from '../src/server/service.ts';
@@ -269,6 +270,8 @@ export class Rig {
   readonly presets: MemoryPresetStore;
   /** What the server's error log was told. */
   readonly errors: MemoryErrorLog;
+  /** The players the game knows, nobody when the check starts. A table made by the rig adds none: only someone who says who they are is known. */
+  readonly players: MemoryPlayerStore;
   /** What the pages of this rig threw, each with whose page it was. */
   readonly pageErrors: string[] = [];
   /** Every picture the pages of this rig asked a GIF host for, in order. */
@@ -284,9 +287,10 @@ export class Rig {
   /** What a check throws in a page on purpose, which is then no failure of the check. */
   private readonly meant: string[] = [];
 
-  private constructor(parts: { store: MemoryStore; presets: MemoryPresetStore; errors: MemoryErrorLog; browser: Browser; service: PokerService; server: DevServer; clock: { ms: number } }) {
+  private constructor(parts: { store: MemoryStore; presets: MemoryPresetStore; players: MemoryPlayerStore; errors: MemoryErrorLog; browser: Browser; service: PokerService; server: DevServer; clock: { ms: number } }) {
     this.store = parts.store;
     this.presets = parts.presets;
+    this.players = parts.players;
     this.errors = parts.errors;
     this.browser = parts.browser;
     this.service = parts.service;
@@ -298,13 +302,15 @@ export class Rig {
   static async start(browser: Browser): Promise<Rig> {
     const store = new MemoryStore();
     const presets = new MemoryPresetStore();
+    // Ids from a source of their own, so that who is known changes no card the check's seed deals
+    const players = new MemoryPlayerStore(seededRng(20261114));
     const clock = { ms: Date.now() };
     const errors = new MemoryErrorLog({ now: () => clock.ms });
-    const service = new PokerService({ store, presets, clock: { now: () => clock.ms }, rng: seededRng(20261113), errors });
+    const service = new PokerService({ store, presets, players, clock: { now: () => clock.ms }, rng: seededRng(20261113), errors });
     const html = await (built ??= clientPage({}));
     const server = await startDevServer({ port: 0, page: async () => html, service });
 
-    return new Rig({ store, presets, errors, browser, service, server, clock });
+    return new Rig({ store, presets, players, errors, browser, service, server, clock });
   }
 
   get url(): string {

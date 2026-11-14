@@ -468,9 +468,25 @@ export function assertFitsTheStore(state: TableState): void {
   assert.ok(bytes <= CACHE_VALUE_BYTES, `with a full chat the table comes to ${bytes} bytes, and the cache takes ${CACHE_VALUE_BYTES}`);
 }
 
+/**
+ * Which known player a member says they are is a label on that member and nothing more: it is one or
+ * it is nobody, two members may carry the same one, and whatever it is, each member is told apart by
+ * an id, a token and a name of their own.
+ */
+export function assertMembersAreTheirOwn(state: TableState): void {
+  for (const member of state.members) {
+    assert.ok(member.identity === null || (typeof member.identity === 'string' && member.identity.length > 0), `${member.name} is known as ${JSON.stringify(member.identity)}`);
+  }
+
+  for (const what of ['id', 'token', 'name'] as const) {
+    assert.equal(new Set(state.members.map((member) => member[what])).size, state.members.length, `two members share one ${what}`);
+  }
+}
+
 /** Everything above, for a table as it stands at `now`. */
 export function assertInvariants(state: TableState, now: number): void {
   assertChipsConserved(state);
+  assertMembersAreTheirOwn(state);
   assertRolesHold(state);
   assertSeatingHolds(state);
   assertBlindsHold(state);

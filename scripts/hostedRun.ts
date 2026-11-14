@@ -14,6 +14,7 @@ import { KEYS_SETTLE_MS } from '../src/client/hotkeys.ts';
 import { startDevServer } from '../src/dev/server.ts';
 import { UNSTAMPED_BUILD } from '../src/server/build.ts';
 import { MemoryErrorLog } from '../src/server/memoryErrorLog.ts';
+import { MemoryPlayerStore } from '../src/server/memoryPlayerStore.ts';
 import { MemoryPresetStore } from '../src/server/memoryPresetStore.ts';
 import { MemoryStore } from '../src/server/memoryStore.ts';
 import { PUT_AWAY_AFTER_MS, PUT_AWAY_MESSAGE } from '../src/server/putAway.ts';
@@ -940,7 +941,7 @@ try {
   {
     // A game of its own, whose clock can be moved on two weeks
     let ahead = 0;
-    const game = new PokerService({ store: new MemoryStore(), presets: new MemoryPresetStore(), clock: { now: () => Date.now() + ahead }, rng: seededRng(14) });
+    const game = new PokerService({ store: new MemoryStore(), presets: new MemoryPresetStore(), players: new MemoryPlayerStore(seededRng(15)), clock: { now: () => Date.now() + ahead }, rng: seededRng(14) });
     const later = await startDevServer({ port: 0, page: async () => html, service: game });
 
     try {

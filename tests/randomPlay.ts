@@ -186,7 +186,13 @@ export const FUZZ_COMMANDS: ((fuzz: Fuzz) => void)[] = [
 
   ({ t }) => {
     if (t.ids.length < 14) {
-      allowRefusal(() => t.ids.push(addMember(t.state, `N${t.ids.length}`, t.ctx()).id));
+      // Told by the count alone, with nothing drawn: every other newcomer says which known player they are, and
+      // every second one of those is a player who joined two places before, under that player's name
+      const place = t.ids.length;
+      const known = place % 2 === 1;
+      const as = known && place % 4 === 3 ? place - 2 : place;
+
+      allowRefusal(() => t.ids.push(addMember(t.state, `N${as}`, t.ctx(), { identity: known ? `KNOWN${as}` : null, keepsName: known }).id));
     }
   },
 ];

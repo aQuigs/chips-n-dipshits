@@ -10,6 +10,7 @@ import type { ApiResponse, Auth, PageBrowser } from '../src/server/api.ts';
 import { BuildGate } from '../src/server/build.ts';
 import { described, ERROR_LIMITS, scrub } from '../src/server/errorLog.ts';
 import { MemoryErrorLog } from '../src/server/memoryErrorLog.ts';
+import { MemoryPlayerStore } from '../src/server/memoryPlayerStore.ts';
 import { MemoryPresetStore } from '../src/server/memoryPresetStore.ts';
 import { MemoryStore } from '../src/server/memoryStore.ts';
 import { PokerService } from '../src/server/service.ts';
@@ -255,7 +256,7 @@ test('at most twenty failures are counted at once: the oldest is let go, with it
 function service(store: TableStore = new MemoryStore()) {
   const clock = { time: 1_700_000_000_000, now: () => clock.time };
   const errors = new MemoryErrorLog(clock);
-  const game = new PokerService({ store, presets: new MemoryPresetStore(), clock, rng: seededRng(3), errors });
+  const game = new PokerService({ store, presets: new MemoryPresetStore(), players: new MemoryPlayerStore(seededRng(4)), clock, rng: seededRng(3), errors });
   const host = game.handle({ op: 'create', name: 'Host', config: { minBuyIn: 100 } });
   assert.ok(host.ok && host.kind === 'joined');
 
@@ -441,7 +442,7 @@ function throwsQuotingTheTable(t: TestTable, rng: Rng, seed: number): boolean {
 
   const clock = { now: () => t.now };
   const errors = new MemoryErrorLog(clock);
-  const game = new PokerService({ store, presets: new MemoryPresetStore(), clock, rng: seededRng(seed), errors });
+  const game = new PokerService({ store, presets: new MemoryPresetStore(), players: new MemoryPlayerStore(seededRng(seed + 1)), clock, rng: seededRng(seed), errors });
   const types = Object.keys(HANDLERS) as CommandType[];
   const type = types[rng.int(types.length)]!;
   const original = HANDLERS[type] as Handler<CommandType>;

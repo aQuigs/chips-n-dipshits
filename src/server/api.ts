@@ -1,4 +1,4 @@
-import type { Command, HandRecord, Preset, Stakes, TableConfig, TableView } from '../engine/index.ts';
+import type { Command, HandRecord, KnownPlayer, Preset, Stakes, TableConfig, TableView } from '../engine/index.ts';
 
 /**
  * Which build of the game a page or a server is. On the way between them every request carries the
@@ -25,10 +25,20 @@ export interface PageBrowser {
   device: 'phone' | 'tablet' | 'desktop';
 }
 
+/**
+ * Who someone says they are on the game's list of players: one already on it, by id, or someone new to
+ * be added to it under the name the request gives. Nothing checks it, and it earns nothing: see `Member.identity`.
+ */
+export type Who = { as: 'known'; id: string } | { as: 'new' };
+
 export type ApiRequest =
-  | { op: 'create'; name: string; config?: Partial<TableConfig> }
+  /**
+   * `name` is what the member is called, and for a known player it is the list's name for them as the
+   * page had it, used when the list can't be asked. Without `who` the member is nobody the list knows.
+   */
+  | { op: 'create'; name: string; who?: Who; config?: Partial<TableConfig> }
   | { op: 'info'; tableId: string }
-  | { op: 'join'; tableId: string; name: string }
+  | { op: 'join'; tableId: string; name: string; who?: Who }
   | {
       op: 'poll';
       tableId: string;
@@ -45,7 +55,10 @@ export type ApiRequest =
   | { op: 'savePreset'; tableId: string; auth: Auth; name: string; settings: Partial<TableConfig>; replace: boolean }
   | { op: 'deletePreset'; tableId: string; auth: Auth; name: string }
   /** A failure a member's page saw, for the error log. Its answer says nothing a page acts on. */
-  | { op: 'report'; tableId: string; auth: Auth; message: string; trace: string; browser: PageBrowser };
+  | { op: 'report'; tableId: string; auth: Auth; message: string; trace: string; browser: PageBrowser }
+  | { op: 'players' }
+  /** A member says who they are after joining. `name` is only for someone new: what the list is to call them. */
+  | { op: 'identify'; tableId: string; auth: Auth; who: Who; name?: string };
 
 /**
  * invalid: the request broke a rule; the message is for the player.
@@ -80,4 +93,5 @@ export type ApiResponse =
   | { ok: true; kind: 'unchanged'; now: number }
   | { ok: true; kind: 'history'; hands: HandRecord[] }
   | { ok: true; kind: 'presets'; presets: Preset[] }
-  | { ok: true; kind: 'reported' };
+  | { ok: true; kind: 'reported' }
+  | { ok: true; kind: 'players'; players: KnownPlayer[] };

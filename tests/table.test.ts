@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { addMember, createTable, DEFAULT_CONFIG, ledgerOf, STATE_SCHEMA, viewFor } from '../src/engine/index.ts';
+import { addMember, createTable, DEFAULT_CONFIG, joiningName, ledgerOf, setIdentity, STATE_SCHEMA, viewFor } from '../src/engine/index.ts';
 import type { Ctx } from '../src/engine/index.ts';
 import { restoreState } from '../src/server/store.ts';
 import { ledgerEntries, seededRng, TestTable } from './helpers.ts';
@@ -58,6 +58,7 @@ test('a name that reads like one already at the table is refused', () => {
   addMember(state, 'Bob', ctx);
 
   assert.throws(() => addMember(state, 'alice', ctx), /already called alice/);
+  assert.throws(() => addMember(state, 'BIG AL', ctx), /already called BIG AL/, 'capitals, whose I would otherwise pass for an l');
   assert.throws(() => addMember(state, '\u0410lice', ctx), /one alphabet/, 'a Cyrillic A in a Latin name');
   assert.throws(() => addMember(state, '\u13AAlice', ctx), /one alphabet/, 'a Cherokee letter in a Latin name');
   assert.throws(() => addMember(state, '\u0422\u041E\u041C', ctx), /reads too much like TOM/, 'TOM written all in Cyrillic');
@@ -70,6 +71,108 @@ test('a name that reads like one already at the table is refused', () => {
   for (const name of ['\u0410\u043D\u043D\u0430', '\u039D\u03AF\u03BA\u03BF\u03C2', '\u4F60\u597D', 'Zo\u00EB', 'Tim', 'Al']) {
     assert.equal(addMember(state, name, ctx).name, name);
   }
+});
+
+test('a member carries which known player they said they are, or nobody, and everyone at the table is told which', () => {
+  const ctx = freshCtx();
+  const { state, host } = createTable('ABC123', 'Quigs', {}, ctx, { identity: 'QQQQQQQQQQ', keepsName: false });
+  const bob = addMember(state, 'Bob', ctx, { identity: 'BBBBBBBBBB', keepsName: true });
+  const guest = addMember(state, 'Guest', ctx);
+
+  assert.deepEqual([host.identity, bob.identity, guest.identity], ['QQQQQQQQQQ', 'BBBBBBBBBB', null]);
+
+  const view = viewFor(state, guest.id, ctx.now);
+  assert.deepEqual(view.you, { id: guest.id, name: 'Guest', role: 'member', seat: null, identity: null });
+  assert.deepEqual(view.members, [
+    { id: host.id, name: 'Quigs', identity: 'QQQQQQQQQQ' },
+    { id: bob.id, name: 'Bob', identity: 'BBBBBBBBBB' },
+    { id: guest.id, name: 'Guest', identity: null },
+  ]);
+  assert.equal(viewFor(state, bob.id, ctx.now).you.identity, 'BBBBBBBBBB');
+
+  assertViewsKeepSecrets(state, ctx.now);
+  assert.deepEqual(restoreState(JSON.stringify(state)), state, 'the identity is kept with the table');
+});
+
+test('a known player whose name the table already has is given room under a number, as a member of their own', () => {
+  const ctx = freshCtx();
+  const { state } = createTable('ABC123', 'Quigs', {}, ctx);
+  const known = { identity: 'BBBBBBBBBB', keepsName: true };
+  const bob = addMember(state, 'Bob', ctx, known);
+
+  // Someone whose name is theirs to change is told to change it, known or not
+  assert.throws(() => addMember(state, 'bob', ctx), /already called bob/);
+  assert.throws(() => addMember(state, 'Bob', ctx, { identity: 'CCCCCCCCCC', keepsName: false }), /already called Bob/);
+
+  const second = addMember(state, 'Bob', ctx, known);
+  const third = addMember(state, 'Bob', ctx, known);
+
+  assert.deepEqual([second.name, third.name], ['Bob 2', 'Bob 3']);
+  assert.deepEqual([second.identity, third.identity], [bob.identity, bob.identity]);
+  assert.equal(new Set([bob.id, second.id, third.id]).size, 3);
+  assert.equal(new Set([bob.token, second.token, third.token]).size, 3);
+  assert.deepEqual(state.feed.slice(-2).map((entry) => entry.text), ['Bob 2 joined', 'Bob 3 joined']);
+
+  // A number that is taken is passed over, and a long name is cut to make room for one
+  addMember(state, 'Ann 2', ctx);
+  addMember(state, 'Ann', ctx);
+  assert.equal(addMember(state, 'Ann', ctx, known).name, 'Ann 3');
+
+  addMember(state, 'Christopher Wren', ctx);
+  assert.equal(addMember(state, 'Christopher Wren', ctx, known).name, 'Christopher Wr 2');
+  assert.equal(addMember(state, 'Christopher Wren', ctx, known).name, 'Christopher Wr 3');
+
+  addMember(state, 'Exactly 14 long', ctx);
+  assert.equal(addMember(state, 'Exactly 14 long', ctx, known).name, 'Exactly 14 lon 2');
+
+  assert.ok(state.members.every((member) => member.name.length <= 16));
+  assertViewsKeepSecrets(state, ctx.now);
+});
+
+test('the name someone would go by can be asked before they join, which changes nothing and draws nothing', () => {
+  const ctx = freshCtx();
+  const { state } = createTable('ABC123', 'Quigs', {}, ctx);
+  const before = JSON.stringify(state);
+  const drawn = seededRng(1);
+  const untouched = seededRng(1);
+
+  assert.equal(joiningName(state, '  New   Guy '), 'New Guy');
+  assert.equal(joiningName(state, 'Quigs', true), 'Quigs 2');
+  assert.throws(() => joiningName(state, 'quigs'), /already called quigs/);
+  assert.throws(() => joiningName(state, '=1'), /Names start with/);
+  assert.equal(JSON.stringify(state), before);
+
+  // A join the table turns away takes nothing from its randomness, so the cards after it are the same
+  assert.throws(() => addMember(state, 'quigs', { now: ctx.now, rng: drawn, effects: [] }), /already called/);
+  assert.equal(drawn.int(1_000_000), untouched.int(1_000_000));
+});
+
+test('a member may say later which known player they are, or change it, and keeps everything else of theirs', () => {
+  const ctx = freshCtx();
+  const { state, host } = createTable('ABC123', 'Quigs', {}, ctx);
+  const bobby = addMember(state, 'Bobby', ctx);
+  const kept = { ...bobby, identity: undefined };
+  const lines = () => state.feed.map((entry) => entry.text);
+
+  setIdentity(state, bobby.id, { id: 'BBBBBBBBBB', name: 'Bob' }, ctx);
+  assert.equal(bobby.identity, 'BBBBBBBBBB');
+  assert.deepEqual({ ...bobby, identity: undefined }, kept, 'the name, the token and the money are as they were');
+  assert.equal(lines().at(-1), 'Bobby is Bob on the list of players');
+
+  // Said again it is not news, and under their own name it needs no saying
+  const told = lines().length;
+  setIdentity(state, bobby.id, { id: 'BBBBBBBBBB', name: 'Bob' }, ctx);
+  setIdentity(state, host.id, { id: 'QQQQQQQQQQ', name: 'Quigs' }, ctx);
+  assert.equal(lines().length, told);
+  assert.equal(host.identity, 'QQQQQQQQQQ');
+
+  // Two members may say they are the same player: it is a label, and nothing is taken from either
+  setIdentity(state, host.id, { id: 'BBBBBBBBBB', name: 'Bob' }, ctx);
+  assert.deepEqual([host.identity, bobby.identity], ['BBBBBBBBBB', 'BBBBBBBBBB']);
+  assert.notEqual(host.token, bobby.token);
+
+  assert.throws(() => setIdentity(state, 'NOBODY', { id: 'BBBBBBBBBB', name: 'Bob' }, ctx));
+  assertViewsKeepSecrets(state, ctx.now);
 });
 
 test('a full table turns a newcomer away until the host takes someone who is only watching off it', () => {

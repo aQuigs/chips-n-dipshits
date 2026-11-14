@@ -5,6 +5,7 @@ import { DEFAULT_CONFIG, fromPreset, matchingPreset, newConfig, PRESET_KEYS, pre
 import type { TableConfig } from '../src/engine/index.ts';
 import type { ApiResponse, Auth } from '../src/server/api.ts';
 import { BuildGate } from '../src/server/build.ts';
+import { MemoryPlayerStore } from '../src/server/memoryPlayerStore.ts';
 import { MemoryPresetStore } from '../src/server/memoryPresetStore.ts';
 import { MemoryStore } from '../src/server/memoryStore.ts';
 import { PokerService } from '../src/server/service.ts';
@@ -198,7 +199,7 @@ test('a table playing a preset\'s settings is known to, and one that differs in 
 
 function setup(build?: string) {
   const presets = new MemoryPresetStore();
-  const service = new PokerService({ store: new MemoryStore(), presets, clock: { now: () => 1_700_000_000_000 }, rng: seededRng(4) });
+  const service = new PokerService({ store: new MemoryStore(), presets, players: new MemoryPlayerStore(seededRng(5)), clock: { now: () => 1_700_000_000_000 }, rng: seededRng(4) });
   const handle = build ? (request: object) => new BuildGate(service, build).handle(request) : (request: object) => service.handle(request);
 
   const joined = (response: ApiResponse) => {

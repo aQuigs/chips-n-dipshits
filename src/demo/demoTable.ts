@@ -2,6 +2,7 @@ import { freshDeck, TIMING } from '../engine/index.ts';
 import type { BettingOptions, Card, Command, HandView, TableView } from '../engine/index.ts';
 import type { ApiRequest, ApiResponse, Auth } from '../server/api.ts';
 import { ByteRng } from '../server/byteRng.ts';
+import { MemoryPlayerStore } from '../server/memoryPlayerStore.ts';
 import { MemoryPresetStore } from '../server/memoryPresetStore.ts';
 import { MemoryStore } from '../server/memoryStore.ts';
 import { PokerService } from '../server/service.ts';
@@ -99,12 +100,8 @@ export function createDemoTable(options: DemoOptions = {}): DemoTable {
   // The table's clock can be pushed ahead of the real one, to skip the wait before the first hand
   let ahead = 0;
   const store = new MemoryStore();
-  const service = new PokerService({
-    store,
-    presets: new MemoryPresetStore(),
-    clock: { now: () => realNow() + ahead },
-    rng: new ByteRng(() => [...crypto.getRandomValues(new Uint8Array(RANDOM_BATCH_BYTES))]),
-  });
+  const rng = new ByteRng(() => [...crypto.getRandomValues(new Uint8Array(RANDOM_BATCH_BYTES))]);
+  const service = new PokerService({ store, presets: new MemoryPresetStore(), players: new MemoryPlayerStore(rng), clock: { now: () => realNow() + ahead }, rng });
 
   const ask = (request: ApiRequest): ApiResponse => service.handle(request);
 

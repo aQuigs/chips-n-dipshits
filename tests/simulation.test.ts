@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { nightIsOver, SEAT_COUNT } from '../src/engine/index.ts';
+import { eligibleSeats, nightIsOver, SEAT_COUNT } from '../src/engine/index.ts';
 import { handRecords, ledgerEntries, seededRng, TestTable } from './helpers.ts';
 import { assertChipsConserved, assertHandRecordsHold, assertInvariants, assertLedgerAgrees } from './invariants.ts';
 import { fixedSettings, randomConfig } from './randomConfig.ts';
@@ -27,6 +27,7 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
   const bombPots = { chips: 0, cents: 0, called: 0, byCount: 0, overAnAnte: 0, short: 0, allInWhenDealt: 0 };
   const doubleBoards = { chips: 0, cents: 0, shownDown: 0, ranOut: 0, withSidePots: 0, wonUncontested: 0 };
   const nights = { afterLastHand: 0, endedOutright: 0, startedAgain: 0, signals: 0 };
+  const blinds = { missedBigBlinds: 0, deadSmallBlinds: 0, shortOfOwed: 0, noSmallBlind: 0, deadButtons: 0, keptWaiting: 0, forgivenTables: 0 };
 
   for (let seed = 1; seed <= TABLES; seed++) {
     const rng = seededRng(seed * 7919);
@@ -65,7 +66,14 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
         bombPots.allInWhenDealt += t.state.hand!.stage !== 'betting' ? 1 : 0;
         doubleBoards[t.state.config.unit] += dealt.boards === 2 ? 1 : 0;
       }
+
+      // A hand with blinds that left someone out who was there to play: they owe, and are waiting
+      if (t.state.handCount > before.hands && t.state.hand && !t.state.hand.bombPot) {
+        blinds.keptWaiting += eligibleSeats(t.state).some((seat) => !t.state.hand!.players.some((player) => player.seat === seat)) ? 1 : 0;
+      }
     }
+
+    blinds.forgivenTables += t.state.config.missedBlinds === 'forgiven' ? 1 : 0;
 
     assertChipsConserved(t.state);
     assertLedgerAgrees(t.state, t.effects);
@@ -86,8 +94,17 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
         doubleBoards.withSidePots += record.result.pots.length > 1 ? 1 : 0;
       }
 
-      // A hand's first event says what ante it was dealt under, when there was one
+      const posts = record.events.flatMap((event) => (event[0] === 'post' ? [event] : []));
+      const owed = posts.filter((post) => post[2] === 'missed big blind' || post[2] === 'dead small blind');
+      blinds.missedBigBlinds += posts.some((post) => post[2] === 'missed big blind') ? 1 : 0;
+      blinds.deadSmallBlinds += posts.some((post) => post[2] === 'dead small blind') ? 1 : 0;
+      blinds.shortOfOwed += owed.some((post) => post[4] === 0) ? 1 : 0;
+      blinds.noSmallBlind += posts.length > 0 && !record.bombPot && !posts.some((post) => post[2] === 'small blind') ? 1 : 0;
+
+      // A hand's first event says where the button was, and what ante it was dealt under when there was one
       const [dealt] = record.events;
+      blinds.deadButtons += dealt?.[0] === 'start' && !record.players.some((player) => player.seat === dealt[2]) ? 1 : 0;
+
       if (dealt?.[0] === 'start' && dealt[6]) {
         handsWithAnte[dealt[7]!] += 1;
         handsWithAnteIn[config.unit] += 1;
@@ -119,6 +136,10 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
   assert.ok(bombPots.chips >= TABLES && bombPots.cents >= TABLES, bombs);
   assert.ok(bombPots.called >= TABLES / 2 && bombPots.byCount >= TABLES, bombs);
   assert.ok(bombPots.overAnAnte >= TABLES && bombPots.short >= TABLES / 2 && bombPots.allInWhenDealt >= TABLES / 4, bombs);
+
+  const missed = `missed blinds: ${JSON.stringify(blinds)}`;
+  assert.ok(blinds.missedBigBlinds >= TABLES / 6 && blinds.deadSmallBlinds >= TABLES / 6 && blinds.keptWaiting >= TABLES / 6, missed);
+  assert.ok(blinds.noSmallBlind >= TABLES && blinds.deadButtons >= TABLES / 2 && blinds.forgivenTables >= TABLES / 4, missed);
 
   const doubles = `double-board bomb pots: ${JSON.stringify(doubleBoards)}`;
   assert.ok(doubleBoards.chips >= TABLES / 2 && doubleBoards.cents >= TABLES / 2, doubles);

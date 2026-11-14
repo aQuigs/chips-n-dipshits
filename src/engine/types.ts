@@ -18,6 +18,9 @@ export type AnteFrom = 'everyone' | 'bigBlind';
 /** How many boards a table plays its bomb pots on. */
 export type BombPotBoards = 'one' | 'two';
 
+/** What becomes of a blind a player was not dealt in for: owed when they come back, or forgiven. */
+export type MissedBlinds = 'owed' | 'forgiven';
+
 export interface TableConfig {
   /** Chosen when the table is created and fixed from then on: the chips already on it would change their worth. */
   unit: Unit;
@@ -43,6 +46,7 @@ export interface TableConfig {
   bombPotEvery: number;
   /** On two boards, each board wins half of every pot. */
   bombPotBoards: BombPotBoards;
+  missedBlinds: MissedBlinds;
 }
 
 export interface Member {
@@ -76,6 +80,18 @@ export interface Seat {
   pendingAdd: number;
   /** The seat the host is moving this player to once the hand they are dealt into ends; null for none. */
   moveTo: number | null;
+  /** The big blind passed this seat while its player was not dealt in, or they sat down at a game already going. Only `handPlan.ts` changes this and the two fields after it. */
+  owesBigBlind: boolean;
+  /** The small blind came to this seat, or would have, while its player was not dealt in. */
+  owesSmallBlind: boolean;
+  /** Chose to post what they owe on the first hand they can be dealt, rather than wait for the big blind. False whenever nothing is owed. */
+  postsOwed: boolean;
+}
+
+/** Where a hand's blinds fall, as seats: one may have nobody posting from it. */
+export interface BlindSeats {
+  small: number;
+  big: number;
 }
 
 export type RequestKind = 'seat' | 'rebuy';
@@ -98,8 +114,12 @@ export type Street = 'preflop' | 'flop' | 'turn' | 'river';
  */
 export type HandStage = 'betting' | 'ritVote' | 'runout' | 'done';
 
-/** What a forced bet is called, in the play-by-play and in a hand's events. */
-export type Post = 'small blind' | 'big blind' | 'straddle' | 'ante' | 'big blind ante' | 'bomb pot';
+/**
+ * What a forced bet is called, in the play-by-play and in a hand's events. A missed big blind and a
+ * dead small blind are what a player who owes blinds posts to come back in before the big blind
+ * reaches them, on top of the hand's own blinds.
+ */
+export type Post = 'small blind' | 'big blind' | 'missed big blind' | 'dead small blind' | 'straddle' | 'ante' | 'big blind ante' | 'bomb pot';
 
 /** The terms of a bomb pot; a hand with none is an ordinary one. */
 export interface BombPot {
@@ -173,7 +193,9 @@ export interface Hand {
   startedAt: number;
   smallBlind: number;
   bigBlind: number;
+  /** The seat the button is on. Nobody need be playing from it: a dead button. */
   button: number;
+  /** The seat the small blind falls on. Nobody posts it when no player dealt in sits there. */
   sbSeat: number;
   bbSeat: number;
   straddleSeat: number | null;
@@ -234,7 +256,13 @@ export interface TableState {
   members: Member[];
   seats: (Seat | null)[];
   requests: SeatRequest[];
+  /** The seat the button was on in the last hand dealt; null before a first hand and after a shuffle. */
   buttonSeat: number | null;
+  /**
+   * The seats the blinds fell on in the last hand that had blinds, which is where the next one takes
+   * them on from. Null when there is no such hand to go on from, so that the next starts a new game.
+   */
+  blinds: BlindSeats | null;
   /** The host has started the game, so hands are dealt whenever two players can play. */
   running: boolean;
   /** When the next hand is dealt while no hand is on the table. */
@@ -318,6 +346,8 @@ export type Command =
   | { type: 'standUp' }
   | { type: 'sitOut' }
   | { type: 'sitIn' }
+  /** Sits a player back in and says how they settle the blinds they owe: posted on the first hand they can be dealt (`post`), or by waiting for the big blind. */
+  | { type: 'comeIn'; post: boolean }
   | { type: 'setStraddle'; on: boolean }
   | { type: 'fold'; turn?: number }
   | { type: 'check'; turn?: number }
@@ -344,6 +374,7 @@ export type Command =
   | { type: 'endNight' }
   /** Starts dealing again after the night ended. */
   | { type: 'playOn' }
+  | { type: 'forgiveBlinds'; playerId: string }
   | { type: 'updateConfig'; config: Partial<TableConfig> }
   | { type: 'transferHost'; playerId: string }
   | { type: 'setCohost'; playerId: string; on: boolean };

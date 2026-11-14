@@ -7,7 +7,7 @@ import type { HandEvent } from './events.ts';
 import { openingBet } from './forcedBets.ts';
 import type { ForcedBet } from './forcedBets.ts';
 import { madeHandName, midSentence } from './handNames.ts';
-import { planHand } from './handPlan.ts';
+import { planHand, takeUp } from './handPlan.ts';
 import { playerHand } from './handRank.ts';
 import type { HandValue } from './handRank.ts';
 import { buildPots, splitAmount } from './pots.ts';
@@ -191,7 +191,8 @@ export function startHand(state: TableState, ctx: Ctx): void {
   const bombPot = claimBombPot(state);
 
   // Worked out while every stack is still whole: what the hand starts with is settled before any of it is posted
-  const { button, order, sbSeat, bbSeat, bets: forced } = planHand(state, bombPot, ctx.rng);
+  const plan = planHand(state, bombPot, ctx.rng);
+  const { button, order, sbSeat, bbSeat, bets: forced } = plan;
 
   // A bomb pot has no bet to call before the flop, and no betting there
   const opening = bombPot ? null : openingBet(forced);
@@ -226,8 +227,8 @@ export function startHand(state: TableState, ctx: Ctx): void {
   }
 
   state.handCount += 1;
-  state.buttonSeat = button;
   state.nextHandAt = null;
+  takeUp(state, plan);
 
   const hand: Hand = {
     number: state.handCount,
@@ -259,8 +260,16 @@ export function startHand(state: TableState, ctx: Ctx): void {
   const stacks = players.map((p): [number, string, number] => [p.seat, p.name, p.startStack]);
   const terms = bombPot ? `${bombPotName(bombPot)} ${formatAmount(bombPot.amount, state.config)}` : `blinds ${stakesText(state.config)}`;
 
+  const onTheButton = playerAt(hand, button);
+
   record(hand, ['start', hand.number, button, smallBlind, bigBlind, stacks, ...startTerms(state, bombPot)]);
-  narrate(state, ctx, `Hand #${hand.number} · ${terms} · ${playerAt(hand, button)!.name} has the button`);
+  narrate(state, ctx, `Hand #${hand.number} · ${terms} · ${onTheButton ? `${onTheButton.name} has the button` : `dead button on seat ${button + 1}`}`);
+
+  // Said, since a hand that starts with one blind looks like a mistake: whoever had the big blind is not in this hand
+  if (!bombPot && !order.includes(sbSeat)) {
+    narrate(state, ctx, 'No small blind this hand');
+  }
+
   postForcedBets(state, ctx, forced);
 
   record(hand, ['deal']);

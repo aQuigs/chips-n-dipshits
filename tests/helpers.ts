@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 
 import type { PrefMemory } from '../src/client/prefs.ts';
-import { applyCommand, createTable, addMember, freshDeck, startHand, tick, viewFor, SEAT_COUNT } from '../src/engine/index.ts';
+import { applyCommand, createTable, addMember, freshDeck, startHand, startOver, tick, viewFor, SEAT_COUNT } from '../src/engine/index.ts';
 import type { Card, Command, Ctx, Effect, Hand, HandRecord, LedgerEntry, Rng, TableConfig, TableState, TableView } from '../src/engine/index.ts';
 
 /** A small repeatable generator (mulberry32); the same seed always deals the same cards. */
@@ -175,12 +175,15 @@ export class TestTable {
   }
 
   /**
-   * Starts a hand with the button and the cards fixed. The deck is stacked before the hand begins, so
-   * whatever a hand does with its cards as it is dealt, such as turning them up when the blinds or the
-   * antes leave nobody to act, it does with the cards asked for.
+   * Starts a hand with the cards fixed. Given a button, the hand starts a new game with the button
+   * there and the blinds on its left, whatever was played before; given none, it follows on from the
+   * last hand as any hand does. The deck is stacked before the hand begins, so whatever a hand does with
+   * its cards as it is dealt, such as turning them up when the blinds or the antes leave nobody to act,
+   * it does with the cards asked for.
    */
   deal(options: DealOptions = {}): void {
     if (options.button !== undefined) {
+      startOver(this.state);
       this.state.buttonSeat = (options.button - 1 + SEAT_COUNT) % SEAT_COUNT;
     }
 

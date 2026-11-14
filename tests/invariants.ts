@@ -83,6 +83,29 @@ export function assertSeatingHolds(state: TableState): void {
 }
 
 /**
+ * What players owe for blinds they missed is owed only where the table says it is and while there is a
+ * game for it to be owed in, a choice to post is about something owed, and nobody plays a hand with
+ * blinds while they owe: they posted, the big blind settled it, or they were not dealt in.
+ */
+export function assertBlindsHold(state: TableState): void {
+  const seated = state.seats.flatMap((seat, index) => (seat ? [{ seat, index }] : []));
+  const owing = seated.filter(({ seat }) => seat.owesBigBlind || seat.owesSmallBlind);
+  const inSeatRange = (index: number) => Number.isInteger(index) && index >= 0 && index < state.seats.length;
+
+  assert.ok(state.config.missedBlinds === 'owed' || owing.length === 0, 'a player owes a blind at a table that forgives them');
+  assert.ok(state.blinds !== null || owing.length === 0, 'a player owes a blind with no game going');
+  assert.ok(seated.every(({ seat }) => !seat.postsOwed || seat.owesBigBlind || seat.owesSmallBlind), 'a player is set to post with nothing owed');
+  assert.ok(state.blinds === null || (inSeatRange(state.blinds.small) && inSeatRange(state.blinds.big)), 'the blinds are on a seat that is not there');
+
+  if (state.hand && !state.hand.bombPot) {
+    const dealtIn = new Set(state.hand.players.map((player) => player.seat));
+
+    assert.ok(owing.every(({ index }) => !dealtIn.has(index)), 'a player is in a hand with blinds while owing one');
+    assert.ok(dealtIn.has(state.hand.bbSeat), 'a hand with blinds has nobody on the big blind');
+  }
+}
+
+/**
  * A bomb pot has its flop out from the first moment anyone sees it, on each board it was dealt on,
  * which a finished hand's record cannot show. One dealt on several boards stays on those: only a hand
  * on one board is ever run twice.
@@ -271,6 +294,7 @@ export function assertInvariants(state: TableState, now: number): void {
   assertChipsConserved(state);
   assertRolesHold(state);
   assertSeatingHolds(state);
+  assertBlindsHold(state);
   assertBombPotsHold(state);
   assertBoardsHold(state);
   assertNightHolds(state);

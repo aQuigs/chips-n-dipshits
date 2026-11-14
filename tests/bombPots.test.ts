@@ -203,7 +203,7 @@ test('a bomb pot starts with the first player left of the button who can act, an
   assert.deepEqual(order(t), [2, 3, 0]);
 });
 
-test('the button moves on through a bomb pot as through any hand', () => {
+test('a bomb pot moves the button on a player, and the hand after it takes the blinds on from the last hand that had any', () => {
   const t = new TestTable({ stacks: [1000, 1000, 1000] });
   t.deal({ button: 0 });
   t.fold(0);
@@ -213,9 +213,21 @@ test('the button moves on through a bomb pot as through any hand', () => {
   t.cmd(0, { type: 'setBombPot', on: true });
   assert.equal(nextHandIsBombPot(t), true);
   assert.equal(t.state.buttonSeat, 1);
+  assert.deepEqual(t.state.blinds, { small: 1, big: 2 }, 'a hand with no blinds moved them');
 
+  // Nobody's blind was skipped for the bomb pot: the big blind goes on from seat 2 to seat 0
   t.deal();
-  assert.deepEqual([t.state.hand!.button, t.state.hand!.sbSeat, t.state.hand!.bbSeat, t.state.hand!.bombPot], [2, 0, 1, null]);
+  assert.deepEqual([t.state.hand!.button, t.state.hand!.sbSeat, t.state.hand!.bbSeat, t.state.hand!.bombPot], [1, 2, 0, null]);
+
+  // One bomb pot after another, the button moves each time
+  t.fold(1);
+  t.fold(2);
+  t.finishHand();
+  t.cmd(0, { type: 'setBombPot', on: true });
+  assert.equal(nextHandIsBombPot(t), true);
+  t.cmd(0, { type: 'setBombPot', on: true });
+  assert.equal(nextHandIsBombPot(t), true);
+  assert.equal(t.state.buttonSeat, 0);
 });
 
 test('a bomb pot every so many hands: the count is of hands dealt since the last one, and a called one starts it again', () => {

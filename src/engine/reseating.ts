@@ -3,6 +3,7 @@
  * into the hand on the table keeps their seat until it ends, so the change waits for that.
  */
 import { shuffle } from './cards.ts';
+import { followMove, startOver } from './handPlan.ts';
 import { isDealtIn, turnAwayFrom } from './seating.ts';
 import { addFeed, memberOf } from './seats.ts';
 import { GameError } from './types.ts';
@@ -25,6 +26,7 @@ function move(state: TableState, ctx: Ctx, from: number, to: number): void {
 
   state.seats[from] = null;
   place(state, seat, to);
+  followMove(state, from, to);
   turnAwayFrom(state, ctx, to);
 }
 
@@ -35,8 +37,8 @@ function shuffleNow(state: TableState, ctx: Ctx): void {
 
   taken.forEach((index, order) => place(state, seats[order]!, index));
 
-  // Where the button was says nothing about the new order, so it is drawn again, as for a table's first hand
-  state.buttonSeat = null;
+  // Where the button and the blinds were says nothing about the new order, so the next hand starts a new game
+  startOver(state);
   state.shuffleAfterHand = false;
 }
 

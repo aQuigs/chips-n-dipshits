@@ -5,9 +5,9 @@ import { GameError } from '../types.ts';
 import type { Command, Ctx, TableState } from '../types.ts';
 import { chat } from './anyone.ts';
 import type { Call, CommandType, Handler, SeatedCall } from './handler.ts';
-import { approve, deny, endTheNight, kick, moveSeat, pause, playOn, setBombPot, setCohost, setLastHands, setStack, shuffleSeats, start, transferChips, transferHost, updateConfig } from './host.ts';
+import { approve, deny, endTheNight, forgiveBlinds, kick, moveSeat, pause, playOn, setBombPot, setCohost, setLastHands, setStack, shuffleSeats, start, transferChips, transferHost, updateConfig } from './host.ts';
 import { call, check, fold, raise, ritVote, showCards } from './play.ts';
-import { cancelRequest, requestRebuy, requestSeat, setStraddle, sitIn, sitOut, standUp } from './seat.ts';
+import { cancelRequest, comeIn, requestRebuy, requestSeat, setStraddle, sitIn, sitOut, standUp } from './seat.ts';
 
 /** Every command the table takes. A new one is a member of `Command`, its handler, and its line here. */
 export const HANDLERS: { [T in CommandType]: Handler<T> } = {
@@ -17,6 +17,7 @@ export const HANDLERS: { [T in CommandType]: Handler<T> } = {
   standUp,
   sitOut,
   sitIn,
+  comeIn,
   setStraddle,
 
   fold,
@@ -41,6 +42,7 @@ export const HANDLERS: { [T in CommandType]: Handler<T> } = {
   setLastHands,
   endNight: endTheNight,
   playOn,
+  forgiveBlinds,
   updateConfig,
   transferHost,
   setCohost,

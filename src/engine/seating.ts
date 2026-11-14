@@ -1,5 +1,6 @@
 import { formatAmount } from './amounts.ts';
 import { stopWaitingFor } from './hand.ts';
+import { owedOnSitting } from './handPlan.ts';
 import { reaches, roleOf } from './hosts.ts';
 import { addFeed, memberOf, recordLedger, seatIndexOf, vacateSeat } from './seats.ts';
 import { GameError } from './types.ts';
@@ -24,6 +25,7 @@ function grantSeat(state: TableState, ctx: Ctx, request: SeatRequest): void {
     straddle: false,
     pendingAdd: 0,
     moveTo: null,
+    ...owedOnSitting(state),
   };
 
   recordLedger(state, ctx, member, 'buy-in', request.amount);

@@ -166,6 +166,20 @@ export const CONFIG_SPECS: { [K in ConfigKey]-?: SpecFor<TableConfig[K]> } = {
   },
   allowStraddle: { kind: 'toggle', label: 'Allow straddles', subject: 'Straddles', default: true, group: 'house' },
   allowRunItTwice: { kind: 'toggle', label: 'Offer run it twice when everyone is all in', subject: 'Run it twice', default: true, group: 'house' },
+  missedBlinds: {
+    kind: 'choice',
+    label: 'Missed blinds',
+    subject: 'Missed blinds',
+    hint: 'Owed: a player the blinds pass while sitting out posts them to come back, or waits for the big blind',
+    default: 'owed',
+    options: [
+      { value: 'owed', label: 'Owed' },
+      { value: 'forgiven', label: 'Forgiven' },
+    ],
+    group: 'house',
+    atCreate: true,
+    nextHand: true,
+  },
   sevenDeuceBounty: {
     kind: 'chips',
     label: 'Seven-deuce bounty',

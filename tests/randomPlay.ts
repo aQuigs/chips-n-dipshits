@@ -55,6 +55,16 @@ export interface Fuzz {
 export const FUZZ_COMMANDS: ((fuzz: Fuzz) => void)[] = [
   ({ t, who }) => attempt(t, who, { type: 'sitOut' }),
   ({ t, who }) => attempt(t, who, { type: 'sitIn' }),
+  ({ t, rng, who }) => {
+    // Everyone who owes blinds comes back at once, most of them to post: random play sits players out far more
+    // often than it brings one back, and a hand with missed blinds posted in it would hardly ever be dealt
+    const owing = t.state.seats.flatMap((seat) => (seat && (seat.owesBigBlind || seat.owesSmallBlind) ? [t.ids.indexOf(seat.playerId)] : []));
+
+    for (const player of owing.length > 0 ? owing : [who]) {
+      attempt(t, player, { type: 'comeIn', post: chance(rng, 70) });
+    }
+  },
+  ({ t, rng, playerId }) => attempt(t, someoneRunningTheGame(t, rng), { type: 'forgiveBlinds', playerId }),
   ({ t, who }) => attempt(t, who, { type: 'standUp' }),
 
   ({ t, rng, who, playerId }) => {

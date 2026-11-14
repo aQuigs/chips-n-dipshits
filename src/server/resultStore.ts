@@ -131,14 +131,26 @@ export interface PlayedNight {
 /** How many of a player's nights are handed out, the latest ones. Earlier ones still count in their record. */
 export const NIGHTS_SHOWN = 250;
 
+/** Every player's nights, the latest first, by the kind of money and then by the player, from rows that each count once. */
+export function everyNights(rows: readonly NightResult[]): Record<Unit, Map<string, PlayedNight[]>> {
+  const nights: Record<Unit, Map<string, PlayedNight[]>> = { chips: new Map(), cents: new Map() };
+
+  for (const { unit, playerId, night, tableName, net, hands, won, biggest, best, badges, highHand } of [...rows].sort(byNight).reverse()) {
+    const ofPlayer = nights[unit].get(playerId) ?? [];
+
+    if (ofPlayer.length < NIGHTS_SHOWN) {
+      ofPlayer.push({ at: night, table: tableName, net, hands, won, biggest, best, badges, highHand });
+    }
+
+    nights[unit].set(playerId, ofPlayer);
+  }
+
+  return nights;
+}
+
 /** A player's nights at tables that play one kind of money, the latest first, from rows that each count once. */
 export function nightsOf(rows: readonly NightResult[], playerId: string, unit: Unit): PlayedNight[] {
-  return rows
-    .filter((row) => row.playerId === playerId && row.unit === unit)
-    .sort(byNight)
-    .reverse()
-    .slice(0, NIGHTS_SHOWN)
-    .map(({ night, tableName, net, hands, won, biggest, best, badges, highHand }) => ({ at: night, table: tableName, net, hands, won, biggest, best, badges, highHand }));
+  return everyNights(rows)[unit].get(playerId) ?? [];
 }
 
 /** The records as they were read at `asOf`. */
@@ -193,14 +205,18 @@ export interface SavedTable {
 
 /**
  * What a store remembers of its looks, to spare itself the next: when the last one worth noting was,
- * and the save of each table found to need nothing more. Only a memory: lost, the tables are looked at again.
+ * the save of each table found to need nothing more, and the save of each whose results could not be
+ * written. Only a memory: lost, the tables are looked at again.
  */
 export interface Settled {
   at: number;
   seen: Record<string, number>;
+  failed: Record<string, number>;
 }
 
-export const NEVER_SETTLED: Settled = { at: 0, seen: {} };
+export const NEVER_SETTLED: Settled = { at: 0, seen: {}, failed: {} };
+
+const sameSaves = (a: Record<string, number>, b: Record<string, number>): boolean => Object.keys(a).length === Object.keys(b).length && Object.entries(a).every(([id, version]) => b[id] === version);
 
 export function idleLongEnough(table: SavedTable, now: number): boolean {
   return now - table.changedAt >= SETTLE_AFTER_MS;
@@ -211,8 +227,9 @@ export function idleLongEnough(table: SavedTable, now: number): boolean {
  * their last save have them written, the latest played first, `SETTLED_AT_ONCE` at most, and the rest
  * wait for the next look. A table mid-hand is written like any other, chips in the pot counting as
  * their owner's, as its ledger has them. `load` reads a table, or gives null for one that can't be
- * read as a table any more, which is then left alone for good. A table that fails is `failed`, and
- * tried again by the next look.
+ * read as a table any more, which is then left alone for good. A table that fails is `failed` and
+ * tried again by a later look, behind every table that has not failed: one that can never be written
+ * holds up nobody.
  *
  * Gives back what to remember, which is `memory` itself when there is nothing new to: a look that was
  * `asked` for by itself is always noted, so that the next asking is held off for `SETTLE_EVERY_MS`,
@@ -228,8 +245,21 @@ export function settleIdle<T extends SavedTable>(
   asked: boolean,
 ): Settled {
   const idle = tables.filter((table) => idleLongEnough(table, now));
-  const seen = Object.fromEntries(idle.filter((table) => memory.seen[table.id] === table.version).map((table) => [table.id, table.version]));
-  const unseen = idle.filter((table) => !(table.id in seen)).sort((a, b) => b.changedAt - a.changedAt || inOrder(a.id, b.id));
+  // Only what is still true of a table as it stands is carried over: a save since then starts it afresh
+  const still = (saves: Record<string, number>) => Object.fromEntries(idle.filter((table) => saves[table.id] === table.version).map((table) => [table.id, table.version]));
+  const seen = still(memory.seen);
+  const troubled = still(memory.failed);
+  const unseen = idle.filter((table) => !(table.id in seen)).sort((a, b) => Number(a.id in troubled) - Number(b.id in troubled) || b.changedAt - a.changedAt || inOrder(a.id, b.id));
+
+  const settled = (table: T): void => {
+    seen[table.id] = table.version;
+    delete troubled[table.id];
+  };
+
+  const trouble = (error: unknown, table: T): void => {
+    troubled[table.id] = table.version;
+    failed(error, table);
+  };
 
   if (unseen.length > 0) {
     const written = results.written();
@@ -238,7 +268,7 @@ export function settleIdle<T extends SavedTable>(
 
     for (const table of unseen) {
       if (written.get(table.id) === table.version) {
-        seen[table.id] = table.version;
+        settled(table);
         continue;
       }
 
@@ -256,27 +286,33 @@ export function settleIdle<T extends SavedTable>(
         if (found && (found.players.length > 0 || written.has(table.id))) {
           toWrite.push({ table, found });
         } else {
-          seen[table.id] = table.version;
+          settled(table);
         }
       } catch (error) {
-        failed(error, table);
+        trouble(error, table);
       }
     }
 
-    try {
-      if (toWrite.length > 0) {
-        results.write(toWrite.map(({ found }) => found));
-      }
+    const write = (batch: typeof toWrite): boolean => {
+      try {
+        results.write(batch.map(({ found }) => found));
+        batch.forEach(({ table }) => settled(table));
 
-      for (const { table } of toWrite) {
-        seen[table.id] = table.version;
+        return true;
+      } catch (error) {
+        batch.length === 1 ? trouble(error, batch[0]!.table) : failed(error, null);
+
+        return false;
       }
-    } catch (error) {
-      failed(error, null);
+    };
+
+    // One write for all of them. When that fails, each by itself, so that one table's trouble is not the others'
+    if (toWrite.length > 0 && !write(toWrite) && toWrite.length > 1) {
+      toWrite.forEach((one) => write([one]));
     }
   }
 
-  const same = Object.keys(seen).length === Object.keys(memory.seen).length && Object.entries(seen).every(([id, version]) => memory.seen[id] === version);
+  const same = sameSaves(seen, memory.seen) && sameSaves(troubled, memory.failed);
 
-  return asked || !same ? { at: now, seen } : memory;
+  return asked || !same ? { at: now, seen, failed: troubled } : memory;
 }

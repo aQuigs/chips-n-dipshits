@@ -15,8 +15,8 @@ import { MemoryErrorLog } from '../src/server/memoryErrorLog.ts';
 import { MemoryResultStore } from '../src/server/memoryResultStore.ts';
 import { MemoryStore } from '../src/server/memoryStore.ts';
 import { PUT_AWAY_AFTER_MS } from '../src/server/putAway.ts';
-import { nightsIn, recordsOf, SETTLE_EVERY_MS, SETTLED_AT_ONCE } from '../src/server/resultStore.ts';
-import type { PlayerRecord, ResultStore } from '../src/server/resultStore.ts';
+import { NEVER_SETTLED, nightsIn, recordsOf, SETTLE_EVERY_MS, SETTLED_AT_ONCE, settleIdle } from '../src/server/resultStore.ts';
+import type { PlayerRecord, ResultStore, ResultWriter, SavedTable } from '../src/server/resultStore.ts';
 import { LAST_WORDS } from '../src/server/service.ts';
 import type { TableStore } from '../src/server/store.ts';
 import { Calls, FakeCache, FakeLock, FakeSpreadsheet } from './fakes.ts';
@@ -677,4 +677,58 @@ test('a table put away whose rows a look had written already costs the sweep one
   assert.deepEqual(sheet.idsIn('Archive'), ['OLD222']);
   assert.deepEqual(sheet.rows(), before);
   assert.deepEqual(sheet.calls.made.filter((call) => call.startsWith('Results.')), ['Results.getLastRow', 'Results.getValues']);
+});
+
+test('a table whose rows can never be written holds up nobody: the tables looked at with it are written by themselves, it waits behind every other from then on, and is tried again when nothing else is due or once it is saved again', () => {
+  const HOUR_MS = 60 * MINUTE_MS;
+  // The latest played first: A, B and C are what a look takes, and D and E wait for the next
+  const saved: SavedTable[] = ['AAA222', 'BBB222', 'CCC222', 'DDD222', 'EEE222'].map((id, age) => ({ id, version: 1, changedAt: NOW - (4 + age) * HOUR_MS }));
+  const states = new Map(saved.map((table) => [table.id, night(table.id, [ANN, BOB]).state]));
+  const kept = new Map<string, number>();
+  const cursed = new Set(['AAA222']);
+  const writes: string[][] = [];
+  const failures: (string | null)[] = [];
+
+  const writer: ResultWriter = {
+    written: () => new Map(kept),
+    write(results) {
+      writes.push(results.map((table) => table.tableId));
+
+      if (results.some((table) => cursed.has(table.tableId))) {
+        throw new Error('This table cannot be written');
+      }
+
+      results.forEach((table) => kept.set(table.tableId, table.version));
+    },
+  };
+
+  let memory = NEVER_SETTLED;
+  const look = (): string[][] => {
+    writes.length = 0;
+    memory = settleIdle(saved, NOW, memory, writer, (table) => ({ ...states.get(table.id)!, version: table.version }), (_error, table) => failures.push(table?.id ?? null), true);
+
+    return writes.map((batch) => [...batch]);
+  };
+
+  assert.deepEqual(look(), [['AAA222', 'BBB222', 'CCC222'], ['AAA222'], ['BBB222'], ['CCC222']], 'together, and when that fails each by itself');
+  assert.deepEqual([[...kept.keys()], failures], [['BBB222', 'CCC222'], [null, 'AAA222']]);
+
+  assert.deepEqual(look(), [['DDD222', 'EEE222', 'AAA222'], ['DDD222'], ['EEE222'], ['AAA222']], 'the others first');
+  assert.deepEqual([...kept.keys()], ['BBB222', 'CCC222', 'DDD222', 'EEE222']);
+
+  assert.deepEqual(look(), [['AAA222']], 'still tried, when nothing else is due');
+  assert.deepEqual(memory.failed, { AAA222: 1 });
+
+  // Three that fail leave the next look to whoever else is due
+  cursed.add('BBB222').add('CCC222');
+  saved[1]!.version = saved[2]!.version = saved[3]!.version = saved[4]!.version = 2;
+  assert.deepEqual(look().at(0), ['BBB222', 'CCC222', 'DDD222'], 'saved again, a table is as good as any other, and one that failed before waits');
+  assert.deepEqual(look().at(0), ['EEE222', 'AAA222', 'BBB222']);
+  assert.deepEqual(Object.fromEntries(kept), { BBB222: 1, CCC222: 1, DDD222: 2, EEE222: 2 });
+
+  // Saved again, the table that failed is tried with the rest, and what was remembered of it is gone once it is written
+  cursed.clear();
+  saved[0]!.version = 2;
+  assert.deepEqual(look(), [['AAA222', 'BBB222', 'CCC222']]);
+  assert.deepEqual([memory.failed, Object.fromEntries(kept)], [{}, { AAA222: 2, BBB222: 2, CCC222: 2, DDD222: 2, EEE222: 2 }]);
 });

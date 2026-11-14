@@ -11705,9 +11705,13 @@ const CHECKS: Check[] = [
         assert.deepEqual(await texts(page, '.standings-units [aria-pressed="true"]'), ['Chips'], 'the money the viewer has a record in');
         assert.equal(await page.locator('[data-player="Ann"] summary .badge').count(), 2);
         assert.deepEqual(await squeezed(page, '.standings-players .who, .standings-players .net, .standings-players .counts, .standings .note, .standings-controls *'), []);
-        assertOnScreen(await boxes(page, '.overlay .dialog, .standings-players summary, #standings-sort, .standings-units button, .standings-about'), screen, 'the standings');
+        assertOnScreen(await boxes(page, '.overlay .dialog, .standings-players summary, #standings-sort, .standings-units button'), screen, 'the standings');
         await assertNoSidewaysScroll(page);
         await shot(page, `standings-three-${screen}`);
+
+        // What the list says of itself is under it, where a wider font may leave it to be scrolled to
+        await page.locator('.standings-about').scrollIntoViewIfNeeded();
+        assertOnScreen(await boxes(page, '.standings-about'), screen, 'what the standings say of themselves');
 
         // Another order
         await page.selectOption('#standings-sort', 'nights');

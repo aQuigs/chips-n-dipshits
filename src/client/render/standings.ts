@@ -44,11 +44,10 @@ function asked<T>(load: () => Promise<T>, what: string, draw: (loaded: T) => (HT
     part.replaceChildren(h('p.note', { 'data-standings': 'loading' }, 'Loading…'));
     part.setAttribute('aria-busy', 'true');
 
+    // Whatever goes wrong, in the asking or in drawing the answer, ends with another try on offer and never with "Loading…"
     load()
-      .then(
-        (loaded) => part.replaceChildren(...draw(loaded).filter((child) => child !== null)),
-        () => part.replaceChildren(h('p.note', { 'data-standings': 'failed' }, `Could not load ${what}.`), h('button.btn', { type: 'button', 'data-action': 'retry-standings', onclick: ask }, 'Try again')),
-      )
+      .then((loaded) => part.replaceChildren(...draw(loaded).filter((child) => child !== null)))
+      .catch(() => part.replaceChildren(h('p.note', { 'data-standings': 'failed' }, `Could not load ${what}.`), h('button.btn', { type: 'button', 'data-action': 'retry-standings', onclick: ask }, 'Try again')))
       .finally(() => part.removeAttribute('aria-busy'));
   };
 

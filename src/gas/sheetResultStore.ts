@@ -2,7 +2,7 @@ import { asNumber, evaluateHand, fromNumber, madeHandName, RANKS, SUITS } from '
 import type { Card, TableResults, Unit } from '../engine/index.ts';
 import type { ErrorLog } from '../server/errorLog.ts';
 import { isPlayerId } from '../server/playerStore.ts';
-import { countedOnce, nightsIn, nightsOf, recordsOf } from '../server/resultStore.ts';
+import { countedOnce, everyNights, nightsIn, nightsOf, recordsOf } from '../server/resultStore.ts';
 import type { NightResult, PlayedNight, PlayerRecord, ResultStore, ResultWriter, Standings } from '../server/resultStore.ts';
 import { AMOUNT, HeldReports, openTab, TEXT, TIMESTAMP, underLock, WHOLE_NUMBER } from './sheets.ts';
 import type { CacheLike, LockLike, SheetLike, SpreadsheetLike } from './sheets.ts';
@@ -79,7 +79,7 @@ const CACHE_SECONDS = 300;
 
 const UNITS: Unit[] = ['chips', 'cents'];
 const standingsKey = (unit: Unit) => `results:${unit}`;
-const nightsKey = (asOf: number, unit: Unit, playerId: string) => `nights:${asOf}:${unit}:${playerId}`;
+const nightsKey = (unit: Unit, playerId: string) => `nights:${unit}:${playerId}`;
 
 const CARD = new RegExp(`^[${RANKS}][${SUITS}]$`);
 const BADGE = /^([A-Za-z][A-Za-z0-9]{0,30}):([1-9]\d{0,8})$/;
@@ -150,7 +150,9 @@ function badgesFrom(cell: unknown): Record<string, number> {
   return Object.fromEntries(
     wordsOf(cell).map((word) => {
       const [, id, times] = BADGE.exec(word) ?? [];
-      if (id === undefined) {
+
+      // A word typed by hand may be one every object answers to, such as constructor, which would be counted up from what the object has there
+      if (id === undefined || id in {}) {
         throw new Unreadable();
       }
 
@@ -222,7 +224,8 @@ const sameIds = (a: string[], b: string[]): boolean => a.length === b.length && 
  *
  * Read for the standings, which are kept in the script cache for a few minutes, refilled only under
  * the lock, and dropped by every write, so the cache is never behind the game's own last write. A
- * change made by hand is heard of when the entry runs out.
+ * change made by hand is heard of when the entry runs out. The reading that fills the standings puts
+ * every player's nights beside them, so that whatever is asked for, the tab is read once.
  */
 export class SheetResultStore implements ResultStore, ResultWriter {
   private readonly deps: SheetResultStoreDeps;
@@ -239,28 +242,14 @@ export class SheetResultStore implements ResultStore, ResultWriter {
   }
 
   nights(playerId: string, unit: Unit): PlayedNight[] {
-    return this.reports.after(() => {
-      const kept = this.cachedNights(playerId, unit);
-      if (kept) {
-        return kept;
-      }
+    const read = (): PlayedNight[] => {
+      const rows = this.rows();
+      this.remember(rows);
 
-      return this.locked(() => {
-        const refilled = this.cachedNights(playerId, unit);
-        if (refilled) {
-          return refilled;
-        }
+      return nightsOf(rows, playerId, unit);
+    };
 
-        // Read once for both: standings that ran out are filled again from the rows the nights come from
-        const rows = this.rows();
-        const { asOf } = this.cached() ?? this.remember(rows);
-        const nights = nightsOf(rows, playerId, unit);
-
-        this.put({ [nightsKey(asOf, unit, playerId)]: JSON.stringify(nights) });
-
-        return nights;
-      });
-    });
+    return this.reports.after(() => this.cachedNights(playerId, unit) ?? this.locked(() => this.cachedNights(playerId, unit) ?? read()));
   }
 
   written(): Map<string, number> {
@@ -419,12 +408,21 @@ export class SheetResultStore implements ResultStore, ResultWriter {
     }
   }
 
-  /** A player's nights as the cache has them, which it only can beside the standings they were read with. */
+  /**
+   * A player's nights as the cache has them, which it only can beside the standings they were read
+   * with. Someone those standings have no record of has no nights, which takes no reading to know.
+   */
   private cachedNights(playerId: string, unit: Unit): PlayedNight[] | null {
     const standings = this.cached();
 
+    if (!standings?.records[unit].some((record) => record.id === playerId)) {
+      return standings && [];
+    }
+
     try {
-      return standings && (JSON.parse(this.deps.cache.get(nightsKey(standings.asOf, unit, playerId)) ?? 'null') as PlayedNight[] | null);
+      const kept = JSON.parse(this.deps.cache.get(nightsKey(unit, playerId)) ?? 'null') as { asOf: number; nights: PlayedNight[] } | null;
+
+      return kept?.asOf === standings.asOf ? kept.nights : null;
     } catch (error) {
       this.reports.failed('store read cached results', error);
 
@@ -432,22 +430,36 @@ export class SheetResultStore implements ResultStore, ResultWriter {
     }
   }
 
-  /** The standings these rows come to, read now, put in the cache: a half for each kind of money, since both at their fullest are more than one entry holds. */
+  /**
+   * The standings these rows come to, read now, put in the cache: a half for each kind of money, since
+   * both at their fullest are more than one entry holds, and then every player's nights, each saying
+   * which reading it is of. Standings that can't be put there must not leave older ones behind; nights
+   * that can't are read again when asked for.
+   */
   private remember(rows: NightResult[]): Standings {
     const standings: Standings = { asOf: this.deps.clock.now(), records: recordsOf(rows) };
+    const nights = everyNights(rows);
+    const ofPlayers = UNITS.flatMap((unit) => [...nights[unit]].map(([playerId, played]) => [nightsKey(unit, playerId), JSON.stringify({ asOf: standings.asOf, nights: played })]));
 
-    this.put(Object.fromEntries(UNITS.map((unit) => [standingsKey(unit), JSON.stringify({ asOf: standings.asOf, players: standings.records[unit] })])));
+    if (!this.put(Object.fromEntries(UNITS.map((unit) => [standingsKey(unit), JSON.stringify({ asOf: standings.asOf, players: standings.records[unit] })])))) {
+      this.forget();
+    } else if (ofPlayers.length > 0) {
+      this.put(Object.fromEntries(ofPlayers));
+    }
 
     return standings;
   }
 
-  /** What was just read under the lock goes into the cache. What can't be put there must not leave older standings behind. */
-  private put(entries: Record<string, string>): void {
+  /** Puts what was just read under the lock into the cache, and says whether it could. */
+  private put(entries: Record<string, string>): boolean {
     try {
       this.deps.cache.putAll(entries, CACHE_SECONDS);
+
+      return true;
     } catch (error) {
       this.reports.failed('store cache results', error);
-      this.forget();
+
+      return false;
     }
   }
 

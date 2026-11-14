@@ -884,7 +884,7 @@ export class SheetStore implements TableStore {
     try {
       const kept = JSON.parse(this.deps.cache.get(SETTLED_KEY) ?? 'null') as Partial<Settled> | null;
 
-      return kept && typeof kept.at === 'number' && typeof kept.seen === 'object' && kept.seen !== null ? { at: kept.at, seen: kept.seen } : NEVER_SETTLED;
+      return kept && typeof kept.at === 'number' && kept.seen && kept.failed ? { at: kept.at, seen: kept.seen, failed: kept.failed } : NEVER_SETTLED;
     } catch (error) {
       this.reports.failed('store read settled tables', error);
 

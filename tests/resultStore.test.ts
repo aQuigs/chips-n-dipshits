@@ -16,7 +16,7 @@ import { countedOnce, nightsIn, nightsOf, NIGHTS_SHOWN, recordsOf } from '../src
 import type { NightResult, PlayerRecord } from '../src/server/resultStore.ts';
 import { Calls, FakeCache, FakeLock, FakeSpreadsheet } from './fakes.ts';
 import { cards, DAY_MS, seededRng } from './helpers.ts';
-import { ANN, BOB, CY, RESULTS_TEXT_LIMIT } from './resultHelpers.ts';
+import { ANN, BOB, CY, DEE, RESULTS_TEXT_LIMIT } from './resultHelpers.ts';
 
 const NOW = Date.UTC(2026, 10, 14, 20);
 
@@ -346,9 +346,9 @@ test('the standings are read from the tab once and kept for five minutes; whoeve
   calls.made = [];
 
   const first = run().standings();
-  assert.deepEqual(calls.made, ['cache.get', 'cache.get', 'cache.get', 'cache.get', 'spreadsheet.getSheetByName', 'Results.getLastRow', 'Results.getValues', 'cache.put']);
+  assert.deepEqual(calls.made, ['cache.get', 'cache.get', 'cache.get', 'cache.get', 'spreadsheet.getSheetByName', 'Results.getLastRow', 'Results.getValues', 'cache.put', 'cache.put'], 'one read, then the standings and everyone’s nights into the cache');
   assert.equal(lock.acquisitions, 2, 'the cache is only ever filled holding the lock, so it is never older than the last write');
-  assert.deepEqual([...cache.seconds.entries()], [['results:chips', 300], ['results:cents', 300]]);
+  assert.deepEqual([...cache.seconds.entries()].sort(), [[`nights:chips:${ANN}`, 300], [`nights:chips:${BOB}`, 300], ['results:cents', 300], ['results:chips', 300]]);
 
   calls.made = [];
   clock.time += 60_000;
@@ -402,7 +402,7 @@ test('a cache that cannot be asked, holds something else, or will not take the s
 });
 
 test('a player’s nights are a second request, read with the standings and kept beside them: the latest first, of the money asked for, the table by its name and date and nothing more', () => {
-  const { write, calls, run, cache } = setup();
+  const { write, calls, run, cache, errors, lock } = setup();
   const day = (n: number) => NOW - n * DAY_MS;
 
   write(results('ABC234', 1, [line(ANN, 100, { hands: 12, won: 3, biggest: 80, best: cards('As Ah Jc 9h 7d'), badges: { heater: 1 }, highHand: true }), line(BOB, -100)], { tableName: 'Friday', createdAt: day(14) }));
@@ -416,17 +416,35 @@ test('a player’s nights are a second request, read with the standings and kept
   ]);
   assert.equal(calls.count('Results.getValues'), 1, 'the nights and the standings they go with are one read');
 
+  // That one read is everyone's nights: whoever is asked for next, in either money, the tab is left alone
   calls.made = [];
+  const lockedBefore = lock.acquisitions;
   assert.deepEqual(run().nights(ANN, 'chips').map((night) => night.table), ['Sunday', 'Friday']);
   assert.deepEqual(run().nights(ANN, 'cents').map((night) => [night.table, night.net]), [['Cash', 2550]]);
-  assert.deepEqual(run().nights(CY, 'chips'), []);
-  assert.equal(calls.count('Results.getValues'), 2, 'one read for each player and money not asked for before');
-  assert.equal(calls.count('cache.put'), 2);
+  assert.deepEqual(run().nights(BOB, 'chips').map((night) => night.net), [40, -100]);
+  assert.deepEqual(run().nights(CY, 'cents').map((night) => night.net), [-2550]);
+  assert.deepEqual(run().nights(CY, 'chips'), [], 'no nights in this money');
+  assert.deepEqual(run().nights(DEE, 'chips'), [], 'nobody the standings have a record of');
+  assert.deepEqual([calls.count('Results.getValues'), calls.count('cache.put'), lock.acquisitions - lockedBefore], [0, 0, 0]);
+
+  // Nights the cache let go of are read again, once, with everything else
+  cache.entries.delete(`nights:chips:${BOB}`);
+  assert.deepEqual(run().nights(BOB, 'chips').map((night) => night.net), [40, -100]);
+  assert.deepEqual(run().nights(ANN, 'chips').map((night) => night.table), ['Sunday', 'Friday']);
+  assert.equal(calls.count('Results.getValues'), 1);
 
   // Kept beside the standings they were read with: a write that drops those drops these
   write(results('KLM234', 1, [line(ANN, 1), line(BOB, -1)], { tableName: 'Monday', createdAt: day(0) }));
   assert.deepEqual(run().nights(ANN, 'chips').map((night) => night.table), ['Monday', 'Sunday', 'Friday']);
   assert.ok([...cache.entries.keys()].every((key) => key.length < 60));
+
+  // Nights that would not go into the cache cost the standings nothing, and are read when asked for
+  cache.entries.clear();
+  calls.failNth(9);
+  assert.equal(run().standings().records.chips.length, 2);
+  assert.equal(errors.rows.at(-1)!.where, 'store cache results');
+  assert.ok(cache.entries.has('results:chips') && !cache.entries.has(`nights:chips:${ANN}`));
+  assert.deepEqual(run().nights(ANN, 'chips').map((night) => night.table), ['Monday', 'Sunday', 'Friday']);
 });
 
 test('only the latest of a player’s nights are handed out, however many the record counts', () => {

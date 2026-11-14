@@ -307,7 +307,7 @@ export function controlsSignature(view: TableView): string {
   return JSON.stringify([
     seat && [seat.stack, seat.pendingAdd, seat.sittingOut, seat.away, seat.straddle, seat.leaving],
     hand && [hand.number, hand.stage, hand.street, hand.toAct, hand.turn, hand.currentBet, hand.pot, hand.options, hand.canVote, hand.canShow],
-    [view.running, view.nextHandAt !== null, view.handCount === 0, view.nightEndedAt],
+    [view.running, view.nextHandAt !== null, view.handCount === 0, view.nightEndedAt, hand?.stage === 'done' && view.handsLeft === 0],
     view.requests.filter((request) => request.playerId === view.you.id),
     [view.config.allowStraddle, view.config.maxBuyIn],
     nextHandNote(view),

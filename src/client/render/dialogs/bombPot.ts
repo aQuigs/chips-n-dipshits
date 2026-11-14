@@ -4,12 +4,12 @@ import { nightOver } from '../night.ts';
 import { hostOrCohost } from '../roles.ts';
 import type { MenuAction } from './menu.ts';
 
-/** Not offered while the next hand is a bomb pot anyway, called or by the table's count, nor once the night is over. */
+/** Not offered while the next hand is a bomb pot anyway, called or by the table's count, nor when no next hand is coming. */
 export const callBombPot: MenuAction = {
   action: 'bomb-pot',
   menu: {
     label: 'Bomb pot next hand',
-    who: (view) => hostOrCohost(view) && view.nextBombPot === null && !nightOver(view),
+    who: (view) => hostOrCohost(view) && view.nextBombPot === null && !nightOver(view) && !(view.hand && view.handsLeft === 0),
     note: (view) => `${formatAmount(view.config.bombPotAmount, view.config)} each, no blinds, starts on ${boardsDealt(bombPotOf(view.config)) > 1 ? 'two flops' : 'the flop'}`,
   },
   pick(handlers) {

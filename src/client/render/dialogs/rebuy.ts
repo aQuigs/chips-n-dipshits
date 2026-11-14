@@ -2,6 +2,7 @@ import { formatAmount } from '../../../engine/amounts.ts';
 import type { TableView } from '../../../engine/view.ts';
 import { h } from '../../ui.ts';
 import { amountField, amountOf } from '../forms.ts';
+import { nightOver } from '../night.ts';
 import { hostOrCohost } from '../roles.ts';
 import { frame, submit } from './dialog.ts';
 import type { DialogHandlers, DialogKind } from './dialog.ts';
@@ -25,4 +26,4 @@ function rebuy(view: TableView, handlers: DialogHandlers): HTMLElement {
   );
 }
 
-export const rebuyDialog: DialogKind<'rebuy'> = { kind: 'rebuy', draw: rebuy };
+export const rebuyDialog: DialogKind<'rebuy'> = { kind: 'rebuy', who: (view) => !nightOver(view), draw: rebuy };

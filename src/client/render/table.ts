@@ -68,6 +68,7 @@ const ACTION_LABELS: Record<string, string> = {
 export interface TableHandlers {
   onSit(seat: number): void;
   onStart(): void;
+  onPlayOn(): void;
   /** While the host picks a new seat for a player: who, and where a pick goes. */
   moving?: { playerId: string; to(seat: number): void };
 }
@@ -383,7 +384,7 @@ function messageEl(view: TableView, handlers: TableHandlers): HTMLElement | null
       'div.message.night-over',
       null,
       h('div', null, 'The night is over'),
-      hostOrCohost(view) ? h('button.btn.primary', { type: 'button', 'data-action': 'start', onclick: handlers.onStart }, 'Keep playing') : null,
+      hostOrCohost(view) ? h('button.btn.primary', { type: 'button', 'data-action': 'play-on', onclick: handlers.onPlayOn }, 'Keep playing') : null,
     );
   }
 

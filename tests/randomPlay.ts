@@ -96,14 +96,14 @@ export const FUZZ_COMMANDS: ((fuzz: Fuzz) => void)[] = [
   ({ t, rng, who }) => attempt(t, who, { type: 'ritVote', agree: chance(rng, 70) }),
 
   // The last hands are called, changed and called off, the night is ended outright, and play is started again after it
-  ({ t, rng }) => attempt(t, chance(rng, 85) ? someoneRunningTheGame(t, rng) : rng.int(t.ids.length), { type: 'setLastHands', hands: chance(rng, 50) ? null : rng.int(LIMITS.lastHands + 1) }),
+  ({ t, rng }) => attempt(t, chance(rng, 85) ? someoneRunningTheGame(t, rng) : rng.int(t.ids.length), { type: 'setLastHands', hands: chance(rng, 50) ? null : rng.int(LIMITS.lastHands + 1), from: Math.max(0, t.state.handCount - rng.int(2)) }),
   ({ t, rng }) => {
     // Rarely: a table between hands is mostly one short of players, whose night would otherwise end at every turn
     if (chance(rng, 10)) {
       attempt(t, chance(rng, 85) ? someoneRunningTheGame(t, rng) : rng.int(t.ids.length), { type: 'endNight' });
     }
   },
-  ({ t, rng }) => attempt(t, someoneRunningTheGame(t, rng), { type: 'start' }),
+  ({ t, rng }) => attempt(t, someoneRunningTheGame(t, rng), { type: chance(rng, 80) ? 'playOn' : 'start' }),
 
   ({ t, rng }) => {
     // Mostly a change the host could make. Now and then one that also asks for what was fixed at creation, which is refused whole

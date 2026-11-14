@@ -18,7 +18,7 @@ function lastHands(view: TableView, handlers: DialogHandlers): HTMLElement {
     handlers.close();
   };
   const choice = (hands: number, label: string) =>
-    h('button.chip-btn', { type: 'button', 'data-hands': hands, 'aria-pressed': String(view.handsLeft === hands), onclick: () => send({ type: 'setLastHands', hands }) }, label);
+    h('button.chip-btn', { type: 'button', 'data-hands': hands, 'aria-pressed': String(view.handsLeft === hands), onclick: () => send({ type: 'setLastHands', hands, from: view.handCount }) }, label);
   const counts = Array.from({ length: LIMITS.lastHands }, (_, index) => choice(index + 1, String(index + 1)));
 
   return frame(
@@ -60,6 +60,7 @@ export const lastHandsDialog: DialogKind<'lastHands'> = {
     who: (view) => hostOrCohost(view) && !nightOver(view),
     note: (view) => lastHandsText(view) ?? 'Call how many hands are left, or end the night',
   },
-  shows: (view) => [view.hand !== null, view.handsLeft],
+  // The hand on the table is what the count is from, so a new one is a new dialog
+  shows: (view) => [view.hand !== null, view.handCount, view.handsLeft],
   draw: lastHands,
 };

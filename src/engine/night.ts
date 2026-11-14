@@ -27,10 +27,12 @@ function endsAfter(count: number, duringHand: boolean): string {
 }
 
 /**
- * Calls, changes or calls off the last hands. `hands` counts those still to be dealt, so a hand on the
- * table is not one of them, and 0 makes it the last. `by` is how the chat names whoever called them.
+ * Calls, changes or calls off the last hands. `hands` counts those still to be dealt after the
+ * `from`th, so a hand on the table is not one of them, and 0 makes it the last. `from` is the hand the
+ * sender was looking at: the table may have dealt another by the time the call arrives, and the night
+ * then ends where they meant, or as soon after as it can. `by` is how the chat names whoever called them.
  */
-export function callLastHands(state: TableState, ctx: Ctx, by: string, hands: unknown): void {
+export function callLastHands(state: TableState, ctx: Ctx, by: string, hands: unknown, from: unknown = state.handCount): void {
   if (hands === null) {
     if (state.lastHand !== null) {
       state.lastHand = null;
@@ -39,15 +41,23 @@ export function callLastHands(state: TableState, ctx: Ctx, by: string, hands: un
     return;
   }
 
-  const count = wholeNumber(hands, 'The number of hands', state.hand ? 0 : 1, LIMITS.lastHands);
-  const lastHand = state.handCount + count;
+  const count = wholeNumber(hands, 'The number of hands', 0, LIMITS.lastHands);
+  const meant = wholeNumber(from, 'The hand', 0, state.handCount) + count;
+
+  // Meant to end after a hand that is over already: at once between hands, or else after the hand on the table
+  if (meant <= state.handCount && !state.hand) {
+    endNight(state, ctx, `${by} ended the night`);
+    return;
+  }
+
+  const lastHand = Math.max(meant, state.handCount);
   if (lastHand === state.lastHand) {
     return;
   }
 
   const verb = state.lastHand === null ? 'calls' : 'now calls';
   state.lastHand = lastHand;
-  addFeed(state, ctx.now, 'system', null, `${by} ${verb} it a night ${endsAfter(count, state.hand !== null)}`);
+  addFeed(state, ctx.now, 'system', null, `${by} ${verb} it a night ${endsAfter(lastHand - state.handCount, state.hand !== null)}`);
 }
 
 /** Called each time a dealt hand is cleared off the table, whatever kind of hand it was. */

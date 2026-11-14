@@ -336,9 +336,14 @@ export type Command =
   | { type: 'shuffleSeats' }
   | { type: 'transferChips'; from: string; to: string; amount: number }
   | { type: 'setBombPot'; on: boolean }
-  /** How many hands are still to be dealt, not counting the one on the table; null calls the last hands off. */
-  | { type: 'setLastHands'; hands: number | null }
+  /**
+   * How many hands are still to be dealt after the `from`th, the hand on the table as the sender saw it
+   * (or the last one dealt, between hands); null calls the last hands off.
+   */
+  | { type: 'setLastHands'; hands: number | null; from?: number }
   | { type: 'endNight' }
+  /** Starts dealing again after the night ended. */
+  | { type: 'playOn' }
   | { type: 'updateConfig'; config: Partial<TableConfig> }
   | { type: 'transferHost'; playerId: string }
   | { type: 'setCohost'; playerId: string; on: boolean };

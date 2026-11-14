@@ -4030,6 +4030,10 @@ const CHECKS: Check[] = [
           await host.waitForSelector('.dialog', { state: 'detached' });
           assert.equal(table.view('Zed').feed.at(-1)!.text, 'The host now calls it a night after this hand');
           await lookInShapes('last', ['Last hand of the night']);
+          await press('[data-action="menu"]');
+          await host.waitForSelector('.menu [data-action="lastHands"]');
+          assert.equal(await host.locator('.menu [data-action^="bomb-pot"]').count(), 0, 'a bomb pot is offered for a hand that never comes');
+          await press('[data-action="close"]');
 
           for (const page of [host, deciding, watcher]) {
             await page.context().close();
@@ -4070,8 +4074,8 @@ const CHECKS: Check[] = [
           assert.equal(table.view('Zed').feed.at(-1)!.text, 'The host ended the night');
 
           // A co-host plays on from the felt, and the next hand is the last
-          await pages.cohost.waitForSelector('.message.night-over [data-action="start"]');
-          await pressOn(pages.cohost, screen)('.message.night-over [data-action="start"]');
+          await pages.cohost.waitForSelector('.message.night-over [data-action="play-on"]');
+          await pressOn(pages.cohost, screen)('.message.night-over [data-action="play-on"]');
           await pages.cohost.waitForSelector('.message.night-over', { state: 'detached' });
           table.deal({ button: 0, holes: { 0: 'As Ah', 3: 'Ks Kh' }, board: '2c 7d 9h Jc 3s' });
           assert.equal(table.view('Zed').feed.find((entry) => entry.text.startsWith('Co-host'))?.text, 'Co-host Stu started play again');
@@ -4089,7 +4093,7 @@ const CHECKS: Check[] = [
           for (const [who, page] of Object.entries(pages)) {
             await page.waitForSelector('.message.night-over');
             assert.equal(await text(page, '.message.night-over > div'), 'The night is over', who);
-            assert.equal(await page.locator('.message.night-over [data-action="start"]').count(), runs(who) ? 1 : 0, `${who} is offered to play on`);
+            assert.equal(await page.locator('.message.night-over [data-action="play-on"]').count(), runs(who) ? 1 : 0, `${who} is offered to play on`);
             assert.equal(await text(page, '.topbar .pill'), 'Night over', who);
             assert.equal(await text(page, '.controls .waiting'), 'The night is over', who);
             assert.equal(await page.locator('.controls .extras, [data-sit]').count(), 0, `${who} is offered to sit down, sit out or add chips with no hands to come`);

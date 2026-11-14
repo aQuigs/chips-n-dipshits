@@ -73,18 +73,78 @@ test('the host calls the last hands, changes the number and calls them off, and 
   assert.equal(t.feedText().length, said + 1, 'calling off what is not called says something');
 });
 
-test('the number of hands is a whole number from 1 to the most, or from 0 while a hand is on the table', () => {
+test('the number of hands is a whole number up to the most, counted from a hand already dealt', () => {
   const t = running();
 
-  for (const hands of [0, LIMITS.lastHands + 1, -1, 2.5, '3', undefined, true]) {
-    assert.throws(() => t.cmd(HOST, { type: 'setLastHands', hands } as unknown as Command), { name: 'GameError', message: `The number of hands must be a whole number from 1 to ${LIMITS.lastHands}` }, String(hands));
+  for (const hands of [LIMITS.lastHands + 1, -1, 2.5, '3', undefined, true]) {
+    assert.throws(() => t.cmd(HOST, { type: 'setLastHands', hands } as unknown as Command), { name: 'GameError', message: `The number of hands must be a whole number from 0 to ${LIMITS.lastHands}` }, String(hands));
   }
 
-  t.cmd(HOST, { type: 'setLastHands', hands: LIMITS.lastHands });
-  assert.equal(t.view(PLAYER).handsLeft, LIMITS.lastHands);
+  for (const from of [1, -1, 0.5, '0']) {
+    assert.throws(() => t.cmd(HOST, { type: 'setLastHands', hands: 2, from } as unknown as Command), { name: 'GameError', message: 'The hand must be a whole number from 0 to 0' }, String(from));
+  }
 
+  t.cmd(HOST, { type: 'setLastHands', hands: LIMITS.lastHands, from: 0 });
+  assert.equal(t.view(PLAYER).handsLeft, LIMITS.lastHands);
+});
+
+test('a call made on a hand the table has since moved on from counts from that hand, and ends the night as soon as it can when that hand was meant to be the last', () => {
+  const t = running();
   nextHand(t);
-  assert.throws(() => t.cmd(HOST, { type: 'setLastHands', hands: -1 }), { message: `The number of hands must be a whole number from 0 to ${LIMITS.lastHands}` });
+
+  // The result of hand 1 is up when the host taps; by the time the tap arrives hand 2 is dealt
+  foldAround(t);
+  assert.equal(t.state.hand!.number, 2);
+  t.cmd(HOST, { type: 'setLastHands', hands: 2, from: 1 });
+  assert.equal(lastLine(t), 'The host calls it a night after this hand and 1 more');
+  assert.equal(t.view(PLAYER).handsLeft, 1);
+
+  t.cmd(HOST, { type: 'setLastHands', hands: 0, from: 1 });
+  assert.equal(lastLine(t), 'The host now calls it a night after this hand', 'the hand meant is over, so the one on the table is the last');
+  foldAround(t);
+  assert.ok(nightIsOver(t.state));
+  assert.equal(handRecords(t.effects).length, 2);
+
+  // Between hands, a call whose last hand is over already ends the night there and then
+  const paused = running();
+  nextHand(paused);
+  paused.cmd(HOST, { type: 'pause' });
+  foldAround(paused);
+  paused.cmd(COHOST, { type: 'setLastHands', hands: 0, from: 1 });
+  assert.ok(nightIsOver(paused.state));
+  assert.equal(lastLine(paused), 'Co-host P1 ended the night');
+  assert.equal(nightsEnded(paused).length, 1);
+});
+
+test('once the night is over, Resume or Start from a page that has not heard is refused, and only playing on starts it again', () => {
+  const t = running();
+  t.cmd(HOST, { type: 'pause' });
+  t.cmd(HOST, { type: 'endNight' });
+
+  assert.throws(() => t.cmd(COHOST, { type: 'start' }), { name: 'GameError', message: 'The night is over, so that waits until play starts again' });
+  assert.ok(nightIsOver(t.state));
+
+  t.cmd(COHOST, { type: 'playOn' });
+  assert.ok(!nightIsOver(t.state));
+  assert.equal(t.state.running, true);
+
+  // Pressed twice, or by two hosts at once, it says so once
+  const said = t.feedText().length;
+  t.cmd(HOST, { type: 'playOn' });
+  assert.equal(t.feedText().length, said);
+});
+
+test('no bomb pot can be called during the last hand, since no hand comes after it, and one can still be called off', () => {
+  const t = running();
+  nextHand(t);
+  t.cmd(HOST, { type: 'setBombPot', on: true });
+  t.cmd(HOST, { type: 'setLastHands', hands: 1 });
+  t.cmd(HOST, { type: 'setBombPot', on: false });
+  t.cmd(HOST, { type: 'setBombPot', on: true });
+
+  t.cmd(HOST, { type: 'setLastHands', hands: 0 });
+  t.cmd(HOST, { type: 'setBombPot', on: false });
+  assert.throws(() => t.cmd(COHOST, { type: 'setBombPot', on: true }), { name: 'GameError', message: 'This is the last hand, so there is no next hand to be a bomb pot' });
 });
 
 test('only the host or a co-host calls the last hands or ends the night: a seated player and a watcher are refused', () => {
@@ -226,7 +286,7 @@ test('the end of each night leaves the engine once, however many nights a table 
   t.cmd(HOST, { type: 'endNight' });
   assert.deepEqual(nightsEnded(t), [{ at: t.now, tableId: t.state.id }]);
 
-  t.cmd(COHOST, { type: 'start' });
+  t.cmd(COHOST, { type: 'playOn' });
   assert.equal(lastLine(t), 'Co-host P1 started play again');
   assert.ok(!nightIsOver(t.state));
   assert.equal(t.state.running, true);
@@ -239,7 +299,7 @@ test('the end of each night leaves the engine once, however many nights a table 
   assert.equal(nightsEnded(t).length, 2);
   assert.equal(nightsEnded(t)[1]!.at, t.now);
 
-  t.cmd(HOST, { type: 'start' });
+  t.cmd(HOST, { type: 'playOn' });
   t.cmd(HOST, { type: 'endNight' });
   assert.equal(nightsEnded(t).length, 3);
 });
@@ -251,7 +311,7 @@ test('starting play again after the night deals again, with no last hands called
   foldAround(t);
   assert.equal(t.view(PLAYER).handsLeft, null);
 
-  t.cmd(HOST, { type: 'start' });
+  t.cmd(HOST, { type: 'playOn' });
   for (let hand = 0; hand < 3; hand++) {
     nextHand(t);
     foldAround(t);
@@ -353,6 +413,6 @@ test('a table saved mid-countdown, or with the night over, comes back as it was'
   const reloaded = TestTable.adopt(restoreState(JSON.stringify(over.state)));
   assert.ok(nightIsOver(reloaded.state));
   assert.throws(() => reloaded.cmd(HOST, { type: 'endNight' }), { message: 'The night is already over' });
-  reloaded.cmd(HOST, { type: 'start' });
+  reloaded.cmd(HOST, { type: 'playOn' });
   assert.ok(!nightIsOver(reloaded.state));
 });

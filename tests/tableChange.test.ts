@@ -300,13 +300,13 @@ test('the end of the night is news once, with the view that brought it, and only
   assert.equal(page.arrive(table).nightEnded, false, 'the night ended again');
 
   // Started and ended again between two views
-  table.cmd(0, { type: 'start' });
+  table.cmd(0, { type: 'playOn' });
   table.now += 1000;
   table.cmd(0, { type: 'endNight' });
   assert.equal(page.arrive(table).nightEnded, true);
 
   // Reaching the page long after, as to a phone that slept through it
-  table.cmd(0, { type: 'start' });
+  table.cmd(0, { type: 'playOn' });
   table.now += 1000;
   table.cmd(0, { type: 'endNight' });
   table.now += 60_000;

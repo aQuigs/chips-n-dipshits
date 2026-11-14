@@ -280,7 +280,7 @@ test('the end of a night reaches the store once each time, whether the last hand
   // Polls and refusals change nothing, and play started again and ended again is another night
   viewOf(poll(0));
   assert.equal(failure(act(0, { type: 'endNight' })).error, 'The night is already over');
-  viewOf(act(0, { type: 'start' }));
+  viewOf(act(0, { type: 'playOn' }));
   viewOf(act(0, { type: 'endNight' }));
   assert.equal(memory.nightsEnded.length, 2);
 });

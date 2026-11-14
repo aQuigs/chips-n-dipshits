@@ -2,6 +2,7 @@ import { formatAmount } from '../../../engine/amounts.ts';
 import type { TableView } from '../../../engine/view.ts';
 import { h } from '../../ui.ts';
 import { amountField, amountOf } from '../forms.ts';
+import { nightOver } from '../night.ts';
 import { hostOrCohost } from '../roles.ts';
 import { frame, submit } from './dialog.ts';
 import type { DialogHandlers, DialogKind } from './dialog.ts';
@@ -27,5 +28,6 @@ function sit(view: TableView, seat: number, handlers: DialogHandlers): HTMLEleme
 
 export const sitDialog: DialogKind<'sit', { seat: number }> = {
   kind: 'sit',
+  who: (view) => !nightOver(view),
   draw: (view, handlers, { seat }) => sit(view, seat, handlers),
 };

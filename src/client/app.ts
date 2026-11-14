@@ -620,6 +620,7 @@ export class App {
       const table = tableEl(view, screen.shape, this.clock.offset, {
         onSit: (seat) => this.openDialog({ kind: 'sit', seat }),
         onStart: () => void this.send({ type: 'start' }),
+        onPlayOn: () => void this.send({ type: 'playOn' }),
         moving: screen.seatMoves.tableHandlers(),
       });
 

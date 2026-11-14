@@ -36,7 +36,7 @@ export const keepPlaying: MenuAction = {
   action: 'keep-playing',
   menu: { label: 'Keep playing', who: (view) => hostOrCohost(view) && nightOver(view), note: () => 'Start dealing again: the night goes on' },
   pick(handlers) {
-    void handlers.send({ type: 'start' });
+    void handlers.send({ type: 'playOn' });
     handlers.close();
   },
 };

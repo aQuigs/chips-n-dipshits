@@ -7,15 +7,15 @@
 
 export interface Task<Worker, Value> {
   name: string;
-  /** `signal` aborts when the task has outrun its limit: it then lets go of what it waits on, and what it throws is kept as where it was. */
+  /** `signal` aborts when the task has outrun its limit: it then lets go of what it waits on, and what it throws as it ends is kept as where it was. */
   run: (worker: Worker, signal: AbortSignal) => Value | Promise<Value>;
 }
 
 export type Result<Value> = { name: string; ms: number } & (
   | { outcome: 'passed'; value: Value }
   | { outcome: 'failed'; error: unknown }
-  /** `error` is what the task threw once told its time was up, if it threw anything before its worker moved on. */
-  | { outcome: 'timedOut'; error?: unknown }
+  /** `ended` says whether the task ended once told its time was up, before its worker moved on, and `error` what it threw as it did, if anything. */
+  | { outcome: 'timedOut'; ended: boolean; error?: unknown }
 );
 
 export interface PoolOptions<Value> {
@@ -61,7 +61,7 @@ async function runTask<Worker, Value>(task: Task<Worker, Value>, worker: Worker,
   stop.abort(new Error(`${task.name}: stopped after ${limitMs} ms`));
   const afterwards = await orLate(settled, graceMs);
 
-  return { ...ended(), outcome: 'timedOut', error: afterwards !== LATE && 'error' in afterwards ? afterwards.error : undefined };
+  return { ...ended(), outcome: 'timedOut', ended: afterwards !== LATE, error: afterwards !== LATE && 'error' in afterwards ? afterwards.error : undefined };
 }
 
 /** Runs every task, one at a time on each worker, and resolves to their results in the order of the list. */

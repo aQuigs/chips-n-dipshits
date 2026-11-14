@@ -332,9 +332,8 @@ export class Rig {
 
   /** Closes this rig's pages and its server. The browser stays open, for the rig of the next check. */
   close(): Promise<void> {
-    this.closing ??= Promise.all(this.contexts.map((context) => context.close()))
-      .finally(() => this.server.close())
-      .then(() => undefined);
+    // A context that will not close has lost its browser, and went with it
+    this.closing ??= Promise.all(this.contexts.map((context) => context.close().catch(() => undefined))).then(() => this.server.close());
 
     return this.closing;
   }
@@ -355,6 +354,13 @@ export class RigBrowser {
     }
 
     return Rig.start(this.browser);
+  }
+
+  /** Gives the browser up, so the next rig gets a new one: for when it may be the browser that a check hung on. */
+  retire(): void {
+    // Not waited for, as a browser that hangs may never close; Playwright ends it with the script
+    void this.browser?.close().catch(() => undefined);
+    this.browser = null;
   }
 
   async close(): Promise<void> {

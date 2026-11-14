@@ -49,28 +49,41 @@ function workerCount(): number {
 
 const CONSOLE_METHODS = ['log', 'info', 'warn', 'error'] as const;
 
+/** Where the lines printed on one worker go: to the check that worker is running. */
+interface Printed {
+  lines: string[];
+}
+
+/** One browser's checks, one after the other. */
+interface Worker {
+  browser: RigBrowser;
+  printed: Printed;
+}
+
 /**
  * Keeps what is printed while a check runs with that check, since several run at once and their lines
- * would come out shuffled. Returns how to run something as a check whose lines go to `lines`.
+ * would come out shuffled. What a page's events print comes in the context its browser was launched in,
+ * whichever check that was, so the context is the worker's, the same for all its checks, and only
+ * where it points changes from one check to the next.
  */
-function keepPrintsApart(): <T>(lines: string[], run: () => T) => T {
-  const printedBy = new AsyncLocalStorage<string[]>();
+function keepPrintsApart(): AsyncLocalStorage<Printed> {
+  const printedOn = new AsyncLocalStorage<Printed>();
 
   for (const method of CONSOLE_METHODS) {
     const print = console[method];
 
     console[method] = (...said: unknown[]) => {
-      const lines = printedBy.getStore();
+      const printed = printedOn.getStore();
 
-      if (lines) {
-        lines.push(format(...said));
+      if (printed) {
+        printed.lines.push(format(...said));
       } else {
         print(...said);
       }
     };
   }
 
-  return (lines, run) => printedBy.run(lines, run);
+  return printedOn;
 }
 
 /** Saves a picture of each page a rig has open, and says where, or why there is none. */
@@ -104,31 +117,41 @@ const telling = (thrown: unknown) =>
 export async function runChecks(checks: readonly Check[], { only, picturesIn }: CheckRun): Promise<boolean> {
   const chosen = checks.filter(([name]) => !only || name.includes(only));
   const notes = chosen.map((): string[] => []);
-  const browsers = Array.from({ length: Math.min(workerCount(), chosen.length) }, () => new RigBrowser());
-  const printingTo = keepPrintsApart();
+  const workers = Array.from({ length: Math.min(workerCount(), chosen.length) }, (): Worker => ({ browser: new RigBrowser(), printed: { lines: [] } }));
+  const printedOn = keepPrintsApart();
   const started = performance.now();
 
   /** One check on a rig of its own. `said` takes what there is to tell of it besides how it ended. */
   const runCheck = async ([name, run]: Check, browser: RigBrowser, stop: AbortSignal, said: string[]): Promise<void> => {
     const rig = await browser.rig();
 
-    // A check out of time is waiting on something: closing its pages under it makes that wait throw, which says where it was
+    // A check out of time is waiting on something: closing its pages under it makes that wait throw, which
+    // says where it was. Its browser goes too, in case that is what hangs
     stop.addEventListener('abort', () => {
       void picturesOf(rig, `${picturesIn}stuck-${fileName(name)}`)
         .then((pictures) => said.push('Its pages when it was stopped:', ...pictures))
-        .finally(() => rig.close())
+        .finally(() => {
+          browser.retire();
+
+          return rig.close();
+        })
         // A close that fails is told by the close below, which is this same one
         .catch(() => undefined);
     });
 
     try {
+      // Out of time before there was a rig, with nobody yet to hear so
+      stop.throwIfAborted();
       await run(rig);
-      assert.equal(rig.pageErrors.length, 0, 'A page of this check threw an error');
     } finally {
+      await rig.close();
+
       // Told of a check that failed some other way too, since it may be why
       said.push(...rig.pageErrors.map((thrown) => `A page threw: ${thrown}`));
-      await rig.close();
     }
+
+    // Looked at once the pages are closed: what one threw as the check ended has arrived by then
+    assert.equal(rig.pageErrors.length, 0, 'A page of this check threw an error');
   };
 
   /** A check's line, and under it what it printed and why it failed. */
@@ -139,7 +162,12 @@ export async function runChecks(checks: readonly Check[], { only, picturesIn }: 
       told.push(telling(result.error));
     } else if (result.outcome === 'timedOut') {
       told.unshift(`Stopped: it was still running after ${LIMIT_MS / 1000} seconds.`);
-      told.push(result.error === undefined ? 'It went on after its pages were closed.' : `Where it was, by what it threw when its pages were closed: ${telling(result.error)}`);
+
+      if (!result.ended) {
+        told.push('It went on after its pages were closed.');
+      } else if (result.error !== undefined) {
+        told.push(`Where it was, by what it threw when its pages were closed: ${telling(result.error)}`);
+      }
     }
 
     const lines = told.map((line) => `        ${line.replaceAll('\n', '\n        ')}\n`);
@@ -147,13 +175,18 @@ export async function runChecks(checks: readonly Check[], { only, picturesIn }: 
     return `  ${result.outcome === 'passed' ? 'ok  ' : 'FAIL'}  ${result.name} (${seconds(result.ms)})\n${lines.join('')}`;
   };
 
-  const results = await runPool(
-    chosen.map((check, index) => ({ name: check[0], run: (browser: RigBrowser, stop: AbortSignal) => printingTo(notes[index]!, () => runCheck(check, browser, stop, notes[index]!)) })),
-    browsers,
-    { limitMs: LIMIT_MS, graceMs: GRACE_MS, report: (result, index) => process.stdout.write(account(result, index)) },
-  );
+  const tasks = chosen.map((check, index) => ({
+    name: check[0],
+    run: ({ browser, printed }: Worker, stop: AbortSignal) => {
+      printed.lines = notes[index]!;
 
-  await Promise.all(browsers.map((browser) => browser.close()));
+      return printedOn.run(printed, () => runCheck(check, browser, stop, notes[index]!));
+    },
+  }));
+
+  const results = await runPool(tasks, workers, { limitMs: LIMIT_MS, graceMs: GRACE_MS, report: (result, index) => process.stdout.write(account(result, index)) });
+
+  await Promise.all(workers.map(({ browser }) => browser.close()));
 
   const failures = results.flatMap((result, index) => (result.outcome === 'passed' ? [] : [account(result, index)]));
   const slowest = [...results].sort((a, b) => b.ms - a.ms).slice(0, SLOWEST_SHOWN);
@@ -166,7 +199,7 @@ export async function runChecks(checks: readonly Check[], { only, picturesIn }: 
   if (results.length === 0) {
     process.stdout.write(`No check has "${only ?? ''}" in its name.\n`);
   } else {
-    process.stdout.write(`\n${results.length} checked and ${failures.length} failed in ${seconds(performance.now() - started)}, ${browsers.length} at a time (CHECK_WORKERS sets how many).\n`);
+    process.stdout.write(`\n${results.length} checked and ${failures.length} failed in ${seconds(performance.now() - started)}, ${workers.length} at a time (CHECK_WORKERS sets how many).\n`);
   }
 
   if (results.length > SLOWEST_SHOWN) {

@@ -100,14 +100,20 @@ test('a task that fails and tasks that outrun the limit are told in their own re
     // Told its time is up, goes on hanging
     named('hangs for good', (_worker, signal) => new Promise(() => signal.addEventListener('abort', () => stopped.push('hangs for good')))),
     pass('fourth'),
+    // Told its time is up, ends without a word
+    named('hangs, then ends', (_worker, signal) => new Promise((resolve) => signal.addEventListener('abort', resolve))),
   ];
 
   const results = await runPool(tasks, ['one', 'two'], SHORT);
 
-  assert.deepEqual(outcomes(results), ['passed', 'failed', 'passed', 'timedOut', 'passed', 'timedOut', 'passed']);
+  assert.deepEqual(outcomes(results), ['passed', 'failed', 'passed', 'timedOut', 'passed', 'timedOut', 'passed', 'timedOut']);
   assert.deepEqual(ran, ['first', 'second', 'third', 'fourth']);
   assert.deepEqual(stopped, ['hangs for good']);
-  assert.deepEqual(thrown(results), [null, 'broken', null, 'was waiting for the flop', null, undefined, null]);
+  assert.deepEqual(thrown(results), [null, 'broken', null, 'was waiting for the flop', null, undefined, null, undefined]);
+  assert.deepEqual(
+    results.map((result) => result.outcome === 'timedOut' && result.ended),
+    [false, false, false, true, false, false, false, true],
+  );
 });
 
 test('a single worker goes on to the next task after one that never stops', async () => {

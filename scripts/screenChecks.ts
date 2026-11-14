@@ -3857,6 +3857,7 @@ const CHECKS: Check[] = [
       assert.equal(await page.title(), own, 'the title was not put back');
 
       const settled = ((await page.evaluate('window.titles')) as string[]).length;
+      // Longer than the title takes to change once, which is TITLE_SWAP_MS, a second
       await page.waitForTimeout(1500);
       assert.equal(((await page.evaluate('window.titles')) as string[]).length, settled, 'the title kept changing after the turn');
 

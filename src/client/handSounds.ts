@@ -2,10 +2,11 @@ import type { HandEvent } from '../engine/events.ts';
 import type { SoundName } from './sound.ts';
 
 /**
- * What one hand event sounds like to the viewer at `viewer`: the table of which event makes which
- * sound. A new kind of event takes a case here, a sound or silence, and the build fails until it has one.
+ * What one hand event sounds like to the viewer at `viewer`, in a hand dealt on `dealtOn` boards from
+ * its first card: the table of which event makes which sound. A new kind of event takes a case here,
+ * a sound or silence, and the build fails until it has one.
  */
-function soundOf(event: HandEvent, viewer: number | null): SoundName | null {
+function soundOf(event: HandEvent, viewer: number | null, dealtOn: number): SoundName | null {
   // A player's own move is silent to them: they made it, and the server's answer comes a moment after the tap
   const byOther = (seat: number) => seat !== viewer;
 
@@ -24,9 +25,11 @@ function soundOf(event: HandEvent, viewer: number | null): SoundName | null {
     case 'raise':
       return byOther(event[1]) ? (event[3] === 0 ? 'allIn' : 'chips') : null;
 
-    // Every street sounds the same, on either board of a hand run twice
+    // Every street sounds the same, and once: boards dealt together, as in a double-board bomb pot, get a street at the
+    // same moment, and the first board's event is the one heard, whether or not the others' arrive with it. A board run
+    // out after another, as when a hand is run twice, has streets of its own
     case 'street':
-      return 'street';
+      return event[1] === 0 || event[1] >= dealtOn ? 'street' : null;
 
     case 'win':
       return byOther(event[1]) ? 'win' : 'myWin';
@@ -59,10 +62,11 @@ const MOST_PER_VIEW = 3;
 /**
  * What the hand's new events sound like to the viewer at `seat`, in order. Each sound plays once,
  * where it last came, and only the last few, so a burst of moves reads as how it ended, not as noise.
- * The viewer's own pot needs no second, smaller one for someone else's beside it.
+ * The viewer's own pot needs no second, smaller one for someone else's beside it. `dealtOn` is how
+ * many boards the hand was dealt on from its first card.
  */
-export function soundsHeard(events: readonly HandEvent[], seat: number | null): SoundName[] {
-  const heard = events.map((event) => soundOf(event, seat)).filter((sound) => sound !== null);
+export function soundsHeard(events: readonly HandEvent[], seat: number | null, dealtOn = 1): SoundName[] {
+  const heard = events.map((event) => soundOf(event, seat, dealtOn)).filter((sound) => sound !== null);
   const once = heard.filter((sound, index) => heard.lastIndexOf(sound) === index && !(sound === 'win' && heard.includes('myWin')));
 
   return once.slice(-MOST_PER_VIEW);

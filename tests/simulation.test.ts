@@ -25,6 +25,7 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
   let shortAntes = 0;
   const transfersIn = { chips: 0, cents: 0 };
   const bombPots = { chips: 0, cents: 0, called: 0, byCount: 0, overAnAnte: 0, short: 0, allInWhenDealt: 0 };
+  const doubleBoards = { chips: 0, cents: 0, shownDown: 0, ranOut: 0, withSidePots: 0, wonUncontested: 0 };
 
   for (let seed = 1; seed <= TABLES; seed++) {
     const rng = seededRng(seed * 7919);
@@ -57,6 +58,7 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
         bombPots.overAnAnte += t.state.config.ante > 0 ? 1 : 0;
         bombPots.short += t.state.hand!.players.some((p) => p.committed < dealt.amount) ? 1 : 0;
         bombPots.allInWhenDealt += t.state.hand!.stage !== 'betting' ? 1 : 0;
+        doubleBoards[t.state.config.unit] += dealt.boards === 2 ? 1 : 0;
       }
     }
 
@@ -70,6 +72,13 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
       showdowns += record.result.uncontested ? 0 : 1;
       runTwice += record.boards.length > 1 ? 1 : 0;
       bounties += record.result.bounty ? 1 : 0;
+
+      if (record.bombPot?.boards === 2) {
+        doubleBoards.shownDown += record.result.uncontested ? 0 : 1;
+        doubleBoards.wonUncontested += record.result.uncontested ? 1 : 0;
+        doubleBoards.ranOut += record.events.some((event) => event[0] === 'runs') ? 1 : 0;
+        doubleBoards.withSidePots += record.result.pots.length > 1 ? 1 : 0;
+      }
 
       // A hand's first event says what ante it was dealt under, when there was one
       const [dealt] = record.events;
@@ -100,4 +109,9 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
   assert.ok(bombPots.chips >= TABLES && bombPots.cents >= TABLES, bombs);
   assert.ok(bombPots.called >= TABLES / 2 && bombPots.byCount >= TABLES, bombs);
   assert.ok(bombPots.overAnAnte >= TABLES && bombPots.short >= TABLES / 2 && bombPots.allInWhenDealt >= TABLES / 4, bombs);
+
+  const doubles = `double-board bomb pots: ${JSON.stringify(doubleBoards)}`;
+  assert.ok(doubleBoards.chips >= TABLES / 2 && doubleBoards.cents >= TABLES / 2, doubles);
+  assert.ok(doubleBoards.shownDown >= TABLES && doubleBoards.wonUncontested >= TABLES / 4, doubles);
+  assert.ok(doubleBoards.ranOut >= TABLES / 4 && doubleBoards.withSidePots >= TABLES / 10, doubles);
 });

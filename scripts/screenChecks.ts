@@ -265,6 +265,33 @@ const BOMB_POT_TABLES = [
 
 const nextIsBombPot = (amount: string) => `Next hand is a bomb pot: ${amount} each`;
 
+/*
+ * Three double-board bomb pots at a table of BOMB_POT_TABLES, every card fixed, played one after the
+ * other with a bet on the first flop and checks from there. Each is named for how its pots are won.
+ */
+const DOUBLE_BOARD_HANDS = {
+  // Marge's deuces make three on the first board, where Quigs has two pair, and his king is best on the second
+  sidePot: { holes: { 0: 'Ks 7d', 1: 'Qc Qd', 2: 'Jc Jd', 3: '2d 2h', 4: 'Ac 3c', 5: '6c 6d' }, board: 'Kh 7s 2c 9d 4h', secondBoard: 'Kd 9c 8h Ts 3s' },
+  // Aces make three on the first board and kings on the second
+  oneEach: { holes: { 0: 'Qc 2d', 1: 'As Ad', 2: 'Ks Kc', 3: '6c 6d', 4: '5c 5d', 5: 'Jc 4d' }, board: 'Ah 7s 2c 9d 4h', secondBoard: 'Kd 9c 8h Ts 3s' },
+  // Aces make three on both, with Marge out of chips
+  both: { holes: { 0: 'Qc 2d', 1: 'As Ad', 2: 'Ks Kc', 4: '5c 5d', 5: 'Jc 4d' }, board: 'Ah 7s 2c 9d 4h', secondBoard: 'Ac 9c 8h Ts 3s' },
+};
+
+/** What the felt says of each of DOUBLE_BOARD_HANDS, by the name of the table. The odd cent of a pot is on the first board. */
+const DOUBLE_BOARD_RESULTS: Record<string, Record<keyof typeof DOUBLE_BOARD_HANDS, string[]>> = {
+  chips: {
+    sidePot: ['Board 1: Marge Simpson-Jr +90, Quigs +225', 'Board 2: Quigs wins 315 with pair of kings'],
+    oneEach: ['Board 1: WWWWWWWWWWWWWWWW wins 295 with three aces', 'Board 2: Ünïcödé Ñandú Ø! wins 295 with three kings'],
+    both: ['Board 1: WWWWWWWWWWWWWWWW wins 250 with three aces', 'Board 2: WWWWWWWWWWWWWWWW wins 250 with three aces'],
+  },
+  cents: {
+    sidePot: ['Board 1: Marge Simpson-Jr +2.25, Quigs +5.63', 'Board 2: Quigs wins 7.87 with pair of kings'],
+    oneEach: ['Board 1: WWWWWWWWWWWWWWWW wins 7.38 with three aces', 'Board 2: Ünïcödé Ñandú Ø! wins 7.37 with three kings'],
+    both: ['Board 1: WWWWWWWWWWWWWWWW wins 6.25 with three aces', 'Board 2: WWWWWWWWWWWWWWWW wins 6.25 with three aces'],
+  },
+};
+
 const stacksBySeat = (page: Page, seats: number) => Promise.all(Array.from({ length: seats }, (_, seat) => text(page, `.seat[data-seat="${seat}"] .stack`)));
 
 async function openLedger(page: Page, screen: ScreenName): Promise<void> {
@@ -3120,36 +3147,37 @@ const CHECKS: Check[] = [
     },
   ],
   [
-    'the form for a new table takes the bomb pot settings, and starts the amount over in dollars',
+    'the form for a new table takes the bomb pot settings, starts the amount over in dollars and keeps the rest',
     async (rig) => {
       for (const screen of PHONE_AND_DESKTOP) {
         const page = await rig.lobby(screen);
         const press = pressOn(page, screen);
-        const values = async () => [await page.inputValue('#new-table-bomb-pot-amount'), await page.inputValue('#new-table-bomb-pot-every')];
+        const values = async () => [await page.inputValue('#new-table-bomb-pot-amount'), await page.inputValue('#new-table-bomb-pot-every'), await page.locator('#new-table-bomb-pot-boards input:checked').inputValue()];
 
-        assert.deepEqual(await values(), ['100', '0']);
+        assert.deepEqual(await values(), ['100', '0', 'one']);
 
         await page.fill('#host-name', 'Quigs');
         await page.fill('#new-table-bomb-pot-amount', '300');
         await page.fill('#new-table-bomb-pot-every', '4');
+        await press('#new-table-bomb-pot-boards label:has-text("Two boards")');
 
-        // What the table plays with starts the amounts over, the bomb pot among them, and keeps how often one comes
+        // What the table plays with starts the amounts over, the bomb pot among them, and keeps how often one comes and on how many boards
         await press('#new-table-unit label:has-text("Dollars and cents")');
-        assert.deepEqual(await values(), ['2.50', '4']);
+        assert.deepEqual(await values(), ['2.50', '4', 'two']);
         await page.fill('#new-table-bomb-pot-amount', '5');
 
-        await page.locator('label[for="new-table-bomb-pot-every"]').scrollIntoViewIfNeeded();
+        await page.locator('#new-table-bomb-pot-boards').scrollIntoViewIfNeeded();
         await shot(page, `bomb-pot-new-table-${screen}`);
-        assert.deepEqual(await squeezed(page, 'label[for^="new-table-bomb-pot"] span, label[for^="new-table-bomb-pot"] small, .card-panel .field input'), [], 'part of the form is cut off');
-        assertOnScreen(await boxes(page, '#new-table-bomb-pot-amount, #new-table-bomb-pot-every, label[for="new-table-bomb-pot-every"]'), screen, 'the bomb pot in the form for a new table');
+        assert.deepEqual(await squeezed(page, 'label[for^="new-table-bomb-pot"] span, label[for^="new-table-bomb-pot"] small, #new-table-bomb-pot-boards span, #new-table-bomb-pot-boards small, .card-panel .field input'), [], 'part of the form is cut off');
+        assertOnScreen(await boxes(page, '#new-table-bomb-pot-amount, #new-table-bomb-pot-every, label[for="new-table-bomb-pot-every"], #new-table-bomb-pot-boards'), screen, 'the bomb pot in the form for a new table');
         await assertNoSidewaysScroll(page);
 
         await press('[data-action="create-table"]');
         await page.waitForSelector('#table-link');
 
         const link = await page.inputValue('#table-link');
-        const { unit, bombPotAmount, bombPotEvery } = rig.store.read(new URL(link).searchParams.get('table')!)!.config;
-        assert.deepEqual({ unit, bombPotAmount, bombPotEvery }, { unit: 'cents', bombPotAmount: 500, bombPotEvery: 4 });
+        const { unit, bombPotAmount, bombPotEvery, bombPotBoards } = rig.store.read(new URL(link).searchParams.get('table')!)!.config;
+        assert.deepEqual({ unit, bombPotAmount, bombPotEvery, bombPotBoards }, { unit: 'cents', bombPotAmount: 500, bombPotEvery: 4, bombPotBoards: 'two' });
 
         await page.context().close();
       }
@@ -3283,8 +3311,12 @@ const CHECKS: Check[] = [
           }
 
           keep('Tuesday cents', { unit: 'cents', smallBlind: 25, bigBlind: 50, ante: 10, minBuyIn: 2000, maxBuyIn: 10_000, actionSeconds: 20, allowStraddle: false, sevenDeuceBounty: 100 });
-          keep('From before', { smallBlind: 5, bigBlind: 10 }, { actionSeconds: 900, rabbitHunting: true });
-          keep('Bombs in chips', { bombPotAmount: 300, bombPotEvery: 5 });
+
+          // Saved when the clock could be set higher, with a setting the game has since dropped, and before a bomb pot could have two boards
+          const { bombPotBoards: _boards, ...fromBefore } = { ...presetSettings({ ...DEFAULT_CONFIG, smallBlind: 5, bigBlind: 10 }), actionSeconds: 900, rabbitHunting: true };
+          rig.presets.save({ name: 'From before', settings: fromBefore, savedAt: 0, savedBy: 'Quigs' }, false);
+
+          keep('Bombs in chips', { bombPotAmount: 300, bombPotEvery: 5, bombPotBoards: 'two' });
           keep('Bombs in cents', { unit: 'cents', smallBlind: 25, bigBlind: 50, minBuyIn: 2000, maxBuyIn: 10_000, bombPotAmount: 500 });
 
           const page = await rig.lobby(screen);
@@ -3315,7 +3347,6 @@ const CHECKS: Check[] = [
           await assertNoSidewaysScroll(page);
           await shot(page, `presets-picked-${screen}`);
 
-          // A preset saved when the clock could be set higher, with a setting the game has since dropped
           await page.selectOption('#new-table-preset', { label: 'From before' });
           assert.deepEqual(await stakes(page), ['chips', '5', '10', '400', '2000']);
           assert.deepEqual(await texts(page, '.preset-notes p.warn'), ['Seconds to act is back to 30: the preset’s is no longer allowed.']);
@@ -3343,6 +3374,20 @@ const CHECKS: Check[] = [
           assert.equal(await page.inputValue('#new-table-bomb-pot-amount'), '5.00');
           await press('#new-table-unit label:has-text("Whole chips")');
           assert.equal(await page.inputValue('#new-table-bomb-pot-amount'), '100');
+
+          // One board or two is marked like any field a preset changes, and a preset from before there were two says one
+          const boardsMarked = () => page.locator('#new-table-bomb-pot-boards.changed input:checked').inputValue();
+
+          await page.selectOption('#new-table-preset', { label: 'Bombs in chips' });
+          assert.equal(await boardsMarked(), 'two');
+          assert.match(await text(page, '.preset-notes p'), /^Changed here: .*A bomb pot is played on\.$/);
+
+          await page.locator('#new-table-bomb-pot-boards').scrollIntoViewIfNeeded();
+          assertOnScreen(await boxes(page, '#new-table-bomb-pot-boards'), screen, 'the boards of a bomb pot, marked as changed');
+          await shot(page, `presets-boards-${screen}`);
+
+          await page.selectOption('#new-table-preset', { label: 'From before' });
+          assert.equal(await boardsMarked(), 'one');
 
           // Edited after picking, before the table is made
           await page.selectOption('#new-table-preset', { label: 'Tuesday cents' });
@@ -3615,6 +3660,282 @@ const CHECKS: Check[] = [
       assertOnScreen(await boxes(page, '.switches [data-pref]'), 'desktop', 'the blocked switch');
       await shot(page, 'preferences-attention-blocked-desktop');
       await page.context().close();
+    },
+  ],
+  [
+    'a double-board bomb pot has two flops out from the start with the bets clear of both, names the viewer\'s hand on each board, and says who won each',
+    async (rig) => {
+      for (const kind of BOMB_POT_TABLES) {
+        for (const screen of ['smallPhone', 'desktop'] as const) {
+          const names = LONG_NAMES.slice(0, 6);
+          const firstToAct = names[1]!;
+          const results = DOUBLE_BOARD_RESULTS[kind.name]!;
+          const table = rig.table(
+            names.map((name, seat) => ({ name, stack: seat === 3 ? kind.short : kind.stack })),
+            { ...kind.config, bombPotBoards: 'two' },
+          );
+          table.alter((state) => {
+            state.handCount = 122;
+          });
+
+          const deal = (hand: keyof typeof DOUBLE_BOARD_HANDS) => {
+            table.act('Quigs', { type: 'setBombPot', on: true });
+            table.deal({ button: 0, ...DOUBLE_BOARD_HANDS[hand] });
+          };
+
+          deal('sidePot');
+          const page = await table.open('Quigs', screen);
+          const press = pressOn(page, screen);
+          const cardsOn = async (board: number) => (await texts(page, `.board[data-run="${board}"] .card:not(.slot)`)).map((card) => card.replace(/\s/g, ''));
+          // Where a line under the seat has no room for more, a hand is named by its kind alone
+          const namedInShort = (shape: string) => screen === 'smallPhone' && shape.startsWith('wide');
+
+          const lookInShapes = (name: string, buttonsUp: boolean, also: (shape: string) => Promise<void> = async () => undefined) =>
+            inShapesOf(
+              page,
+              screen,
+              async (shape) => {
+                await dealt(page);
+                const under = '.pot, .message.result > div';
+                const middle = await boxes(page, `.board .card, ${under}`);
+
+                assert.deepEqual(await squeezed(page, '.pot, .bet, .plate .stack'), [], 'an amount on the table is cut off');
+                assertOnScreen([...middle, ...(await boxes(page, '.seat .plate, .bet'))], screen, 'a seat, a bet or the middle of the table');
+                assertApart(middle, await boxes(page, '.seat .plate, .seat .hole .card'), 'the middle of the table and a seat');
+                assertApart(await boxes(page, '.board[data-run="0"] .card'), await boxes(page, `.board[data-run="1"] .card, ${under}`), 'the first board and what is under it');
+                assertApart(await boxes(page, '.board[data-run="1"] .card'), await boxes(page, under), 'the second board and what is under it');
+                await also(shape);
+                await shot(page, `double-board-${name}-${shape}-${kind.name}-${screen}`);
+              },
+              { buttonsUp },
+            );
+
+          const lookAtHint = async () => {
+            await assertHintFits(page);
+            assert.equal(new Set((await textBoxes(page, `${HINT} .read`)).map((line) => line.top)).size, 2, 'each board has one line of the hint');
+          };
+
+          const lookAtTwoPair = async (shape: string) => {
+            await lookAtHint();
+            assert.equal(await page.locator(`${HINT} .detail`).isVisible(), !namedInShort(shape), `the ranks of the two pair in the hint on a ${shape} table`);
+          };
+
+          // Both flops are out before anyone acts, over the one pot of what everyone posted
+          assert.deepEqual([await cardsOn(0), await cardsOn(1)], [['K♥', '7♠', '2♣'], ['K♦', '9♣', '8♥']]);
+          assert.equal(await page.locator('.board .card.slot').count(), 4, 'each board has room for its turn and river');
+          assert.equal(await text(page, '.pot'), `Bomb pot${kind.pot}`);
+          assert.deepEqual(await stacksBySeat(page, 6), kind.stacks);
+          assert.equal(await page.locator('.seat.acting').getAttribute('data-seat'), '1');
+
+          // One round of betting on the two flops: the bets sit around both boards, and the viewer, asked last, has a hand on each
+          table.act(firstToAct, { type: 'raise', to: table.view(firstToAct).hand!.options!.minRaiseTo });
+          for (const caller of [names[2]!, names[4]!, names[5]!]) {
+            table.act(caller, { type: 'call' });
+          }
+
+          await page.waitForSelector('.turn [data-action="call"]');
+          assert.deepEqual(await texts(page, '.bet'), Array(4).fill(kind.bet));
+          await hintSays(page, 'Two pair, kings and sevens', 'Pair of kings');
+          assert.deepEqual(await texts(page, `${HINT} .run`), ['1', '2']);
+          await lookInShapes('bets', true, lookAtTwoPair);
+
+          const feedToggle = async () => {
+            if (screen !== 'desktop') {
+              await page.tap('.feed-toggle');
+            }
+          };
+
+          await feedToggle();
+          const said = await texts(page, '.entries li');
+          const start = said.indexOf(kind.lines[0]!.replace('bomb pot', 'double-board bomb pot'));
+          assert.deepEqual(said.slice(start + 1, start + 5), [...kind.lines.slice(1, 3), 'First board, Flop: K♥ 7♠ 2♣', 'Second board, Flop: K♦ 9♣ 8♥']);
+          assert.deepEqual(await squeezed(page, '.entries li'), [], 'a line of the play-by-play is cut off');
+          await assertNoSidewaysScroll(page);
+          await shot(page, `double-board-play-by-play-${kind.name}-${screen}`);
+          await feedToggle();
+
+          // On the river each board has its own cards picked out, and a card in hand only where both boards agree on it
+          table.act('Quigs', { type: 'call' });
+          table.play(passive, (view) => view.hand!.street === 'river' && view.hand!.toAct === 0);
+          await page.waitForSelector('.board[data-run="1"] .card[data-card="3s"]');
+          await page.waitForSelector('.turn [data-action="check"]');
+          await hintSays(page, 'Two pair, kings and sevens', 'Pair of kings');
+          assert.deepEqual(await marking(page), { plays: sortedCards('Kh 7s 9d Kd 9c 8h Ts Ks'), idle: sortedCards('2c 4h 3s') });
+          await lookInShapes('river', true, async (shape) => {
+            await assertMarked(page);
+            await lookAtTwoPair(shape);
+          });
+
+          // Each pot is split between the boards: the short stack takes the first board's half of the one she is in for
+          const lookAtResult = async (hand: keyof typeof DOUBLE_BOARD_HANDS) => {
+            table.play(passive, (view) => view.hand!.stage === 'done');
+            await page.waitForFunction(`document.querySelector('.message.result > div')?.textContent === ${JSON.stringify(results[hand][0])}`);
+            assert.deepEqual(await texts(page, '.message.result > div'), results[hand]);
+            assert.equal(await page.locator(`${HINT}, .pot`).count(), 0, 'the result names the hands and says who won what, so the hint and the pot make room for it');
+            await lookInShapes(`result-${hand}`, false);
+          };
+
+          await lookAtResult('sidePot');
+
+          const nextHand = () => {
+            table.act('Quigs', { type: 'pause' });
+            table.play(passive, (view) => view.hand === null);
+          };
+
+          for (const hand of ['oneEach', 'both'] as const) {
+            nextHand();
+            deal(hand);
+            await lookAtResult(hand);
+          }
+
+          // A hand everyone else folds is won whole, on neither board, and the hint stays since nothing in the middle names a hand
+          nextHand();
+          deal('both');
+          table.play(
+            (view, name) => {
+              const { canCheck, minRaiseTo } = view.hand!.options!;
+
+              return name === 'Quigs' ? { type: 'raise', to: minRaiseTo } : { type: canCheck ? 'check' : 'fold' };
+            },
+            (view) => view.hand!.stage === 'done',
+          );
+          await page.waitForFunction(`document.querySelector('.message.result > div')?.textContent?.startsWith('Quigs wins')`);
+          assert.deepEqual(await texts(page, '.message.result > div'), [`Quigs wins ${kind.name === 'cents' ? '12.50' : '500'}`]);
+          await hintSays(page, 'Pair of deuces', 'Ace high');
+          await lookInShapes('result-folded', false, lookAtHint);
+
+          nextHand();
+
+          await press('[data-action="menu"]');
+          await press('.menu [data-action="history"]');
+          await page.waitForSelector('.history summary');
+          assert.deepEqual((await texts(page, '.history summary')).map((line) => line.split('\n')[0]), [126, 125, 124, 123].map((hand) => `Hand #${hand} · double-board bomb pot`));
+          await page.locator('.history details').nth(1).locator('summary').scrollIntoViewIfNeeded();
+          await page.locator('.history details').nth(1).locator('summary').click();
+
+          const told = (await text(page, '.history details[open] pre')).split('\n');
+          const [first, second] = results.both.map((line) => line.replace(/^Board \d: /, '').replace(' with ', (_with) => ' on the BOARD with '));
+          assert.deepEqual(told.filter((line) => line.includes('River')), ['First board, River: A♥ 7♠ 2♣ 9♦ 4♥', 'Second board, River: A♣ 9♣ 8♥ 10♠ 3♠']);
+          assert.deepEqual(told.slice(-2), [first!.replace('BOARD', 'first board'), second!.replace('BOARD', 'second board')]);
+          assert.deepEqual(await squeezed(page, '.history summary'), [], 'the hand\'s line in the history is cut off');
+          await assertNoSidewaysScroll(page);
+          await shot(page, `double-board-history-${kind.name}-${screen}`);
+
+          await page.context().close();
+        }
+      }
+    },
+  ],
+  [
+    'a double-board bomb pot plays the deal and one flop for the two on another player’s page, and one street for the turn of both',
+    async (rig) => {
+      const table = rig.table(
+        [
+          { name: 'Quigs', stack: 1000 },
+          { name: 'Stu', stack: 1000 },
+          { name: 'Pam', stack: 1000 },
+        ],
+        { bombPotBoards: 'two' },
+      );
+      const page = await table.open('Pam', 'phone', LISTEN);
+
+      table.act('Quigs', { type: 'setBombPot', on: true });
+      table.deal({ button: 0, board: '3s 4c Jd 9h Qd', secondBoard: 'Kd 5c 8h Ts 2s' });
+      await page.waitForSelector('.board[data-run="1"] .card[data-card]:nth-child(3)');
+      await page.waitForFunction('window.played.length >= 2');
+      await page.waitForTimeout(300);
+
+      assert.deepEqual(await playedNames(page), ['deal', 'street'], 'the deal and one flop for the two boards');
+
+      const [deal, flop] = await playedAt(page);
+      const dealLasts = Math.max(...RECIPES.deal.map((voice) => voice.at + voice.length));
+      assert.ok(flop! - deal! >= dealLasts, `the flops start ${(flop! - deal!).toFixed(3)} s after the deal, which lasts ${dealLasts} s`);
+
+      // Stu, left of the button, checks to Pam, whose own check is silent to her; the button's check brings the turn
+      table.act('Stu', { type: 'check' });
+      await page.waitForSelector('.turn [data-action="check"]:enabled');
+      await page.waitForFunction('window.played.length >= 4');
+      await page.waitForTimeout(300);
+      assert.deepEqual(await playedNames(page, 2), ['knock', 'turn']);
+
+      table.act('Pam', { type: 'check' });
+      table.act('Quigs', { type: 'check' });
+      await page.waitForSelector('.board[data-run="1"] .card[data-card]:nth-child(4)');
+      await page.waitForFunction('window.played.length >= 6');
+      await page.waitForTimeout(300);
+
+      assert.deepEqual(await playedNames(page, 4), ['knock', 'street'], 'the button’s check, and one street for the turn of both boards');
+
+      await page.context().close();
+    },
+  ],
+  [
+    'the table settings take one board or two for a bomb pot, and the menu and the bar under the table say which is coming',
+    async (rig) => {
+      for (const kind of BOMB_POT_TABLES) {
+        // The settings are a long list now, and the narrowest phone is where a row of it runs out of room first
+        for (const screen of ['smallPhone', 'desktop'] as const) {
+          const table = rig.table(
+            [
+              { name: 'Quigs', stack: kind.stack },
+              { name: 'Stu', stack: kind.stack },
+            ],
+            kind.config,
+          );
+          const page = await table.open('Quigs', screen);
+          const press = pressOn(page, screen);
+          const picked = (boards: string) => page.isChecked(`#table-bomb-pot-boards input[value="${boards}"]`);
+          const openSettings = async () => {
+            await press('[data-action="menu"]');
+            await press('.menu [data-action="settings"]');
+            await page.waitForSelector('#table-bomb-pot-boards');
+          };
+
+          await openSettings();
+          assert.equal(await picked('one'), true, 'a bomb pot is on one board unless the host says otherwise');
+          assert.equal(await text(page, '#table-bomb-pot-boards > span'), 'A bomb pot is played on');
+          assert.deepEqual(await texts(page, '#table-bomb-pot-boards .check'), ['One board', 'Two boards']);
+          assert.equal(await text(page, '#table-bomb-pot-boards small'), 'With two, each board wins half of every pot');
+
+          await page.locator('#table-bomb-pot-boards').scrollIntoViewIfNeeded();
+          assert.deepEqual(await squeezed(page, '#table-bomb-pot-boards .check span, #table-bomb-pot-boards > span, #table-bomb-pot-boards small'), [], 'part of the settings is cut off');
+          assertOnScreen(await boxes(page, '.dialog, #table-bomb-pot-boards, #table-bomb-pot-boards .check'), screen, 'the boards of a bomb pot in the settings');
+          const [one, two] = await boxes(page, '#table-bomb-pot-boards .check');
+          assert.ok(one && two && !overlap(one, two), 'the two choices are drawn over each other');
+          await assertNoSidewaysScroll(page);
+
+          await press('#table-bomb-pot-boards label:has-text("Two boards")');
+          await shot(page, `double-board-settings-${kind.name}-${screen}`);
+          await press('[data-action="save-settings"]');
+          await page.waitForSelector('.dialog', { state: 'detached' });
+          assert.equal(table.view('Stu').feed.at(-1)!.text, `A double-board bomb pot is ${kind.amount} and comes only when called`);
+
+          // Called from the menu, which says what it starts on, it is told under the table by its name
+          await press('[data-action="menu"]');
+          assert.equal(await text(page, '.menu [data-action="bomb-pot"]'), `Bomb pot next hand${kind.amount} each, no blinds, starts on two flops`);
+          assert.deepEqual(await squeezed(page, '.menu-item, .menu-item small'), [], 'a line of the menu is cut off');
+          await press('.menu [data-action="bomb-pot"]');
+          await page.waitForSelector('.controls .next-hand');
+          assert.equal(await text(page, '.controls .next-hand'), `Next hand is a double-board bomb pot: ${kind.amount} each`);
+
+          await inShapesOf(
+            page,
+            screen,
+            async (shape) => {
+              assert.deepEqual(await squeezed(page, '.controls .waiting, .controls .next-hand'), [], 'what is said about the next hand is cut off');
+              assertOnScreen(await boxes(page, '.controls .next-hand, .seat .plate'), screen, 'the table and what is said under it');
+              assertApart(await boxes(page, '.controls .next-hand'), await boxes(page, '.stage, .controls .extras'), 'word of the bomb pot and what is around it');
+              await shot(page, `double-board-next-${kind.name}-${screen}-${shape}`);
+            },
+            { buttonsUp: false },
+          );
+
+          await openSettings();
+          assert.equal(await picked('two'), true);
+
+          await page.context().close();
+        }
+      }
     },
   ],
 ];

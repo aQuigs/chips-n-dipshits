@@ -18,9 +18,17 @@
 
 .table {
   --card-w: clamp(24px, 6.6cqmin, 50px);
-  /* How near the middle of the table a bet's own middle may come: half of the board with the pot under it
-     (a card, the gap, the pot's line), half a bet, and a sliver of felt between them */
-  --center-reach: calc((var(--card-w) * 1.4 + 1.4cqmin + 1.75em) / 2 + 0.8em + 3px);
+  /* How many boards the hand is played on, which the table says as data-boards, and how wide a card on them is */
+  --boards: 1;
+  --board-card-w: var(--card-w);
+  /* Between two boards: a little more than the hand hint lifts a card that plays, so one on the lower board stays off the upper */
+  --board-gap: calc(var(--board-card-w) * 0.2);
+  /* A bet and the sliver of felt that keeps it from the next one */
+  --bet-row: calc(1.7em + 3px);
+  /* How near the middle of the table a bet's own middle may come: half of the boards with the pot under them
+     (the cards of each board, the gaps between boards, the gap over the pot and its line), half a bet, and a
+     sliver of felt between them */
+  --center-reach: calc((var(--boards) * (var(--board-card-w) * 1.4 + var(--board-gap)) - var(--board-gap) + 1.4cqmin + 1.75em) / 2 + 0.8em + 3px);
 
   position: absolute;
   inset: 0;
@@ -60,19 +68,23 @@
   width: 52%;
 }
 
+/* Two boards take smaller cards, so that with the pot under them they still fit between the bets */
+.table[data-boards='2'] {
+  --boards: 2;
+  --board-card-w: clamp(20px, 5.4cqmin, 42px);
+}
+
 .boards {
+  --card-w: var(--board-card-w);
+
   display: grid;
-  gap: 1cqmin;
+  gap: var(--board-gap);
 }
 
 .board {
   display: flex;
   justify-content: center;
   gap: 0.8cqmin;
-}
-
-.boards.twice {
-  --card-w: clamp(20px, 5.4cqmin, 42px);
 }
 
 .board.later {
@@ -112,4 +124,9 @@
 .message.result {
   gap: 0.2em;
   color: var(--felt-win);
+}
+
+/* Under more than one board the result has less of the table to itself, so its lines sit closer */
+.table:not([data-boards='1']) .message.result {
+  line-height: 1.25;
 }

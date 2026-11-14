@@ -2,10 +2,10 @@ import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
-import { STATE_SCHEMA, TIMING } from '../src/engine/index.ts';
+import { replayHand, STATE_SCHEMA, TIMING } from '../src/engine/index.ts';
 import type { TableState } from '../src/engine/index.ts';
 import { restoreState } from '../src/server/store.ts';
-import { handRecords, seededRng, TestTable } from './helpers.ts';
+import { checkAround, handRecords, seededRng, TestTable } from './helpers.ts';
 import { assertHandRecordsHold, assertInvariants } from './invariants.ts';
 import { randomStep } from './randomPlay.ts';
 
@@ -141,7 +141,7 @@ test('a table saved before bomb pots has none called or counted, a hand in play 
   for (const file of FILES) {
     const state = load(file);
 
-    assert.deepEqual([state.bombPotCalled, state.handsSinceBombPot, state.config.bombPotAmount, state.config.bombPotEvery], [false, 0, 100, 0], file);
+    assert.deepEqual([state.bombPotCalled, state.handsSinceBombPot, state.config.bombPotAmount, state.config.bombPotEvery, state.config.bombPotBoards], [false, 0, 100, 0, 'one'], file);
     assert.equal(state.hand === null ? null : state.hand.bombPot, null, file);
   }
 
@@ -150,4 +150,33 @@ test('a table saved before bomb pots has none called or counted, a hand in play 
   const { bombPotAmount: _amount, bombPotEvery: _every, ...asOnceSaved } = cents.state.config;
   const restored = restoreState(JSON.stringify({ ...cents.state, config: asOnceSaved }));
   assert.deepEqual([restored.config.bombPotAmount, restored.config.bombPotEvery, restored.config.smallBlind], [250, 0, 25]);
+});
+
+test('a bomb pot saved in the middle by the code before there were two boards goes on as it was, on one', () => {
+  // A bomb pot on one board says nothing of boards, so one saved by the code before is this one without the setting
+  const t = new TestTable({ stacks: [1000, 1000, 1000], config: { allowRunItTwice: true } });
+  t.cmd(0, { type: 'setBombPot', on: true });
+  t.deal({ button: 0, holes: { 0: 'As Ah', 1: 'Ks Kh', 2: 'Qs Qh' }, board: '2c 7d 9h Jc 3s' });
+  t.check(1);
+  assert.deepEqual(t.state.hand!.bombPot, { amount: 100 });
+
+  const { bombPotBoards: _boards, ...asOnceSaved } = t.state.config;
+  const restored = TestTable.adopt(restoreState(JSON.stringify({ ...t.state, config: asOnceSaved })));
+  assert.equal(restored.state.config.bombPotBoards, 'one');
+  assert.deepEqual([restored.state.hand!.boards, restored.state.hand!.runs], [[['2c', '7d', '9h']], 1]);
+  assertInvariants(restored.state, restored.now);
+
+  restored.check(2);
+  restored.check(0);
+  assert.deepEqual(restored.state.hand!.boards, [['2c', '7d', '9h', 'Jc']], 'the turn comes on its one board');
+  assert.deepEqual(replayHand(restored.state.hand!.events)!.boards, restored.state.hand!.boards);
+
+  // Its settings can be changed from there, and the bomb pot after this one is on two
+  restored.cmd(0, { type: 'updateConfig', config: { bombPotBoards: 'two', bombPotEvery: 1 } });
+  checkAround(restored, [1, 2, 0], 2);
+  restored.finishHand();
+  assertHandRecordsHold(restored.effects);
+
+  restored.deal();
+  assert.deepEqual([restored.state.hand!.bombPot, restored.state.hand!.boards.length], [{ amount: 100, boards: 2 }, 2]);
 });

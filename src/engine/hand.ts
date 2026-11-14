@@ -1,8 +1,8 @@
 import { formatAmount } from './amounts.ts';
 import { bettingIsClosed, bettingOptions, owesAction } from './betting.ts';
-import { claimBombPot } from './bombPots.ts';
-import { FLOP_SIZE, isSevenDeuce, prettyCards, shuffledDeck } from './cards.ts';
-import type { Card } from './cards.ts';
+import { boardsComplete, dealStreet, newBoards, potShares, runOut } from './boards.ts';
+import { boardsDealt, bombPotName, claimBombPot } from './bombPots.ts';
+import { isSevenDeuce, prettyCards, shuffledDeck } from './cards.ts';
 import type { HandEvent } from './events.ts';
 import { forcedBets, openingBet, positionsOf } from './forcedBets.ts';
 import type { ForcedBet } from './forcedBets.ts';
@@ -27,7 +27,6 @@ export const TIMING = {
 };
 
 const HOLE_CARDS = 2;
-const BOARD_SIZE = 5;
 
 // A hand's log is saved with the table on every action, so a raising war can't be allowed to grow it without end
 const LOG_LIMIT = 240;
@@ -40,8 +39,10 @@ const LOG_GAP = '… a long stretch of the action is left out …';
  */
 export const EVENT_LIMIT = 320;
 
-const STREET_BY_BOARD_LENGTH: Record<number, Street> = { 3: 'flop', 4: 'turn', 5: 'river' };
 const STREET_TITLES: Record<Street, string> = { preflop: 'Preflop', flop: 'Flop', turn: 'Turn', river: 'River' };
+
+/** What the play-by-play calls each board of a hand played on several. */
+const BOARD_NAMES = ['First board', 'Second board'];
 
 export type BettingAction = { type: 'fold' } | { type: 'check' } | { type: 'call' } | { type: 'raise'; to: number };
 
@@ -243,10 +244,7 @@ export function startHand(state: TableState, ctx: Ctx): void {
     bounty: sevenDeuceBounty,
     bombPot,
     deck,
-    boards: [[]],
-    runs: 1,
-    runIndex: 0,
-    sharedBoardLength: 0,
+    ...newBoards(boardsDealt(bombPot)),
     street: 'preflop',
     stage: 'betting',
     players,
@@ -262,7 +260,7 @@ export function startHand(state: TableState, ctx: Ctx): void {
   state.hand = hand;
 
   const stacks = players.map((p): [number, string, number] => [p.seat, p.name, p.startStack]);
-  const terms = bombPot ? `bomb pot ${formatAmount(bombPot.amount, state.config)}` : `blinds ${stakesText(state.config)}`;
+  const terms = bombPot ? `${bombPotName(bombPot)} ${formatAmount(bombPot.amount, state.config)}` : `blinds ${stakesText(state.config)}`;
 
   record(hand, ['start', hand.number, button, smallBlind, bigBlind, stacks, ...startTerms(state, bombPot)]);
   narrate(state, ctx, `Hand #${hand.number} · ${terms} · ${playerAt(hand, button)!.name} has the button`);
@@ -275,7 +273,7 @@ export function startHand(state: TableState, ctx: Ctx): void {
     return;
   }
 
-  // The flop comes whoever is all in. What nobody could match goes back first, so it is dealt to the pot it is played for
+  // The flop comes whoever is all in, on every board. What nobody could match goes back first, so it is dealt to the pot it is played for
   refundUncalledBet(state, ctx);
   dealNextStreet(state, ctx);
   advance(state, ctx, button);
@@ -382,27 +380,24 @@ function refundUncalledBet(state: TableState, ctx: Ctx): void {
   narrate(state, ctx, beyondTheBet ? `${formatAmount(excess, state.config)} that nobody could match returned to ${top.name}` : `Uncalled bet of ${formatAmount(excess, state.config)} returned to ${top.name}`);
 }
 
-/** Deals the next street onto one of the hand's boards. */
-function dealBoardCards(hand: Hand, boardIndex: number): Street {
-  const board = hand.boards[boardIndex]!;
-  const count = board.length === 0 ? FLOP_SIZE : 1;
-  const dealt: Card[] = [];
+/** Deals the next street, on every board it is due on, and tells the table. */
+function dealAndTell(state: TableState, ctx: Ctx): void {
+  const hand = state.hand!;
 
-  for (let i = 0; i < count; i++) {
-    dealt.push(hand.deck.pop()!);
+  for (const { board, street, cards } of dealStreet(hand)) {
+    const which = hand.runs > 1 ? `${BOARD_NAMES[board]}, ` : '';
+
+    hand.street = street;
+    record(hand, ['street', board, cards]);
+    narrate(state, ctx, `${which}${STREET_TITLES[street]}: ${prettyCards(hand.boards[board]!)}`);
   }
-
-  board.push(...dealt);
-  record(hand, ['street', boardIndex, dealt]);
-
-  return STREET_BY_BOARD_LENGTH[board.length]!;
 }
 
+/** Deals the next street and opens its round of betting. */
 function dealNextStreet(state: TableState, ctx: Ctx): void {
   const hand = state.hand!;
-  const board = hand.boards[0]!;
 
-  hand.street = dealBoardCards(hand, 0);
+  dealAndTell(state, ctx);
   hand.currentBet = 0;
   hand.minRaise = hand.bigBlind;
   hand.lastAggressor = null;
@@ -415,8 +410,6 @@ function dealNextStreet(state: TableState, ctx: Ctx): void {
       player.lastAction = null;
     }
   }
-
-  narrate(state, ctx, `${STREET_TITLES[hand.street]}: ${prettyCards(board)}`);
 }
 
 /** Bets leave the front of the players once no more betting can happen. */
@@ -563,7 +556,6 @@ function beginRunout(state: TableState, ctx: Ctx): void {
   const live = livePlayers(hand);
 
   collectBets(hand);
-  hand.sharedBoardLength = hand.boards[0]!.length;
 
   for (const player of live) {
     if (!player.shown) {
@@ -571,28 +563,24 @@ function beginRunout(state: TableState, ctx: Ctx): void {
     }
   }
 
+  // A second board is offered only to a hand on one: boards dealt apart from the start are already two
   const everyoneCanVote = live.every((p) => !state.seats[p.seat]!.away && !state.seats[p.seat]!.leaving);
-  if (state.config.allowRunItTwice && everyoneCanVote) {
+  if (hand.runs === 1 && state.config.allowRunItTwice && everyoneCanVote) {
     hand.stage = 'ritVote';
     hand.deadline = ctx.now + TIMING.ritVoteMs;
     return;
   }
 
-  startRunout(state, ctx, 1);
+  startRunout(state, ctx, hand.runs);
 }
 
 function startRunout(state: TableState, ctx: Ctx, runs: number): void {
   const hand = state.hand!;
 
   hand.stage = 'runout';
-  hand.runs = runs;
-  hand.runIndex = 0;
+  runOut(hand, runs);
   hand.deadline = ctx.now + TIMING.runoutStepMs;
   record(hand, ['runs', runs]);
-
-  if (runs > 1) {
-    narrate(state, ctx, 'Everyone agreed to run it twice');
-  }
 }
 
 export function voteRunItTwice(state: TableState, ctx: Ctx, seatIndex: number, agree: boolean): void {
@@ -618,63 +606,60 @@ export function voteRunItTwice(state: TableState, ctx: Ctx, seatIndex: number, a
 
   if (livePlayers(hand).every((p) => p.ritVote === true)) {
     startRunout(state, ctx, 2);
+    narrate(state, ctx, 'Everyone agreed to run it twice');
   }
 }
 
 /** Deals the next street of an all-in runout, and settles the hand once every board is complete. */
 function runoutStep(state: TableState, ctx: Ctx): void {
   const hand = state.hand!;
-  const board = hand.boards[hand.runIndex]!;
 
-  hand.street = dealBoardCards(hand, hand.runIndex);
+  dealAndTell(state, ctx);
 
-  const boardLabel = hand.runs > 1 ? (hand.runIndex === 0 ? 'First board, ' : 'Second board, ') : '';
-  narrate(state, ctx, `${boardLabel}${STREET_TITLES[hand.street]}: ${prettyCards(board)}`);
-
-  if (board.length < BOARD_SIZE) {
-    hand.deadline = ctx.now + TIMING.runoutStepMs;
+  if (boardsComplete(hand)) {
+    settleShowdown(state, ctx);
     return;
   }
 
-  if (hand.runIndex + 1 < hand.runs) {
-    hand.runIndex += 1;
-    hand.boards.push(hand.boards[0]!.slice(0, hand.sharedBoardLength));
-    hand.deadline = ctx.now + TIMING.runoutStepMs;
-    return;
-  }
+  hand.deadline = ctx.now + TIMING.runoutStepMs;
+}
 
-  settleShowdown(state, ctx);
+/** What every player still in makes on each of the hand's boards, by seat. */
+function handsByBoard(hand: Hand): Map<number, HandValue>[] {
+  const live = livePlayers(hand);
+
+  return hand.boards.map((board) => new Map(live.map((p) => [p.seat, playerHand(p.cards, board)])));
 }
 
 /**
  * Turns hands face up in showdown order: the last player to bet or raise on the river goes first, or
  * the first player left of the button if the river was checked around. After that a player shows only
- * if they can still win a pot, and mucks otherwise.
+ * if they can still win a pot on some board, and mucks otherwise.
  */
 function revealAtShowdown(state: TableState, ctx: Ctx): void {
   const hand = state.hand!;
   const live = livePlayers(hand);
-  const board = hand.boards[0]!;
   const pots = buildPots(hand.players);
-  const values = new Map(live.map((p) => [p.seat, playerHand(p.cards, board)]));
+  const values = handsByBoard(hand);
 
   const aggressor = live.find((p) => p.seat === hand.lastAggressor);
   const order = aggressor ? clockwiseFrom(live, aggressor.seat) : clockwiseAfter(live, hand.button);
   const shown: number[] = [];
 
   for (const player of order) {
-    const mine = values.get(player.seat)!;
     const canStillWin = pots.some((pot) => {
       if (!pot.eligible.includes(player.seat)) {
         return false;
       }
 
-      return shown.filter((seat) => pot.eligible.includes(seat)).every((seat) => mine.score >= values.get(seat)!.score);
+      const against = shown.filter((seat) => pot.eligible.includes(seat));
+
+      return values.some((onBoard) => against.every((seat) => onBoard.get(player.seat)!.score >= onBoard.get(seat)!.score));
     });
 
     if (canStillWin) {
       shown.push(player.seat);
-      show(state, ctx, player, ` (${madeHandName(mine)})`);
+      show(state, ctx, player, ` (${values.map((onBoard) => madeHandName(onBoard.get(player.seat)!)).join(' / ')})`);
     } else {
       record(hand, ['muck', player.seat]);
       narrate(state, ctx, `${player.name} mucks`);
@@ -697,9 +682,7 @@ function settleShowdown(state: TableState, ctx: Ctx): void {
   collectBets(hand);
 
   const pots = buildPots(hand.players);
-  const values: Map<number, HandValue>[] = hand.boards.map(
-    (board) => new Map(live.map((p) => [p.seat, playerHand(p.cards, board)])),
-  );
+  const values = handsByBoard(hand);
 
   const potResults: PotResult[] = [];
   const winnings = new Map<number, number>();
@@ -708,11 +691,7 @@ function settleShowdown(state: TableState, ctx: Ctx): void {
   pots.forEach((pot, potIndex) => {
     const awards: PotAward[] = [];
 
-    // Run twice, each board plays for half the pot and the first board gets the odd chip
-    const firstHalf = Math.ceil(pot.amount / hand.runs);
-    const amounts = hand.runs === 1 ? [pot.amount] : [firstHalf, pot.amount - firstHalf];
-
-    amounts.forEach((amount, run) => {
+    potShares(hand, pot.amount).forEach((amount, run) => {
       if (amount === 0) {
         return;
       }
@@ -725,7 +704,7 @@ function settleShowdown(state: TableState, ctx: Ctx): void {
         winners.forEach((seat) => mainPotWinners.add(seat));
       }
 
-      const runLabel = hand.runs > 1 ? (run === 0 ? ' on the first board' : ' on the second board') : '';
+      const runLabel = hand.runs > 1 ? ` on the ${midSentence(BOARD_NAMES[run]!)}` : '';
 
       for (const [seat, share] of splitAmount(amount, seatsClockwiseAfter(winners, hand.button))) {
         if (share === 0) {

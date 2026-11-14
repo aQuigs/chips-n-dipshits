@@ -35,6 +35,29 @@
   gap: 0 0.4em;
 }
 
+/* A board's mark stays on the line of its name, however narrow the seat the hint hangs from */
+.seat.me .hint.per-board {
+  width: max-content;
+}
+
+/*
+ * Under a lying table this short there is room for a line a board and no more: another would lift the
+ * viewer's cards onto the pot, which two boards bring nearer. So each hand is named by its kind alone,
+ * its ranks left to the cards that are picked out, and the word that seven-deuce carries a bounty goes
+ * unsaid, since it would take a line of its own.
+ */
+@container (max-height: 350px) {
+  .table.wide .hint.per-board .read {
+    flex-wrap: nowrap;
+    white-space: nowrap;
+  }
+
+  .table.wide .hint.per-board .detail,
+  .table.wide .hint.per-board .bounty {
+    display: none;
+  }
+}
+
 .hint .name {
   text-wrap-style: balance;
 }

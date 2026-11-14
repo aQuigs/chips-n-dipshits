@@ -63,6 +63,21 @@ test('a dollars-and-cents preset saved before bomb pots gets the bomb pot a new 
   assert.equal(fromPreset({ ...beforeBombPots, unit: 'chips' }).config.bombPotAmount, 100);
 });
 
+test('a preset saved before a bomb pot could have two boards plays its bomb pots on one, and one saved with two keeps them', () => {
+  const { bombPotBoards: _boards, ...beforeTwoBoards } = kept({ bombPotAmount: 300, bombPotEvery: 5 });
+
+  const used = fromPreset(beforeTwoBoards);
+
+  assert.deepEqual(used.notes, []);
+  assert.equal(used.config.bombPotBoards, 'one');
+  assert.deepEqual([used.config.bombPotAmount, used.config.bombPotEvery], [300, 5], 'the bomb pot it did keep');
+
+  // Filled into a form that was set to two boards, it still says one: the preset is the settings of the table it was saved from
+  assert.equal(fromPreset(beforeTwoBoards, { ...DEFAULT_CONFIG, bombPotBoards: 'two' }).config.bombPotBoards, 'one');
+
+  assert.deepEqual(fromPreset(kept({ bombPotBoards: 'two' })), { config: { ...DEFAULT_CONFIG, bombPotBoards: 'two' }, notes: [] });
+});
+
 test('a setting since taken out of the game is dropped without a word', () => {
   const used = fromPreset({ ...kept({ bigBlind: 40 }), rabbitHunting: true, burnCardsShown: 'often' });
 

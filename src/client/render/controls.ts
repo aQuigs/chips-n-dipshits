@@ -1,5 +1,6 @@
 import { editableAmount, formatAmount, hasDecimals, parseAmount, shortAmount } from '../../engine/amounts.ts';
 import type { Denominated } from '../../engine/amounts.ts';
+import { bombPotName } from '../../engine/bombPots.ts';
 import type { Command } from '../../engine/types.ts';
 import type { HandView, SeatView, TableView } from '../../engine/view.ts';
 import { HOTKEYS } from '../hotkeys.ts';
@@ -177,7 +178,7 @@ function waitingText(view: TableView, hand: HandView | null): string {
 function nextHandNote(view: TableView): string | null {
   const deciding = view.hand?.options || view.hand?.canVote;
 
-  return view.nextBombPot && !deciding ? `Next hand is a bomb pot: ${formatAmount(view.nextBombPot.amount, view.config)} each` : null;
+  return view.nextBombPot && !deciding ? `Next hand is a ${bombPotName(view.nextBombPot)}: ${formatAmount(view.nextBombPot.amount, view.config)} each` : null;
 }
 
 function waitingEl(text: string, view: TableView): HTMLElement {

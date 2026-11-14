@@ -1,5 +1,6 @@
 import { formatAmount } from '../../../engine/amounts.ts';
 import type { Denominated } from '../../../engine/amounts.ts';
+import { bombPotName } from '../../../engine/bombPots.ts';
 import { cardText, h } from '../../ui.ts';
 import { everyone, frame } from './dialog.ts';
 import type { DialogHandlers, DialogKind } from './dialog.ts';
@@ -21,7 +22,7 @@ function history(table: Denominated, handlers: DialogHandlers): HTMLElement {
                 return `${hand.players.find((p) => p.seat === win.seat)?.name ?? '?'} +${formatAmount(withBounty, table)}`;
               });
 
-              const title = `Hand #${hand.number}${hand.bombPot ? ' · bomb pot' : ''}`;
+              const title = `Hand #${hand.number}${hand.bombPot ? ` · ${bombPotName(hand.bombPot)}` : ''}`;
 
               return h('details', null, h('summary', null, title, h('small', null, winners.join(', '))), h('pre', null, cardText(hand.summary, handlers.prefs.get('deck'))));
             })),

@@ -25,7 +25,7 @@ import { THEMES } from '../src/client/themes.ts';
 import { shortAmount, signedAmount } from '../src/engine/amounts.ts';
 import { BADGES, badgeOf, DEFAULT_CONFIG, LIMITS, onTheClock, presetSettings, REACTION_GAP_MS, REACTION_LIFE_MS } from '../src/engine/index.ts';
 import { cardWords } from '../src/engine/handNames.ts';
-import type { Bounty, Card, Command, Straddle, TableConfig, TableView } from '../src/engine/index.ts';
+import type { Bounty, Card, Command, KnownPlayer, Straddle, TableConfig, TableView } from '../src/engine/index.ts';
 import { PUT_AWAY_AFTER_MS, PUT_AWAY_MESSAGE } from '../src/server/putAway.ts';
 import { contrast } from '../tests/colorVision.ts';
 import { boxes, Gate, overlap, Rig, RigTable, SCREENS, setStageHeight, squeezed, textBoxes } from './rig.ts';
@@ -11610,6 +11610,242 @@ const CHECKS: Check[] = [
         assertOnScreen(await boxes(page, '.history details[data-hand="1"] .no-replay'), screen, 'why the hand cannot be replayed');
         await shot(page, `replay-not-possible-${screen}`);
 
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'the standings open over the first screen: they say they are loading, offer another try when they cannot be had, say so when no night is on record, and close back to the screen as it was left',
+    async (rig) => {
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        const page = await rig.lobby(screen);
+        const press = pressOn(page, screen);
+        const standings = await Gate.on(page, 'standings');
+        await page.fill('#host-name', `Hal ${screen}`);
+
+        await standings.close('requests');
+        await press('[data-action="standings"]');
+        await standings.holding();
+        assert.equal(await text(page, '.overlay .dialog h2'), 'Standings');
+        assert.equal(await text(page, '[data-standings="loading"]'), 'Loading…');
+        await shot(page, `standings-loading-${screen}`);
+
+        await standings.lose();
+        await page.waitForSelector('[data-standings="failed"]');
+        assert.equal(await text(page, '[data-standings="failed"]'), 'Could not load the standings.');
+        assertOnScreen(await boxes(page, '.overlay .dialog, [data-action="retry-standings"]'), screen, 'the standings that could not be had');
+        await shot(page, `standings-failed-${screen}`);
+
+        await standings.open();
+        await press('[data-action="retry-standings"]');
+        await page.waitForSelector('[data-standings="empty"]');
+        assert.equal(await text(page, '[data-standings="empty"]'), 'No nights on record yet.');
+        assert.match(await text(page, '[data-standings="as-of"]'), /^As of \d{1,2}:\d\d(\s[AP]M)?\. A night goes on record when it is ended, or once its table has been left alone for 3 hours\.$/);
+        assert.deepEqual(await squeezed(page, '.standings .note'), []);
+        assertOnScreen(await boxes(page, '.overlay .dialog, .standings p'), screen, 'the standings with no night on record');
+        await assertNoSidewaysScroll(page);
+        await shot(page, `standings-empty-${screen}`);
+
+        // The first screen is underneath as it was left, and the keyboard is back where it came from
+        await press('.overlay [data-action="close"]');
+        await page.waitForSelector('.overlay', { state: 'detached' });
+        assert.equal(await page.inputValue('#host-name'), `Hal ${screen}`);
+        assert.equal(await page.evaluate('document.activeElement.dataset.action'), 'standings');
+        assert.equal(await page.evaluate('[...document.querySelectorAll("main, .toast")].some((part) => part.inert)'), false);
+
+        await press('[data-action="standings"]');
+        await page.waitForSelector('[data-standings="empty"]');
+        assert.equal(await page.evaluate('document.querySelector("main.lobby").inert'), true, 'the screen underneath can be reached while the standings are up');
+        await page.keyboard.press('Escape');
+        await page.waitForSelector('.overlay', { state: 'detached' });
+
+        // And the screen still does what it is for
+        await press('[data-action="create-table"]');
+        await page.waitForSelector('#table-link');
+        assert.equal(await page.locator('.overlay[data-screen="standings"]').count(), 0);
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'the standings with three players: whoever is up the most first and the viewer marked, in another order when asked, each kind of money apart, and a player’s nights asked for when their line is opened; from a table’s menu they are the same, stay as they are while the table plays on, and leave the table where it was',
+    async (rig) => {
+      const [ann, bob, cy] = ['Ann', 'Bob', 'Cy'].map((name, index) => rig.players.add(name, rig.now() + index)) as [KnownPlayer, KnownPlayer, KnownPlayer];
+      const day = 24 * 60 * 60 * 1000;
+      const line = (player: KnownPlayer, net: number, more: object = {}) => ({ playerId: player.id, name: player.name, net, hands: 100, won: 25, biggest: 400, best: null, badges: {}, highHand: false, ...more });
+
+      rig.results.write([
+        { tableId: 'FRIDAY', tableName: 'Friday night', unit: 'chips', createdAt: rig.now() - 14 * day, version: 1, players: [line(ann, 1500, { hands: 120, won: 30, biggest: 2400, best: ['Ks', 'Kh', 'Kd', 'Kc', 'As'], badges: { quads: 1, heater: 2 }, highHand: true }), line(bob, -500), line(cy, -1000)] },
+        { tableId: 'SUNDAY', tableName: 'Sunday', unit: 'chips', createdAt: rig.now() - 7 * day, version: 1, players: [line(ann, -200, { hands: 80, won: 20 }), line(bob, 900, { biggest: 3100 }), line(cy, -700)] },
+        { tableId: 'TUESDAY', tableName: 'Tuesday', unit: 'chips', createdAt: rig.now() - 2 * day, version: 1, players: [line(bob, 100), line(cy, -100)] },
+        { tableId: 'CASH', tableName: 'Cash game', unit: 'cents', createdAt: rig.now() - day, version: 1, players: [line(ann, -2550), line(cy, 2550)] },
+      ]);
+
+      const names = (page: Page) => texts(page, '.standings-players .who');
+      const nets = (page: Page) => texts(page, '.standings-players summary .net');
+
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        // A browser that remembers being Bob
+        const page = await rig.page(screen, 'a returning player');
+        const press = pressOn(page, screen);
+        const nights = await Gate.on(page, 'nights');
+        await page.addInitScript(`localStorage.setItem('cnd.player', ${JSON.stringify(JSON.stringify(bob))})`);
+        await page.goto(rig.url);
+        await page.waitForSelector('[data-action="standings"]');
+        await page.evaluate('document.fonts.ready.then(() => undefined)');
+
+        await press('[data-action="standings"]');
+        await page.waitForSelector('.standings-players li');
+        assert.deepEqual(await names(page), ['Ann', 'Bob', 'Cy']);
+        assert.deepEqual(await nets(page), ['+1,300', '+500', '-1,800']);
+        assert.deepEqual(await texts(page, '.standings-players .place'), ['1', '2', '3']);
+        assert.deepEqual(await texts(page, '.standings-players summary .counts'), ['2 nights · up in 1 · won 25% of hands', '3 nights · up in 2 · won 25% of hands', '3 nights · up in 0 · won 25% of hands']);
+        assert.deepEqual(await texts(page, '.standings-players li.me .who'), ['Bob']);
+        assert.equal(await style(page, '.standings-players li.me .who', 'content', '::after'), '" (you)"');
+        assert.deepEqual(await texts(page, '.standings-units [aria-pressed="true"]'), ['Chips'], 'the money the viewer has a record in');
+        assert.equal(await page.locator('[data-player="Ann"] summary .badge').count(), 2);
+        assert.deepEqual(await squeezed(page, '.standings-players .who, .standings-players .net, .standings-players .counts, .standings .note, .standings-controls *'), []);
+        assertOnScreen(await boxes(page, '.overlay .dialog, .standings-players summary, #standings-sort, .standings-units button, .standings-about'), screen, 'the standings');
+        await assertNoSidewaysScroll(page);
+        await shot(page, `standings-three-${screen}`);
+
+        // Another order
+        await page.selectOption('#standings-sort', 'nights');
+        assert.deepEqual(await names(page), ['Bob', 'Cy', 'Ann']);
+        assert.deepEqual(await texts(page, '.standings-players .place'), ['1', '2', '3']);
+        await page.selectOption('#standings-sort', 'biggest');
+        assert.deepEqual(await names(page), ['Bob', 'Ann', 'Cy']);
+        await page.selectOption('#standings-sort', 'net');
+        assert.deepEqual(await names(page), ['Ann', 'Bob', 'Cy']);
+
+        // A player's nights: asked for when the line is opened, and asked again when that fails
+        await nights.close('requests');
+        await press('[data-player="Ann"] summary');
+        await nights.holding();
+        assert.equal(await text(page, '[data-player="Ann"] [data-standings="loading"]'), 'Loading…');
+        assert.deepEqual((await texts(page, '[data-player="Ann"] dd')).slice(0, 4), ['50 of 200 hands (25%)', '2,400', 'Four kings K♠ K♥ K♦ K♣ A♠', 'Once']);
+        assert.deepEqual(await texts(page, '[data-player="Ann"] dd .badge-list b'), ['🍀 Quads', '🔥 Heater ×2']);
+        await nights.lose();
+        await page.waitForSelector('[data-player="Ann"] [data-standings="failed"]');
+        assert.equal(await text(page, '[data-player="Ann"] [data-standings="failed"]'), 'Could not load Ann’s nights.');
+        await nights.open();
+        await press('[data-player="Ann"] [data-action="retry-standings"]');
+        await page.waitForSelector('[data-player="Ann"] .standings-nights li');
+
+        assert.deepEqual(await texts(page, '[data-player="Ann"] .standings-nights .net'), ['-200', '+1,500'], 'the latest night first');
+        assert.deepEqual((await texts(page, '[data-player="Ann"] .standings-nights .when small')).map((table) => table.trim()), ['Sunday', 'Friday night']);
+        assert.deepEqual(await texts(page, '[data-player="Ann"] .standings-nights li:last-child .counts'), ['120 hands · 30 pots · biggest 2,400 · high hand of the night', 'Four kings K♠ K♥ K♦ K♣ A♠']);
+        assert.deepEqual(await squeezed(page, '.standings-nights .when, .standings-nights .net, .standings-nights .counts, .standings-players dd'), []);
+        await page.locator('[data-player="Ann"] .standings-nights').scrollIntoViewIfNeeded();
+        assertOnScreen(await boxes(page, '[data-player="Ann"] .standings-nights li'), screen, 'a player’s nights');
+        await assertNoSidewaysScroll(page);
+        await shot(page, `standings-nights-${screen}`);
+
+        // The other money is a list of its own, and coming back finds the open line as it was, with nothing asked for again
+        await nights.close('requests');
+        await press('.standings-units [data-unit="cents"]');
+        assert.deepEqual([await names(page), await nets(page)], [['Cy', 'Ann'], ['+25.50', '-25.50']]);
+        assert.equal(await page.locator('.standings-players details[open]').count(), 0);
+        await shot(page, `standings-dollars-${screen}`);
+        await press('.standings-units [data-unit="chips"]');
+        await page.selectOption('#standings-sort', 'nights');
+        assert.deepEqual(await names(page), ['Bob', 'Cy', 'Ann']);
+        assert.equal(await page.locator('[data-player="Ann"] details[open] .standings-nights li').count(), 2);
+        await nights.open();
+        await page.context().close();
+
+        // From a table, as a member who is Bob there
+        const table = rig.table([{ name: `Quigs ${screen}`, stack: 1000 }, { name: `Bobby ${screen}`, stack: 1000 }]);
+        table.alter((state) => {
+          state.members.find((member) => member.name === `Bobby ${screen}`)!.identity = bob.id;
+        });
+
+        const seat = await table.open(`Bobby ${screen}`, screen);
+        const seatPress = pressOn(seat, screen);
+        const address = seat.url();
+        await seatPress('[data-action="menu"]');
+        assert.equal(await text(seat, '.menu [data-action="standings"]'), 'StandingsWho is up and who is down, over every night');
+        await seatPress('.menu [data-action="standings"]');
+        await seat.waitForSelector('.standings-players li');
+        assert.equal(await text(seat, '.dialog h2'), 'Standings');
+        assert.deepEqual([await names(seat), await nets(seat)], [['Ann', 'Bob', 'Cy'], ['+1,300', '+500', '-1,800']]);
+        assert.deepEqual(await texts(seat, '.standings-players li.me .who'), ['Bob']);
+        await seatPress('[data-player="Cy"] summary');
+        await seat.waitForSelector('[data-player="Cy"] .standings-nights li');
+        await shot(seat, `standings-at-table-${screen}`);
+
+        // The table plays on underneath, and what the viewer opened stays open
+        table.act(`Quigs ${screen}`, { type: 'chat', text: 'still here' });
+        await seat.waitForSelector('.feed li:has-text("still here")', { state: 'attached' });
+        table.deal({ button: 0 });
+        await seat.waitForSelector('.seat.me .card', { state: 'attached' });
+        assert.equal(await seat.locator('[data-player="Cy"] details[open] .standings-nights li').count(), 3);
+
+        await seatPress('.dialog [data-action="close"]');
+        await seat.waitForSelector('.dialog', { state: 'detached' });
+        assert.equal(await seat.locator('.seat.me').count(), 1);
+        assert.equal(seat.url(), address);
+        await seat.context().close();
+      }
+    },
+  ],
+  [
+    'forty players with the longest names, the biggest numbers and every badge fit the smallest phone and a desktop: nothing is squeezed or runs out of the dialog, and the list scrolls inside it',
+    async (rig) => {
+      const name = (n: number) => [`${'W'.repeat(13)}${String(n).padStart(3, '0')}`, `Ünïcödé Ñandú ${String(n).padStart(2, '0')}`, `你好你好你好你好 ${n}`, `Player ${n}`][n % 4]!;
+      const players = Array.from({ length: 40 }, (_player, n) => rig.players.add(name(n), rig.now() + n));
+      const badges = Object.fromEntries(BADGES.map((badge) => [badge.id, 12]));
+      const day = 24 * 60 * 60 * 1000;
+
+      // More to a table than a table seats, to put forty records on the page in three nights
+      for (let night = 0; night < 3; night++) {
+        rig.results.write([
+          {
+            tableId: `BIG${night}`,
+            tableName: 'W'.repeat(LIMITS.tableNameLength),
+            unit: 'chips',
+            createdAt: rig.now() - night * 7 * day,
+            version: 1,
+            players: players.map((player, n) => ({ playerId: player.id, name: player.name, net: (n % 2 === 0 ? 1 : -1) * (333_333_333 - n), hands: 3333, won: 1111, biggest: 999_999_999, best: ['As', 'Ks', 'Qs', 'Js', 'Ts'] as Card[], badges, highHand: true })),
+          },
+        ]);
+      }
+
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        const page = await rig.lobby(screen);
+        const press = pressOn(page, screen);
+        await press('[data-action="standings"]');
+        await page.waitForSelector('.standings-players li');
+
+        const withinTheDialog = async (selector: string, what: string) => {
+          const [dialog] = await boxes(page, '.overlay .dialog');
+
+          for (const box of await boxes(page, selector)) {
+            assert.ok(box.left >= dialog!.left - 1 && box.right <= dialog!.right + 1, `${what} runs out of the dialog: ${JSON.stringify(box)} in ${JSON.stringify(dialog)}`);
+          }
+        };
+
+        assert.equal(await page.locator('.standings-players > li').count(), 40);
+        assert.equal(await text(page, '.standings-players summary .net'), '+999,999,999');
+        assert.deepEqual(await squeezed(page, '.standings-players .who, .standings-players .net, .standings-players .counts, .standings-players .place, .dialog-body'), []);
+        await withinTheDialog('.standings-players summary > *, .standings-players .badge', 'a line of the list');
+        assertOnScreen(await boxes(page, '.overlay .dialog, .overlay [data-action="close"], #standings-sort'), screen, 'the dialog');
+        assert.equal(await page.evaluate('(() => { const body = document.querySelector(".dialog-body"); return body.scrollHeight > body.clientHeight; })()'), true, 'forty players fit without scrolling, which they cannot');
+        await assertNoSidewaysScroll(page);
+        await shot(page, `standings-forty-${screen}`);
+
+        // The longest name's line, opened
+        await press('.standings-players li:first-child summary');
+        await page.waitForSelector('.standings-players li:first-child .standings-nights li');
+        assert.deepEqual(await squeezed(page, '.standings-players dd, .standings-nights .when, .standings-nights .net, .standings-nights .counts, .dialog-body'), []);
+        await withinTheDialog('.standings-players li:first-child dl > div, .standings-players li:first-child .standings-nights li > *, .standings-players li:first-child .badge-list li', 'the opened line');
+        await assertNoSidewaysScroll(page);
+        await page.locator('.standings-players li:first-child .standings-nights').scrollIntoViewIfNeeded();
+        await shot(page, `standings-forty-open-${screen}`);
+
+        // The last line can be reached
+        await page.locator('.standings-players > li:last-child').scrollIntoViewIfNeeded();
+        assertOnScreen(await boxes(page, '.standings-players > li:last-child summary'), screen, 'the last player');
         await page.context().close();
       }
     },

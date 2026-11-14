@@ -31,6 +31,7 @@ import { movePromptEl, SeatMoves } from './seatMoves.ts';
 import type { Abilities, AppPreferences } from './prefs.ts';
 import { controlsEl, controlsSignature, lockTurn, sizingMemory } from './render/controls.ts';
 import type { Sizing } from './render/controls.ts';
+import { frame } from './render/dialogs/dialog.ts';
 import { dialogAllowed, dialogEl, dialogShows } from './render/dialogs/index.ts';
 import type { Dialog, DialogHandlers } from './render/dialogs/index.ts';
 import { createFeed } from './render/feed.ts';
@@ -40,6 +41,8 @@ import type { AsksWho, LobbyScreen, Visitor } from './render/lobby.ts';
 import { nightOver } from './render/night.ts';
 import { outdatedEl } from './render/outdated.ts';
 import { hostOrCohost } from './render/roles.ts';
+import { standingsEl } from './render/standings.ts';
+import type { StandingsHandlers } from './render/standings.ts';
 import { handDrawn, shapeFor, tableEl } from './render/table.ts';
 import { createThemePicker } from './render/themePicker.ts';
 import { voiceLinkEl } from './render/voiceLink.ts';
@@ -125,6 +128,8 @@ export class App {
   /** The table this page is at, from sitting down at its screen until that screen is left. */
   private table: TableConnection | null = null;
   private screen: TableScreen | null = null;
+  /** Takes the standings off a screen that has no table, while they are up over one. */
+  private closeStandings: (() => void) | null = null;
   private dialog: Dialog | null = null;
   private dialogOpens = 0;
 
@@ -232,7 +237,9 @@ export class App {
         return;
       }
 
-      if (this.dialog) {
+      if (this.closeStandings) {
+        this.closeStandings();
+      } else if (this.dialog) {
         this.closeDialog();
       } else if (this.screen?.picker.isOpen) {
         this.screen.picker.close();
@@ -279,6 +286,7 @@ export class App {
         }
       },
       openTable: (code) => this.openTable(code.trim().toUpperCase()),
+      standings: () => this.showStandings(),
     });
 
     this.mount(lobby.element);
@@ -651,7 +659,58 @@ export class App {
   }
 
   private mount(content: HTMLElement): void {
+    // Whatever was up over the screen before goes with it, and lets go of what it held back
+    this.closeStandings?.();
     this.root.replaceChildren(content, this.toastEl);
+  }
+
+  /**
+   * The standings over a screen that has no table, which stays as it is underneath: a name half typed
+   * on the first screen is still there when they are closed. At a table they are a dialog like any other.
+   */
+  private showStandings(): void {
+    const close = (): void => {
+      modal.update(false);
+      overlay.remove();
+      this.closeStandings = null;
+    };
+
+    const overlay = h(
+      'div.overlay',
+      { 'data-screen': 'standings', onclick: (event: Event) => event.target === overlay && close() },
+      frame('Standings', { close }, standingsEl(this.standingsHandlers(this.me.get()?.id ?? null))),
+    );
+    const modal = new Modal(overlay);
+
+    this.closeStandings?.();
+    this.closeStandings = close;
+    this.root.appendChild(overlay);
+    modal.update(true);
+  }
+
+  private standingsHandlers(you: string | null): StandingsHandlers {
+    return {
+      load: async () => {
+        const response = await this.request({ op: 'standings' });
+
+        if (response?.ok && response.kind === 'standings') {
+          return response;
+        }
+
+        throw new Error('The standings could not be loaded');
+      },
+      nights: async (playerId, unit) => {
+        const response = await this.request({ op: 'nights', playerId, unit });
+
+        if (response?.ok && response.kind === 'nights') {
+          return response.nights;
+        }
+
+        throw new Error('The nights could not be loaded');
+      },
+      you,
+      deck: this.prefs.get('deck'),
+    };
   }
 
   // ---- Talking to the server ----
@@ -1087,6 +1146,7 @@ export class App {
         remembered: () => this.me.get(),
         identify: (as) => this.identify(session, as),
       },
+      standings: (you) => this.standingsHandlers(you),
       tableLink: () => this.platform.links.tableLink(session.tableId),
       memberLink: () => this.platform.links.memberLink(session.tableId, session.auth),
       prefs: this.prefs,

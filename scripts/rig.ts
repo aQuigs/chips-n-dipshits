@@ -18,6 +18,7 @@ import type { ApiRequest, ApiResponse, Auth } from '../src/server/api.ts';
 import { MemoryErrorLog } from '../src/server/memoryErrorLog.ts';
 import { MemoryPlayerStore } from '../src/server/memoryPlayerStore.ts';
 import { MemoryPresetStore } from '../src/server/memoryPresetStore.ts';
+import { MemoryResultStore } from '../src/server/memoryResultStore.ts';
 import { MemoryStore } from '../src/server/memoryStore.ts';
 import { PokerService } from '../src/server/service.ts';
 import { seededRng, TestTable } from '../tests/helpers.ts';
@@ -272,6 +273,8 @@ export class Rig {
   readonly errors: MemoryErrorLog;
   /** The players the game knows, nobody when the check starts. A table made by the rig adds none: only someone who says who they are is known. */
   readonly players: MemoryPlayerStore;
+  /** What the game keeps of its players' nights, for a check to put nights on record without playing them. */
+  readonly results: MemoryResultStore;
   /** What the pages of this rig threw, each with whose page it was. */
   readonly pageErrors: string[] = [];
   /** Every picture the pages of this rig asked a GIF host for, in order. */
@@ -287,10 +290,11 @@ export class Rig {
   /** What a check throws in a page on purpose, which is then no failure of the check. */
   private readonly meant: string[] = [];
 
-  private constructor(parts: { store: MemoryStore; presets: MemoryPresetStore; players: MemoryPlayerStore; errors: MemoryErrorLog; browser: Browser; service: PokerService; server: DevServer; clock: { ms: number } }) {
+  private constructor(parts: { store: MemoryStore; presets: MemoryPresetStore; players: MemoryPlayerStore; results: MemoryResultStore; errors: MemoryErrorLog; browser: Browser; service: PokerService; server: DevServer; clock: { ms: number } }) {
     this.store = parts.store;
     this.presets = parts.presets;
     this.players = parts.players;
+    this.results = parts.results;
     this.errors = parts.errors;
     this.browser = parts.browser;
     this.service = parts.service;
@@ -300,17 +304,18 @@ export class Rig {
 
   /** A rig with nothing on it yet, whose pages open in `browser`. */
   static async start(browser: Browser): Promise<Rig> {
-    const store = new MemoryStore();
+    const clock = { ms: Date.now() };
+    const results = new MemoryResultStore(() => clock.ms);
+    const store = new MemoryStore(results);
     const presets = new MemoryPresetStore();
     // Ids from a source of their own, so that who is known changes no card the check's seed deals
     const players = new MemoryPlayerStore(seededRng(20261114));
-    const clock = { ms: Date.now() };
     const errors = new MemoryErrorLog({ now: () => clock.ms });
-    const service = new PokerService({ store, presets, players, clock: { now: () => clock.ms }, rng: seededRng(20261113), errors });
+    const service = new PokerService({ store, presets, players, results, clock: { now: () => clock.ms }, rng: seededRng(20261113), errors });
     const html = await (built ??= clientPage({}));
     const server = await startDevServer({ port: 0, page: async () => html, service });
 
-    return new Rig({ store, presets, players, errors, browser, service, server, clock });
+    return new Rig({ store, presets, players, results, errors, browser, service, server, clock });
   }
 
   get url(): string {
@@ -456,11 +461,11 @@ export class RigBrowser {
   }
 }
 
-/** Which of a page's requests a gate stands in the way of: the moves of a hand, the polls for news of the table, reactions, showing cards after a hand, or asking for the list of known players. */
-export type Gated = 'moves' | 'polls' | 'reactions' | 'shows' | 'players';
+/** Which of a page's requests a gate stands in the way of: the moves of a hand, the polls for news of the table, reactions, showing cards after a hand, or asking for the list of known players, the standings, or one player's nights. */
+export type Gated = 'moves' | 'polls' | 'reactions' | 'shows' | 'players' | 'standings' | 'nights';
 
 /** The requests a gate stops that are not commands, by what they ask for. */
-const GATED_OPS: Partial<Record<Gated, ApiRequest['op']>> = { polls: 'poll', players: 'players' };
+const GATED_OPS: Partial<Record<Gated, ApiRequest['op']>> = { polls: 'poll', players: 'players', standings: 'standings', nights: 'nights' };
 
 /** The commands a gate for each other kind of request stops. */
 const GATED_COMMANDS: Partial<Record<Gated, ReadonlySet<Command['type']>>> = { moves: MOVES, reactions: FLEETING, shows: new Set(['showCards']) };

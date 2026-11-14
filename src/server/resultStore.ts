@@ -6,6 +6,7 @@
  */
 import { evaluateHand, resultsOf } from '../engine/index.ts';
 import type { Card, PlayerResult, TableResults, TableState, Unit } from '../engine/index.ts';
+import { SETTLE_AFTER_MS } from './api.ts';
 
 /** One known player's night at one table, as it is kept: a row of the Results tab. */
 export interface NightResult extends PlayerResult {
@@ -176,16 +177,6 @@ export interface ResultWriter {
    */
   write(results: readonly TableResults[]): void;
 }
-
-const HOUR_MS = 60 * 60 * 1000;
-
-/**
- * How long a table goes unsaved before its results are written without its night having been ended,
- * which is how most nights among friends end: everyone closes the tab. Longer than any break, and
- * short enough that last night is in the record by morning. A table played on afterwards is simply
- * written again.
- */
-export const SETTLE_AFTER_MS = 3 * HOUR_MS;
 
 /** How many tables one look loads to write their results, in one write, so that it stays a small part of the request that carries it. */
 export const SETTLED_AT_ONCE = 3;

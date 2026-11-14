@@ -652,8 +652,8 @@ export class SheetStore implements TableStore {
   }
 
   /**
-   * Copies the records held in a table's row to the Ledger and Hands tabs, then takes them off the
-   * row. Whatever can't be written stays held and is tried again the next time the row is read, so a
+   * Copies the records held in a table's row to their tabs, the table's results among them when a
+   * night ended, then takes them off the row. Whatever can't be written stays held and is tried again the next time the row is read, so a
    * failing write costs no record and never holds up the game. Returns whether the row is now clear.
    *
    * `triedWithin` says how many rows back in their tabs some of these may have been tried before. A

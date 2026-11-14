@@ -17,6 +17,7 @@ import { setStackDialog } from './setStack.ts';
 import { settingsDialog } from './settings.ts';
 import { shuffleSeats } from './shuffle.ts';
 import { sitDialog } from './sit.ts';
+import { standingsDialog } from './standings.ts';
 import { straddlesDialog } from './straddles.ts';
 import { themeDialog } from './theme.ts';
 import { tonightDialog } from './tonight.ts';
@@ -34,6 +35,7 @@ const REGISTERED = [
   inviteDialog,
   ledgerDialog,
   tonightDialog,
+  standingsDialog,
   historyDialog,
   playersDialog,
   shuffleSeats,

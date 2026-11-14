@@ -4,6 +4,7 @@ import type { SendOutcome } from '../../connection.ts';
 import type { MuteList } from '../../mutes.ts';
 import type { Abilities, AppPreferences } from '../../prefs.ts';
 import type { PresetHandlers } from '../presets.ts';
+import type { StandingsHandlers } from '../standings.ts';
 import type { PlayerHandlers } from '../whoField.ts';
 import { h, holdWhile } from '../../ui.ts';
 import type { Dialog } from './index.ts';
@@ -19,6 +20,8 @@ export interface DialogHandlers {
   replay(record: HandRecord): void;
   presets: PresetHandlers;
   players: PlayerHandlers;
+  /** What the standings ask with, for a viewer who is the known player `you`, or null for nobody the list knows. */
+  standings(you: string | null): StandingsHandlers;
   tableLink(): string;
   memberLink(): string;
   prefs: AppPreferences;
@@ -68,7 +71,7 @@ export interface DialogKind<K extends string = string, P = unknown> {
   draw(view: TableView, handlers: DialogHandlers, params: P): HTMLElement;
 }
 
-export function frame(title: string, handlers: DialogHandlers, ...body: (HTMLElement | null)[]): HTMLElement {
+export function frame(title: string, handlers: Pick<DialogHandlers, 'close'>, ...body: (HTMLElement | null)[]): HTMLElement {
   return h(
     'div.dialog',
     // Focusable by script only: opening a dialog puts the keyboard here, not on the page behind it

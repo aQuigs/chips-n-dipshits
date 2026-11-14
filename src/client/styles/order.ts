@@ -51,4 +51,5 @@ export const STYLESHEETS = [
   'who.css',
   'bounty-list.css',
   'replay.css',
+  'standings.css',
 ];

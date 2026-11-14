@@ -3,7 +3,8 @@
  * friends will reach it. It is the check that the page Apps Script serves is the page that was
  * built, and that the script and its Sheet answer. It leaves one small table behind in the Sheet, a
  * Presets tab if there was none, with the presets in it as it found them, and in the Players tab the
- * one player it plays as, whom its first run adds and every later run picks from the list.
+ * one player it plays as, whom its first run adds and every later run picks from the list. Both of its
+ * browsers being that one player, its table is nobody's night, and it leaves nothing in the standings.
  */
 import assert from 'node:assert/strict';
 import { mkdir, readFile } from 'node:fs/promises';
@@ -53,7 +54,7 @@ async function timed(what: string, step: () => Promise<unknown>): Promise<void> 
   console.log(`  ${what}: ${((Date.now() - started) / 1000).toFixed(1)} s`);
 }
 
-type ScriptAnswer = { ok: boolean; presets?: Preset[]; players?: KnownPlayer[]; error?: string };
+type ScriptAnswer = { ok: boolean; presets?: Preset[]; players?: KnownPlayer[]; units?: { players: { name: string }[] }[]; error?: string };
 
 /** Asks the script directly from inside the game's frame, the way the page itself does, as the page's build. */
 async function ask(visitor: Visitor, request: object): Promise<ScriptAnswer> {
@@ -70,6 +71,15 @@ async function checkPlayers(visitor: Visitor): Promise<KnownPlayer[]> {
   assert.ok(answer.ok && answer.players, `the players could not be listed: ${answer.error}`);
 
   return answer.players.filter((player) => player.name === CHECK_PLAYER);
+}
+
+/** The standings answer from the real Sheet, whatever it has on record, and never have the check's own player in them. */
+async function checkStandings(visitor: Visitor): Promise<void> {
+  const answer = await ask(visitor, { op: 'standings' });
+  assert.ok(answer.ok && answer.units, `the standings could not be read: ${answer.error}`);
+
+  const names = answer.units.flatMap((unit) => unit.players.map((player) => player.name));
+  assert.ok(!names.includes(CHECK_PLAYER), `${CHECK_PLAYER} is in the standings, where a table of one player should leave nobody`);
 }
 
 /**
@@ -243,6 +253,7 @@ try {
   await host.page.screenshot({ path: `${OUT}live-host-after.png` });
 
   await checkPresets(browser, deployment.url, host, inAddress(host.page, 'table')!, inAddress(host.page, 'me')!);
+  await timed('standings from the Sheet', () => checkStandings(host));
 
   console.log('The deployed game works. Pictures are in screenshots/live-*.png');
 } finally {

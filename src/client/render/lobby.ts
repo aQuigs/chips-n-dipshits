@@ -32,6 +32,8 @@ export interface LobbyHandlers {
   /** Resolves when the attempt is over, whichever way it went. */
   create(as: Answer, config: Partial<TableConfig>): Promise<void>;
   openTable(code: string): void;
+  /** Shows the standings over this screen, which stays as it is underneath. */
+  standings(): void;
 }
 
 export interface LobbyScreen extends AsksWho {
@@ -155,8 +157,15 @@ export function lobbyEl(visitor: Visitor, themePicker: HTMLElement, handlers: Lo
     h('button.btn', { type: 'submit' }, 'Find table'),
   );
 
+  const standings = h(
+    'section.standings-door',
+    null,
+    h('button.btn', { type: 'button', 'data-action': 'standings', onclick: handlers.standings }, 'Standings'),
+    h('p.note', null, 'Who is up and who is down, over every night.'),
+  );
+
   return {
-    element: h('main.lobby', null, brand(), h('div.panels', null, create, join), themeSection(themePicker)),
+    element: h('main.lobby', null, brand(), standings, h('div.panels', null, create, join), themeSection(themePicker)),
     offerPlayers: who.offer,
 
     offerPresets(presets) {

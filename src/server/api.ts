@@ -22,6 +22,14 @@ export const HISTORY_LIMIT = 30;
 export const REPORTED_MESSAGE_LENGTH = 500;
 export const REPORTED_TRACE_LENGTH = 3000;
 
+/**
+ * How long a table goes unsaved before its results are kept without its night having been ended,
+ * which is how most nights among friends end: everyone closes the tab. Longer than any break, and
+ * short enough that last night is on record by morning. A table played on afterwards is simply
+ * written again. It is here because the standings page says it.
+ */
+export const SETTLE_AFTER_MS = 3 * 60 * 60 * 1000;
+
 /** What a page says of its browser when it reports a failure: its name, major version and kind of device, nothing else. */
 export interface PageBrowser {
   name: string;

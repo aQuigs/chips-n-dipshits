@@ -5,7 +5,7 @@ import { halfShownLabel, showOffer, showStillOffered } from '../src/client/showi
 import { spotsOf } from '../src/client/tableChances.ts';
 import { addMember, fullyShown, handFacts, prettyCard, replayHand, seededRng } from '../src/engine/index.ts';
 import type { Command, Rng, TableView } from '../src/engine/index.ts';
-import { ACES, BOARD, handRecords, KINGS, QUEENS, TestTable } from './helpers.ts';
+import { ACES, BOARD, handRecords, KINGS, QUEENS, sevenDeuceBounty, TestTable } from './helpers.ts';
 import { assertInvariants } from './invariants.ts';
 import { chance, pick, randomStep } from './randomPlay.ts';
 
@@ -207,7 +207,7 @@ test('a card left face down is nowhere another player or a watcher can read: the
 
   for (let seed = 1; tried < 150 && seed < 1000; seed++) {
     const players = 2 + rng.int(5);
-    const t = new TestTable({ stacks: Array.from({ length: players }, () => 200 + rng.int(1500)), seed, config: { maxRuns: (1 + rng.int(3)) as 1 | 2 | 3, sevenDeuceBounty: rng.int(2) * 25 } });
+    const t = new TestTable({ stacks: Array.from({ length: players }, () => 200 + rng.int(1500)), seed, config: { maxRuns: (1 + rng.int(3)) as 1 | 2 | 3, bounties: rng.int(2) === 1 ? sevenDeuceBounty(25) : [] } });
     const watcher = t.ids.push(addMember(t.state, 'Kibitz', t.ctx()).id) - 1;
 
     t.deal({ button: rng.int(players) });
@@ -252,7 +252,7 @@ test('a card left face down is nowhere another player or a watcher can read: the
 
 /** A table without a bounty where seat 1 wins uncalled with seven-deuce, showing what `show` says, one request after another. */
 function sevenDeuceUncalled(show: number[][], bounty = 0): TestTable {
-  const t = new TestTable({ stacks: [1000, 1000, 1000], config: { sevenDeuceBounty: bounty } });
+  const t = new TestTable({ stacks: [1000, 1000, 1000], config: { bounties: bounty > 0 ? sevenDeuceBounty(bounty) : [] } });
 
   t.deal({ button: 0, holes: { 1: '7h 2c' } });
   t.fold(0);

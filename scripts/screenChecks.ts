@@ -3708,21 +3708,23 @@ const CHECKS: Check[] = [
         assert.deepEqual(await page.evaluate(`[...document.querySelectorAll('#table-unit input')].map((input) => input.disabled)`), [true, true], 'what the table plays with can still be picked');
         assert.equal(await text(page, '#table-unit small'), "Can't be changed once the table is created");
         assert.deepEqual(
-          await Promise.all(['small-blind', 'big-blind', 'min-buy-in', 'max-buy-in', 'seven-deuce-bounty'].map((field) => page.inputValue(`#table-${field}`))),
-          ['0.25', '0.50', '20.00', '100.00', '0.00'],
+          await Promise.all(['small-blind', 'big-blind', 'min-buy-in', 'max-buy-in'].map((field) => page.inputValue(`#table-${field}`))),
+          ['0.25', '0.50', '20.00', '100.00'],
         );
         assert.deepEqual(await squeezed(page, '#table-unit .check span, #table-unit small, .dialog .field input'), [], 'part of the settings is cut off');
         assertOnScreen(await boxes(page, '.dialog, #table-unit, #table-unit .check'), screen, 'the settings');
         await shot(page, `cents-settings-${screen}`);
 
-        await page.fill('#table-seven-deuce-bounty', '2.5');
+        await press('[data-action="add-bounty"]');
+        await page.fill('#table-bounties-hand-0', '72');
+        await page.fill('#table-bounties-amount-0', '2.5');
         await page.fill('#table-small-blind', '.5');
         await page.fill('#table-big-blind', '1');
         await press('[data-action="save-settings"]');
         await page.waitForSelector('.dialog', { state: 'detached' });
 
-        const { unit, smallBlind, bigBlind, sevenDeuceBounty } = table.view('Quigs').config;
-        assert.deepEqual({ unit, smallBlind, bigBlind, sevenDeuceBounty }, { unit: 'cents', smallBlind: 50, bigBlind: 100, sevenDeuceBounty: 250 });
+        const { unit, smallBlind, bigBlind, bounties } = table.view('Quigs').config;
+        assert.deepEqual({ unit, smallBlind, bigBlind, bounties }, { unit: 'cents', smallBlind: 50, bigBlind: 100, bounties: [['72', 250]] });
         assert.equal(await text(page, '.topbar .title span'), '0.50/1.00 hold’em');
 
         // Adding chips and setting a stack are typed in dollars too
@@ -4104,7 +4106,7 @@ const CHECKS: Check[] = [
             { name: 'Quigs', stack: 1000 },
             { name: 'Stu', stack: 1000 },
           ],
-          { maxRuns: 2, sevenDeuceBounty: 50 },
+          { maxRuns: 2, bounties: [['72', 50]] },
         );
 
       const boardPlays = heads();
@@ -4125,7 +4127,7 @@ const CHECKS: Check[] = [
       bounty.deal({ button: 0, holes: { 0: '7h 2c' } });
       page = await bounty.open('Quigs', 'smallPhone');
       await hintSays(page, 'Seven-deuce offsuit');
-      assert.equal(await text(page, `${HINT} .bounty`), 'Bounty hand');
+      assert.equal(await text(page, `${HINT} .bounty`), 'Bounty 50');
       await shot(page, 'hint-bounty-small-phone');
       await inEveryShape(page, () => assertHintFits(page));
       await page.context().close();
@@ -4969,7 +4971,9 @@ const CHECKS: Check[] = [
             keep(`${'Wednesday Wild WWWWWWW'.slice(0, 22)} ${String(index).padStart(7, 'W')}`, { smallBlind: 5 + index, bigBlind: 10 + index });
           }
 
-          keep('Tuesday cents', { unit: 'cents', smallBlind: 25, bigBlind: 50, ante: 10, minBuyIn: 2000, maxBuyIn: 10_000, actionSeconds: 20, allowStraddle: false, sevenDeuceBounty: 100 });
+          // Saved when a table's bounty was one amount, for seven-deuce
+          const { bounties: _list, ...tuesday } = presetSettings({ ...DEFAULT_CONFIG, unit: 'cents', smallBlind: 25, bigBlind: 50, ante: 10, minBuyIn: 2000, maxBuyIn: 10_000, actionSeconds: 20, allowStraddle: false });
+          rig.presets.save({ name: 'Tuesday cents', settings: { ...tuesday, sevenDeuceBounty: 100 }, savedAt: 0, savedBy: 'Quigs' }, false);
 
           // Saved when the clock could be set higher, with a setting the game has since dropped, and before a bomb pot could have two boards
           const { bombPotBoards: _boards, ...fromBefore } = { ...presetSettings({ ...DEFAULT_CONFIG, smallBlind: 5, bigBlind: 10 }), actionSeconds: 900, dealersChoice: true };
@@ -4993,10 +4997,11 @@ const CHECKS: Check[] = [
           assert.equal(await page.inputValue('#new-table-name'), "Chips n' Dipshits", 'the preset names the table');
           assert.equal(await page.inputValue('#new-table-voice-link'), 'https://discord.gg/abc', 'the call typed in was thrown away');
           assert.deepEqual(await texts(page, '.preset-notes p'), [
-            'Changed here: Table name, Play with, Small blind, Big blind, Ante, Minimum buy-in, Maximum buy-in.',
-            'Also set, in the table settings: Seconds to act 20, Straddle under the gun off, Seven-deuce bounty 1.00.',
+            'Changed here: Table name, Play with, Small blind, Big blind, Ante, Minimum buy-in, Maximum buy-in, Bounty hands.',
+            'Also set, in the table settings: Seconds to act 20, Straddle under the gun off.',
           ]);
-          assert.equal(await page.locator('.changed').count(), 7);
+          assert.deepEqual([await page.inputValue('#new-table-bounties .bounty-hand'), await page.inputValue('#new-table-bounties .bounty-row input:not(.bounty-hand)')], ['72', '1.00'], 'the seven-deuce bounty of a preset saved before bounties were a list');
+          assert.equal(await page.locator('.changed').count(), 8);
           assert.equal(await page.locator('#new-table-unit.changed, label[for="new-table-small-blind"].changed').count(), 2);
           assert.equal(await page.locator('label[for="new-table-voice-link"].changed, label[for="new-table-host-name"].changed').count(), 0);
 
@@ -5057,7 +5062,7 @@ const CHECKS: Check[] = [
 
           const tableId = new URL(await page.inputValue('#table-link')).searchParams.get('table')!;
           const config = rig.store.read(tableId)!.config;
-          assert.deepEqual(config, { ...DEFAULT_CONFIG, name: 'Tuesday at Stu’s', voiceLink: 'https://discord.gg/abc', unit: 'cents', smallBlind: 10, bigBlind: 50, ante: 10, minBuyIn: 2000, maxBuyIn: 10_000, actionSeconds: 20, allowStraddle: false, sevenDeuceBounty: 100 });
+          assert.deepEqual(config, { ...DEFAULT_CONFIG, name: 'Tuesday at Stu’s', voiceLink: 'https://discord.gg/abc', unit: 'cents', smallBlind: 10, bigBlind: 50, ante: 10, minBuyIn: 2000, maxBuyIn: 10_000, actionSeconds: 20, allowStraddle: false, bounties: [['72', 100]] });
 
           await press('[data-action="close"]');
           assert.equal(await text(page, '.topbar .title span'), '0.10/0.50 · ante 0.10');
@@ -6763,7 +6768,7 @@ const CHECKS: Check[] = [
       }
 
       // With a bounty on, seven-deuce folded to as that big blind collects it, and its seat shows what it took though the hand itself won nothing
-      const table = rig.table(['Quigs', 'Stu', 'Pocket Pam', 'Big Al'].map((name) => ({ name, stack: 1000 })), { sevenDeuceBounty: 50 });
+      const table = rig.table(['Quigs', 'Stu', 'Pocket Pam', 'Big Al'].map((name) => ({ name, stack: 1000 })), { bounties: [['72', 50]] });
       table.deal({ button: 0 });
       playOut(table);
       table.act('Pocket Pam', { type: 'standUp' });
@@ -6773,7 +6778,7 @@ const CHECKS: Check[] = [
       table.act('Quigs', { type: 'pause' });
       table.play(folding, (view) => view.hand!.stage === 'done');
       await page.waitForSelector('.message.result > div');
-      assert.deepEqual(await texts(page, '.message.result > div'), ['Everyone folded to Big Al', 'Seven-deuce! Big Al collects a 100 bounty']);
+      assert.deepEqual(await texts(page, '.message.result > div'), ['Everyone folded to Big Al', 'Big Al collects 100 for the 72 bounty']);
       assert.equal(await text(page, '.seat[data-seat="3"] .status.won'), '+100');
       assert.deepEqual(await squeezed(page, '.message.result > div, .seat .plate .status'), [], 'the result or what a seat took is cut off');
       await shot(page, 'missed-blinds-bounty-on-a-lone-big-blind');
@@ -10675,7 +10680,7 @@ const CHECKS: Check[] = [
   [
     'with animations on and nobody choosing to show, seven-deuce everyone folded to turns up for its bounty with the pot, before the bounty’s chips, and the badge’s toast comes only once the hand is cleared',
     async (rig) => {
-      const table = rig.table(SHOW_PLAYERS, { sevenDeuceBounty: 10 });
+      const table = rig.table(SHOW_PLAYERS, { bounties: [['72', 10]] });
       const stu = await table.open('Stu', 'smallPhone', MOTION, { moving: true });
       const quigs = await table.open('Quigs', 'smallPhone');
 
@@ -10683,7 +10688,7 @@ const CHECKS: Check[] = [
       table.play((_view, name) => (name === 'Quigs' ? { type: 'raise', to: 60 } : { type: 'fold' }), (view) => view.hand!.stage === 'done');
       assert.ok(table.view('Stu').hand!.result!.bounty, 'no bounty was paid');
 
-      await stu.waitForSelector('.entries li:has-text("collects a bounty")', { state: 'attached' });
+      await stu.waitForSelector('.entries li:has-text("for the 72 bounty")', { state: 'attached' });
       await stu.waitForFunction(`window.flights.some((flight) => flight.name === 'flip')`);
       await dealt(stu);
       const flights = (await flown(stu)).filter((flight) => flight.name === 'flip' || flight.name === 'show' || flight.name === 'chips');

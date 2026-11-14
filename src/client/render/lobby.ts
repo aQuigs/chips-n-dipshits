@@ -1,4 +1,5 @@
-import { CONFIG_SPECS, settingText, startingConfig } from '../../engine/config.ts';
+import { bountiesText } from '../../engine/bounties.ts';
+import { CONFIG_SPECS, holdsAmounts, sameSetting, settingText, startingConfig } from '../../engine/config.ts';
 import type { ConfigKey } from '../../engine/config.ts';
 import { fromPreset, PRESET_KEYS } from '../../engine/presets.ts';
 import type { Preset } from '../../engine/presets.ts';
@@ -90,14 +91,14 @@ export function lobbyEl(visitor: Visitor, themePicker: HTMLElement, handlers: Lo
 
   const alsoSet = (table: TableConfig): HTMLElement[] => {
     const start = startingConfig(table);
-    const differ = (Object.keys(unseen) as ConfigKey[]).filter((key) => table[key] !== start[key]);
+    const differ = (Object.keys(unseen) as ConfigKey[]).filter((key) => !sameSetting(table[key], start[key]));
 
     return differ.length > 0 ? [h('p.note', null, `Also set, in the table settings: ${differ.map((key) => `${CONFIG_SPECS[key].label} ${settingText(key, table)}`).join(', ')}.`)] : [];
   };
 
   // An amount means something else once what the table plays with changes, so the preset's unseen ones start over too
   const startedOver = (start: TableConfig): void => {
-    const amounts = (Object.keys(unseen) as ConfigKey[]).filter((key) => CONFIG_SPECS[key].kind === 'chips');
+    const amounts = (Object.keys(unseen) as ConfigKey[]).filter(holdsAmounts);
 
     unseen = { ...unseen, ...Object.fromEntries(amounts.map((key) => [key, start[key]])) };
     notes.replaceChildren(...alsoSet({ ...start, ...unseen }));
@@ -131,7 +132,7 @@ export function lobbyEl(visitor: Visitor, themePicker: HTMLElement, handlers: Lo
     who.element,
     presetPick,
     settings.rows,
-    h('p.note', null, 'You become the host. Clock, straddles, running it more than once and the 7-2 bounty are in the table settings.'),
+    h('p.note', null, 'You become the host. Clock, straddles and running it more than once are in the table settings.'),
     createButton,
   );
 
@@ -204,6 +205,7 @@ export function joinScreen(tableId: string, visitor: Visitor, themePicker: HTMLE
       about.replaceChildren(
         h('h2', null, info.name),
         h('p', null, `Blinds ${stakesText(info)}`),
+        ...(info.bounties.length > 0 ? [h('p', null, `Bounties: ${bountiesText(info.bounties, info)}`)] : []),
         h('p.note', null, info.players.length > 0 ? `At the table: ${info.players.join(', ')}` : 'Nobody is seated yet.'),
       );
       joinButton.disabled = false;

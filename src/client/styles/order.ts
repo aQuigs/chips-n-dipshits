@@ -49,4 +49,5 @@ export const STYLESHEETS = [
   'gifs.css',
   'show-one.css',
   'who.css',
+  'bounty-list.css',
 ];

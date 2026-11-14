@@ -2,7 +2,8 @@
 import { formatAmount, validAmount } from '../amounts.ts';
 import { bombPotName, bombPotOf } from '../bombPots.ts';
 import { stopChoppingUnasked } from '../chop.ts';
-import { validatedConfig } from '../config.ts';
+import { bountiesText } from '../bounties.ts';
+import { sameSetting, validatedConfig } from '../config.ts';
 import { restartActionClock, retimeRabbitOffer } from '../hand.ts';
 import { forgive, forgiveEveryone, owes } from '../handPlan.ts';
 import { payHighHandNow } from '../highHand.ts';
@@ -219,9 +220,9 @@ export const updateConfig: Handler<'updateConfig'> = {
       addFeed(state, ctx.now, 'system', null, ante > 0 ? `The ante is ${formatAmount(ante, state.config)}, paid by ${paidBy}${when}` : `The ante is off${when}`);
     }
 
-    if (state.config.sevenDeuceBounty !== before.sevenDeuceBounty) {
-      const bounty = state.config.sevenDeuceBounty;
-      addFeed(state, ctx.now, 'system', null, bounty > 0 ? `The seven-deuce bounty is ${formatAmount(bounty, state.config)}${when}` : `The seven-deuce bounty is off${when}`);
+    if (!sameSetting(state.config.bounties, before.bounties)) {
+      const { bounties } = state.config;
+      addFeed(state, ctx.now, 'system', null, bounties.length > 0 ? `The bounties are ${bountiesText(bounties, state.config)}${when}` : `The bounties are off${when}`);
     }
 
     if (state.config.highHandBonus !== before.highHandBonus) {

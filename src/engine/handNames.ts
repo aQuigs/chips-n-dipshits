@@ -83,6 +83,19 @@ export function startingHandName(hole: readonly Card[]): string {
   return `${capitalized(one(high))}-${one(low)} ${suitOf(hole[0]!) === suitOf(hole[1]!) ? 'suited' : 'offsuit'}`;
 }
 
+/** A starting hand in kept form (`startingHands.ts`) as it is said aloud: "jack-four suited", "seven-deuce", "pocket aces". */
+export function startingHandWords(hand: string): string {
+  const [high, low] = [rankOf(hand[0]!), rankOf(hand[1]!)];
+
+  if (high === low) {
+    return `pocket ${many(high)}`;
+  }
+
+  const suitedness = { s: ' suited', o: ' offsuit' }[hand[2] ?? ''] ?? '';
+
+  return `${one(high)}-${one(low)}${suitedness}`;
+}
+
 /** What a player holds on one board, for their eyes only. */
 export interface HandRead {
   name: string;

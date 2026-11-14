@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { addMember, evaluateHand, handFacts, HIGH_CARD, isSevenDeuce, isStraddle, ledgerOf, newTonight, nextHighHand, nightIsOver, SEAT_COUNT, STRADDLES, STRADDLES_IN_A_ROW, STRAIGHT_FLUSH, straddlesAllowed, tonightView } from '../src/engine/index.ts';
+import { addMember, evaluateHand, handFacts, HIGH_CARD, isStartingHand, SEVEN_DEUCE, isStraddle, ledgerOf, newTonight, nextHighHand, nightIsOver, SEAT_COUNT, STRADDLES, STRADDLES_IN_A_ROW, STRAIGHT_FLUSH, straddlesAllowed, tonightView } from '../src/engine/index.ts';
 import type { Card, Effect, HandRecord, PlayerTonight, Straddle, TableState, Tonight, TonightView } from '../src/engine/index.ts';
 import { restoreState } from '../src/server/store.ts';
 import { ACES, BOARD, cards, checkAround, faceDownCards, handRecords, KINGS, ledgerEntries, QUEENS, seededRng, TestTable } from './helpers.ts';
@@ -527,7 +527,7 @@ function badgesEarned(record: HandRecord, player: HandRecord['players'][number],
     heater: every(after.streak, before.streak, 3),
     felted,
     scoop: record.boards.length > 1 && !result.uncontested && took === pot,
-    sevenDeuce: hole.length === 2 && isSevenDeuce(hole) && outright,
+    sevenDeuce: hole.length === 2 && isStartingHand(hole, SEVEN_DEUCE) && outright,
     airBall: shown.some((hand) => hand.value.category === HIGH_CARD && wonOn(hand.run)),
     cooler: [...ownQuads, ...ownFlush].some((hand) => !wonOn(hand.run)),
     atm: every(after.busts, before.busts, 3),
@@ -703,7 +703,7 @@ test('over random games the numbers are at every step exactly what the hand reco
         reached.busts += facts.players.some((p) => p.busted) ? 1 : 0;
 
         const bounty = record.result.bounty;
-        assert.ok(!bounty || recount.earned.some((earned) => earned.hand === record.number && earned.seat === bounty.seat && earned.id === 'sevenDeuce'), `hand ${record.number}: a bounty was paid for seven-deuce and the badge was not earned`);
+        assert.ok(!bounty?.hand.startsWith(SEVEN_DEUCE) || recount.earned.some((earned) => earned.hand === record.number && earned.seat === bounty.seat && earned.id === 'sevenDeuce'), `hand ${record.number}: a bounty was paid for seven-deuce and the badge was not earned`);
         reached.splits += facts.players.some((p) => p.wins.some((win) => win.between > 1)) ? 1 : 0;
       }
 

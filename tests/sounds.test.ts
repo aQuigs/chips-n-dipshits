@@ -11,7 +11,7 @@ import { tableChange } from '../src/client/tableChange.ts';
 import type { TableChange } from '../src/client/tableChange.ts';
 import { boardsDealt } from '../src/engine/index.ts';
 import type { HandEvent, TableView } from '../src/engine/index.ts';
-import { mapMemory, TestTable } from './helpers.ts';
+import { mapMemory, sevenDeuceBounty, TestTable } from './helpers.ts';
 
 /** A viewer's sounds, made by a stand-in that writes down what it was asked to play, on a clock the test moves. */
 class Ears {
@@ -84,7 +84,7 @@ const BY_SOMEONE_ELSE: [HandEvent, SoundName | null][] = [
   [['show', 1, ['7d', '2s']], null],
   [['muck', 1], null],
   [['win', 1, 400, 0, 0], 'win'],
-  [['bounty', 1, [[0, 20]]], 'chips'],
+  [['bounty', 1, [[0, 20]], '72'], 'chips'],
   [['chopOffer', 1], null],
   [['chopAnswer', 1, true], null],
   [['chop', [[1, 10], [2, 20]]], 'chips'],
@@ -230,7 +230,7 @@ test('a double-board bomb pot plays the deal and then one flop for the two, and 
 });
 
 test('a seven-deuce bounty rings up its chips after the pot', () => {
-  const table = new TestTable({ stacks: [1000, 1000, 1000], config: { sevenDeuceBounty: 50 } });
+  const table = new TestTable({ stacks: [1000, 1000, 1000], config: { bounties: sevenDeuceBounty(50) } });
   const page = new Page(table, 1);
 
   table.deal({ button: 0, holes: { 0: '7h 2s' } });

@@ -13,7 +13,7 @@ import { PUT_AWAY_MESSAGE } from '../src/server/putAway.ts';
 import { PokerService } from '../src/server/service.ts';
 import type { TableStore } from '../src/server/store.ts';
 import { FakeCache, FakeLock, FakeSpreadsheet } from './fakes.ts';
-import { DAY_MS, failure, joined, seededRng, viewOf } from './helpers.ts';
+import { DAY_MS, failure, joined, seededRng, sevenDeuceBounty, viewOf } from './helpers.ts';
 
 function setup(store: TableStore = new MemoryStore()) {
   const clock = { time: 1_000_000, now: () => clock.time };
@@ -63,7 +63,7 @@ test('anyone with the table id can look it up and join under a free name', () =>
   const tableId = joined(service.handle({ op: 'create', name: 'Quigs' })).view.id;
 
   const info = service.handle({ op: 'info', tableId: tableId.toLowerCase() });
-  assert.deepEqual(info, { ok: true, kind: 'info', table: { id: tableId, name: "Chips n' Dipshits", unit: 'chips', smallBlind: 10, bigBlind: 20, ante: 0, anteFrom: 'everyone', players: [] } });
+  assert.deepEqual(info, { ok: true, kind: 'info', table: { id: tableId, name: "Chips n' Dipshits", unit: 'chips', smallBlind: 10, bigBlind: 20, ante: 0, anteFrom: 'everyone', bounties: [], players: [] } });
 
   const ann = joined(service.handle({ op: 'join', tableId: ` ${tableId.toLowerCase()} `, name: 'Ann' }));
   assert.equal(ann.view.you.role, 'member');
@@ -289,7 +289,7 @@ test('history returns the finished hands of the table', () => {
 /** Plays a table through the service with every player polling, the way browsers would. */
 function playThroughService(store: TableStore, steps: number, rng: Rng, beforeStep: () => void = () => {}): number {
   const { service, tableId, players, clock, act } = seatedTable(store);
-  viewOf(act(0, { type: 'updateConfig', config: { actionSeconds: 15, maxRuns: 2, sevenDeuceBounty: 20 } }));
+  viewOf(act(0, { type: 'updateConfig', config: { actionSeconds: 15, maxRuns: 2, bounties: sevenDeuceBounty(20) } }));
   viewOf(act(0, { type: 'start' }));
 
   const versions = players.map(() => 0);

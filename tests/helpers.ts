@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 
 import type { PrefMemory } from '../src/client/prefs.ts';
-import { applyCommand, createTable, addMember, freshDeck, seededRng, startHand, startOver, tick, viewFor, SEAT_COUNT } from '../src/engine/index.ts';
-import type { Card, Command, Ctx, Effect, Hand, HandPlayer, HandRecord, LedgerEntry, Rng, TableConfig, TableState, TableView } from '../src/engine/index.ts';
+import { applyCommand, createTable, addMember, freshDeck, seededRng, startHand, startOver, tick, viewFor, SEAT_COUNT, SEVEN_DEUCE } from '../src/engine/index.ts';
+import type { Bounty, Card, Command, Ctx, Effect, Hand, HandPlayer, HandRecord, LedgerEntry, Rng, TableConfig, TableState, TableView } from '../src/engine/index.ts';
 import type { ApiResponse, Joined } from '../src/server/api.ts';
 
 /** A player's cards the table has not seen. */
@@ -12,6 +12,11 @@ export const faceDownCards = (player: HandPlayer): Card[] => player.cards.filter
 export const DAY_MS = 24 * 60 * 60 * 1000;
 
 export { seededRng };
+
+/** A table's bounties when seven-deuce is the one hand on the list, as every table with a bounty had before there could be others. */
+export function sevenDeuceBounty(amount: number): Bounty[] {
+  return [[SEVEN_DEUCE, amount]];
+}
 
 export function cards(text: string): Card[] {
   return text.split(' ').filter((card) => card.length > 0);

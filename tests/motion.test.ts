@@ -12,7 +12,7 @@ import { TableNews } from '../src/client/tableChange.ts';
 import type { TableChange } from '../src/client/tableChange.ts';
 import { boardsDealt, replayHand } from '../src/engine/index.ts';
 import type { BombPot, HandEvent, TableView } from '../src/engine/index.ts';
-import { mapMemory, seededRng, TestTable } from './helpers.ts';
+import { mapMemory, seededRng, sevenDeuceBounty, TestTable } from './helpers.ts';
 import { chance, randomStep } from './randomPlay.ts';
 
 /** A viewer's table, moved by a stand-in that writes down what it was asked to do. */
@@ -190,7 +190,7 @@ test('each kind of hand event moves what it should, or nothing', () => {
     ['a hand mucked at the showdown', ON_THE_FLOP, ['muck', 1], []],
     ['a pot won', ON_THE_FLOP, ['win', 1, 60, 0, 0], ['chips 60 pot>seat1 @0']],
     ['a pot won with a bet in front', [...DEALT, ['fold', 0], ['fold', 1]], ['win', 2, 30, 0, 0], ['chips 10 bet1>pot @0', 'chips 20 bet2>pot @0', 'chips 30 pot>seat2 @0']],
-    ['a bounty', [...ON_THE_FLOP, ['win', 1, 60, 0, 0]], ['bounty', 1, [[0, 50], [2, 50]]], ['chips 50 seat0>seat1 @0', 'chips 50 seat2>seat1 @0']],
+    ['a bounty', [...ON_THE_FLOP, ['win', 1, 60, 0, 0]], ['bounty', 1, [[0, 50], [2, 50]], '72'], ['chips 50 seat0>seat1 @0', 'chips 50 seat2>seat1 @0']],
     ['an offer to chop', [...DEALT, ['fold', 0]], ['chopOffer', 1], []],
     ['an answer to it', [...DEALT, ['fold', 0], ['chopOffer', 1]], ['chopAnswer', 2, true], []],
     ['the cards that would have come, hunted after everyone folded on the flop', [...ON_THE_FLOP, ['bet', 1, 40, 940], ['fold', 2], ['fold', 0], ['return', 1, 40], ['win', 1, 60, 0, 0]], ['hunt', [['9h', '4c']]], ['hunt >board0.3 @0', 'hunt >board0.4 @60']],
@@ -232,7 +232,7 @@ test('a card shown alone turns by itself, and one shown in the pause after the h
 test('a winner everyone folded to who chose to show turns up beside the game with the result, and a loser who chose to at a showdown turns in the game’s lane', () => {
   const folded: HandEvent[] = [...DEALT, ['fold', 0], ['fold', 1], ['return', 2, 10]];
   assert.deepEqual(seen(folded, [['win', 2, 20, 0, 0], ['show', 2, ['As', 'Kd']]]), ['chips 10 bet1>pot @0', 'chips 10 bet2>pot @0', 'chips 20 pot>seat2 @0', 'flip >cards2 @0']);
-  assert.deepEqual(seen(folded, [['show', 2, ['7s', '2d']], ['bounty', 2, [[0, 50], [1, 50]]]]), ['flip >cards2 @0', 'chips 50 seat0>seat2 @0', 'chips 50 seat1>seat2 @0'], 'seven-deuce turned up for its bounty');
+  assert.deepEqual(seen(folded, [['show', 2, ['7s', '2d']], ['bounty', 2, [[0, 50], [1, 50]], '72']]), ['flip >cards2 @0', 'chips 50 seat0>seat2 @0', 'chips 50 seat1>seat2 @0'], 'seven-deuce turned up for its bounty');
 
   const river: HandEvent[] = [...ON_THE_FLOP, ['street', 0, ['9h']], ['street', 0, ['4c']], ['check', 1], ['check', 2], ['check', 0]];
   assert.deepEqual(seen(river, [['show', 1, ['Ac', 'Ad']], ['show', 2, ['7d', '2s']], ['muck', 0], ['win', 1, 60, 0, 0]]), ['show >cards1 @0', 'show >cards2 @0', 'chips 60 pot>seat1 @0']);
@@ -240,7 +240,7 @@ test('a winner everyone folded to who chose to show turns up beside the game wit
 
 test('seven-deuce turned up for its bounty after everyone folded turns beside the game but on the same beat as ever: with the pot, before the bounty’s chips and its sound, with no sound of its own', () => {
   const folded: HandEvent[] = [...DEALT, ['fold', 0], ['fold', 1], ['return', 2, 10]];
-  const ended: HandEvent[] = [['win', 2, 20, 0, 0], ['show', 2, ['7s', '2d']], ['bounty', 2, [[0, 50], [1, 50]]]];
+  const ended: HandEvent[] = [['win', 2, 20, 0, 0], ['show', 2, ['7s', '2d']], ['bounty', 2, [[0, 50], [1, 50]], '72']];
   const moves = movesSeen(going(folded, ended), 0);
   const startOf = (name: string, from?: string) => moves.filter((move) => move.name === name && (from === undefined || where(move.from) === from)).map((move) => move.after);
 
@@ -669,7 +669,7 @@ test('whatever random play brings, in views of one event or many, stays in budge
   for (let seed = 1; seed <= 12; seed++) {
     const rng = seededRng(seed * 104_729);
     const players = 2 + rng.int(9);
-    const table = new TestTable({ stacks: Array.from({ length: players }, () => 200 + rng.int(1800)), seed, config: { maxRuns: 2, sevenDeuceBounty: 20, ante: seed % 3 === 0 ? 5 : 0, bombPotAmount: 50, bombPotEvery: seed % 4 === 0 ? 3 : 0 } });
+    const table = new TestTable({ stacks: Array.from({ length: players }, () => 200 + rng.int(1800)), seed, config: { maxRuns: 2, bounties: sevenDeuceBounty(20), ante: seed % 3 === 0 ? 5 : 0, bombPotAmount: 50, bombPotEvery: seed % 4 === 0 ? 3 : 0 } });
     const page = new Page(table, 0);
 
     table.cmd(0, { type: 'start' });

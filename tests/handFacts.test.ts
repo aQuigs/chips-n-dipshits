@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { fullyShown, handFacts, isSevenDeuce, PAIR, STRAIGHT_FLUSH, THREE_OF_A_KIND, wonAPot } from '../src/engine/index.ts';
+import { fullyShown, handFacts, isStartingHand, SEVEN_DEUCE, PAIR, STRAIGHT_FLUSH, THREE_OF_A_KIND, wonAPot } from '../src/engine/index.ts';
 import type { HandFacts, PlayerFacts, Straddle } from '../src/engine/index.ts';
-import { ACES, BOARD, cards, checkAround, faceDownCards, handRecords, KINGS, QUEENS, TestTable } from './helpers.ts';
+import { ACES, BOARD, cards, checkAround, faceDownCards, handRecords, KINGS, QUEENS, sevenDeuceBounty, TestTable } from './helpers.ts';
 
 // On the first board aces beat kings beat queens; on the second a king makes the kings three of a kind
 const SECOND = 'Kd 4c 5h 8s Td';
@@ -289,7 +289,7 @@ test('a double-board bomb pot: scooped, one player is paid on both boards; with 
 });
 
 test('won with seven-deuce: the cards are a fact when the bounty turned them up, and the bounty is told apart from the pot', () => {
-  const t = new TestTable({ stacks: [1000, 1000, 50], config: { sevenDeuceBounty: 50 } });
+  const t = new TestTable({ stacks: [1000, 1000, 50], config: { bounties: sevenDeuceBounty(50) } });
   t.deal({ button: 0, holes: { 0: '7h 2c' } });
   t.raise(0, 60);
   t.fold(1);
@@ -298,7 +298,7 @@ test('won with seven-deuce: the cards are a fact when the bounty turned them up,
   const facts = factsOf(t);
   const winner = at(facts, 0);
 
-  assert.ok(wonAPot(winner) && fullyShown(winner.cards) && isSevenDeuce(winner.cards));
+  assert.ok(wonAPot(winner) && fullyShown(winner.cards) && isStartingHand(winner.cards, SEVEN_DEUCE));
   assert.deepEqual(facts.players.map((p) => [p.putIn, p.tookOut, p.bounty, p.net]), [[20, 50, 80, 110], [10, 0, -50, -60], [20, 0, -30, -50]]);
   assert.equal(facts.pot, 50, 'the bounty is paid on top, and is no part of the pot');
 
@@ -316,7 +316,7 @@ test('won with seven-deuce: the cards are a fact when the bounty turned them up,
 });
 
 test('a player who wins a side pot and loses it to the bounty is busted by whoever collected, and by nobody else', () => {
-  const t = new TestTable({ stacks: [80, 50, 1000], config: { smallBlind: 5, bigBlind: 10, sevenDeuceBounty: 100, maxRuns: 1 } });
+  const t = new TestTable({ stacks: [80, 50, 1000], config: { smallBlind: 5, bigBlind: 10, bounties: sevenDeuceBounty(100), maxRuns: 1 } });
   t.deal({ button: 0, holes: { 0: KINGS, 1: '7h 2s', 2: QUEENS }, board: '7c 2d 9h Jc 3s' });
   t.raise(0, 80);
   t.call(1);

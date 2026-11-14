@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { CONFIG_KEYS, CONFIG_SPECS, DEFAULT_CONFIG, newConfig, startingConfig, validatedConfig, validSetting } from '../src/engine/index.ts';
+import { CONFIG_KEYS, CONFIG_SPECS, DEFAULT_CONFIG, newConfig, sameSetting, startingConfig, validatedConfig, validSetting } from '../src/engine/index.ts';
 import type { ChoiceSpec, NumberSpec } from '../src/engine/index.ts';
-import { seededRng, TestTable } from './helpers.ts';
+import { seededRng, sevenDeuceBounty, TestTable } from './helpers.ts';
 import { randomConfig, randomSetting } from './randomConfig.ts';
 
 test('the default settings are the registry\'s defaults, and the table accepts them', () => {
@@ -24,7 +24,7 @@ test('the default settings are the registry\'s defaults, and the table accepts t
     allowMississippiStraddle: false,
     maxRuns: 3,
     allowChop: false,
-    sevenDeuceBounty: 0,
+    bounties: [],
     highHandBonus: 0,
     bombPotAmount: 100,
     bombPotEvery: 0,
@@ -68,12 +68,12 @@ test('when several things are wrong, the complaint is about the one that was alw
   assert.equal(complaint({ smallBlind: 0, bigBlind: 0 }), 'The small blind must be a whole number from 1 to 1,000,000,000');
   assert.equal(complaint({ minBuyIn: 500, maxBuyIn: 100, actionSeconds: 400 }), "The maximum buy-in can't be smaller than the minimum");
   assert.equal(complaint({ bigBlind: 5, maxRuns: 0 }), "The big blind can't be smaller than the small blind");
-  assert.equal(complaint({ sevenDeuceBounty: -1, maxRuns: 'x', name: 7 }), 'The table name is missing');
-  assert.equal(complaint({ sevenDeuceBounty: -1, maxRuns: 'x' }), 'Running it more than once must be one of: Once only, Up to twice, Up to three times');
+  assert.equal(complaint({ bounties: [['72', -1]], maxRuns: 'x', name: 7 }), 'The table name is missing');
+  assert.equal(complaint({ bounties: [['72', -1]], maxRuns: 'x' }), 'Running it more than once must be one of: Once only, Up to twice, Up to three times');
 });
 
 test('settings the host leaves out keep their value, and anything that is no setting is dropped', () => {
-  const current = { ...DEFAULT_CONFIG, sevenDeuceBounty: 40, allowStraddle: false };
+  const current = { ...DEFAULT_CONFIG, bounties: sevenDeuceBounty(40), allowStraddle: false };
 
   assert.deepEqual(validatedConfig({ bigBlind: 50, cheat: true }, current), { ...current, bigBlind: 50 });
   assert.deepEqual(validatedConfig(null, current), current);
@@ -134,12 +134,12 @@ test('random settings are always ones the table accepts, and between them reach 
 
 test('changing a setting that waits for the next hand leaves the hand in play as it is', () => {
   const waiting = CONFIG_KEYS.filter((key) => CONFIG_SPECS[key].nextHand);
-  assert.deepEqual(waiting, ['smallBlind', 'bigBlind', 'ante', 'anteFrom', 'allowStraddle', 'allowDoubleStraddle', 'allowButtonStraddle', 'allowMississippiStraddle', 'maxRuns', 'missedBlinds', 'sevenDeuceBounty', 'bombPotAmount', 'bombPotEvery', 'bombPotBoards']);
+  assert.deepEqual(waiting, ['smallBlind', 'bigBlind', 'ante', 'anteFrom', 'allowStraddle', 'allowDoubleStraddle', 'allowButtonStraddle', 'allowMississippiStraddle', 'maxRuns', 'missedBlinds', 'bounties', 'bombPotAmount', 'bombPotEvery', 'bombPotBoards']);
 
   const rng = seededRng(3);
 
   for (const key of waiting) {
-    const t = new TestTable({ stacks: [1000, 1000, 1000], config: { bigBlind: 20, sevenDeuceBounty: 10 } });
+    const t = new TestTable({ stacks: [1000, 1000, 1000], config: { bigBlind: 20, bounties: sevenDeuceBounty(10) } });
     t.deal({ button: 0 });
     t.call(0);
 
@@ -151,7 +151,7 @@ test('changing a setting that waits for the next hand leaves the hand in play as
 
       try {
         t.cmd(0, { type: 'updateConfig', config: { [key]: value } });
-        changed += value === t.state.config[key] ? 1 : 0;
+        changed += sameSetting(value, t.state.config[key]) ? 1 : 0;
       } catch (error) {
         assert.equal((error as Error).name, 'GameError');
       }
@@ -185,6 +185,6 @@ test('a refusal writes amounts the way the table being created or changed does',
   const cents = startingConfig({ unit: 'cents' });
 
   assert.throws(() => newConfig({ unit: 'cents', smallBlind: 0 }), { message: 'The small blind must be an amount to the cent from 0.01 to 10,000,000.00' });
-  assert.throws(() => validatedConfig({ sevenDeuceBounty: -1 }, cents), { message: 'The seven-deuce bounty must be an amount to the cent from 0.00 to 10,000,000.00' });
+  assert.throws(() => validatedConfig({ bounties: [['72', -1]] }, cents), { message: 'The 72 bounty must be an amount to the cent from 0.01 to 10,000,000.00' });
   assert.throws(() => newConfig({ unit: 'euros', smallBlind: 0 }), { name: 'GameError', message: 'What the table plays with must be one of: Whole chips, Dollars and cents' });
 });

@@ -1,5 +1,7 @@
 import { formatAmount, validAmount } from './amounts.ts';
 import type { Denominated } from './amounts.ts';
+import { bountiesText, handListedTwice, SEVEN_DEUCE, validBounties } from './bounties.ts';
+import type { Bounty } from './bounties.ts';
 import { STRADDLES } from './straddles.ts';
 import type { StraddleKind } from './straddles.ts';
 import { GameError } from './types.ts';
@@ -79,7 +81,20 @@ export interface ChoiceSpec<V extends string | number = string | number> extends
   }[];
 }
 
-export type ConfigSpec = TextSpec | LinkSpec | NumberSpec | ToggleSpec | ChoiceSpec;
+/** A list of starting hands, each with an amount, as the table's bounties are; empty for none. Its amounts obey what a `chips` setting's do. */
+export interface HandAmountsSpec extends SpecBase {
+  kind: 'handAmounts';
+  default: Bounty[];
+  min: number;
+  max?: number;
+  /** The most hands on the list. */
+  most: number;
+}
+
+export type ConfigSpec = TextSpec | LinkSpec | NumberSpec | ToggleSpec | ChoiceSpec | HandAmountsSpec;
+
+/** What a setting can hold. */
+export type SettingValue = TableConfig[keyof TableConfig];
 
 export type ConfigKey = keyof TableConfig;
 
@@ -91,7 +106,9 @@ function straddleSwitch(setting: StraddleKind['setting']): ToggleSpec {
 }
 
 /** The kind of spec a setting of a given type takes; a string or a number that is one of a few fixed values is a choice. */
-type SpecFor<V> = [V] extends [boolean]
+type SpecFor<V> = [V] extends [Bounty[]]
+  ? HandAmountsSpec
+  : [V] extends [boolean]
   ? ToggleSpec
   : [V] extends [number]
     ? number extends V
@@ -217,14 +234,16 @@ export const CONFIG_SPECS: { [K in ConfigKey]-?: SpecFor<TableConfig[K]> } = {
     atCreate: true,
     nextHand: true,
   },
-  sevenDeuceBounty: {
-    kind: 'chips',
-    label: 'Seven-deuce bounty',
-    subject: 'The seven-deuce bounty',
-    hint: 'Paid by everyone dealt in to whoever wins with 7-2. 0 turns it off',
-    default: 0,
-    min: 0,
+  bounties: {
+    kind: 'handAmounts',
+    label: 'Bounty hands',
+    subject: 'The bounties',
+    hint: 'Whoever wins with one collects its amount from everyone else dealt in. Write a hand as 72, 72s for suited only, 72o for offsuit only, or AA',
+    default: [],
+    min: 1,
+    most: LIMITS.bounties,
     group: 'extras',
+    atCreate: true,
     nextHand: true,
   },
   highHandBonus: {
@@ -297,6 +316,7 @@ function rule<K extends ConfigKey>(keys: K[], complaint: (config: Pick<TableConf
 export const CONFIG_RULES: ConfigRule[] = [
   rule(['smallBlind', 'bigBlind'], (config) => (config.bigBlind < config.smallBlind ? "The big blind can't be smaller than the small blind" : null)),
   rule(['minBuyIn', 'maxBuyIn'], (config) => (config.maxBuyIn < config.minBuyIn ? "The maximum buy-in can't be smaller than the minimum" : null)),
+  rule(['bounties'], (config) => handListedTwice(config.bounties)),
   rule(['actionSeconds'], (config) =>
     config.actionSeconds !== 0 && config.actionSeconds < LIMITS.minActionSeconds ? `The action clock must be off or at least ${LIMITS.minActionSeconds} seconds` : null,
   ),
@@ -310,6 +330,8 @@ export const CONFIG_RULES: ConfigRule[] = [
 const RETIRED_SETTINGS: Record<string, (old: unknown) => Partial<TableConfig>> = {
   // A switch until three runs were allowed, and on meant up to twice
   allowRunItTwice: (on) => ({ maxRuns: on === false ? 1 : 2 }),
+  // One amount for seven-deuce until the bounties were a list, and 0 meant none
+  sevenDeuceBounty: (amount) => ({ bounties: amount === 0 ? [] : [[SEVEN_DEUCE, amount as number]] }),
 };
 
 /** Saved settings with any under a retired name put as the settings that took their place, unless those were saved too. */
@@ -354,6 +376,18 @@ export function startingConfig(chosen?: unknown): TableConfig {
   return start as TableConfig;
 }
 
+/** Whether two values of a setting are the same, a list being the same when everything on it is. */
+export function sameSetting(a: SettingValue | undefined, b: SettingValue | undefined): boolean {
+  return a === b || (Array.isArray(a) && Array.isArray(b) && JSON.stringify(a) === JSON.stringify(b));
+}
+
+/** Whether a setting holds amounts, which mean something else once what the table plays with changes. */
+export function holdsAmounts(key: ConfigKey): boolean {
+  const kind = CONFIG_SPECS[key].kind;
+
+  return kind === 'chips' || kind === 'handAmounts';
+}
+
 /** A setting's value as a player reads it: "0.25", "on", "Dollars and cents". */
 export function settingText(key: ConfigKey, config: TableConfig): string {
   const spec = CONFIG_SPECS[key];
@@ -366,13 +400,15 @@ export function settingText(key: ConfigKey, config: TableConfig): string {
       return value ? 'on' : 'off';
     case 'choice':
       return spec.options.find((option) => option.value === value)?.label ?? String(value);
+    case 'handAmounts':
+      return bountiesText(value as Bounty[], config);
     default:
       return String(value);
   }
 }
 
 /** One setting as its spec allows it, or a refusal that names it and writes amounts the way `table` does. */
-export function validSetting(spec: ConfigSpec, value: unknown, table: Denominated): string | number | boolean {
+export function validSetting(spec: ConfigSpec, value: unknown, table: Denominated): SettingValue {
   switch (spec.kind) {
     case 'text':
       return text(value, spec.subject, spec.maxLength);
@@ -393,6 +429,8 @@ export function validSetting(spec: ConfigSpec, value: unknown, table: Denominate
 
       return option.value;
     }
+    case 'handAmounts':
+      return validBounties(value, table, spec);
   }
 }
 
@@ -402,14 +440,14 @@ export function validSetting(spec: ConfigSpec, value: unknown, table: Denominate
  */
 export function validatedConfig(input: unknown, current: TableConfig): TableConfig {
   const given = fieldsOf(input);
-  const config: Partial<Record<ConfigKey, string | number | boolean>> = {};
+  const config: Partial<Record<ConfigKey, SettingValue>> = {};
 
   for (const key of CONFIG_KEYS) {
     const spec = CONFIG_SPECS[key];
 
     config[key] = validSetting(spec, given[key] === undefined ? current[key] : given[key], current);
 
-    if (fixedAtCreation(key) && config[key] !== current[key]) {
+    if (fixedAtCreation(key) && !sameSetting(config[key], current[key])) {
       throw new GameError(`${spec.subject} was chosen when the table was created and can't be changed`);
     }
 

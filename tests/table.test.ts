@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import { addMember, createTable, DEFAULT_CONFIG, ledgerOf, setIdentity, STATE_SCHEMA, viewFor } from '../src/engine/index.ts';
 import type { Ctx } from '../src/engine/index.ts';
 import { restoreState } from '../src/server/store.ts';
-import { ledgerEntries, seededRng, TestTable } from './helpers.ts';
+import { ledgerEntries, seededRng, sevenDeuceBounty, TestTable } from './helpers.ts';
 import { assertChipsConserved, assertViewsKeepSecrets } from './invariants.ts';
 
 function freshCtx(): Ctx {
@@ -31,7 +31,7 @@ test('table settings that make no sense are rejected', () => {
   assert.throws(create({ actionSeconds: 2 }), /action clock/);
   assert.throws(create({ allowStraddle: 'yes' }), { message: 'The straddle under the gun must be on or off' });
   assert.throws(create({ name: '' }), /table name/);
-  assert.throws(create({ sevenDeuceBounty: -5 }), /bounty/);
+  assert.throws(create({ bounties: [['72', -5]] }), /The 72 bounty must be a whole number from 1/);
 });
 
 test('names are unique at a table and cannot look like a spreadsheet formula', () => {
@@ -428,11 +428,11 @@ test('a settings change keeps everything it does not mention and is validated as
   const t = new TestTable({ stacks: [1000, 1000] });
   const before = { ...t.state.config };
 
-  t.cmd(0, { type: 'updateConfig', config: { sevenDeuceBounty: 40 } });
-  assert.deepEqual(t.state.config, { ...before, sevenDeuceBounty: 40 });
+  t.cmd(0, { type: 'updateConfig', config: { bounties: sevenDeuceBounty(40) } });
+  assert.deepEqual(t.state.config, { ...before, bounties: sevenDeuceBounty(40) });
 
   assert.throws(() => t.cmd(0, { type: 'updateConfig', config: { bigBlind: 5 } }), /big blind/);
-  assert.deepEqual(t.state.config, { ...before, sevenDeuceBounty: 40 });
+  assert.deepEqual(t.state.config, { ...before, bounties: sevenDeuceBounty(40) });
 });
 
 test('the voice chat link changes at once, and the chat says who set, changed or removed it without printing it', () => {
@@ -718,12 +718,15 @@ test('only the player on the clock is told their options', () => {
 });
 
 test('a table saved by the version before this one is brought up to date, and an unknown version is refused', () => {
-  const t = new TestTable({ stacks: [1000, 1000, 1000], config: { sevenDeuceBounty: 50 } });
+  const t = new TestTable({ stacks: [1000, 1000, 1000], config: { bounties: sevenDeuceBounty(50) } });
   t.deal({ button: 0, holes: { 0: '7h 2c' } });
 
-  const saved = JSON.parse(JSON.stringify(t.state)) as { schema: number; hand: { bounty?: number; players: { shown: boolean | boolean[] }[] } };
+  const saved = JSON.parse(JSON.stringify(t.state)) as { schema: number; config: { bounties?: unknown; sevenDeuceBounty?: number }; hand: { bounties?: unknown; players: { shown: boolean | boolean[] }[] } };
   saved.schema = 2;
-  delete saved.hand.bounty;
+  // As schema 6 and those before it kept the bounty, one amount for seven-deuce, and schema 2 kept none on the hand
+  delete saved.config.bounties;
+  saved.config.sevenDeuceBounty = 50;
+  delete saved.hand.bounties;
   // As schema 2 kept it, until cards could be shown one at a time
   for (const player of saved.hand.players) {
     player.shown = false;
@@ -755,7 +758,7 @@ test('a table created to play dollars and cents starts at stakes that suit it, a
   t.cmd(0, { type: 'approve', playerId: t.ids[1]! });
   t.cmd(0, { type: 'setStack', playerId: t.ids[1]!, stack: 1234 });
   t.cmd(watcher, { type: 'requestSeat', seat: 5, buyIn: 2000 });
-  t.cmd(0, { type: 'updateConfig', config: { smallBlind: 50, bigBlind: 100, sevenDeuceBounty: 500, minBuyIn: 5000 } });
+  t.cmd(0, { type: 'updateConfig', config: { smallBlind: 50, bigBlind: 100, bounties: sevenDeuceBounty(500), minBuyIn: 5000 } });
   t.cmd(1, { type: 'standUp' });
 
   const said = t.feedText();
@@ -765,7 +768,7 @@ test('a table created to play dollars and cents starts at stakes that suit it, a
     'P1 adds 25.50',
     "The host set P1's stack to 12.34",
     'Blinds are 0.50/1.00',
-    'The seven-deuce bounty is 5.00',
+    'The bounties are 72 for 5.00',
     "Ann asked to sit down with 20.00, which the new buy-in limits don't allow",
     'P1 leaves the table with 12.34',
   ]) {
@@ -802,7 +805,7 @@ test('a player is told what their own cards make, on every street, and nobody el
   const t = new TestTable({ stacks: [1000, 1000, 1000] });
   t.deal({ button: 0, holes: { 0: 'As Kd', 1: 'Ks Kh', 2: 'Qs Jh' }, board: 'Kc 7d 2s Ad 9h' });
 
-  assert.deepEqual(t.view(0).hand!.holding, { reads: [{ name: 'Ace-king offsuit', plays: [] }], bounty: false });
+  assert.deepEqual(t.view(0).hand!.holding, { reads: [{ name: 'Ace-king offsuit', plays: [] }], bounty: null });
   assert.deepEqual(t.view(1).hand!.holding!.reads[0]!.name, 'Pocket kings');
 
   // Nothing in one player's view says what another holds, not even in words
@@ -852,14 +855,14 @@ test('a hand run twice is read on each board', () => {
 });
 
 test('seven-deuce is pointed out at a table that pays the bounty for it, and only there', () => {
-  const withBounty = new TestTable({ stacks: [1000, 1000], config: { sevenDeuceBounty: 50 } });
+  const withBounty = new TestTable({ stacks: [1000, 1000], config: { bounties: sevenDeuceBounty(50) } });
   withBounty.deal({ button: 0, holes: { 0: '7h 2c', 1: '7s 3c' } });
-  assert.deepEqual(withBounty.view(0).hand!.holding, { reads: [{ name: 'Seven-deuce offsuit', plays: [] }], bounty: true });
-  assert.equal(withBounty.view(1).hand!.holding!.bounty, false);
+  assert.deepEqual(withBounty.view(0).hand!.holding, { reads: [{ name: 'Seven-deuce offsuit', plays: [] }], bounty: ['72', 50] });
+  assert.equal(withBounty.view(1).hand!.holding!.bounty, null);
 
   const without = new TestTable({ stacks: [1000, 1000] });
   without.deal({ button: 0, holes: { 0: '7h 2h' } });
-  assert.deepEqual(without.view(0).hand!.holding, { reads: [{ name: 'Seven-deuce suited', plays: [] }], bounty: false });
+  assert.deepEqual(without.view(0).hand!.holding, { reads: [{ name: 'Seven-deuce suited', plays: [] }], bounty: null });
 });
 
 test('the chat says what the ante is and who pays it whenever that changes, and nothing while there is none', () => {

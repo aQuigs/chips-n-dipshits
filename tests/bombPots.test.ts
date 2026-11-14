@@ -3,7 +3,7 @@ import { test } from 'node:test';
 
 import { addMember, fullyShown, TIMING } from '../src/engine/index.ts';
 import type { TableConfig } from '../src/engine/index.ts';
-import { ACES, BOARD, checkAround, chipsIn, handRecords, KINGS, options, QUEENS, TestTable } from './helpers.ts';
+import { ACES, BOARD, checkAround, chipsIn, handRecords, KINGS, options, QUEENS, sevenDeuceBounty, TestTable } from './helpers.ts';
 import type { DealOptions, TableOptions } from './helpers.ts';
 import { assertChipsConserved, assertHandRecordsHold, assertInvariants } from './invariants.ts';
 
@@ -412,8 +412,8 @@ test('a called bomb pot waits through a pause, and through a table too short to 
 });
 
 test('seven-deuce bounty in a bomb pot: the pot is won as ever, and the bounty is paid on top by everyone dealt in', () => {
-  const uncontested = bombPot({ stacks: [1000, 1000, 1000], config: { sevenDeuceBounty: 50 } }, { holes: { 0: '7h 2c' } });
-  assert.equal(uncontested.view(0).hand!.holding!.bounty, true);
+  const uncontested = bombPot({ stacks: [1000, 1000, 1000], config: { bounties: sevenDeuceBounty(50) } }, { holes: { 0: '7h 2c' } });
+  assert.deepEqual(uncontested.view(0).hand!.holding!.bounty, ['72', 50]);
 
   uncontested.check(1);
   uncontested.check(2);
@@ -427,7 +427,7 @@ test('seven-deuce bounty in a bomb pot: the pot is won as ever, and the bounty i
   assertChipsConserved(uncontested.state);
 
   // At a showdown, from a player the bomb pot left with less than the bounty too
-  const shown = bombPot({ stacks: [1000, 130, 1000], config: { sevenDeuceBounty: 50 } }, { holes: { 0: '7h 2c', 1: ACES }, board: '7s 2d 9h Jc 3s' });
+  const shown = bombPot({ stacks: [1000, 130, 1000], config: { bounties: sevenDeuceBounty(50) } }, { holes: { 0: '7h 2c', 1: ACES }, board: '7s 2d 9h Jc 3s' });
   checkAround(shown, [1, 2, 0], 3);
 
   assert.deepEqual(shown.state.hand!.result!.bounty!.payments, [{ seat: 1, amount: 30 }, { seat: 2, amount: 50 }]);

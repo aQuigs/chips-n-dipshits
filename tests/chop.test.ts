@@ -8,7 +8,7 @@ import { test } from 'node:test';
 import { blindsOnly, mayOfferChop, replayHand, SEAT_COUNT, STRADDLES, TIMING } from '../src/engine/index.ts';
 import type { HandEvent, Rng, TableConfig, TableState } from '../src/engine/index.ts';
 import { restoreState } from '../src/server/store.ts';
-import { handRecords, seededRng, TestTable } from './helpers.ts';
+import { handRecords, seededRng, sevenDeuceBounty, TestTable } from './helpers.ts';
 import { assertChipsConserved, assertHandRecordsHold, chopAnswers, assertInvariants } from './invariants.ts';
 import { chance, pick } from './randomPlay.ts';
 
@@ -486,7 +486,7 @@ test('a chopped hand is a hand played: it counts down the last hands and toward 
 });
 
 test('no seven-deuce bounty is paid on a chop: nobody won', () => {
-  const t = new TestTable({ stacks: [1000, 1000, 1000, 1000], config: { ...CHOPS, sevenDeuceBounty: 50 } });
+  const t = new TestTable({ stacks: [1000, 1000, 1000, 1000], config: { ...CHOPS, bounties: sevenDeuceBounty(50) } });
   t.deal({ button: 0, holes: { [SB]: '7h 2c' } });
   t.fold(3);
   t.fold(0);

@@ -8,7 +8,7 @@ import { test } from 'node:test';
 
 import { comingIn, owes, replayHand } from '../src/engine/index.ts';
 import type { TableConfig } from '../src/engine/index.ts';
-import { chipsIn, options, TestTable } from './helpers.ts';
+import { chipsIn, options, sevenDeuceBounty, TestTable } from './helpers.ts';
 import type { DealOptions } from './helpers.ts';
 import { assertHandRecordsHold, assertInvariants } from './invariants.ts';
 
@@ -301,7 +301,7 @@ test('the events of a hand with missed blinds posted retell it: what is in front
 });
 
 test('seven-deuce folded to as a lone big blind still collects its bounty, though the hand had nothing else to win', () => {
-  const t = new TestTable({ stacks: [1000, 1000, 1000, 1000], config: { sevenDeuceBounty: 50 } });
+  const t = new TestTable({ stacks: [1000, 1000, 1000, 1000], config: { bounties: sevenDeuceBounty(50) } });
   t.deal({ button: 0 });
   t.foldOut();
 
@@ -312,7 +312,7 @@ test('seven-deuce folded to as a lone big blind still collects its bounty, thoug
 
   // Winning without a showdown is what pays it, and a big blind with nobody to match it wins that way
   assert.deepEqual(t.state.hand!.result!.winnings, [{ seat: 3, amount: 0 }]);
-  assert.deepEqual(t.state.hand!.result!.bounty, { seat: 3, payments: [{ seat: 0, amount: 50 }, { seat: 1, amount: 50 }] });
+  assert.deepEqual(t.state.hand!.result!.bounty, { seat: 3, hand: '72', payments: [{ seat: 0, amount: 50 }, { seat: 1, amount: 50 }] });
   assert.deepEqual(t.stacks(), [950, 940, 1010, 1100]);
 });
 

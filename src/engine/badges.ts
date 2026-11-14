@@ -4,8 +4,10 @@
  * hand's facts and what the hand did to the player's numbers for the night, and nothing else: never the
  * table, never a card nobody was shown. Nothing outside this file knows one badge from another.
  */
-import { isSevenDeuce, rankOf } from './cards.ts';
+import { SEVEN_DEUCE } from './bounties.ts';
+import { rankOf } from './cards.ts';
 import { fullyShown } from './shown.ts';
+import { isStartingHand } from './startingHands.ts';
 import { somebodyWon } from './handFacts.ts';
 import type { HandFacts, HandShown, PlayerFacts } from './handFacts.ts';
 import { listed, midSentence } from './handNames.ts';
@@ -63,8 +65,9 @@ const wonOn = (player: PlayerFacts, board: number): boolean => player.wins.some(
 const named = (hands: HandShown[]): string => midSentence(hands[0]!.name);
 
 /**
- * Whether the player won the hand outright, as the seven-deuce bounty counts it: everyone else folded,
- * or at a showdown their hand beat every other one turned up, on every board.
+ * Whether the player won the hand outright, as a bounty is paid for winning it: everyone else folded,
+ * or at a showdown their hand beat every other one turned up, on every board. Whatever bounties the
+ * table plays, or none.
  */
 function wonOutright(hand: HandFacts, player: PlayerFacts): boolean {
   if (hand.ended === 'folds') {
@@ -148,8 +151,8 @@ export const BADGES: readonly Badge[] = [
     id: 'sevenDeuce',
     name: 'Seven-Deuce',
     mark: '💩',
-    description: 'Won a hand outright with seven-deuce, as the bounty counts it, with the table seeing the cards.',
-    earned: (hand, player) => fullyShown(player.cards) && isSevenDeuce(player.cards) && wonOutright(hand, player),
+    description: 'Won a hand outright with seven-deuce, as a bounty is paid for winning, with the table seeing the cards.',
+    earned: (hand, player) => fullyShown(player.cards) && isStartingHand(player.cards, SEVEN_DEUCE) && wonOutright(hand, player),
   },
   {
     id: 'airBall',

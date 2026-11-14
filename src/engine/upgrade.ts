@@ -1,10 +1,11 @@
+import { SEVEN_DEUCE } from './bounties.ts';
 import { HOLE_CARDS } from './cards.ts';
 import { startingConfig, withRetiredSettings } from './config.ts';
 import type { HandEvent } from './events.ts';
 import { highHandsFrom } from './highHand.ts';
 import { newTonight } from './tonight.ts';
 import { STATE_SCHEMA } from './types.ts';
-import type { Hand, HandPlayer, HandRecord, HandRecordPlayer, Member, PlayerTonight, Seat, TableState, Tonight } from './types.ts';
+import type { Hand, HandPlayer, HandRecord, HandRecordPlayer, HandResult, Member, PlayerTonight, Seat, TableState, Tonight } from './types.ts';
 
 /** What schema 3 kept of straddles: whether a player posts one under the gun, the only kind there was, and the one seat that did in a hand. */
 interface SchemaThree {
@@ -25,14 +26,35 @@ function votesAsRuns(events: HandEvent[]): HandEvent[] {
   return events.map((event) => (event[0] === 'vote' ? ['vote', event[1], runsOf(event[2] as SchemaFourVote)!] : event));
 }
 
+/** What schema 6 and those before it kept of a bounty: one amount, for seven-deuce, 0 for none. */
+interface SchemaSix {
+  config: { sevenDeuceBounty?: number };
+  hand: (Partial<Hand> & { bounty?: number }) | null;
+}
+
+/**
+ * A hand's events and result with every bounty naming the hand it was paid for: one that names none
+ * was paid before a table could have any bounty but seven-deuce. Records keep no schema, so both kinds
+ * may be read.
+ */
+function bountiesNamed(events: HandEvent[], result: HandResult | null): HandEvent[] {
+  if (result?.bounty) {
+    result.bounty.hand ??= SEVEN_DEUCE;
+  }
+
+  return events.map((event) => (event[0] === 'bounty' && event[3] === undefined ? ['bounty', event[1], event[2], SEVEN_DEUCE] : event));
+}
+
 /**
  * One step per schema number, taking a table saved with that schema to the next one. A step is for a
  * change of shape: a field renamed, retyped or removed. It can treat what it is given as a table.
  */
 const STEPS: Record<number, (state: TableState) => void> = {
   2: (state) => {
-    if (state.hand) {
-      state.hand.bounty = state.config.sevenDeuceBounty;
+    const { config, hand } = state as unknown as SchemaSix;
+
+    if (hand) {
+      hand.bounty = config.sevenDeuceBounty;
     }
   },
   3: (state) => {
@@ -72,6 +94,16 @@ const STEPS: Record<number, (state: TableState) => void> = {
       const shown = player.shown as unknown as boolean;
 
       player.shown = player.cards.map(() => shown);
+    }
+  },
+  6: (state) => {
+    state.config = withRetiredSettings(state.config as unknown as Record<string, unknown>) as unknown as TableState['config'];
+
+    const { hand } = state as unknown as SchemaSix;
+    if (hand) {
+      hand.bounties = hand.bounty! > 0 ? [[SEVEN_DEUCE, hand.bounty!]] : [];
+      delete hand.bounty;
+      hand.events = bountiesNamed(hand.events ?? [], hand.result ?? null);
     }
   },
 };
@@ -169,7 +201,7 @@ export function upgradeState(saved: TableState): TableState {
 /** Gives a hand record saved by older code the fields added since. Records keep no schema, so what changed shape is read either way. */
 export function upgradeRecord(saved: HandRecord): HandRecord {
   fillMissing(saved, SAVED_DEFAULTS.record());
-  saved.events = votesAsRuns(saved.events);
+  saved.events = bountiesNamed(votesAsRuns(saved.events), saved.result);
 
   for (const player of saved.players) {
     fillMissing(player, SAVED_DEFAULTS.recordPlayer());

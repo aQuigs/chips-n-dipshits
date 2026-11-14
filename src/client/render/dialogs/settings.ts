@@ -1,3 +1,4 @@
+import { sameSetting } from '../../../engine/config.ts';
 import { stakesText } from '../../../engine/stakes.ts';
 import type { TableConfig } from '../../../engine/types.ts';
 import type { TableView } from '../../../engine/view.ts';
@@ -13,7 +14,7 @@ import type { DialogHandlers, DialogKind } from './dialog.ts';
  * host has changed since, and sending it would quietly undo their change.
  */
 function changed(opened: TableConfig, held: Partial<TableConfig>): Partial<TableConfig> {
-  return Object.fromEntries(Object.entries(held).filter(([key, value]) => value !== opened[key as keyof TableConfig]));
+  return Object.fromEntries(Object.entries(held).filter(([key, value]) => !sameSetting(value, opened[key as keyof TableConfig])));
 }
 
 function settings(view: TableView, handlers: DialogHandlers): HTMLElement {
@@ -24,7 +25,7 @@ function settings(view: TableView, handlers: DialogHandlers): HTMLElement {
       onsubmit: (event: Event) => submit(event, handlers, { type: 'updateConfig', config: changed(view.config, fields.read(form)) }, handlers.close),
     },
     fields.rows,
-    h('p.note', null, 'New blinds, a new ante, the straddles allowed, how many times it may be run, a new bounty and new bomb pot settings apply from the next hand.'),
+    h('p.note', null, 'New blinds, a new ante, the straddles allowed, how many times it may be run, new bounties and new bomb pot settings apply from the next hand.'),
     h('button.btn.primary', { type: 'submit', 'data-action': 'save-settings' }, 'Save'),
   );
 

@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import { spotsOf } from '../src/client/tableChances.ts';
 import { addMember, handFacts, replayHand } from '../src/engine/index.ts';
 import type { AutoShow, Command, HandRecord, TableConfig } from '../src/engine/index.ts';
-import { ACES, BOARD, checkAround, handRecords, KINGS, QUEENS, TestTable } from './helpers.ts';
+import { ACES, BOARD, checkAround, handRecords, KINGS, QUEENS, sevenDeuceBounty, TestTable } from './helpers.ts';
 import { assertInvariants, assertViewsKeepSecrets } from './invariants.ts';
 
 const NAMES = ['Pam', 'Stu', 'Kim', 'Ann'];
@@ -226,7 +226,7 @@ test('seven-deuce: a bounty turns the hand up either way, without a bounty the c
   const badges = (t: TestTable, player: number) => t.state.tonight.players[t.ids[player]!]?.badges ?? {};
 
   // With a bounty the hand is turned up to collect it, and the choice has nothing left to show
-  const bounty = { sevenDeuceBounty: 50 };
+  const bounty = { bounties: sevenDeuceBounty(50) };
   const paidOff = foldedToPam(() => {}, bounty, sevenDeuce);
   const paidOn = foldedToPam((t) => choose(t, 0, 'foldedTo'), bounty, sevenDeuce);
   assert.deepEqual(paidOn.state.hand!.events, paidOff.state.hand!.events);

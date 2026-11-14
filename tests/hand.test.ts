@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { TIMING } from '../src/engine/index.ts';
-import { ACES, BOARD, checkAround, chipsIn, handRecords, KINGS, options, QUEENS, TestTable } from './helpers.ts';
+import { ACES, BOARD, checkAround, chipsIn, handRecords, KINGS, options, QUEENS, sevenDeuceBounty, TestTable } from './helpers.ts';
 import { assertChipsConserved, assertInvariants } from './invariants.ts';
 
 test('three-handed: blinds sit left of the button and the button acts first before the flop', () => {
@@ -448,7 +448,7 @@ test('run three times with a side pot: every pot is split in three, a different 
 
 test('run three times, the seven-deuce bounty is for winning the main pot on every board: two of three pay nothing', () => {
   const bounty = (third: string): TestTable => {
-    const t = new TestTable({ stacks: [500, 500, 1000], config: { sevenDeuceBounty: 50, maxRuns: 3 } });
+    const t = new TestTable({ stacks: [500, 500, 1000], config: { bounties: sevenDeuceBounty(50), maxRuns: 3 } });
     t.deal({ button: 0, holes: { 0: '7h 2c', 1: 'Jh Td' }, board: '7d 7s 2h 9c 4d', secondBoard: '7c 2d 5s 8h Ad', thirdBoard: third });
     t.raise(0, 500);
     t.call(1);
@@ -461,7 +461,7 @@ test('run three times, the seven-deuce bounty is for winning the main pot on eve
   };
 
   const everyBoard = bounty('2s Kc Qd 5c 3h');
-  assert.deepEqual(everyBoard.state.hand!.result!.bounty, { seat: 0, payments: [{ seat: 2, amount: 50 }] });
+  assert.deepEqual(everyBoard.state.hand!.result!.bounty, { seat: 0, hand: '72', payments: [{ seat: 2, amount: 50 }] });
   assert.deepEqual(everyBoard.stacks(), [1020 + 50, 0, 980 - 50]);
 
   const twoOfThree = bounty('Js Kc Qd 5c 3h');
@@ -470,7 +470,7 @@ test('run three times, the seven-deuce bounty is for winning the main pot on eve
 });
 
 test('a board whose share of the main pot comes to nothing still counts for the bounty: losing it is not winning the whole pot', () => {
-  const t = new TestTable({ stacks: [1, 500], config: { smallBlind: 1, bigBlind: 2, sevenDeuceBounty: 50, maxRuns: 3 } });
+  const t = new TestTable({ stacks: [1, 500], config: { smallBlind: 1, bigBlind: 2, bounties: sevenDeuceBounty(50), maxRuns: 3 } });
   t.deal({ button: 0, holes: { 0: '7h 2c', 1: 'Jh Td' }, board: '7d 7s 2h 9c 4d', secondBoard: '7c 2d 5s 8h Ad', thirdBoard: 'Js Kc Qd 5c 3h' });
   while (t.state.hand!.stage === 'betting') {
     t.call(t.toAct!);
@@ -561,7 +561,7 @@ test('a player who gives up their seat during the run-it-twice vote does not hol
 });
 
 test('seven-deuce bounty: winning without a showdown shows the hand and collects from everyone dealt in', () => {
-  const t = new TestTable({ stacks: [1000, 1000, 1000], config: { sevenDeuceBounty: 50 } });
+  const t = new TestTable({ stacks: [1000, 1000, 1000], config: { bounties: sevenDeuceBounty(50) } });
   t.deal({ button: 0, holes: { 0: '7h 2c' } });
 
   t.raise(0, 60);
@@ -569,7 +569,7 @@ test('seven-deuce bounty: winning without a showdown shows the hand and collects
   t.fold(2);
 
   assert.deepEqual(t.state.hand!.result!.bounty, {
-    seat: 0,
+    seat: 0, hand: '72',
     payments: [
       { seat: 1, amount: 50 },
       { seat: 2, amount: 50 },
@@ -581,7 +581,7 @@ test('seven-deuce bounty: winning without a showdown shows the hand and collects
 });
 
 test('seven-deuce bounty: paid for winning a showdown, capped by what a player has left', () => {
-  const t = new TestTable({ stacks: [1000, 1000, 110], config: { sevenDeuceBounty: 50 } });
+  const t = new TestTable({ stacks: [1000, 1000, 110], config: { bounties: sevenDeuceBounty(50) } });
   t.deal({ button: 0, holes: { 0: '7h 2c', 1: ACES }, board: '7d 7s 2h Kc 4d' });
 
   t.raise(0, 100);
@@ -595,7 +595,7 @@ test('seven-deuce bounty: paid for winning a showdown, capped by what a player h
   ]);
   assert.deepEqual(t.stacks(), [1000 + 100 + 20 + 100, 1000 - 100 - 50, 110 - 20 - 50]);
 
-  const broke = new TestTable({ stacks: [1000, 1000, 50], config: { sevenDeuceBounty: 50 } });
+  const broke = new TestTable({ stacks: [1000, 1000, 50], config: { bounties: sevenDeuceBounty(50) } });
   broke.deal({ button: 0, holes: { 0: '7h 2c' } });
   broke.raise(0, 60);
   broke.fold(1);
@@ -607,7 +607,7 @@ test('seven-deuce bounty: paid for winning a showdown, capped by what a player h
 });
 
 test('seven-deuce bounty: none is announced when everyone who owes it has no chips left', () => {
-  const t = new TestTable({ stacks: [1000, 500], config: { sevenDeuceBounty: 50 } });
+  const t = new TestTable({ stacks: [1000, 500], config: { bounties: sevenDeuceBounty(50) } });
   t.deal({ button: 0, holes: { 0: '7h 2c', 1: KINGS }, board: '7s 7d 2h 9c 4d' });
   t.raise(0, 500);
   t.call(1);
@@ -619,29 +619,29 @@ test('seven-deuce bounty: none is announced when everyone who owes it has no chi
 });
 
 test('seven-deuce bounty: a hand is played for the bounty it was dealt under', () => {
-  const turnedOn = new TestTable({ stacks: [1000, 1000, 1000], config: { sevenDeuceBounty: 0 } });
+  const turnedOn = new TestTable({ stacks: [1000, 1000, 1000], config: { bounties: [] } });
   turnedOn.deal({ button: 0, holes: { 0: '7h 2c' } });
-  turnedOn.cmd(0, { type: 'updateConfig', config: { sevenDeuceBounty: 100 } });
+  turnedOn.cmd(0, { type: 'updateConfig', config: { bounties: sevenDeuceBounty(100) } });
   turnedOn.raise(0, 60);
   turnedOn.fold(1);
   turnedOn.fold(2);
 
   assert.equal(turnedOn.state.hand!.result!.bounty, null, 'nobody agreed to a bounty when this hand was dealt');
-  assert.ok(turnedOn.feedText().includes('The seven-deuce bounty is 100 from the next hand'));
+  assert.ok(turnedOn.feedText().includes('The bounties are 72 for 100 from the next hand'));
 
-  const turnedOff = new TestTable({ stacks: [1000, 1000, 1000], config: { sevenDeuceBounty: 50 } });
+  const turnedOff = new TestTable({ stacks: [1000, 1000, 1000], config: { bounties: sevenDeuceBounty(50) } });
   turnedOff.deal({ button: 0, holes: { 0: '7h 2c' } });
-  turnedOff.cmd(0, { type: 'updateConfig', config: { sevenDeuceBounty: 0 } });
+  turnedOff.cmd(0, { type: 'updateConfig', config: { bounties: [] } });
   turnedOff.raise(0, 60);
   turnedOff.fold(1);
   turnedOff.fold(2);
 
   assert.deepEqual(turnedOff.stacks(), [1130, 940, 930]);
-  assert.ok(turnedOff.feedText().includes('The seven-deuce bounty is off from the next hand'));
+  assert.ok(turnedOff.feedText().includes('The bounties are off from the next hand'));
 });
 
 test('seven-deuce bounty: nothing for a split pot or a losing hand', () => {
-  const split = new TestTable({ stacks: [1000, 1000], config: { sevenDeuceBounty: 50 } });
+  const split = new TestTable({ stacks: [1000, 1000], config: { bounties: sevenDeuceBounty(50) } });
   split.deal({ button: 0, holes: { 0: '7h 2c', 1: '8h 3c' }, board: 'As Ks Qs Js Ts' });
   split.call(0);
   split.check(1);
@@ -649,7 +649,7 @@ test('seven-deuce bounty: nothing for a split pot or a losing hand', () => {
   assert.equal(split.state.hand!.result!.bounty, null);
   assert.deepEqual(split.stacks(), [1000, 1000]);
 
-  const lost = new TestTable({ stacks: [1000, 1000], config: { sevenDeuceBounty: 50 } });
+  const lost = new TestTable({ stacks: [1000, 1000], config: { bounties: sevenDeuceBounty(50) } });
   lost.deal({ button: 0, holes: { 0: '7h 2c', 1: ACES }, board: 'Kc 9d 5h Jc 3s' });
   lost.call(0);
   lost.check(1);
@@ -986,14 +986,14 @@ test('changing the action clock applies to the player already being waited for',
   untouched.deal({ button: 0 });
   const deadline = untouched.state.hand!.deadline;
   untouched.now += 10_000;
-  untouched.cmd(0, { type: 'updateConfig', config: { sevenDeuceBounty: 5 } });
+  untouched.cmd(0, { type: 'updateConfig', config: { bounties: sevenDeuceBounty(5) } });
   assert.equal(untouched.state.hand!.deadline, deadline, 'another setting does not hand the player a fresh clock');
 });
 
 test('seven-deuce bounty: a tie on the second board is not winning outright, even when one chip cannot be split', () => {
   const t = new TestTable({
     stacks: [100, 100, 1],
-    config: { smallBlind: 1, bigBlind: 2, maxRuns: 2, sevenDeuceBounty: 50 },
+    config: { smallBlind: 1, bigBlind: 2, maxRuns: 2, bounties: sevenDeuceBounty(50) },
   });
   t.deal({
     button: 0,
@@ -1121,7 +1121,7 @@ test('dollars and cents: the play-by-play, the pots and the result of a split po
 });
 
 test('dollars and cents: an uncalled bet, a short all-in and a seven-deuce bounty read in dollars', () => {
-  const t = new TestTable({ stacks: [10_000, 40, 10_000], config: { unit: 'cents', smallBlind: 25, bigBlind: 50, sevenDeuceBounty: 500 } });
+  const t = new TestTable({ stacks: [10_000, 40, 10_000], config: { unit: 'cents', smallBlind: 25, bigBlind: 50, bounties: sevenDeuceBounty(500) } });
   t.deal({ button: 0, holes: { 0: '7h 2c', 1: 'As Ah', 2: 'Kd Kh' }, board: '7d 7s 2h 9c 4d' });
 
   t.raise(0, 150);
@@ -1136,8 +1136,8 @@ test('dollars and cents: an uncalled bet, a short all-in and a seven-deuce bount
   }
 
   // The player who lost their last cent in the hand has nothing to pay the bounty with
-  assert.deepEqual(t.state.hand!.result!.bounty, { seat: 0, payments: [{ seat: 2, amount: 500 }] });
-  assert.ok(text.includes('P0 won with seven-deuce and collects a bounty of 5.00'));
+  assert.deepEqual(t.state.hand!.result!.bounty, { seat: 0, hand: '72', payments: [{ seat: 2, amount: 500 }] });
+  assert.ok(text.includes('P0 collects 5.00 for the 72 bounty'));
   assert.deepEqual(t.stacks(), [10_000 + 40 + 50 + 500, 0, 10_000 - 50 - 500]);
   assertChipsConserved(t.state);
 });
@@ -1372,7 +1372,7 @@ test('a hand is played with the ante it was dealt under, and a changed ante is p
 });
 
 test('seven-deuce bounty with an ante: the antes are won with the pot, and the bounty is paid on top as ever', () => {
-  const everyone = new TestTable({ stacks: [1000, 1000, 1000], config: { ...EVERYONE_ANTES, sevenDeuceBounty: 50 } });
+  const everyone = new TestTable({ stacks: [1000, 1000, 1000], config: { ...EVERYONE_ANTES, bounties: sevenDeuceBounty(50) } });
   everyone.deal({ button: 0, holes: { 0: '7h 2c' } });
   everyone.raise(0, 60);
   everyone.fold(1);
@@ -1383,7 +1383,7 @@ test('seven-deuce bounty with an ante: the antes are won with the pot, and the b
   assert.deepEqual(everyone.stacks(), [1140, 935, 925]);
   assertChipsConserved(everyone.state);
 
-  const bigBlind = new TestTable({ stacks: [1000, 1000, 1000], config: { ...BIG_BLIND_ANTE, sevenDeuceBounty: 50 } });
+  const bigBlind = new TestTable({ stacks: [1000, 1000, 1000], config: { ...BIG_BLIND_ANTE, bounties: sevenDeuceBounty(50) } });
   bigBlind.deal({ button: 0, holes: { 0: '7h 2c' } });
   bigBlind.raise(0, 60);
   bigBlind.fold(1);

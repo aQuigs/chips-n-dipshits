@@ -1,7 +1,9 @@
-import { CONFIG_GROUPS, CONFIG_KEYS, CONFIG_SPECS, fixedAtCreation, startingConfig } from '../../engine/config.ts';
-import type { ConfigKey, ConfigSpec } from '../../engine/config.ts';
+import type { Bounty } from '../../engine/bounties.ts';
+import { CONFIG_GROUPS, CONFIG_KEYS, CONFIG_SPECS, fixedAtCreation, holdsAmounts, sameSetting, startingConfig } from '../../engine/config.ts';
+import type { ConfigKey, ConfigSpec, SettingValue } from '../../engine/config.ts';
 import type { TableConfig } from '../../engine/types.ts';
 import { h } from '../ui.ts';
+import { bountiesHeld, bountyListField } from './bountyList.ts';
 import { amountField, amountOf, checkField, inputOf, numberField, numberOf } from './forms.ts';
 
 export interface ConfigForm {
@@ -16,7 +18,7 @@ export interface ConfigForm {
 }
 
 /** The field for one setting. `table` is the table its amounts are written for. */
-function field(id: string, spec: ConfigSpec, value: string | number | boolean, table: TableConfig): HTMLElement {
+function field(id: string, spec: ConfigSpec, value: SettingValue, table: TableConfig): HTMLElement {
   const hint = 'hint' in spec && spec.hint ? h('small', null, spec.hint) : null;
 
   switch (spec.kind) {
@@ -55,10 +57,13 @@ function field(id: string, spec: ConfigSpec, value: string | number | boolean, t
         ),
         hint,
       );
+
+    case 'handAmounts':
+      return bountyListField(id, spec, value as Bounty[], table);
   }
 }
 
-function held(form: HTMLFormElement, id: string, spec: ConfigSpec, table: TableConfig): string | number | boolean {
+function held(form: HTMLFormElement, id: string, spec: ConfigSpec, table: TableConfig): SettingValue {
   switch (spec.kind) {
     case 'toggle':
       return inputOf(form, id).checked;
@@ -80,6 +85,9 @@ function held(form: HTMLFormElement, id: string, spec: ConfigSpec, table: TableC
     case 'count':
     case 'seconds':
       return numberOf(form, id);
+
+    case 'handAmounts':
+      return bountiesHeld(form, id, table);
   }
 }
 
@@ -110,7 +118,7 @@ export function configForm(values: TableConfig, idPrefix: string, creating: bool
 
     table = startingConfig(Object.fromEntries(choices.map((key) => [key, held(form, idOf(key), CONFIG_SPECS[key], table)])));
 
-    for (const key of shown.filter((amount) => CONFIG_SPECS[amount].kind === 'chips')) {
+    for (const key of shown.filter(holdsAmounts)) {
       redraw(key);
     }
 
@@ -177,7 +185,7 @@ export function configForm(values: TableConfig, idPrefix: string, creating: bool
 
     fill(form, values) {
       const before = { ...table, ...read(form) };
-      const changed = shown.filter((key) => before[key] !== values[key]);
+      const changed = shown.filter((key) => !sameSetting(before[key], values[key]));
 
       table = values;
 

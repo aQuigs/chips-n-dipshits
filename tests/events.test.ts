@@ -3,7 +3,7 @@ import { test } from 'node:test';
 
 import { addMember, EVENT_LIMIT, LIMITS, replayHand } from '../src/engine/index.ts';
 import type { HandEvent, HandRecord } from '../src/engine/index.ts';
-import { handRecords, TestTable } from './helpers.ts';
+import { handRecords, sevenDeuceBounty, TestTable } from './helpers.ts';
 import { assertEventsRetellTheHand, assertHandRecordsHold, assertInvariants, assertRecordBalances, assertViewsKeepSecrets } from './invariants.ts';
 
 /** Plays the hand out to its record, however many steps of the clock that takes. */
@@ -185,12 +185,12 @@ test('a vote against, a timeout, a muck and a bounty each leave their event', ()
   assert.deepEqual(beaten.state.hand!.events.slice(-3), [['show', 1, ['As', 'Ah']], ['muck', 0], ['win', 1, 40, 0, 0]]);
   assertEventsRetellTheHand(recordOf(beaten));
 
-  const bounty = new TestTable({ stacks: [500, 500, 500], config: { sevenDeuceBounty: 25 } });
+  const bounty = new TestTable({ stacks: [500, 500, 500], config: { bounties: sevenDeuceBounty(25) } });
   bounty.deal({ button: 0, holes: { 0: '7h 2c' } });
   bounty.raise(0, 60);
   bounty.fold(1);
   bounty.fold(2);
-  assert.deepEqual(bounty.state.hand!.events.slice(-4), [['return', 0, 40], ['win', 0, 50, 0, 0], ['show', 0, ['7h', '2c']], ['bounty', 0, [[1, 25], [2, 25]]]]);
+  assert.deepEqual(bounty.state.hand!.events.slice(-4), [['return', 0, 40], ['win', 0, 50, 0, 0], ['show', 0, ['7h', '2c']], ['bounty', 0, [[1, 25], [2, 25]], '72']]);
   assertEventsRetellTheHand(recordOf(bounty));
 });
 

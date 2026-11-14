@@ -36,13 +36,18 @@ function complaint(typed: string, table: Denominated, min: number, max: number):
  * A `value` of null leaves it empty, for an amount that has no likely answer.
  */
 export function amountField(id: string, label: string, value: number | null, table: Denominated, min: number, max = LIMITS.chips, hint?: string): HTMLElement {
+  return h('label.field', { for: id }, h('span', null, label), amountInput(id, value, table, min, max), hint ? h('small', null, hint) : null);
+}
+
+/** The box of an `amountField` alone, for a form that labels it another way. */
+export function amountInput(id: string, value: number | null, table: Denominated, min: number, max = LIMITS.chips): HTMLInputElement {
   const input = h('input', { type: 'text', id, name: id, value: value === null ? '' : editableAmount(value, table), inputmode: hasDecimals(table) ? 'decimal' : 'numeric', autocomplete: 'off', required: true });
   const check = () => input.setCustomValidity(complaint(input.value, table, min, max));
 
   input.addEventListener('input', check);
   check();
 
-  return h('label.field', { for: id }, h('span', null, label), input, hint ? h('small', null, hint) : null);
+  return input;
 }
 
 /** A labeled list to pick one of. It starts on `prompt`, which can't be sent, so nothing is picked by accident. */

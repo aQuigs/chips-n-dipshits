@@ -46,7 +46,8 @@ export type HandEvent =
   | [kind: 'muck', seat: number]
   /** One player's share of one pot; `pot` 0 is the main pot, and `board` is which board won it. */
   | [kind: 'win', seat: number, amount: number, pot: number, board: number]
-  | [kind: 'bounty', seat: number, payments: [seat: number, amount: number][]]
+  /** The hand's winner collects a bounty: what each other player paid, and the hand it was for, in kept form (`startingHands.ts`). */
+  | [kind: 'bounty', seat: number, payments: [seat: number, amount: number][], hand: string]
   /** The small blind offers to chop the blinds. */
   | [kind: 'chopOffer', seat: number]
   /** The big blind's answer. A no follows a `timeout` when the clock ran out, and stands for any answer they could not give. */

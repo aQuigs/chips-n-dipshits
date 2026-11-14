@@ -6,7 +6,7 @@ import { PICKER_MARK } from '../src/client/reactions.ts';
 import { addMember, BADGES, badgeOf, countHand, earnBadges, handFacts, REACTIONS } from '../src/engine/index.ts';
 import type { HandFacts, TableState } from '../src/engine/index.ts';
 import { restoreState } from '../src/server/store.ts';
-import { ACES, BOARD, checkAround, handRecords, KINGS, QUEENS, TestTable } from './helpers.ts';
+import { ACES, BOARD, checkAround, handRecords, KINGS, QUEENS, sevenDeuceBounty, TestTable } from './helpers.ts';
 import { assertInvariants } from './invariants.ts';
 
 // On the first board aces beat kings beat queens; on the second a king makes the kings three of a kind
@@ -321,7 +321,7 @@ const CASES: Record<string, { earns: Case[]; misses: Case[] }> = {
       {
         said: 'seven-deuce that everyone folded to, shown for the bounty',
         earned: () => {
-          const t = new TestTable({ stacks: [1000, 1000, 1000], config: { sevenDeuceBounty: 50 } });
+          const t = new TestTable({ stacks: [1000, 1000, 1000], config: { bounties: sevenDeuceBounty(50) } });
 
           return earnedIn(t, 0, () => {
             t.deal({ button: 0, holes: { 0: '7s 2d' } });
@@ -337,7 +337,7 @@ const CASES: Record<string, { earns: Case[]; misses: Case[] }> = {
       {
         said: 'seven-deuce run three times that won two boards and lost the third, which a main pot of two chips left with nothing',
         earned: () => {
-          const t = new TestTable({ stacks: [1, 500], config: { smallBlind: 1, bigBlind: 2, sevenDeuceBounty: 50, maxRuns: 3 } });
+          const t = new TestTable({ stacks: [1, 500], config: { smallBlind: 1, bigBlind: 2, bounties: sevenDeuceBounty(50), maxRuns: 3 } });
 
           return earnedIn(t, 0, () => {
             t.deal({ button: 0, holes: { 0: '7h 2c', 1: 'Jh Td' }, board: '7d 7s 2h 9c 4d', secondBoard: '7c 2d 5s 8h Ad', thirdBoard: 'Js Kc Qd 5c 3h' });
@@ -654,7 +654,7 @@ test('a hand the blinds chop the moment it folds to them, both on Always chop, e
 
 test('a big blind folded to with seven-deuce and nothing in the pot wins the hand on the bounty alone: it earns the badge and counts toward a run', () => {
   // As in tests/missedBlinds.test.ts: seat 2, due the small blind, sits out, so the big blind is posted alone and comes back
-  const t = new TestTable({ stacks: [1000, 1000, 1000, 1000], config: { sevenDeuceBounty: 50 } });
+  const t = new TestTable({ stacks: [1000, 1000, 1000, 1000], config: { bounties: sevenDeuceBounty(50) } });
   t.deal({ button: 0 });
   t.foldOut();
 

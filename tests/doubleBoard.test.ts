@@ -3,7 +3,7 @@ import { test } from 'node:test';
 
 import { replayHand, TIMING } from '../src/engine/index.ts';
 import type { HandEvent, TableConfig } from '../src/engine/index.ts';
-import { ACES, BOARD, checkAround, handRecords, KINGS, QUEENS, seededRng, TestTable } from './helpers.ts';
+import { ACES, BOARD, checkAround, handRecords, KINGS, QUEENS, seededRng, sevenDeuceBounty, TestTable } from './helpers.ts';
 import type { DealOptions, TableOptions } from './helpers.ts';
 import { assertChipsConserved, assertHandRecordsHold, assertInvariants, assertViewsKeepSecrets } from './invariants.ts';
 import { chance, randomStep } from './randomPlay.ts';
@@ -257,19 +257,19 @@ test('double board: at showdown a player shows who can still win a pot on either
 });
 
 test('double board, seven-deuce bounty: paid for winning the whole main pot on both boards or without a showdown, never for one board', () => {
-  const config = { sevenDeuceBounty: 50 };
+  const config = { bounties: sevenDeuceBounty(50) };
   const sevenDeuce = { 0: '7h 2s', 1: 'Ah Kc', 2: 'Qc Jd' };
 
   // Two pair on both boards
   const both = doubleBoard({ stacks: [1000, 1000, 1000], config }, { holes: sevenDeuce, secondBoard: '7s 2h Qd 5c 9s' });
-  assert.equal(both.view(0).hand!.holding!.bounty, true);
+  assert.deepEqual(both.view(0).hand!.holding!.bounty, ['72', 50]);
   both.check(1);
   both.fold(2);
   checkAround(both, [0], 1);
   checkAround(both, [1, 0], 2);
 
   assert.deepEqual(awardsOf(both), [[[0, 150, 0], [0, 150, 1]]]);
-  assert.deepEqual(both.state.hand!.result!.bounty, { seat: 0, payments: [{ seat: 1, amount: 50 }, { seat: 2, amount: 50 }] });
+  assert.deepEqual(both.state.hand!.result!.bounty, { seat: 0, hand: '72', payments: [{ seat: 1, amount: 50 }, { seat: 2, amount: 50 }] });
   assert.deepEqual(both.stacks(), [1300, 850, 850]);
   assertChipsConserved(both.state);
 
@@ -452,7 +452,7 @@ test('over random double-board hands no chip is made or lost, and each board\'s 
       bombPotEvery: 1,
       bombPotAmount: 1 + rng.int(150),
       maxRuns: chance(rng, 50) ? 3 : 1,
-      sevenDeuceBounty: chance(rng, 30) ? 25 : 0,
+      bounties: chance(rng, 30) ? sevenDeuceBounty(25) : [],
     };
 
     const t = new TestTable({ stacks, seed, config });

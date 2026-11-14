@@ -2,6 +2,7 @@ import { formatAmount, shortAmount } from '../../engine/amounts.ts';
 import type { Denominated } from '../../engine/amounts.ts';
 import { onTheClock } from '../../engine/betting.ts';
 import { BOARD_SIZE } from '../../engine/boards.ts';
+import { bountyWords } from '../../engine/bounties.ts';
 import type { ChanceFigure } from '../../engine/chances.ts';
 import { listed, midSentence } from '../../engine/handNames.ts';
 import type { HandRead } from '../../engine/handNames.ts';
@@ -194,10 +195,11 @@ function nameEl(name: string): HTMLElement {
 }
 
 /**
- * What the viewer's cards make, a line per board, with room in each line for one more short figure.
- * Drawn whether or not the player wants it, so the preference only has to hide it.
+ * What the viewer's cards make, a line per board, with room in each line for one more short figure,
+ * and what they collect if they are a bounty hand and win. Drawn whether or not the player wants it,
+ * so the preference only has to hide it.
  */
-function hintEl(holding: Holding): HTMLElement {
+function hintEl(holding: Holding, table: Denominated): HTMLElement {
   const perBoard = holding.reads.length > 1;
 
   return h(
@@ -209,7 +211,7 @@ function hintEl(holding: Holding): HTMLElement {
         null,
         perBoard ? h('span.run', { 'aria-label': `Board ${run + 1}:` }, String(run + 1)) : null,
         nameEl(read.name),
-        run === 0 && holding.bounty ? h('span.bounty', null, 'Bounty hand') : null,
+        run === 0 && holding.bounty ? h('span.bounty', null, `Bounty ${shortAmount(holding.bounty[1], table)}`) : null,
       ),
     ),
   );
@@ -274,7 +276,7 @@ function seatEl(view: TableView, seat: SeatView, slot: number, shape: Shape, clo
   const middleNamesHands = hand?.stage === 'done' && boardsWonOn(hand) > 1;
   const label = hand?.stage === 'done' && !middleNamesHands ? shownLabel(seat, hand) : null;
   const holding = isMe ? (hand?.holding ?? null) : null;
-  const hint = holding && !middleNamesHands ? hintEl(holding) : null;
+  const hint = holding && !middleNamesHands ? hintEl(holding, view.config) : null;
   const place = seatPlace(shape, slot);
   const spot = chances?.seats.indexOf(seat.seat) ?? -1;
   const chance = spot >= 0 ? chanceEl(chances!.boards.map((figures) => figures?.[spot] ?? null), view.hand?.runs ?? 1) : null;
@@ -509,7 +511,7 @@ function resultLines(view: TableView, hand: HandView): string[] {
     lines.push(`Everyone folded to ${nameAt(result.winnings[0]!.seat)}`);
   }
 
-  const bountyLine = result.bounty ? [`Seven-deuce! ${nameAt(result.bounty.seat)} collects a ${amountOf(sum(result.bounty.payments.map((payment) => payment.amount)))} bounty`] : [];
+  const bountyLine = result.bounty ? [bountyWords(nameAt(result.bounty.seat), result.bounty.hand, amountOf(sum(result.bounty.payments.map((payment) => payment.amount))))] : [];
 
   if (fits && lines.length + bountyLine.length <= RESULT_LINES) {
     return [...lines, ...bountyLine];

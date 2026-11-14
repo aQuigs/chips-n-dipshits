@@ -462,6 +462,7 @@ export class PokerService {
         bigBlind: state.config.bigBlind,
         ante: state.config.ante,
         anteFrom: state.config.anteFrom,
+        bounties: state.config.bounties,
         players,
       },
     };

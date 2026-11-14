@@ -1,5 +1,5 @@
 /* A preset: a table's settings kept under a name, for the group to start the next table from. */
-import { CONFIG_KEYS, CONFIG_RULES, CONFIG_SPECS, DEFAULT_CONFIG, fieldsOf, newConfig, settingText, startingConfig, validSetting, withRetiredSettings } from './config.ts';
+import { CONFIG_KEYS, CONFIG_RULES, CONFIG_SPECS, DEFAULT_CONFIG, fieldsOf, newConfig, sameSetting, settingText, startingConfig, validSetting, withRetiredSettings } from './config.ts';
 import type { ConfigKey } from './config.ts';
 import type { TableConfig } from './types.ts';
 import { LIMITS, text } from './validate.ts';
@@ -99,6 +99,6 @@ export function matchingPreset(presets: Preset[], config: TableConfig): Preset |
   return presets.find((preset) => {
     const used = fromPreset(preset.settings, config).config;
 
-    return PRESET_KEYS.every((key) => used[key] === config[key]);
+    return PRESET_KEYS.every((key) => sameSetting(used[key], config[key]));
   }) ?? null;
 }

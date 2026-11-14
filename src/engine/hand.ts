@@ -3,7 +3,8 @@ import { bettingIsClosed, bettingOptions, chipsFor, objectionTo, onTheClock, pas
 import type { BettingAction } from './betting.ts';
 import { boardsComplete, dealStreet, dealTheRest, newBoards, potShares, runOut } from './boards.ts';
 import { boardsDealt, bombPotName, claimBombPot } from './bombPots.ts';
-import { HOLE_CARDS, isSevenDeuce, prettyCards, shuffledDeck } from './cards.ts';
+import { bountyFor, bountyWords } from './bounties.ts';
+import { HOLE_CARDS, prettyCards, shuffledDeck } from './cards.ts';
 import type { Card } from './cards.ts';
 import { answerUnasked, chopsUnasked, mayOfferChop } from './chop.ts';
 import { takesEvent } from './events.ts';
@@ -197,7 +198,7 @@ export function startHand(state: TableState, ctx: Ctx): void {
     throw new Error('A hand needs at least two players');
   }
 
-  const { smallBlind, bigBlind, sevenDeuceBounty } = state.config;
+  const { smallBlind, bigBlind, bounties } = state.config;
   const bombPot = claimBombPot(state);
 
   // Worked out while every stack is still whole: what the hand starts with is settled before any of it is posted
@@ -250,7 +251,7 @@ export function startHand(state: TableState, ctx: Ctx): void {
     bbSeat,
     straddles: plan.straddles,
     passedOver: plan.passedOver,
-    bounty: sevenDeuceBounty,
+    bounties,
     maxRuns: state.config.maxRuns,
     bombPot,
     chopOffered: false,
@@ -918,14 +919,17 @@ function finishUncontested(state: TableState, ctx: Ctx, winner: HandPlayer): voi
   }
 }
 
-/** Whoever wins a hand holding seven-deuce collects the bounty from everyone else who was dealt in. */
+/** Whoever wins a hand holding a bounty hand collects its bounty from everyone else who was dealt in. */
 function payBounty(state: TableState, ctx: Ctx, winnerSeat: number): BountyResult | null {
   const hand = state.hand!;
   const winner = playerAt(hand, winnerSeat)!;
+  const bounty = bountyFor(winner.cards, hand.bounties);
 
-  if (hand.bounty <= 0 || !isSevenDeuce(winner.cards)) {
+  if (!bounty) {
     return null;
   }
+
+  const [bountyHand, each] = bounty;
 
   const payments: BountyResult['payments'] = [];
   let total = 0;
@@ -936,7 +940,7 @@ function payBounty(state: TableState, ctx: Ctx, winnerSeat: number): BountyResul
     }
 
     const seat = state.seats[player.seat]!;
-    const amount = Math.min(hand.bounty, seat.stack);
+    const amount = Math.min(each, seat.stack);
 
     if (amount > 0) {
       seat.stack -= amount;
@@ -953,10 +957,10 @@ function payBounty(state: TableState, ctx: Ctx, winnerSeat: number): BountyResul
   show(state, ctx, winner);
 
   state.seats[winnerSeat]!.stack += total;
-  record(hand, ['bounty', winnerSeat, payments.map((payment): [number, number] => [payment.seat, payment.amount])]);
-  narrate(state, ctx, `${winner.name} won with seven-deuce and collects a bounty of ${formatAmount(total, state.config)}`);
+  record(hand, ['bounty', winnerSeat, payments.map((payment): [number, number] => [payment.seat, payment.amount]), bountyHand]);
+  narrate(state, ctx, bountyWords(winner.name, bountyHand, formatAmount(total, state.config)));
 
-  return { seat: winnerSeat, payments };
+  return { seat: winnerSeat, hand: bountyHand, payments };
 }
 
 function finishHand(state: TableState, ctx: Ctx, result: HandResult): void {

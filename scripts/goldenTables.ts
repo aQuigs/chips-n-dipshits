@@ -20,13 +20,13 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-import { addMember, STATE_SCHEMA, TIMING } from '../src/engine/index.ts';
+import { addMember, SEVEN_DEUCE, STATE_SCHEMA, TIMING } from '../src/engine/index.ts';
 import type { Hand, TableConfig, TableState } from '../src/engine/index.ts';
 import { TestTable } from '../tests/helpers.ts';
 
 const OUT = fileURLToPath(new URL('../tests/fixtures/tables/', import.meta.url));
 
-const CONFIG: Partial<TableConfig> = { minBuyIn: 400, maxBuyIn: 2000, actionSeconds: 30, maxRuns: 2, sevenDeuceBounty: 25 };
+const CONFIG: Partial<TableConfig> = { minBuyIn: 400, maxBuyIn: 2000, actionSeconds: 30, maxRuns: 2, bounties: [[SEVEN_DEUCE, 25]] };
 
 function table(stacks: number[], seed: number, config: Partial<TableConfig> = {}): TestTable {
   return new TestTable({ stacks, config: { ...CONFIG, ...config }, seed });
@@ -366,7 +366,7 @@ for (const { schema, tables, beforeEvents = false } of SETS) {
     if (name === 'betting-straddle-side-pot') {
       write(`schema2-${name}`, schema, () => {
         const built = state();
-        const { bounty: _added, ...hand } = built.hand!;
+        const { bounty: _added, ...hand } = built.hand! as Hand & { bounty?: number };
 
         return { ...built, schema: 2, hand };
       });

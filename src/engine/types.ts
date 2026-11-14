@@ -1,3 +1,4 @@
+import type { Bounty } from './bounties.ts';
 import type { Card, Rng } from './cards.ts';
 import type { HandEvent } from './events.ts';
 
@@ -7,7 +8,7 @@ export const SEAT_COUNT = 10;
  * Bumped when the shape of a saved table changes (a field renamed, retyped or removed), together with a
  * step in `upgradeState`. A field that is only added gets a default in `SAVED_DEFAULTS` instead.
  */
-export const STATE_SCHEMA = 6;
+export const STATE_SCHEMA = 7;
 
 /** What a table's amounts count, since every one of them is kept as a whole number: chips, or the cents of an amount written in dollars. */
 export type Unit = 'chips' | 'cents';
@@ -43,8 +44,8 @@ export interface TableConfig {
   allowMississippiStraddle: boolean;
   /** The most times the rest of a hand may be run when everyone is all in: 1 never offers more. See `runVote.ts`. */
   maxRuns: 1 | 2 | 3;
-  /** Paid by every other player dealt in to whoever wins with seven-deuce; 0 turns it off. */
-  sevenDeuceBounty: number;
+  /** Each paid by every other player dealt in to whoever wins with its hand: see `payBounty`. Empty for none. */
+  bounties: Bounty[];
   /** Paid by everyone else seated to whoever holds the high hand, when the night ends or the host pays it out; 0 for the honor alone. */
   highHandBonus: number;
   /** What everyone dealt into a bomb pot puts in. */
@@ -238,6 +239,8 @@ export interface ShownHand {
 
 export interface BountyResult {
   seat: number;
+  /** The hand it was paid for, in the form `startingHands.ts` keeps. */
+  hand: string;
   payments: { seat: number; amount: number }[];
 }
 
@@ -267,8 +270,8 @@ export interface Hand {
   straddles: StraddlePost[];
   /** The players whose straddle the hand did not take, for each of them to be told why. */
   passedOver: PassedOver[];
-  /** The seven-deuce bounty this hand was dealt under; like the blinds, a new setting waits for the next hand. */
-  bounty: number;
+  /** The bounties this hand was dealt under; like the blinds, a new list waits for the next hand. */
+  bounties: Bounty[];
   /** The most times the rest may be run when everyone is all in, as the table allowed when this hand was dealt. */
   maxRuns: number;
   /** What kind of hand this is: a bomb pot and its terms, or null for an ordinary hand. Settled when it is dealt. */

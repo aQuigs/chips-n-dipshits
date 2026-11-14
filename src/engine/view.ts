@@ -1,7 +1,8 @@
 import { bettingOptions } from './betting.ts';
 import type { BettingOptions } from './betting.ts';
 import { bombPotDue, bombPotHangsOnCall } from './bombPots.ts';
-import { isSevenDeuce } from './cards.ts';
+import { bountyFor } from './bounties.ts';
+import type { Bounty } from './bounties.ts';
 import type { Card } from './cards.ts';
 import { foldChops, mayOfferChop } from './chop.ts';
 import type { HandEvent } from './events.ts';
@@ -63,8 +64,8 @@ export interface SeatView {
 export interface Holding {
   /** One for each board on the table, which grows as a hand run more than once lays each next board. */
   reads: HandRead[];
-  /** Seven-deuce in a hand that pays the bounty for it. */
-  bounty: boolean;
+  /** The bounty the cards would collect on if they win the hand: of those it was dealt under, the one for this very hand. */
+  bounty: Bounty | null;
 }
 
 export interface HandView {
@@ -291,7 +292,7 @@ export function viewFor(state: TableState, playerId: string, now: number): Table
 function holdingOf(hand: Hand, player: HandPlayer): Holding {
   return {
     reads: hand.boards.map((board) => readHand(player.cards, board)),
-    bounty: hand.bounty > 0 && isSevenDeuce(player.cards),
+    bounty: bountyFor(player.cards, hand.bounties),
   };
 }
 

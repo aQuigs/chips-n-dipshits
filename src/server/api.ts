@@ -1,4 +1,4 @@
-import type { Command, HandRecord, KnownPlayer, Preset, Stakes, TableConfig, TableView } from '../engine/index.ts';
+import type { Bounty, Command, HandRecord, KnownPlayer, Preset, Stakes, TableConfig, TableView } from '../engine/index.ts';
 
 /**
  * Which build of the game a page or a server is. On the way between them every request carries the
@@ -82,6 +82,7 @@ export interface ApiError {
 export interface TableInfo extends Stakes {
   id: string;
   name: string;
+  bounties: Bounty[];
   players: string[];
 }
 

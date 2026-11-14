@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict';
 
 import { chromium } from 'playwright';
-import type { Browser, BrowserContext, BrowserContextOptions, Page } from 'playwright';
+import type { Browser, BrowserContext, BrowserContextOptions, Page, Route } from 'playwright';
 
 import { startDevServer } from '../src/dev/server.ts';
 import type { DevServer } from '../src/dev/server.ts';
@@ -28,6 +28,35 @@ const STEP_TIMEOUT_MS = 15_000;
 
 // Built once for the whole run, since no check can change the page
 let built: Promise<string> | undefined;
+
+// All a page asks of the outside is its fonts, and it does not count as loaded until their stylesheet has
+// come. Asked for once in a run and answered from here after: asked by every page, one slow answer from
+// Google is a page that never loaded, on a machine with nothing wrong with it
+const FONTS = /^https:\/\/fonts\.(googleapis|gstatic)\.com\//;
+const fonts = new Map<string, Promise<{ status: number; headers: Record<string, string>; body: Buffer }>>();
+
+async function answerFont(route: Route): Promise<void> {
+  const url = route.request().url();
+  let answer = fonts.get(url);
+
+  if (!answer) {
+    answer = route.fetch().then(async (response) => {
+      assert.ok(response.ok(), `${url} answered ${response.status()}`);
+
+      return { status: response.status(), headers: response.headers(), body: await response.body() };
+    });
+    fonts.set(url, answer);
+    // Not kept when it fails, so the next page asks again
+    answer.catch(() => fonts.delete(url));
+  }
+
+  try {
+    await route.fulfill(await answer);
+  } catch {
+    // The answer never came, or the page has gone: left to the browser, as if nobody had stepped in
+    await route.continue().catch(() => undefined);
+  }
+}
 
 export const SCREENS = {
   phone: { width: 375, height: 667 },
@@ -314,6 +343,7 @@ export class Rig {
   private async context(options: BrowserContextOptions): Promise<BrowserContext> {
     const context = await this.browser.newContext(options);
     this.contexts.push(context);
+    await context.route(FONTS, answerFont);
 
     // A check stopped for running out of time may still be going, and what it opens now nobody would close
     if (this.closing) {

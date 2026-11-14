@@ -1619,11 +1619,11 @@ const CHECKS: Check[] = [
         await press(`${row('Marge Simpson-Jr')} [data-action="make-cohost"]`);
         assert.equal(await text(page, '.dialog h2'), 'Make Marge Simpson-Jr a co-host?');
         await press('[data-action="confirm"]');
-        assert.deepEqual(table.view('Quigs').cohostIds, [table.auth('Marge Simpson-Jr').id]);
 
         await press('[data-action="menu"]');
         await press('.menu [data-action="players"]');
         await page.waitForSelector(`${row('Marge Simpson-Jr')} .cohost`);
+        assert.deepEqual(table.view('Quigs').cohostIds, [table.auth('Marge Simpson-Jr').id]);
         assert.equal(await page.locator('.seat[data-seat="1"] .plate .cohost').count(), 1, 'the seat does not show the co-host mark');
         await shot(page, `players-cohost-named-${screen}`);
 

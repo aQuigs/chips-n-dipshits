@@ -4,7 +4,6 @@
  * overlap. A stand-in for Apps Script's host object is put in the page, on top of the local server.
  */
 import assert from 'node:assert/strict';
-import { randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
@@ -14,7 +13,6 @@ import type { Browser, Page } from 'playwright';
 import { KEYS_SETTLE_MS } from '../src/client/hotkeys.ts';
 import { startDevServer } from '../src/dev/server.ts';
 import { UNSTAMPED_BUILD } from '../src/server/build.ts';
-import { ByteRng } from '../src/server/byteRng.ts';
 import { MemoryErrorLog } from '../src/server/memoryErrorLog.ts';
 import { MemoryPresetStore } from '../src/server/memoryPresetStore.ts';
 import { MemoryStore } from '../src/server/memoryStore.ts';
@@ -22,7 +20,7 @@ import { PUT_AWAY_AFTER_MS, PUT_AWAY_MESSAGE } from '../src/server/putAway.ts';
 import { PokerService } from '../src/server/service.ts';
 import { seededRng } from '../tests/helpers.ts';
 import { clientPage } from './bundle.ts';
-import { answeredAfter, complaints, moveIn, movesSent, NOTICES, ownComplaints, STILL, TITLES, toldOf } from './pageSpies.ts';
+import { answeredAfter, complaints, moveIn, movesSent, NOTICES, opsSent, ownComplaints, STILL, TITLES, toldOf } from './pageSpies.ts';
 import { Gate } from './rig.ts';
 import { STAND_IN_HOST } from './standInHost.ts';
 
@@ -82,18 +80,6 @@ const throwIn = (page: Page, message: string) =>
     void Promise.reject(new Error(`${text}, rejected`));
   }, message);
 
-/** The operation of every request a page sends from now on. */
-function opsSent(page: Page): string[] {
-  const ops: string[] = [];
-  page.on('request', (request) => {
-    if (request.method() === 'POST') {
-      ops.push((JSON.parse(request.postData() ?? '{}') as { op?: string }).op ?? '');
-    }
-  });
-
-  return ops;
-}
-
 const inAddress = (page: Page, name: string) => new URL(page.url()).searchParams.get(name);
 const remembered = (page: Page, tableId: string) => page.evaluate(`localStorage.getItem('cnd.seat.${tableId}')`) as Promise<string | null>;
 /** A page's own seat, the chips in front of it, the pot and the board, as they are drawn, less the turn's clock, which never stands still. */
@@ -139,11 +125,10 @@ async function say(page: Page, text: string): Promise<void> {
 
 const html = await clientPage({});
 
-// Every case below but the one that throws on purpose, which has a server of its own, is told nothing: no request that
-// failed, went unanswered or was refused is a failure of the page, and the server fails nowhere
+// Every case before the one that throws on purpose is told nothing: no request that failed, went unanswered or was
+// refused is a failure of the page, and the server fails nowhere
 const errors = new MemoryErrorLog({ now: () => Date.now() });
-const game = new PokerService({ store: new MemoryStore(), presets: new MemoryPresetStore(), clock: { now: () => Date.now() }, rng: new ByteRng(() => [...randomBytes(256)]), errors });
-const server = await startDevServer({ port: 0, page: async () => html, service: game });
+const server = await startDevServer({ port: 0, page: async () => html, errors });
 const browser = await chromium.launch();
 
 try {
@@ -1016,50 +1001,42 @@ try {
 
   console.log("A failure in the page reaches Apps Script's stand-in once, as a report from the member, and the seat is kept; before joining there is nobody to send it as");
   {
-    const reported = new MemoryErrorLog({ now: () => Date.now() });
-    const own = new PokerService({ store: new MemoryStore(), presets: new MemoryPresetStore(), clock: { now: () => Date.now() }, rng: seededRng(15), errors: reported });
-    const apart = await startDevServer({ port: 0, page: async () => html, service: own });
+    assert.equal(errors.rows.length, 0, 'the cases above wrote to the error log');
 
-    try {
-      const meant = 'A failure on purpose';
-      const lobby = await open(browser, meant);
-      const fromLobby = opsSent(lobby);
-      await lobby.goto(apart.url);
-      await lobby.waitForSelector('[data-action="create-table"]');
-      await throwIn(lobby, meant);
-      await sleep(QUIET_MS);
-      assert.deepEqual(fromLobby.filter((op) => op === 'report'), [], 'a page that is at no table reported');
+    const meant = 'A failure on purpose';
+    const lobby = await open(browser, meant);
+    const fromLobby = opsSent(lobby);
+    await lobby.goto(server.url);
+    await lobby.waitForSelector('[data-action="create-table"]');
+    await throwIn(lobby, meant);
+    await sleep(QUIET_MS);
+    assert.deepEqual(fromLobby.filter((op) => op === 'report'), [], 'a page that is at no table reported');
 
-      const page = await open(browser, meant);
-      const id = await createTable(page, apart.url, 'Homer');
-      const member = inAddress(page, 'me')!;
-      const sent = opsSent(page);
+    const page = await open(browser, meant);
+    const id = await createTable(page, server.url, 'Homer');
+    const member = inAddress(page, 'me')!;
+    const sent = opsSent(page);
 
-      await throwIn(page, meant);
-      await throwIn(page, meant);
-      await until('the reports', () => reported.rows.length === 2);
-      await sleep(QUIET_MS);
+    await throwIn(page, meant);
+    await throwIn(page, meant);
+    await until('the reports', () => errors.rows.length === 2);
+    await sleep(QUIET_MS);
 
-      assert.deepEqual(sent.filter((op) => op === 'report'), ['report', 'report'], 'the thrown failure and the rejected one, each once');
-      assert.deepEqual(
-        reported.rows.map((row) => [row.where, row.tableId, row.message]),
-        [
-          ['page', id, meant],
-          ['page', id, `${meant}, rejected`],
-        ],
-      );
-      assert.match(reported.rows[0]!.browser, /^Chrome \d+ on a desktop$/);
-      assert.deepEqual([inAddress(page, 'table'), inAddress(page, 'me'), await remembered(page, id)], [id, member, member], 'the seat was lost');
-      await say(page, 'still here');
+    assert.deepEqual(sent.filter((op) => op === 'report'), ['report', 'report'], 'the thrown failure and the rejected one, each once');
+    assert.deepEqual(
+      errors.rows.map((row) => [row.where, row.tableId, row.message]),
+      [
+        ['page', id, meant],
+        ['page', id, `${meant}, rejected`],
+      ],
+    );
+    assert.match(errors.rows[0]!.browser, /^Chrome \d+ on a desktop$/);
+    assert.deepEqual([inAddress(page, 'table'), inAddress(page, 'me'), await remembered(page, id)], [id, member, member], 'the seat was lost');
+    await say(page, 'still here');
 
-      await lobby.context().close();
-      await page.context().close();
-    } finally {
-      await apart.close();
-    }
+    await lobby.context().close();
+    await page.context().close();
   }
-
-  assert.deepEqual(errors.rows, [], 'the cases above wrote to the error log');
 
   console.log('The Apps Script-hosted page holds up');
 } finally {

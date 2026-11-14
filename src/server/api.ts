@@ -14,6 +14,10 @@ export interface Auth {
   token: string;
 }
 
+/** The most a page sends of a failure's message and of its trace. */
+export const REPORTED_MESSAGE_LENGTH = 500;
+export const REPORTED_TRACE_LENGTH = 3000;
+
 /** What a page says of its browser when it reports a failure: its name, major version and kind of device, nothing else. */
 export interface PageBrowser {
   name: string;

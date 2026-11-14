@@ -39,7 +39,6 @@ test("nothing is reported that says only that a request got no answer, or that h
   for (const message of ['NetworkError: Connection failure due to HTTP 0', 'TypeError: Failed to fetch', 'TypeError: Load failed', 'ScriptError: We are sorry, a server error occurred', 'Script error.', '', '   ']) {
     assert.equal(errors.take(new Error(message)), null, message);
   }
-
 });
 
 test('a browser is told by its name, major version and kind of device, and nothing else of it', () => {
@@ -73,7 +72,7 @@ class Page extends EventTarget {
 test('what the page throws and what it leaves to reject are both reported, through the one sender', () => {
   const page = new Page();
   const sent: PageFailure[] = [];
-  watchForErrors(page as unknown as FailureSource, { ready: () => true, send: (failure) => sent.push(failure) });
+  watchForErrors(page as unknown as FailureSource, () => (failure) => sent.push(failure));
 
   const again = new Error('thrown');
   page.fail(again);
@@ -90,7 +89,7 @@ test('a failure while the page is at no table is let go without counting, so it 
   const page = new Page();
   const sent: PageFailure[] = [];
   let atTable = false;
-  watchForErrors(page as unknown as FailureSource, { ready: () => atTable, send: (failure) => sent.push(failure) });
+  watchForErrors(page as unknown as FailureSource, () => (atTable ? (failure) => sent.push(failure) : null));
 
   const again = new Error('in the lobby and at the table');
   for (const word of ['a', 'b', 'c', 'd']) {
@@ -111,15 +110,12 @@ test('a report that fails, or that makes the page throw again, is never reported
   const page = new Page();
   let calls = 0;
 
-  watchForErrors(page as unknown as FailureSource, {
-    ready: () => true,
-    send: () => {
-      calls += 1;
+  watchForErrors(page as unknown as FailureSource, () => () => {
+    calls += 1;
 
-      // As though sending it threw, which the browser would tell as one more failure
-      page.fail(new Error('the report itself broke'));
-      throw new Error('the report itself broke');
-    },
+    // As though sending it threw, which the browser would tell as one more failure
+    page.fail(new Error('the report itself broke'));
+    throw new Error('the report itself broke');
   });
 
   assert.doesNotThrow(() => page.fail(new Error('first')));
@@ -133,7 +129,7 @@ test('a report that fails, or that makes the page throw again, is never reported
 async function connectionThat(answer: (request: ApiRequest) => Promise<ApiResponse & Built>): Promise<PageFailure[]> {
   const page = new Page();
   const sent: PageFailure[] = [];
-  watchForErrors(page as unknown as FailureSource, { ready: () => true, send: (failure) => sent.push(failure) });
+  watchForErrors(page as unknown as FailureSource, () => (failure) => sent.push(failure));
 
   const unhandled = (reason: unknown) => page.reject(reason);
   process.on('unhandledRejection', unhandled);
@@ -159,8 +155,8 @@ async function connectionThat(answer: (request: ApiRequest) => Promise<ApiRespon
 }
 
 test('a request that gets no answer, or is refused, is no failure of the page: nothing is reported', async () => {
-  assert.deepEqual(await connectionThat(() => Promise.reject(new Error('NetworkError: Connection failure due to HTTP 0'))), []);
-  assert.deepEqual(await connectionThat(() => Promise.reject(new TypeError('Failed to fetch'))), []);
+  // Lost on the way, with words the page would not take for a network failure, so only the connection keeps it from being reported
+  assert.deepEqual(await connectionThat(() => Promise.reject(new Error('The line went quiet'))), []);
   assert.deepEqual(await connectionThat(async () => ({ ok: false, code: 'unauthorized', error: 'Who are you', build: '__BUILD__' })), []);
   assert.deepEqual(await connectionThat(async () => ({ ok: false, code: 'busy', error: 'The table is busy, try again', build: '__BUILD__' })), []);
 });

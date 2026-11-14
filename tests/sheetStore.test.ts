@@ -8,6 +8,7 @@ import { SheetPresetStore } from '../src/gas/sheetPresetStore.ts';
 import { TEXT, TIMESTAMP, WHOLE_NUMBER } from '../src/gas/sheets.ts';
 import { SheetStore } from '../src/gas/sheetStore.ts';
 import { ERROR_LIMITS, NOWHERE } from '../src/server/errorLog.ts';
+import { MemoryErrorLog } from '../src/server/memoryErrorLog.ts';
 import { MemoryPresetStore } from '../src/server/memoryPresetStore.ts';
 import { MemoryStore } from '../src/server/memoryStore.ts';
 import type { PresetStore, SavedPreset } from '../src/server/presetStore.ts';
@@ -1981,7 +1982,6 @@ test('a report costs a known number of calls, a repeat only the cache, and a run
   log.report({ where: 'server act', error: 'second' });
   assert.deepEqual(calls.made, ['cache.get', 'cache.put']);
 
-  calls.made = [];
   const busy = errorsSetup();
   const many = busy.run();
   for (let n = 0; n < 10; n++) {
@@ -2116,4 +2116,24 @@ test('what the store notes while holding the lock is reported once the lock is l
 
   assert.deepEqual(reported, [{ where: 'store copy to Ledger', lockHeld: false }]);
   assert.deepEqual([2, 5].map((column) => spreadsheet.getSheetByName(ERRORS_TAB)!.shown(2, column)), ['store copy to Ledger', 'ABC234']);
+});
+
+test('a sweep that fails is reported before the call that made it returns, which is the last of a new table', () => {
+  const errors = new MemoryErrorLog({ now: () => NOW });
+  const store = new SheetStore({
+    spreadsheet: () => {
+      throw new Error('Sheet down');
+    },
+    cache: new FakeCache(),
+    lock: new FakeLock(),
+    flush: () => undefined,
+    errors,
+  });
+
+  store.putAwayOld(NOW, () => []);
+
+  assert.deepEqual(
+    errors.rows.map((row) => [row.where, row.message]),
+    [['store put away', 'Sheet down']],
+  );
 });

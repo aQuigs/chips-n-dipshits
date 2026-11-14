@@ -1,8 +1,8 @@
 import { addMember, applyCommand, createTable, GameError, presetName, presetSettings, randomId, requireLevel, sharedPreset, tick, viewFor } from '../engine/index.ts';
 import type { Command, Ctx, Member, Preset, Rng, TableState } from '../engine/index.ts';
-import type { ApiResponse, Auth, ErrorCode, PageBrowser } from './api.ts';
+import type { ApiResponse, Auth, ErrorCode } from './api.ts';
+import { NOWHERE } from './errorLog.ts';
 import type { ErrorLog, Failure } from './errorLog.ts';
-import { MemoryErrorLog } from './memoryErrorLog.ts';
 import type { PresetStore } from './presetStore.ts';
 import { PUT_AWAY_MESSAGE } from './putAway.ts';
 import type { LastWords } from './putAway.ts';
@@ -18,7 +18,7 @@ export interface ServiceDeps {
   presets: PresetStore;
   clock: Clock;
   rng: Rng;
-  /** Where failures the game carries on through are written down. Left out, they are kept in memory. */
+  /** Where failures the game carries on through are written down. Left out, only Apps Script's own log hears of them. */
   errors?: ErrorLog;
 }
 
@@ -28,10 +28,6 @@ const TABLE_ID_LENGTH = 6;
 const TABLE_ID_PATTERN = new RegExp(`^[A-Z0-9]{${TABLE_ID_LENGTH}}$`);
 const CREATE_ATTEMPTS = 5;
 const HISTORY_LIMIT = 30;
-
-// What a page may send of a failure; the log keeps far less of it
-const REPORTED_MESSAGE_LENGTH = 500;
-const REPORTED_TRACE_LENGTH = 3000;
 
 /** A poll that may be kept open: until the table moves on from `since`, or for `ms` at most. */
 export interface PollWait {
@@ -134,15 +130,6 @@ export function failureOf(request: unknown, error: unknown): Failure {
   };
 }
 
-const textOf = (value: unknown, length: number) => (typeof value === 'string' ? value.slice(0, length) : '');
-
-/** A page's word for its browser, with every field checked to be of its kind; the log keeps only the ones it knows. */
-function browserOf(value: unknown): PageBrowser | null {
-  const { name, major, device } = (typeof value === 'object' && value !== null ? value : {}) as Partial<Record<keyof PageBrowser, unknown>>;
-
-  return typeof name === 'string' && typeof major === 'number' && (device === 'phone' || device === 'tablet' || device === 'desktop') ? { name: name.slice(0, 20), major, device } : null;
-}
-
 /** Nothing yet: whatever comes to want a table's last state answers here. */
 const LAST_WORDS: LastWords = () => [];
 
@@ -163,7 +150,7 @@ export class PokerService {
     this.presets = deps.presets;
     this.clock = deps.clock;
     this.rng = deps.rng;
-    this.errors = deps.errors ?? new MemoryErrorLog(deps.clock);
+    this.errors = deps.errors ?? NOWHERE;
   }
 
   /** Answers one request. Rule violations and bad requests come back as error responses; only bugs and outages throw. */
@@ -191,12 +178,8 @@ export class PokerService {
     }
   }
 
-  /**
-   * Tells Apps Script's own log and the error log of something that went wrong. The one way the server
-   * reports a failure, so that a host which catches the same error again (`api` in `gas/main.ts`) can
-   * hand it here as well: the log writes one error object once.
-   */
-  failed(failure: Failure): void {
+  /** Tells Apps Script's own log and the error log of something that went wrong. */
+  private failed(failure: Failure): void {
     console.error(failure.where, failure.error);
     this.errors.report(failure);
   }
@@ -450,9 +433,9 @@ export class PokerService {
    */
   private reportFromPage(tableId: string, auth: Auth, request: Fields): ApiResponse {
     const { member } = this.memberOf(tableId, auth);
-    const error = { message: textOf(request.message, REPORTED_MESSAGE_LENGTH), stack: textOf(request.trace, REPORTED_TRACE_LENGTH) };
+    const error = { message: request.message, stack: request.trace };
 
-    this.errors.report({ where: 'page', error, tableId, page: { memberId: member.id, build: textOf(request.build, 100), browser: browserOf(request.browser) } });
+    this.errors.report({ where: 'page', error, tableId, page: { memberId: member.id, build: request.build, browser: request.browser } });
 
     return { ok: true, kind: 'reported' };
   }

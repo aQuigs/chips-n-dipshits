@@ -5,6 +5,7 @@ import type { AddressInfo } from 'node:net';
 
 import { BuildGate, UNSTAMPED_BUILD } from '../server/build.ts';
 import { ByteRng } from '../server/byteRng.ts';
+import type { ErrorLog } from '../server/errorLog.ts';
 import { MemoryPresetStore } from '../server/memoryPresetStore.ts';
 import { MemoryStore } from '../server/memoryStore.ts';
 import { PokerService } from '../server/service.ts';
@@ -21,6 +22,8 @@ export interface DevServerOptions {
   page: () => Promise<string>;
   /** The game to serve. Left out, it is a fresh one on the real clock; a check passes its own to fix the cards and move time. */
   service?: PokerService;
+  /** Where the fresh game writes its failures, when one is not passed. */
+  errors?: ErrorLog;
 }
 
 export interface DevServer {
@@ -70,6 +73,7 @@ export async function startDevServer(options: DevServerOptions): Promise<DevServ
       presets: new MemoryPresetStore(),
       clock: { now: () => Date.now() },
       rng: new ByteRng(() => [...randomBytes(RANDOM_BATCH_BYTES)]),
+      errors: options.errors,
     });
   let service = new BuildGate(game, UNSTAMPED_BUILD);
   let closing = false;

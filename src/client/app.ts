@@ -177,22 +177,15 @@ export class App {
     }
   }
 
-  /** Whether the page is at a table, as a member who could tell the server of a failure. */
-  get atTable(): boolean {
-    return this.table !== null;
-  }
-
   /**
-   * Tells the server's error log of a failure the page saw, as the member of the table it is at. Before
-   * the page is at a table there is nobody to send it as, and it is dropped. Like a reaction it is sent
-   * once and whatever comes back, or doesn't, is left alone: nothing of the seat or the screen hangs on it.
+   * What tells the server's error log of a failure the page saw, as the member of the table it is at, or
+   * null before the page is at a table, when there is nobody to send it as. Like a reaction a report is
+   * sent once and whatever comes back, or doesn't, is left alone: nothing of the seat or the screen hangs on it.
    */
-  reportFailure(failure: PageFailure): void {
+  failureReporter(): ((failure: PageFailure) => void) | null {
     const session = this.table?.session;
 
-    if (session) {
-      void this.server.ask({ op: 'report', tableId: session.tableId, auth: session.auth, ...failure, browser: browserOf(navigator.userAgent) });
-    }
+    return session ? (failure) => void this.server.ask({ op: 'report', tableId: session.tableId, auth: session.auth, ...failure, browser: browserOf(navigator.userAgent) }) : null;
   }
 
   /** Starts seated at a table as a member who is already known, skipping the lobby. */

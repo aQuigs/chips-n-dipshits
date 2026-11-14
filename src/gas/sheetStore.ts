@@ -203,13 +203,6 @@ function heldCells(held: Held[], noted: Noted = () => undefined): string[] {
   }
 }
 
-/** The table records held together belong to. */
-function tableOfHeld(held: Held[]): string | null {
-  const first = held[0]?.record;
-
-  return first ? (first.type === 'ledger' ? first.entry.tableId : first.record.tableId) : null;
-}
-
 function isHeld(value: unknown): value is Held {
   const { id, record } = (value ?? {}) as Partial<Held>;
   if (typeof id !== 'string' || typeof record !== 'object' || record === null) {
@@ -385,7 +378,7 @@ export class SheetStore implements TableStore {
 
         this.persist(txn.save, txn.at, found ? found.row : null, found ? found.held : [], fresh);
       } else if (found && found.held.length > 0) {
-        this.copyOut(found.row, found.held, RETRY_SCAN_ROWS, found.state.config);
+        this.copyOut(found.row, found.held, RETRY_SCAN_ROWS, found.state);
       }
 
       return txn.result;
@@ -440,17 +433,19 @@ export class SheetStore implements TableStore {
   }
 
   putAwayOld(now: number, lastWords: LastWords): void {
-    try {
-      this.reportingAfter(() => underLock(this.deps.lock, BUSY, () => this.sweep(now, lastWords), PUT_AWAY_LOCK_WAIT_MS));
-    } catch (error) {
-      // Whatever was not put away is still in the Tables tab, where the next new table finds it. Giving up on a lock
-      // that was taken is what a sweep is meant to do, and no failure
-      if (error instanceof StoreBusyError) {
-        console.error(error);
-      } else {
-        this.failed('store put away', error);
+    this.reportingAfter(() => {
+      try {
+        underLock(this.deps.lock, BUSY, () => this.sweep(now, lastWords), PUT_AWAY_LOCK_WAIT_MS);
+      } catch (error) {
+        // Whatever was not put away is still in the Tables tab, where the next new table finds it. Giving up on a lock
+        // that was taken is what a sweep is meant to do, and no failure
+        if (error instanceof StoreBusyError) {
+          console.error(error);
+        } else {
+          this.failed('store put away', error);
+        }
       }
-    }
+    });
   }
 
   wasPutAway(tableId: string): boolean {
@@ -509,7 +504,7 @@ export class SheetStore implements TableStore {
         return null;
       }
 
-      const settled = found.held.length === 0 || this.copyOut(found.row, found.held, RETRY_SCAN_ROWS, found.state.config);
+      const settled = found.held.length === 0 || this.copyOut(found.row, found.held, RETRY_SCAN_ROWS, found.state);
       this.remember(found.state, found.row, settled);
 
       return found.state;
@@ -567,7 +562,7 @@ export class SheetStore implements TableStore {
       throw error;
     }
 
-    const settled = held.length === 0 || this.copyOut(row, held, leftOver.length > 0 ? RETRY_SCAN_ROWS : NEVER_TRIED, state.config);
+    const settled = held.length === 0 || this.copyOut(row, held, leftOver.length > 0 ? RETRY_SCAN_ROWS : NEVER_TRIED, state);
 
     // The save itself succeeded, so a cache that can't be refreshed is only emptied, not treated as a failure of the request
     try {
@@ -624,9 +619,10 @@ export class SheetStore implements TableStore {
    * write that reported failure may have landed all the same, so they are looked for there first and
    * not written twice.
    */
-  private copyOut(row: number, held: Held[], triedWithin: number, table: Denominated): boolean {
+  private copyOut(row: number, held: Held[], triedWithin: number, state: TableState): boolean {
     const waiting: Held[] = [];
-    const noted = this.noter(tableOfHeld(held));
+    const table = state.config;
+    const noted = this.noter(state.id);
 
     for (const { type, sheet, idColumn, formats } of RECORD_SHEETS) {
       const mine = held.filter((item) => item.record.type === type);
@@ -840,7 +836,7 @@ export class SheetStore implements TableStore {
     const waiting = new Set(held.map((item) => item.id));
     const fresh = state && !archived ? heldOf(lastWordsOf(state, now, lastWords), `${saveOf(id, values[2])}:away`).filter((item) => !waiting.has(item.id)) : [];
 
-    if (held.length + fresh.length > 0 && !(state && this.settle(row, held, fresh, state.config))) {
+    if (held.length + fresh.length > 0 && !(state && this.settle(row, held, fresh, state))) {
       return null;
     }
 
@@ -852,15 +848,15 @@ export class SheetStore implements TableStore {
    * ones, which are held there first, as a save holds them, so that a copy that fails leaves them where
    * the next try finds them. Returns whether none is left waiting.
    */
-  private settle(row: number, held: Held[], fresh: Held[], table: Denominated): boolean {
+  private settle(row: number, held: Held[], fresh: Held[], state: TableState): boolean {
     const all = [...held, ...fresh];
 
     if (fresh.length > 0) {
-      this.sheet('tables').getRange(row, HELD_COLUMN, 1, HELD_CHUNKS).setValues([heldCells(all, this.noter(tableOfHeld(all)))]);
+      this.sheet('tables').getRange(row, HELD_COLUMN, 1, HELD_CHUNKS).setValues([heldCells(all, this.noter(state.id))]);
       this.deps.flush();
     }
 
-    return this.copyOut(row, all, WHOLE_TAB, table);
+    return this.copyOut(row, all, WHOLE_TAB, state);
   }
 
   /** The Archive tab, which the first table to be put away makes. Until then there is none, which is nothing put away. */

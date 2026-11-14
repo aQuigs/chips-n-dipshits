@@ -86,13 +86,7 @@ export class FakeSheet implements SheetLike {
   getLastRow(): number {
     this.note('getLastRow');
 
-    for (let row = this.cells.length - 1; row >= 0; row--) {
-      if ((this.cells[row] ?? []).some((cell) => cell !== '' && cell !== undefined)) {
-        return row + 1;
-      }
-    }
-
-    return 0;
+    return this.lastRowWithContent();
   }
 
   getMaxRows(): number {
@@ -184,14 +178,14 @@ export class FakeSheet implements SheetLike {
   appendRow(values: unknown[]): void {
     this.note('appendRow');
 
-    const row = this.getLastRowQuietly();
+    const row = this.lastRowWithContent();
     this.mustBeWritable(row + 1, values);
 
     this.cells[row] = values.map((value, column) => this.interpret(value, this.formats[row]?.[column]));
     this.maxRows = Math.max(this.maxRows, row + 1);
   }
 
-  private getLastRowQuietly(): number {
+  private lastRowWithContent(): number {
     for (let row = this.cells.length - 1; row >= 0; row--) {
       if ((this.cells[row] ?? []).some((cell) => cell !== '' && cell !== undefined)) {
         return row + 1;

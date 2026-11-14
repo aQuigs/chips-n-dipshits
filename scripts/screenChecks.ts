@@ -29,7 +29,7 @@ import { PUT_AWAY_AFTER_MS, PUT_AWAY_MESSAGE } from '../src/server/putAway.ts';
 import { contrast } from '../tests/colorVision.ts';
 import { boxes, Gate, overlap, Rig, RigTable, SCREENS, setStageHeight, squeezed, textBoxes } from './rig.ts';
 import type { Box, RigDeal, RigPlayer, ScreenName } from './rig.ts';
-import { answeredAfter, complaints, MOTION, movesSent, NOTICES, ownComplaints, SPOTS, TITLES, toldOf } from './pageSpies.ts';
+import { answeredAfter, complaints, MOTION, movesSent, NOTICES, opsSent, ownComplaints, SPOTS, TITLES, toldOf } from './pageSpies.ts';
 import type { Flight, Spots } from './pageSpies.ts';
 import { STAND_IN_HOST } from './standInHost.ts';
 import { runChecks } from './checkRunner.ts';
@@ -10066,12 +10066,7 @@ const CHECKS: Check[] = [
           return app.outerHTML;
         })()`) as Promise<string>;
       const before = await drawn();
-      const reports: string[] = [];
-      page.on('request', (request) => {
-        if ((JSON.parse(request.postData() ?? '{}') as { op?: string }).op === 'report') {
-          reports.push(request.url());
-        }
-      });
+      const sent = opsSent(page);
 
       await rig.throwIn(page, 'A failure on purpose');
       await rig.throwIn(page, 'A failure on purpose');
@@ -10084,7 +10079,7 @@ const CHECKS: Check[] = [
       // Long enough for a second report, which must not come
       await page.waitForTimeout(500);
       const [row, ...more] = rig.errors.rows;
-      assert.equal(reports.length, 1, 'the same failure was sent more than once');
+      assert.equal(sent.filter((op) => op === 'report').length, 1, 'the same failure was sent more than once');
       assert.deepEqual(more, []);
       assert.deepEqual([row!.where, row!.tableId, row!.message, row!.times], ['page', table.id, 'A failure on purpose', 1]);
       // The rig's phones are a desktop Chrome at a phone's size, and say so

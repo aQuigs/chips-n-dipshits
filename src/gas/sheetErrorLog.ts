@@ -53,10 +53,8 @@ export class SheetErrorLog implements ErrorLog, ErrorShelf {
   }
 
   report(failure: Failure): void {
-    const again = typeof failure.error === 'object' && failure.error !== null && this.seen.has(failure.error);
-
-    // A script run serves one request, so this is what one request may spend on reporting. An error reported already costs nothing
-    if (again || this.reports >= REPORTS_PER_RUN) {
+    // A script run serves one request, so this is what one request may spend on reporting
+    if (this.reports >= REPORTS_PER_RUN) {
       return;
     }
 

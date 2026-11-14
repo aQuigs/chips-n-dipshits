@@ -306,11 +306,11 @@ test('a failure in answering a request is a row naming the operation and the tab
 });
 
 test('the same error caught again further out, as the Apps Script host does, is written once', () => {
-  const { game, errors, tableId } = service();
+  const { errors, tableId } = service();
   const error = new Error('Once only');
 
-  game.failed({ where: 'server act', error, tableId });
-  game.failed({ where: 'server', error, tableId });
+  errors.report({ where: 'server act', error, tableId });
+  errors.report({ where: 'server', error, tableId });
 
   assert.equal(errors.rows.length, 1);
 });
@@ -487,10 +487,4 @@ test('over random games, whatever a handler throws at whatever point, no row hol
   }
 
   assert.ok(thrown >= 20, `only ${thrown} of the games reached the handler`);
-});
-
-test('a store given no log, as in most tests, still works and reports nowhere', () => {
-  const store = new SheetStore({ spreadsheet: () => new FakeSpreadsheet(), cache: new FakeCache(), lock: new FakeLock(), flush: () => undefined });
-
-  assert.equal(store.read('ABC234'), null);
 });

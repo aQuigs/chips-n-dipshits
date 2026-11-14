@@ -4,6 +4,7 @@
  * goes wrong while reporting is never reported either. Nothing about the player goes with a report: its
  * message and trace, and from the browser only its name, version and kind of device.
  */
+import { REPORTED_MESSAGE_LENGTH, REPORTED_TRACE_LENGTH } from '../server/api.ts';
 import type { PageBrowser } from '../server/api.ts';
 
 /** What the page sends of one failure. */
@@ -14,9 +15,6 @@ export interface PageFailure {
 
 /** Reports one page load sends at most. */
 export const REPORTS_PER_LOAD = 3;
-
-const MESSAGE_LENGTH = 500;
-const TRACE_LENGTH = 3000;
 
 // A failure from a script of another site, which the browser hides, says only this: nothing to go on
 const HIDDEN = /^(Uncaught )?Script error\.?$/;
@@ -31,10 +29,10 @@ function partsOf(thrown: unknown): PageFailure {
     const said = typeof message === 'string' ? message : '';
     const named = typeof name === 'string' && name !== '' && name !== 'Error' && !said.startsWith(name) ? `${name}: ${said}` : said;
 
-    return { message: named.slice(0, MESSAGE_LENGTH), trace: typeof stack === 'string' ? stack.slice(0, TRACE_LENGTH) : '' };
+    return { message: named.slice(0, REPORTED_MESSAGE_LENGTH), trace: typeof stack === 'string' ? stack.slice(0, REPORTED_TRACE_LENGTH) : '' };
   }
 
-  return { message: String(thrown).slice(0, MESSAGE_LENGTH), trace: '' };
+  return { message: String(thrown).slice(0, REPORTED_MESSAGE_LENGTH), trace: '' };
 }
 
 /** Which failures of one page load are worth a report: each once, a few at most, none that is only a request going unanswered. */
@@ -90,18 +88,13 @@ export interface FailureSource {
   addEventListener(type: 'error' | 'unhandledrejection', listener: (event: { error?: unknown; message?: unknown; reason?: unknown }) => void): void;
 }
 
-/** Where the page's failures go: `ready` says whether there is anyone to send them as, and a failure while not is let go uncounted. */
-export interface FailureSink {
-  ready(): boolean;
-  send(failure: PageFailure): void;
-}
-
 /**
  * Listens on `target` for what the page throws and leaves uncaught, and hands what is worth reporting
- * to `sink`. Whatever happens while doing that, `send` included, is swallowed, so a report can never
- * bring about another.
+ * to the sender `reporter` gives, which is null while there is nobody to send it as: a failure then is
+ * let go uncounted. Whatever happens while doing that, sending included, is swallowed, so a report can
+ * never bring about another.
  */
-export function watchForErrors(target: FailureSource, sink: FailureSink): void {
+export function watchForErrors(target: FailureSource, reporter: () => ((failure: PageFailure) => void) | null): void {
   const errors = new PageErrors();
   let busy = false;
 
@@ -113,10 +106,11 @@ export function watchForErrors(target: FailureSource, sink: FailureSink): void {
     busy = true;
 
     try {
-      const failure = sink.ready() ? errors.take(thrown) : null;
+      const send = reporter();
+      const failure = send ? errors.take(thrown) : null;
 
-      if (failure) {
-        sink.send(failure);
+      if (send && failure) {
+        send(failure);
       }
     } catch {
       // Reporting is what failed, which is the one thing never reported

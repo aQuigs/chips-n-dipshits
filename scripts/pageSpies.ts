@@ -72,6 +72,19 @@ export function moveIn(request: Request): string | null {
 }
 
 /** The moves a page sends from now on, in order, whatever becomes of them on the way. */
+/** The operation of every request a page sends from now on. */
+export function opsSent(page: Page): string[] {
+  const ops: string[] = [];
+
+  page.on('request', (request) => {
+    if (request.method() === 'POST') {
+      ops.push((JSON.parse(request.postData() ?? '{}') as { op?: string }).op ?? '');
+    }
+  });
+
+  return ops;
+}
+
 export function movesSent(page: Page): string[] {
   const sent: string[] = [];
 

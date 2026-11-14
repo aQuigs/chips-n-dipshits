@@ -18,8 +18,8 @@ export interface Failure {
   error: unknown;
   /** The table it happened at, when there is one; an id that isn't one of the game's is left out. */
   tableId?: string | null;
-  /** A page's report: who sent it, by which the limits on pages count, the page's build and its browser. */
-  page?: { memberId: string; build: string; browser: PageBrowser | null };
+  /** A page's report: who sent it, by which the limits on pages count, and the page's build and browser as it sent them, read here. */
+  page?: { memberId: string; build: unknown; browser: unknown };
 }
 
 /** One row of the log, in the order of its columns. */
@@ -147,22 +147,23 @@ export function described(error: unknown): { message: string; trace: string } {
   }
 }
 
-export function browserText(browser: PageBrowser | null): string {
-  if (!browser || !BROWSER_NAMES.has(browser.name) || !DEVICES.has(browser.device)) {
+/** A page's word for its browser, kept only when every part of it is one the log knows. */
+function browserText(browser: unknown): string {
+  const { name, major, device } = (typeof browser === 'object' && browser !== null ? browser : {}) as Partial<Record<keyof PageBrowser, unknown>>;
+
+  if (typeof name !== 'string' || !BROWSER_NAMES.has(name) || typeof device !== 'string' || !DEVICES.has(device)) {
     return '';
   }
 
-  const major = Number.isInteger(browser.major) && browser.major > 0 && browser.major < 1000 ? ` ${browser.major}` : '';
-
-  return `${browser.name}${major} on a ${browser.device}`;
+  return `${name}${typeof major === 'number' && Number.isInteger(major) && major > 0 && major < 1000 ? ` ${major}` : ''} on a ${device}`;
 }
 
 /** The row a failure comes to, from its fields alone. `build` is the server's, which a page of another build is told apart from. */
-export function rowOf(failure: Failure, at: number, build: string): ErrorRow {
+function rowOf(failure: Failure, at: number, build: string): ErrorRow {
   const { message, trace } = described(failure.error);
   const tableId = typeof failure.tableId === 'string' && TABLE_ID.test(failure.tableId) ? failure.tableId : '';
   const page = failure.page;
-  const pageBuild = page ? (BUILD.test(page.build) ? page.build : '?') : build;
+  const pageBuild = page ? (typeof page.build === 'string' && BUILD.test(page.build) ? page.build : '?') : build;
 
   return {
     at,
@@ -230,7 +231,7 @@ function tallyOf(kept: string | null, minute: number): Tally {
 }
 
 /** What makes two failures the same one: where, and the message with its numbers left out. */
-export const signatureOf = (row: Pick<ErrorRow, 'where' | 'message'>) => `${row.where}\n${row.message.replace(/\d+/g, '#')}`;
+const signatureOf = (row: Pick<ErrorRow, 'where' | 'message'>) => `${row.where}\n${row.message.replace(/\d+/g, '#')}`;
 
 /** The row that says how many more times a failure happened after its first row. */
 function repeatsRow(kind: Kind): ErrorRow {
@@ -261,7 +262,7 @@ function pageAllowed(tally: Tally, tableId: string, memberId: string): boolean {
  * limits is dropped. Past the rows a minute allows, a page's row is dropped and the server's is held
  * as a count. Pages may take only a few of those rows, so the server's own always have room.
  */
-export function folded(row: ErrorRow, pageMember: string | null, kept: string | null): { rows: ErrorRow[]; kept: string } {
+function folded(row: ErrorRow, pageMember: string | null, kept: string | null): { rows: ErrorRow[]; kept: string } {
   const tally = tallyOf(kept, Math.floor(row.at / 60_000));
   const rows: ErrorRow[] = [];
   const write = (written: ErrorRow, room: number = ERROR_LIMITS.rowsPerReport): boolean => {

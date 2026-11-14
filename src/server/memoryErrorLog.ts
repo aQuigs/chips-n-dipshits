@@ -10,15 +10,13 @@ export class MemoryErrorLog implements ErrorLog, ErrorShelf {
   private tally: string | null = null;
   private tallyUntil = 0;
   private readonly clock: Clock;
-  private readonly build: string;
 
-  constructor(clock: Clock, build = UNSTAMPED_BUILD) {
+  constructor(clock: Clock) {
     this.clock = clock;
-    this.build = build;
   }
 
   report(failure: Failure): void {
-    reportOn(this, this.seen, failure, this.clock.now(), this.build);
+    reportOn(this, this.seen, failure, this.clock.now(), UNSTAMPED_BUILD);
   }
 
   recall(): string | null {

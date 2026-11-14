@@ -27,8 +27,11 @@
 .next-hand {
   display: flex;
   flex-wrap: wrap;
-  justify-content: center;
   gap: 0 12px;
+}
+
+.controls.seated .next-hand {
+  justify-content: center;
 }
 
 .message.night-over > div {

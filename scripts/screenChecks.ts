@@ -1790,6 +1790,26 @@ async function assertPamShows(page: Page, screen: ScreenName, cards: (Card | nul
   const around = [...(await textBoxes(page, `.seat:not(${pam}) .plate > *`)), ...(await boxes(page, `.seat:not(${pam}) .hole .card, .board .card`)), ...(await textBoxes(page, '.message.result > div'))];
   assertApart(await boxes(page, `${pam} .hole .card`), around, `${where}: Pam's cards and the table around them`);
 }
+/** Who plays the showdown of `pamShowsHerLoser`, by seat: Stu's queens show first, Pam's fours and Quigs's fives can't beat them, and Ann's aces win. */
+const SHOWDOWN_HOLES: Record<number, string> = { 0: '5c 5d', 1: 'Qd Qc', 2: '4h 4d', 3: 'As Ah' };
+const SHOWDOWN_LINES = ['Stu shows Q♦ Q♣ (Pair of queens)', 'Pam shows 4♥ 4♦ (Pair of fours)', 'Ann shows A♠ A♥ (Pair of aces)', 'Quigs mucks'];
+
+/** Nine players and Kibitz watching, the button on Quigs. Four of them check a hand down: Pam chose to show her losers and Quigs did not. */
+function pamShowsHerLoser(rig: Rig): RigTable {
+  const table = rig.table(SHOW_PLAYERS);
+  const playing = ['Quigs', 'Stu', 'Pam', 'Ann'];
+
+  table.join('Kibitz');
+  table.act('Pam', { type: 'setAutoShow', when: 'lost', on: true });
+  table.deal({ button: 0, holes: SHOWDOWN_HOLES, board: HIGH_HAND_BOARD });
+  table.play((view, name) => (playing.includes(name) ? passive(view) : { type: 'fold' }), (view) => view.hand!.stage === 'done');
+
+  return table;
+}
+
+/** A seat's cards as a page draws them, left to right: each face-up card, or null for a back. */
+const drawnCards = (page: Page, seat: number) => page.evaluate(`[...document.querySelectorAll('.seat[data-seat="${seat}"] .hole .card')].map((card) => card.dataset.card ?? null)`) as Promise<(string | null)[]>;
+
 // Run in the page: the chat box as the player has it, with the name picked in the list marked
 const CHAT_BOX = `(() => {
   const input = document.querySelector('#chat-input');
@@ -10485,6 +10505,174 @@ const CHECKS: Check[] = [
           await each.context().close();
         }
       }
+    },
+  ],
+  [
+    'a player switches each choice to show on in Show or muck from the menu, on a 360 phone and the desktop: the menu line says what is set, nobody else is told, and a watcher has no such line',
+    async (rig) => {
+      const entry = '.menu [data-action="autoShow"]';
+      const switchOf = (when: string) => `.dialog [data-auto-show="${when}"]`;
+
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        const table = rig.table(SHOW_PLAYERS);
+        table.join('Kibitz');
+        const page = await table.open('Pam', screen);
+        const press = pressOn(page, screen);
+
+        await press('[data-action="menu"]');
+        await page.waitForSelector(entry);
+        assert.equal(await text(page, `${entry} small`), 'Muck losers · muck when folded to');
+        await press(entry);
+        await page.waitForSelector(switchOf('lost'));
+        assert.deepEqual((await texts(page, '.dialog [data-auto-show]')).map((label) => label.split('\n')[0]), ['Show my losing hands', 'Show when everyone folds to me']);
+        assert.deepEqual(await page.locator('.dialog [data-auto-show]').evaluateAll((switches) => switches.map((one) => one.getAttribute('aria-checked'))), ['false', 'false']);
+
+        await press(switchOf('lost'));
+        await page.waitForSelector(`${switchOf('lost')}[aria-checked="true"]`);
+        assert.deepEqual(table.view('Pam').you.autoShow, ['lost']);
+        await press(switchOf('foldedTo'));
+        await page.waitForSelector(`${switchOf('foldedTo')}[aria-checked="true"]`);
+        assert.deepEqual(table.view('Pam').you.autoShow, ['lost', 'foldedTo']);
+
+        assert.deepEqual(await squeezed(page, '.dialog [data-auto-show] span, .dialog .note'), [], 'what a switch says is cut off');
+        assertOnScreen(await boxes(page, '.dialog [data-auto-show], .dialog [data-action="close"]'), screen, 'the switches of the dialog');
+        const switches = await boxes(page, '.dialog [data-auto-show]');
+        switches.forEach((one, index) => assertApart([one], switches.slice(index + 1), 'two switches of the dialog'));
+        await assertNoSidewaysScroll(page);
+        await shot(page, `auto-show-dialog-${screen}`);
+
+        await press('.dialog [data-action="close"]');
+        await page.waitForSelector('.dialog', { state: 'detached' });
+        await press('[data-action="menu"]');
+        await page.waitForSelector(`${entry} small:has-text("Show losers · show when folded to")`);
+        await page.locator(entry).scrollIntoViewIfNeeded();
+        assertOnScreen(await boxes(page, entry), screen, 'the menu line');
+        assert.deepEqual(await squeezed(page, `${entry}, ${entry} small`), [], 'the menu line is cut off');
+        await shot(page, `auto-show-menu-${screen}`);
+
+        for (const other of ['Stu', 'Kibitz']) {
+          assert.deepEqual(table.view(other).you.autoShow, []);
+          assert.ok(!JSON.stringify(table.view(other)).includes('foldedTo'), `${other} is told what Pam chose`);
+        }
+
+        const watcher = await table.open('Kibitz', screen);
+        await pressOn(watcher, screen)('[data-action="menu"]');
+        await watcher.waitForSelector('.menu [data-action="history"]');
+        assert.equal(await watcher.locator(entry).count(), 0, 'a watcher is offered choices for a seat they do not have');
+
+        await page.context().close();
+        await watcher.context().close();
+      }
+    },
+  ],
+  [
+    'at a showdown at nine seats the losing hand Pam chose to show is turned up in its turn and Quigs’s is mucked, for another player and a watcher on a 360 phone standing and lying and on the desktop',
+    async (rig) => {
+      const table = pamShowsHerLoser(rig);
+      assert.deepEqual([table.view('Stu').seats[2]!.cards, table.view('Stu').seats[0]!.cards], [['4h', '4d'], [null, null]]);
+      const pages = [
+        ['Stu', 'smallPhone', await table.open('Stu', 'smallPhone')],
+        ['Kibitz', 'smallPhone', await table.open('Kibitz', 'smallPhone')],
+        ['Stu', 'desktop', await table.open('Stu', 'desktop')],
+      ] as const;
+
+      for (const [who, screen, page] of pages) {
+        await page.waitForSelector('.message.result');
+        await inShapesOf(
+          page,
+          screen,
+          async (shape) => {
+            await assertPamShows(page, screen, ['4h', '4d'], `${who} on a ${screen}, ${shape}`);
+            assert.deepEqual(await drawnCards(page, 0), [null, null], `${who} on a ${screen}, ${shape}: Quigs's mucked hand`);
+            await shot(page, `auto-show-showdown-${who}-${screen}-${shape}`);
+          },
+          { buttonsUp: false },
+        );
+      }
+
+      for (const [, , page] of pages) {
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'the play-by-play and the hand history say the loser shown by choice where a muck was, and the cards of a player everyone folded to who chose to show them',
+    async (rig) => {
+      for (const screen of PHONE_AND_DESKTOP) {
+        const table = pamShowsHerLoser(rig);
+        clearTable(table);
+        table.act('Quigs', { type: 'setAutoShow', when: 'foldedTo', on: true });
+        dealFoldedToQuigs(table, PAM_HOLE);
+
+        const stu = await table.open('Stu', screen);
+        await stu.waitForSelector('.seat[data-seat="0"] .hole .card[data-card="Jc"]');
+        assert.deepEqual(await drawnCards(stu, 0), ['Qc', 'Jc']);
+        await shot(stu, `auto-show-folded-to-${screen}`);
+        await toggleFeed(stu, screen);
+        await stu.waitForSelector('.entries li:has-text("Quigs shows")');
+        const lines = await texts(stu, '.entries li');
+        const from = lines.indexOf(SHOWDOWN_LINES[0]!);
+        assert.deepEqual(lines.slice(from, from + SHOWDOWN_LINES.length), SHOWDOWN_LINES);
+        assert.equal(lines.at(-1), 'Quigs shows Q♣ J♣');
+        assert.deepEqual(await squeezed(stu, '.entries li'), [], 'a line of the play-by-play is cut off');
+        await shot(stu, `auto-show-play-by-play-${screen}`);
+        await toggleFeed(stu, screen);
+
+        clear(rig, table);
+        const press = pressOn(stu, screen);
+        await press('[data-action="menu"]');
+        await press('.menu [data-action="history"]');
+        await stu.waitForSelector('.history summary >> nth=1');
+        await press('.history details:nth-child(1) summary');
+        await press('.history details:nth-child(2) summary');
+        const [folded, shownDown] = (await texts(stu, '.history pre')).map((hand) => hand.split('\n'));
+        assert.equal(folded!.at(-1), 'Quigs shows Q♣ J♣');
+        const at = shownDown!.indexOf(SHOWDOWN_LINES[0]!);
+        assert.deepEqual(shownDown!.slice(at, at + SHOWDOWN_LINES.length), SHOWDOWN_LINES);
+        await shot(stu, `auto-show-history-${screen}`);
+
+        await stu.context().close();
+      }
+    },
+  ],
+  [
+    'with animations on, a player everyone folded to who chose to show turns their cards over beside the game: with the turn stopped the table reads as still, and the next hand is dealt just as after a hand nobody showed',
+    async (rig) => {
+      const table = foldedToQuigs(rig);
+      const page = await table.open('Stu', 'smallPhone', MOTION, { moving: true });
+      playOut(table);
+
+      const nextDeal = async (showing: boolean) => {
+        table.act('Quigs', { type: 'setAutoShow', when: 'foldedTo', on: showing });
+        await page.evaluate('window.flights.splice(0)');
+        nextFoldedToQuigs(table, PAM_HOLE);
+        await page.waitForSelector('.message.result');
+
+        if (showing) {
+          await page.waitForFunction(`window.flights.some((flight) => flight.name === 'flip')`);
+          await page.evaluate(`window.flipping = document.getAnimations().filter((animation) => animation.id === 'flip'); window.flipping.forEach((animation) => animation.pause())`);
+          assert.deepEqual(await page.evaluate(`window.flights.filter((flight) => flight.name === 'flip' || flight.name === 'show').map((flight) => [flight.name, flight.seat])`), [['flip', 0], ['flip', 0]], 'what turned over: both of Quigs’s cards, beside the game');
+        }
+
+        await dealt(page);
+        assert.deepEqual(await drawnCards(page, 0), showing ? ['Qc', 'Jc'] : [null, null]);
+
+        await page.evaluate('window.flights.splice(0)');
+        clearTable(table);
+        table.deal({ button: 0, holes: { 0: 'Qc Jc', 2: PAM_HOLE } });
+
+        await page.waitForFunction(`window.flights.filter((flight) => flight.name === 'deal').length === ${2 * SHOW_PLAYERS.length}`);
+        await dealt(page);
+        const flights = await flown(page);
+        playOut(table);
+
+        return flights.filter((flight) => flight.name === 'deal').map(({ seat, delay, duration }) => [seat, delay, duration]);
+      };
+
+      const quiet = await nextDeal(false);
+      const shown = await nextDeal(true);
+      assert.deepEqual(shown, quiet, 'the deal after the cards shown went out otherwise');
+      assert.deepEqual(await page.evaluate('window.flipping.map((animation) => animation.playState)').then((states) => (states as string[]).filter((state) => state === 'finished')), []);
     },
   ],
 ];

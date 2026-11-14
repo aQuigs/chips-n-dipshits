@@ -1,7 +1,7 @@
 /* Random play on a test table: what the simulation runs, and what plays a saved table on after it is read back. */
 import assert from 'node:assert/strict';
 
-import { addMember, CONFIG_KEYS, fullyShown, LIMITS, mayOfferChop, MOST_RUNS, nextDeadline, owes, rabbitToHunt, REACTIONS, SEAT_COUNT, seededRng, straddlesAllowed, viewFor } from '../src/engine/index.ts';
+import { addMember, AUTO_SHOWS, CONFIG_KEYS, fullyShown, LIMITS, mayOfferChop, MOST_RUNS, nextDeadline, owes, rabbitToHunt, REACTIONS, SEAT_COUNT, seededRng, straddlesAllowed, viewFor } from '../src/engine/index.ts';
 import type { Command, GameError, Rng } from '../src/engine/index.ts';
 import type { TestTable } from './helpers.ts';
 import { randomConfig } from './randomConfig.ts';
@@ -108,6 +108,14 @@ export const FUZZ_COMMANDS: ((fuzz: Fuzz) => void)[] = [
     }
 
     attempt(t, who, chance(rng, 50) ? { type: 'offerChop' } : { type: 'answerChop', agree: chance(rng, 50) });
+  },
+  ({ t, rng }) => {
+    // Everyone at once, as with straddles, so that the hand ending next has some players showing and some not
+    for (const seat of seated(t)) {
+      for (const when of AUTO_SHOWS) {
+        attempt(t, seatOwnerIndex(t, seat), { type: 'setAutoShow', when, on: chance(rng, 40) });
+      }
+    }
   },
   ({ t, rng, who }) => attempt(t, who, { type: 'showCards', hand: handOrOneBefore(t, rng), cards: pick(rng, SHOWN_TOGETHER)! }),
   ({ t, rng, who }) => attempt(t, who, { type: 'huntRabbit', hand: handOrOneBefore(t, rng) }),

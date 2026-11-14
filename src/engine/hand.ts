@@ -1,4 +1,5 @@
 import { formatAmount } from './amounts.ts';
+import { showsAt } from './autoShow.ts';
 import { bettingIsClosed, bettingOptions, chipsFor, objectionTo, onTheClock, passesTo } from './betting.ts';
 import type { BettingAction } from './betting.ts';
 import { boardsComplete, dealStreet, dealTheRest, newBoards, potShares, runOut } from './boards.ts';
@@ -763,7 +764,9 @@ function handsByBoard(hand: Hand): Map<number, HandValue>[] {
 /**
  * Turns hands face up in showdown order: the last player to bet or raise on the river goes first, or
  * the first player left of the button if the river was checked around. After that a player shows only
- * if they can still win a pot on some board, and mucks otherwise.
+ * if they can still win a pot on some board, and otherwise mucks, unless they chose to show a hand
+ * that lost. A loser turned up by choice is shown in its turn like any other hand, and is no hand the
+ * players after it have to beat, since one shown before it already beats it.
  */
 function revealAtShowdown(state: TableState, ctx: Ctx): void {
   const hand = state.hand!;
@@ -786,9 +789,13 @@ function revealAtShowdown(state: TableState, ctx: Ctx): void {
       return values.some((onBoard) => against.every((seat) => onBoard.get(player.seat)!.score >= onBoard.get(seat)!.score));
     });
 
+    const made = ` (${values.map((onBoard) => madeHandName(onBoard.get(player.seat)!)).join(' / ')})`;
+
     if (canStillWin) {
       shown.push(player.seat);
-      show(state, ctx, player, ` (${values.map((onBoard) => madeHandName(onBoard.get(player.seat)!)).join(' / ')})`);
+      show(state, ctx, player, made);
+    } else if (showsAt(state, player.seat, 'lost')) {
+      show(state, ctx, player, made);
     } else {
       record(hand, ['muck', player.seat]);
       narrate(state, ctx, `${player.name} mucks`);
@@ -906,6 +913,11 @@ function finishUncontested(state: TableState, ctx: Ctx, winner: HandPlayer): voi
     hands: [],
     bounty: payBounty(state, ctx, winner.seat),
   });
+
+  // As if they pressed to show both the moment the hand ended: a show by choice, not a showdown
+  if (showsAt(state, winner.seat, 'foldedTo')) {
+    show(state, ctx, winner);
+  }
 }
 
 /** Whoever wins a hand holding seven-deuce collects the bounty from everyone else who was dealt in. */

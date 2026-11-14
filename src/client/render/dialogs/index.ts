@@ -1,4 +1,5 @@
 import type { TableView } from '../../../engine/view.ts';
+import { autoShowDialog } from './autoShow.ts';
 import { callBombPot, callOffBombPot } from './bombPot.ts';
 import { confirmDialog } from './confirm.ts';
 import type { DialogHandlers, DialogKind } from './dialog.ts';
@@ -48,6 +49,7 @@ const REGISTERED = [
   themeDialog,
   preferencesDialog,
   muteDialog,
+  autoShowDialog,
   standUp,
   toLobby,
   sitDialog,

@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { HANDLERS } from '../src/engine/commands/index.ts';
-import { eligibleSeats, handFacts, isStraddle, nightIsOver, REACTIONS_LIVE, SEAT_COUNT } from '../src/engine/index.ts';
+import { eligibleSeats, fullyShown, handFacts, isStraddle, nightIsOver, REACTIONS_LIVE, SEAT_COUNT } from '../src/engine/index.ts';
 import type { CommandType } from '../src/engine/commands/handler.ts';
-import type { Command, Rng, Straddle, TableConfig } from '../src/engine/index.ts';
+import type { AutoShow, Command, Rng, Straddle, TableConfig, TableState } from '../src/engine/index.ts';
 import { handRecords, ledgerEntries, seededRng, TestTable } from './helpers.ts';
 import { assertChipsConserved, assertHandRecordsHold, chopAnswers, assertInvariants, assertLedgerAgrees } from './invariants.ts';
 import { fixedSettings, randomConfig } from './randomConfig.ts';
@@ -40,7 +40,7 @@ class Recording extends TestTable {
 
 /** Random table number `seed`, started, with the generator that plays it and the settings it was given. */
 function randomTable(seed: number): { t: Recording; rng: Rng; config: TableConfig } {
-  const rng = seededRng(seed * 7993);
+  const rng = seededRng(seed * 8011);
   const players = 2 + rng.int(SEAT_COUNT - 1);
   const stacks = Array.from({ length: players }, () => (chance(rng, 15) ? 1 + rng.int(30) : 100 + rng.int(1900)));
 
@@ -53,6 +53,26 @@ function randomTable(seed: number): { t: Recording; rng: Rng; config: TableConfi
   t.cmd(0, { type: 'start' });
 
   return { t, rng, config };
+}
+
+/**
+ * Which standing choices to show the hand just ended carried out, holding it to them: a player who
+ * chose to show losers never mucks, and one everyone folded to who chose to show has both cards up.
+ */
+function autoShowsApplied(state: TableState): Record<AutoShow, boolean> {
+  const hand = state.hand!;
+  const chose = (seat: number, when: AutoShow) => state.seats[seat]!.autoShow.includes(when);
+  const mucked = new Set(hand.events.flatMap((event) => (event[0] === 'muck' ? [event[1]] : [])));
+  const live = hand.players.filter((player) => !player.folded);
+  const showdown = !hand.result!.uncontested && !hand.events.some((event) => event[0] === 'runs');
+  const winner = hand.result!.uncontested && !hand.result!.chopped ? live[0] : undefined;
+
+  assert.ok(live.every((player) => !mucked.has(player.seat) || !chose(player.seat, 'lost')), `hand ${hand.number}: a player who shows losers mucked`);
+  assert.ok(!winner || !chose(winner.seat, 'foldedTo') || fullyShown(winner.shown), `hand ${hand.number}: a player who shows when folded to did not`);
+
+  const lost = live.filter((player) => !hand.result!.winnings.some((win) => win.seat === player.seat && win.amount > 0));
+
+  return { lost: showdown && lost.some((player) => chose(player.seat, 'lost')), foldedTo: winner !== undefined && chose(winner.seat, 'foldedTo') };
 }
 
 test('random play never breaks the rules of chip accounting, secrecy or turn order', () => {
@@ -78,6 +98,8 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
   const hunts = { hunted: 0, onTwoBoards: 0 };
   // Hands in which a player showed by choice one card, the other one after it, or both at once
   const shownByChoice = { oneCard: 0, otherAfter: 0, both: 0 };
+  // Hands that ended with a player whose standing choice to show applied: a loser at a showdown that was not run out, and a player everyone folded to
+  const autoShown = { lost: 0, foldedTo: 0 };
   const straddles: Record<Straddle | 'passedOver' | 'overAnAnte' | 'shownDown', number> = { straddle: 0, 'double straddle': 0, 'button straddle': 0, 'Mississippi straddle': 0, passedOver: 0, overAnAnte: 0, shownDown: 0 };
 
   // Tables that ended with a member the list of players knows, one it does not, and two who said they were the same player
@@ -95,7 +117,7 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
         assertInvariants(t.state, t.now);
       }
 
-      const before = { hands: t.state.handCount, called: t.state.bombPotCalled, inHand: t.state.hand !== null, over: nightIsOver(t.state), effects: t.effects.length };
+      const before = { hands: t.state.handCount, called: t.state.bombPotCalled, inHand: t.state.hand !== null, over: nightIsOver(t.state), effects: t.effects.length, ended: t.state.hand?.stage === 'done' };
       const lastReaction = t.state.reactions.at(-1);
       randomStep(t, rng);
 
@@ -111,6 +133,13 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
 
       if (before.over !== nightIsOver(t.state)) {
         nights[before.over ? 'startedAgain' : before.inHand ? 'afterLastHand' : 'endedOutright'] += 1;
+      }
+
+      // Looked at in the step that ends the hand, while the choices are still the ones the engine read
+      if (t.state.hand?.stage === 'done' && !before.ended) {
+        const applied = autoShowsApplied(t.state);
+        autoShown.lost += applied.lost ? 1 : 0;
+        autoShown.foldedTo += applied.foldedTo ? 1 : 0;
       }
 
       // A hand is dealt by time passing, never by the step that called a bomb pot or changed a setting
@@ -253,6 +282,9 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
 
   const showing = `hands with cards shown by choice: ${JSON.stringify(shownByChoice)}`;
   assert.ok(shownByChoice.oneCard >= TABLES * 2 && shownByChoice.otherAfter >= TABLES / 4 && shownByChoice.both >= TABLES * 2, showing);
+
+  const choosing = `hands where a choice to show applied: ${JSON.stringify(autoShown)}`;
+  assert.ok(autoShown.lost >= TABLES && autoShown.foldedTo >= TABLES, choosing);
 
   const doubles = `double-board bomb pots: ${JSON.stringify(doubleBoards)}`;
   assert.ok(doubleBoards.chips >= TABLES / 2 && doubleBoards.cents >= TABLES / 2, doubles);

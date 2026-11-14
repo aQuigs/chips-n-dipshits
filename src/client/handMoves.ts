@@ -142,8 +142,9 @@ function stepsOf(event: HandEvent, before: ReplayPosition, after: ReplayPosition
 
     case 'show': {
       const [, seat, turned] = event;
-      // A card turned up in the pause after the hand, which a player does by choice, is beside the game: nothing waits for it
-      const name = over ? 'flip' : 'show';
+      // Cards turned up in the pause after the hand, or as it ends with everyone else folded, are no showdown's: by the
+      // player's choice or for a bounty, they are beside the game and nothing waits for them
+      const name = over || before.seats.filter((player) => !player.folded).length === 1 ? 'flip' : 'show';
 
       // The viewer has been looking at their own cards all along
       if (seat === viewer) {

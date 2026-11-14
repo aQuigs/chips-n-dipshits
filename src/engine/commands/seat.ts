@@ -1,5 +1,6 @@
 /* What a player asks for about their own seat. */
 import { formatAmount, validAmount } from '../amounts.ts';
+import { chooseAutoShow, isAutoShow } from '../autoShow.ts';
 import { choosePosting } from '../handPlan.ts';
 import { addReaction } from '../reactions.ts';
 import { leaveSeat, submit } from '../seating.ts';
@@ -110,6 +111,19 @@ export const setAlwaysChop: Handler<'setAlwaysChop'> = {
     }
 
     seat.alwaysChop = on;
+  },
+};
+
+/** Allowed at any time, during a hand too: the choice is read when a hand ends. */
+export const setAutoShow: Handler<'setAutoShow'> = {
+  by: 'seat',
+  run: ({ command, seat }) => {
+    const on = yesOrNo(command.on, 'Showing');
+    if (!isAutoShow(command.when)) {
+      throw new GameError('Say when to show your cards');
+    }
+
+    chooseAutoShow(seat, command.when, on);
   },
 };
 

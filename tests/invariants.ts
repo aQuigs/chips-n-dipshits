@@ -393,6 +393,11 @@ export function assertViewsKeepSecrets(state: TableState, now: number): void {
     assert.equal(leaked, undefined, `${viewer.name}'s view holds a card that is face down for them`);
     assert.deepEqual(view.tonight, tonight, `${viewer.name} is shown other numbers for the night than the rest of the table`);
 
+    // When a player shows without being asked is theirs alone to know, and is in no part of a view but `you`
+    const own = state.seats.find((seat) => seat?.playerId === viewer.id);
+    assert.deepEqual(view.you.autoShow, own?.autoShow ?? [], `${viewer.name} is told other choices to show than their own`);
+    assert.ok(!JSON.stringify({ ...view, you: null }).includes('"autoShow"'), `${viewer.name}'s view tells someone's choices to show`);
+
     for (const player of hand?.players ?? []) {
       const seen = view.seats[player.seat]!.cards!;
       const mine = viewer.id === player.playerId;

@@ -223,10 +223,19 @@ test('a card shown alone turns by itself, and one shown in the pause after the h
     return movesSeen(change, 0);
   };
 
-  assert.deepEqual(seen(won, [['show', 1, ['As', null]]]), ['show >cards1.0 @0'], 'with the result');
+  assert.deepEqual(seen(won, [['show', 1, ['As', null]]]), ['flip >cards1.0 @0'], 'with the result of a hand everyone folded');
   assert.deepEqual(inThePause(won, [['show', 1, [null, 'Kd']]]).map(told), ['flip >cards1.1 @0']);
   assert.deepEqual(inThePause(won, [['show', 1, ['As', 'Kd']]]).map(told), ['flip >cards1 @0']);
   assert.deepEqual(inThePause(won, [['show', 0, ['Qc', null]]]), [], 'the viewer’s own card');
+});
+
+test('a winner everyone folded to who chose to show turns up beside the game with the result, and a loser who chose to at a showdown turns in the game’s lane', () => {
+  const folded: HandEvent[] = [...DEALT, ['fold', 0], ['fold', 1], ['return', 2, 10]];
+  assert.deepEqual(seen(folded, [['win', 2, 20, 0, 0], ['show', 2, ['As', 'Kd']]]), ['chips 10 bet1>pot @0', 'chips 10 bet2>pot @0', 'chips 20 pot>seat2 @0', 'flip >cards2 @0']);
+  assert.deepEqual(seen(folded, [['show', 2, ['7s', '2d']], ['bounty', 2, [[0, 50], [1, 50]]]]), ['flip >cards2 @0', 'chips 50 seat0>seat2 @0', 'chips 50 seat1>seat2 @0'], 'seven-deuce turned up for its bounty');
+
+  const river: HandEvent[] = [...ON_THE_FLOP, ['street', 0, ['9h']], ['street', 0, ['4c']], ['check', 1], ['check', 2], ['check', 0]];
+  assert.deepEqual(seen(river, [['show', 1, ['Ac', 'Ad']], ['show', 2, ['7d', '2s']], ['muck', 0], ['win', 1, 60, 0, 0]]), ['show >cards1 @0', 'show >cards2 @0', 'chips 60 pot>seat1 @0']);
 });
 
 test('a new hand slides the blinds in as the cards go out, around the table from the button’s left', () => {

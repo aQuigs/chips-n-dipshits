@@ -453,6 +453,19 @@ test('every saved table loads with rabbit hunting off and nothing hunted', () =>
   }
 });
 
+test('every saved table loads with every player mucking as before, and a table saved with choices to show keeps them', () => {
+  for (const file of FILES) {
+    assert.ok(load(file).seats.every((seat) => !seat || seat.autoShow.length === 0), file);
+  }
+
+  const t = new TestTable({ stacks: [1000, 1000] });
+  t.cmd(1, { type: 'setAutoShow', when: 'foldedTo', on: true });
+  t.cmd(1, { type: 'setAutoShow', when: 'lost', on: true });
+
+  const saved = restoreState(JSON.stringify(t.state));
+  assert.deepEqual(saved.seats.slice(0, 2).map((seat) => seat!.autoShow), [[], ['lost', 'foldedTo']]);
+});
+
 test('every table saved before schema 6 loads in one go with what was shown as a flag for each card: a hand shown is both, one not shown is neither', () => {
   for (const file of FILES) {
     const saved = JSON.parse(readFileSync(new URL(file, FOLDER), 'utf8')) as { state?: TableState } & TableState;

@@ -1,4 +1,5 @@
 export * from './amounts.ts';
+export * from './autoShow.ts';
 export * from './badges.ts';
 export * from './betting.ts';
 export * from './boards.ts';

@@ -20,7 +20,7 @@ import { memberOf, seatIndexOf } from './seats.ts';
 import { asSeen, fullyShown } from './shown.ts';
 import { tonightView } from './tonight.ts';
 import type { TonightView } from './tonight.ts';
-import type { BombPot, FeedEntry, Hand, HandPlayer, HandResult, HandStage, PassedOver, PlayerAction, Reaction, RequestKind, Straddle, StraddlePost, Street, TableConfig, TableState } from './types.ts';
+import type { AutoShow, BombPot, FeedEntry, Hand, HandPlayer, HandResult, HandStage, PassedOver, PlayerAction, Reaction, RequestKind, Straddle, StraddlePost, Street, TableConfig, TableState } from './types.ts';
 
 /** A hole card as one viewer sees it: the card, or null when it is face down for them. */
 export type VisibleCard = Card | null;
@@ -147,8 +147,11 @@ export interface TableView {
   nextHandAt: number | null;
   /** Hands dealt at this table so far. */
   handCount: number;
-  /** `role` says which of the host's powers the viewer has: whether a command needs them is its handler's `by`. */
-  you: { id: string; name: string; role: Role; seat: number | null; identity: string | null };
+  /**
+   * `role` says which of the host's powers the viewer has: whether a command needs them is its handler's `by`.
+   * `autoShow` is when their seat shows cards without their asking, theirs alone to see; empty without a seat.
+   */
+  you: { id: string; name: string; role: Role; seat: number | null; identity: string | null; autoShow: AutoShow[] };
   seats: (SeatView | null)[];
   hand: HandView | null;
   /** The seats are shuffled when the hand ends. */
@@ -268,7 +271,7 @@ export function viewFor(state: TableState, playerId: string, now: number): Table
     running: state.running,
     nextHandAt: state.nextHandAt,
     handCount: state.handCount,
-    you: { id: me.id, name: me.name, role, seat: mySeat >= 0 ? mySeat : null, identity: me.identity },
+    you: { id: me.id, name: me.name, role, seat: mySeat >= 0 ? mySeat : null, identity: me.identity, autoShow: mySeat >= 0 ? [...state.seats[mySeat]!.autoShow] : [] },
     seats,
     hand: handView,
     shuffleAfterHand: state.shuffleAfterHand,

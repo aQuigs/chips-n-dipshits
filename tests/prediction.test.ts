@@ -348,7 +348,7 @@ test('for whoever is to act on random tables, every move the page predicts is th
   const blindFacing: Record<Straddle, number> = { ...straddled };
 
   for (let seed = 1; seed <= TABLES; seed++) {
-    const rng = seededRng(seed * 104_729);
+    const rng = seededRng(seed * 104_743);
     const players = 2 + rng.int(SEAT_COUNT - 1);
     const stacks = Array.from({ length: players }, () => (chance(rng, 25) ? 1 + rng.int(60) : 100 + rng.int(1900)));
     // A small blind who may chop needs three players or more and nothing but the blinds in, which random settings and

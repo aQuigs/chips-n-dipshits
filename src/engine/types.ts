@@ -115,7 +115,16 @@ export interface Seat {
   postsOwed: boolean;
   /** Chops the blinds whenever the other blind would too, without being asked: see `chop.ts`. Only at a table that allows chops. */
   alwaysChop: boolean;
+  /** When this player's cards are turned up without their asking, where the table would leave them face down: see `autoShow.ts`. Theirs alone to see. */
+  autoShow: AutoShow[];
 }
+
+/**
+ * A standing choice to show cards the rules let a player keep face down. lost: a hand that cannot win
+ * anything at a showdown is turned up in its turn instead of mucked. foldedTo: when everyone folds to
+ * the player, both cards are shown the moment the hand ends.
+ */
+export type AutoShow = 'lost' | 'foldedTo';
 
 /** Where a hand's blinds fall, as seats: one may have nobody posting from it. */
 export interface BlindSeats {
@@ -519,6 +528,8 @@ export type Command =
   | { type: 'answerChop'; agree: boolean; turn?: number }
   /** Says whether the player chops the blinds whenever the other blind would too. */
   | { type: 'setAlwaysChop'; on: boolean }
+  /** Says whether the player's cards are shown at `when` without their asking: see `AutoShow`. */
+  | { type: 'setAutoShow'; when: AutoShow; on: boolean }
   /** How many times the player wants the rest of an all-in hand run: see `runVote.ts`. */
   | { type: 'ritVote'; runs: number }
   /** Turns face up, once hand number `hand` is over, the sender's hole cards at these places: 0 for the one on their left, 1 for the other. */

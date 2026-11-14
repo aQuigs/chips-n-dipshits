@@ -98,7 +98,7 @@ interface SavedDefaults {
 export const SAVED_DEFAULTS: SavedDefaults = {
   table: () => ({ cohostIds: [], shuffleAfterHand: false, bombPotCalled: false, handsSinceBombPot: 0, lastHand: null, nightEndedAt: null, blinds: null, tonight: newTonight(), reactions: [] }),
   member: () => ({ transferred: 0, identity: null }),
-  seat: () => ({ moveTo: null, owesBigBlind: false, owesSmallBlind: false, postsOwed: false, alwaysChop: false }),
+  seat: () => ({ moveTo: null, owesBigBlind: false, owesSmallBlind: false, postsOwed: false, alwaysChop: false, autoShow: [] }),
   hand: () => ({ events: [], bombPot: null, passedOver: [], chopOffered: false, hunted: null }),
   handPlayer: () => ({ dead: 0 }),
   record: () => ({ events: [], bombPot: null, bigBlind: 0 }),

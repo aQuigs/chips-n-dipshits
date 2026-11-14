@@ -98,6 +98,7 @@ const DECLARED: { [T in CommandType]: { by: 'member' | 'seat' } | { by: HostLeve
   comeIn: { by: 'seat' },
   setStraddle: { by: 'seat' },
   setAlwaysChop: { by: 'seat' },
+  setAutoShow: { by: 'seat' },
   fold: { by: 'member' },
   check: { by: 'member' },
   call: { by: 'member' },

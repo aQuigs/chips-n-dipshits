@@ -49,4 +49,5 @@ export const STYLESHEETS = [
   'gifs.css',
   'show-one.css',
   'who.css',
+  'auto-show.css',
 ];

@@ -26,8 +26,19 @@ export interface DevServerOptions {
   service?: PokerService;
   /** Where the fresh game writes its failures, when one is not passed. */
   errors?: ErrorLog;
-  /** Awaited before each request to the game is handled, once any wait for news is over: a check passes one to answer as late as a busy machine would. */
-  lag?: (body: unknown, request: IncomingMessage) => Promise<void>;
+  /**
+   * Answers each request to the game in the server's place, given the server's own way of answering:
+   * a check passes one to hear and answer as late as a busy machine would.
+   */
+  answer?: (body: unknown, request: IncomingMessage, server: Answering) => Promise<unknown>;
+}
+
+/** The two things the server does with a request to the game, for whoever answers in its place. */
+export interface Answering {
+  /** Resolves when a poll's wait for news is over, and at once for anything else. */
+  untilNews(body: unknown): Promise<void>;
+  /** The game's answer, as the table stands when it is asked. */
+  handle(body: unknown): unknown;
 }
 
 export interface DevServer {
@@ -100,6 +111,17 @@ export async function startDevServer(options: DevServerOptions): Promise<DevServ
     }
   };
 
+  // Whichever build the server is when it is asked, which a deploy may change while a request is held
+  const answering: Answering = { untilNews: holdUntilNews, handle: (body) => service.handle(body) };
+
+  const answer =
+    options.answer ??
+    (async (body, _request, server) => {
+      await server.untilNews(body);
+
+      return server.handle(body);
+    });
+
   const respond = (response: ServerResponse, status: number, type: string, body: string): void => {
     response.writeHead(status, { 'Content-Type': `${type}; charset=utf-8`, 'Cache-Control': 'no-store' });
     response.end(body);
@@ -117,9 +139,7 @@ export async function startDevServer(options: DevServerOptions): Promise<DevServ
     if (request.method === 'POST' && path === '/api') {
       const body: unknown = JSON.parse(await readBody(request));
 
-      await holdUntilNews(body);
-      await options.lag?.(body, request);
-      respond(response, 200, 'application/json', JSON.stringify(service.handle(body)));
+      respond(response, 200, 'application/json', JSON.stringify(await answer(body, request, answering)));
       return;
     }
 

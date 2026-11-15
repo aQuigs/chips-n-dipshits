@@ -26,6 +26,11 @@ test('no screen check asks the screen for a toast', () => {
   assert.deepEqual(linesWith(CHECKS, /\.toast\b/), [], 'a toast is gone from the screen in seconds: ask what the page told with toastTold or toasts (scripts/pageSpies.ts)');
 });
 
+test('no screen check empties what a page wrote down, or reads its moves but by the table’s version', () => {
+  assert.deepEqual(linesWith(CHECKS, /\b(flights|played|buzzes|notices|titles|toasts)\.(splice\(|shift\(|pop\(|length\s*=(?!=))/), [], 'a page that is behind brings the last step’s news after the emptying: ask for what one step brought');
+  assert.deepEqual(linesWith(CHECKS, /window\.flights\b/), [], 'ask with flightsSince(table.version from before the step), or flown(page, since) (scripts/pageSpies.ts)');
+});
+
 test('no screen check gives a wait a timeout of its own', () => {
   assert.deepEqual(linesWith(CHECKS, /\btimeout:/), [], 'the rig’s timeout is the one with room for a slow runner');
 });

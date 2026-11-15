@@ -39,7 +39,7 @@ export interface Toast {
  * since it throws the older one's away. A page loaded again starts both afresh.
  */
 export const RIG_PAGE = (now: number) => `(() => {
-  const rig = { now: ${now}, version: -1, toasts: [] };
+  const rig = { now: ${now}, version: -1, drawing: -1, toasts: [] };
 
   rig.forward = (ms) => {
     rig.now = Math.max(rig.now, ms);
@@ -56,6 +56,8 @@ export const RIG_PAGE = (now: number) => `(() => {
     }
 
     if (typeof view?.version === 'number' && !thrownAway) {
+      // Set before the page has done anything with the answer, so that whatever it does with it is counted to this version
+      rig.drawing = Math.max(rig.drawing, view.version);
       setTimeout(() => (rig.version = Math.max(rig.version, view.version)), 0);
     }
   };
@@ -179,6 +181,10 @@ export interface PageNow {
   toastUp: boolean;
   /** Each sound played, by its voices; null on a page nothing listens to. */
   sounds: string[][] | null;
+  /** Each move set off, by the version of the table it was for and its name; null on a page whose moves nothing writes down. */
+  flights: [version: number, name: string][] | null;
+  /** What the page's other spies wrote down, by the spy's name. */
+  spies: Record<string, string>;
 }
 
 // Run in the page: what it shows, in few enough words to print under a check that failed
@@ -204,6 +210,8 @@ export const PAGE_NOW = `(() => {
     toasts: (window.rig?.toasts ?? []).map((toast) => toast.text),
     toastUp: document.querySelector('.toast:not([hidden])') !== null,
     sounds: window.played ? window.played.map((sound) => sound.voices) : null,
+    flights: window.flights ? window.flights.map((flight) => [flight.version, flight.name]) : null,
+    spies: Object.fromEntries(['buzzes', 'notices', 'titles'].filter((spy) => window[spy]).map((spy) => [spy, JSON.stringify(window[spy]).slice(0, 300)])),
   };
 })()`;
 
@@ -410,6 +418,8 @@ export interface Flight {
   duration: number;
   /** The frame of the page it was set off in, counted from when the page opened. */
   frame: number;
+  /** The version of its table the page had last been brought when it set the move off: the view the move is for. */
+  version: number;
 }
 
 /**
@@ -467,6 +477,7 @@ export const MOTION = `(() => {
       delay: options.delay,
       duration: options.duration,
       frame: window.frame,
+      version: window.rig.drawing,
     });
 
     animation.currentTime = 0;
@@ -485,4 +496,20 @@ export const MOTION = `(() => {
   };
 
   window.land = () => held.splice(0).forEach((animation) => animation.playState === 'paused' && animation.finish());
+
+  // The flights stay, for a check to ask at any time for those of one step: this only keeps how far it has read them all
+  let read = 0;
+  window.unread = () => {
+    const from = read;
+    read = window.flights.length;
+
+    return window.flights.slice(from);
+  };
 })()`;
+
+/**
+ * Run in a page with `MOTION`: what it has set moving for a view of its table newer than version `since`,
+ * which is `table.version` taken before the step whose moves are asked for. A page that is behind still
+ * has the moves of earlier steps to come, and they are not among these. With no version, all it ever set moving.
+ */
+export const flightsSince = (since = -Infinity) => `window.flights.filter((flight) => flight.version > ${since})`;

@@ -9,14 +9,17 @@ import { format, inspect } from 'node:util';
 
 import { runPool } from './pool.ts';
 import type { Result } from './pool.ts';
-import { RigBrowser, STALL_MS } from './rig.ts';
-import type { Rig } from './rig.ts';
+import { RigBrowser, STALL_MS, STALL_WAYS } from './rig.ts';
+import type { Rig, StallWay } from './rig.ts';
 
 export type Check = [name: string, run: (rig: Rig) => Promise<void>];
 
+/** A check and how the pages of its rig are slow, when the run is a stalled one. */
+type Stalled = [...Check, way: StallWay | undefined];
+
 export interface CheckRun {
-  /** Runs only the checks with this in their name. */
-  only?: string;
+  /** Runs only the checks with one of these in their name, which in a stalled run starts with `[deaf]` or `[behind]`; every check when there are none. */
+  only: string[];
   /** The folder, ending in a slash, for pictures of the pages of a check that failed or was stopped. */
   picturesIn: string;
 }
@@ -101,15 +104,17 @@ const telling = (thrown: unknown) =>
 
 /** Runs the checks and prints how each went, then the failures again and how long it all took. Resolves to whether every check passed. */
 export async function runChecks(checks: readonly Check[], { only, picturesIn }: CheckRun): Promise<boolean> {
-  const chosen = checks.filter(([name]) => !only || name.includes(only));
+  // A stalled run puts every check through each way a page can be slow
+  const ways: readonly (StallWay | undefined)[] = STALL_MS > 0 ? STALL_WAYS : [undefined];
+  const chosen = ways.flatMap((way) => checks.map(([name, run]): Stalled => [way ? `[${way}] ${name}` : name, run, way])).filter(([name]) => only.length === 0 || only.some((part) => name.includes(part)));
   const notes = chosen.map((): string[] => []);
   const workers = Array.from({ length: Math.min(workerCount(), chosen.length) }, (): Worker => ({ browser: new RigBrowser(), lines: [] }));
   const printedOn = keepPrintsApart();
   const started = performance.now();
 
   /** One check on a rig of its own. `said` takes what there is to tell of it besides how it ended. */
-  const runCheck = async ([name, run]: Check, browser: RigBrowser, stop: AbortSignal, said: string[]): Promise<void> => {
-    const rig = await browser.rig();
+  const runCheck = async ([name, run, way]: Stalled, browser: RigBrowser, stop: AbortSignal, said: string[]): Promise<void> => {
+    const rig = await browser.rig(way);
 
     // A check out of time is waiting on something: closing its pages under it makes that wait throw, which says where it was
     stop.addEventListener('abort', () => {
@@ -196,7 +201,7 @@ export async function runChecks(checks: readonly Check[], { only, picturesIn }: 
   }
 
   if (results.length === 0) {
-    process.stdout.write(`No check has "${only ?? ''}" in its name.\n`);
+    process.stdout.write(`No check has ${only.map((part) => `"${part}"`).join(' or ')} in its name.\n`);
   } else {
     process.stdout.write(`\n${results.length} checked and ${failures.length} failed in ${seconds(performance.now() - started)}, ${workers.length} at a time (CHECK_WORKERS sets how many).\n`);
   }

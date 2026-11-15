@@ -7,7 +7,7 @@ Multiplayer no-limit hold'em whose backend is a Google Sheet with an Apps Script
 - `npm test`: unit tests, a few seconds. Run after every change.
 - `npm run build`: type-checks all three TypeScript projects (Node, client, Apps Script) and builds `dist/`.
 - `npm run test:e2e`: plays a full game in headless browsers, about three minutes. Run after any change to `src/client`, then look at the pictures it leaves in `screenshots/`.
-- `npm run test:stall`: the screen checks on a rig as slow as a busy machine, about nine minutes. Not run by CI; see "How a screen check is written".
+- `npm run test:stall`: the screen checks on a rig as slow as a busy machine, about twenty minutes. Not run by CI; see "How a screen check is written".
 - `npm run dev`: the game on localhost with tables in memory.
 - `npm run deploy`: pushes the build to Apps Script. Outward-facing: only when asked.
 - `npm run check:live`: plays a short game at the deployed address. Run after every deploy; it adds a table to the real Sheet.
@@ -66,16 +66,17 @@ Multiplayer no-limit hold'em whose backend is a Google Sheet with an Apps Script
 
 ## How a screen check is written
 
-A check must pass on a machine too slow to keep up. `npm run test:stall -- "part of its name"` is that machine, where a race that loses one run in many loses every time: run it on every check a PR adds or changes.
+A check must pass on a machine too slow to keep up. `npm run test:stall -- "part of its name" "part of another"` is that machine, and runs each check both ways a page can be slow: `[deaf]`, it hears nothing for five seconds after a step and then only how the table stands; `[behind]`, it is given every view in order, each late. A race that loses one run in many loses there every time: run it on every check a PR adds or changes.
 
 - A page's clock is the rig's (`RIG_PAGE` in `scripts/pageSpies.ts`): `Date.now` stands still through any real wait and moves only with `rig.advance`, so a page left waiting never takes the table's news for older than it is. Never pin a page's clock; to show that something the page counts by the clock runs or stands (a countdown, the wait between reactions, a move gone unanswered), move the rig's. `page.clock.install` is only for a check that steps the page's timers, and takes that page off the rig's clock.
-- After a step, wait on each page you go on to read for something only that step brings. Where nothing new shows, or what you would wait for was there before the step, `await table.heardBy(page)`: it waits for the table's version, which only the server's answer brings.
+- After a step, wait on each page you go on to read for something only that step brings. A result on the felt, cards at rest or a button were there after the hand before too, and a page that is behind passes such a wait a whole view early. Where what you would wait for was there before the step, or nothing new shows, `await table.heardBy(page)`: it waits for the table's version, which only the server's answer brings.
 - A page that must tell news on its own (a toast, a sound, a move it plays) has heard of every earlier step first, with `table.heardBy`: handed two steps in one view it may take the lot for missed and tell nothing.
 - A page asks the server for something itself (the hand history, a list) only once it has heard of the last step: asked sooner, the answer can be from before the step, and nothing draws it again.
 - A tap that sends a command other than a move (a reaction, a switch) is still on its way when the check's next line runs: make it with `answeredTo` (`scripts/pageSpies.ts`) before reading the rig's side or stepping it, as a move is made with `answeredAfter`.
 - What a page told in a toast is asked with `toastTold` or `toasts` (`scripts/pageSpies.ts`), never a selector: a toast is gone in 4.5 seconds and a busy machine looks later.
+- What a page set moving is asked for by step: `const before = table.version`, the step, then `flightsSince(before)` in the page or `flown(page, before)`. Nothing a page wrote down is ever emptied: a page that is behind brings the last step's moves after the emptying, and an exact count of what came since never comes true.
 - No wait gets a `timeout` of its own: the rig's is the one with room for a slow runner and for a stalled run.
-- A check that fails prints what each of its pages showed and saves `screenshots/failed-*.png`. Read that before running it again.
+- A check that fails prints, for each of its pages, what it showed against the table as the rig has it and what its spies wrote down (toasts, sounds, moves by version), and saves `screenshots/failed-*.png`. Read that before running it again.
 - `tests/screenCheckRules.test.ts` holds the script to the rules a pattern can find. A new class of race gets a helper and, where a pattern can find it, a line there.
 
 ## Google side

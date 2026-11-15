@@ -31,7 +31,7 @@ import { PUT_AWAY_AFTER_MS, PUT_AWAY_MESSAGE } from '../src/server/putAway.ts';
 import { contrast } from '../tests/colorVision.ts';
 import { boxes, Gate, overlap, Rig, RigTable, SCREENS, setStageHeight, squeezed, textBoxes } from './rig.ts';
 import type { Box, RigDeal, RigPlayer, ScreenName } from './rig.ts';
-import { answeredAfter, answeredTo, complaints, LISTEN, MOTION, movesSent, NOTICES, opsSent, ownComplaints, soundOf, SPOTS, TITLES, toastTold, toasts, toldOf } from './pageSpies.ts';
+import { answeredAfter, answeredTo, complaints, flightsSince, LISTEN, MOTION, movesSent, NOTICES, opsSent, ownComplaints, soundOf, SPOTS, TITLES, toastTold, toasts, toldOf } from './pageSpies.ts';
 import type { Flight, Spots } from './pageSpies.ts';
 import { STAND_IN_HOST } from './standInHost.ts';
 import { runChecks } from './checkRunner.ts';
@@ -626,12 +626,15 @@ const inTheAir = (page: Page) =>
  */
 const CELEBRATION_MS: Partial<Record<MoveName, number>> = { facedown: MOST_SWEAT_MS, reveal: MOST_SWEAT_MS, confetti: MOST_VIEW_MS + MOVE_MS.confetti, throw: MOVE_MS.throw };
 
-/** What the page has set moving since it was last asked, once all of it has landed. Moves held in the air are let go first. */
-async function flown(page: Page): Promise<Flight[]> {
+/**
+ * What the page has set moving since it was last asked, once all of it has landed; with `since`, only
+ * what of that was for a view of its table newer than that version. Moves held in the air are let go first.
+ */
+async function flown(page: Page, since = -Infinity): Promise<Flight[]> {
   await page.evaluate('window.land()');
   await dealt(page);
 
-  const flights = (await page.evaluate('window.flights.splice(0)')) as Flight[];
+  const flights = ((await page.evaluate('window.unread()')) as Flight[]).filter((flight) => flight.version > since);
 
   for (const flight of flights) {
     const most = CELEBRATION_MS[flight.name];
@@ -1787,13 +1790,14 @@ const drawnCards = (page: Page, seat: number) => page.evaluate(`[...document.que
 
 /** Deals the next hand at the nine-seat table, with the game paused, and gives back when each card of the deal left and how long it took on `page`. */
 async function dealFlights(table: RigTable, page: Page): Promise<(number | null)[][]> {
-  await page.evaluate('window.flights.splice(0)');
   clearTable(table);
+
+  const cleared = table.version;
   table.deal({ button: 0, holes: { 0: 'Qc Jc', 2: PAM_HOLE } });
 
-  await page.waitForFunction(`window.flights.filter((flight) => flight.name === 'deal').length === ${2 * SHOW_PLAYERS.length}`);
+  await page.waitForFunction(`${flightsSince(cleared)}.filter((flight) => flight.name === 'deal').length === ${2 * SHOW_PLAYERS.length}`);
   await dealt(page);
-  const flights = await flown(page);
+  const flights = await flown(page, cleared);
   playOut(table);
 
   return flights.filter((flight) => flight.name === 'deal').map(({ seat, delay, duration }) => [seat, delay, duration]);
@@ -2200,7 +2204,6 @@ const CHECKS: Check[] = [
 
       const page = await table.open('Quigs', 'smallPhone', MOTION, { moving: true });
       await dealt(page);
-      await page.evaluate('window.flights.splice(0)');
 
       // Thrown as this machine draws its emoji, and again with them drawn far wider: it leaves and lands on the same seats
       for (const glyph of ['own-emoji', 'wide-emoji']) {
@@ -2210,9 +2213,10 @@ const CHECKS: Check[] = [
           rig.advance(REACTION_LIFE_MS);
         }
 
+        const before = table.version;
         table.act('Sam', { type: 'react', kind: 'tomato', to: table.auth('Pam').id });
         await page.waitForSelector('.seat-reaction[data-reaction="tomato"]');
-        const [flight, ...others] = await flown(page);
+        const [flight, ...others] = await flown(page, before);
 
         assert.deepEqual(others, [], `more moved than the throw (${glyph})`);
         assert.ok(flight && flight.name === 'throw' && flight.what === 'mark' && flight.standIn && flight.text === '🍅', JSON.stringify(flight));
@@ -2226,19 +2230,20 @@ const CHECKS: Check[] = [
       // A hand dealt on a quiet table, then one dealt with a throw in the same moment: every card goes out just as it did
       const deal = async (throwing: boolean) => {
         playOut(table);
+        await table.heardBy(page);
         await page.waitForSelector('.seat-reaction', { state: 'detached' });
         await dealt(page);
-        await page.evaluate('window.flights.splice(0)');
 
         rig.advance(REACTION_GAP_MS);
+        const before = table.version;
         table.dealNext();
         if (throwing) {
           table.act('Lu', { type: 'react', kind: 'beer', to: table.auth('Quigs').id });
           await page.waitForSelector('.seat-reaction[data-reaction="beer"]');
         }
 
-        await page.waitForFunction(`window.flights.filter((flight) => flight.name === 'deal').length === ${2 * NINE_REACTING.length}`);
-        const flights = await flown(page);
+        await page.waitForFunction(`${flightsSince(before)}.filter((flight) => flight.name === 'deal').length === ${2 * NINE_REACTING.length}`);
+        const flights = await flown(page, before);
 
         return { deal: flights.filter((flight) => flight.name === 'deal').map(({ delay, duration }) => [delay, duration]), throws: flights.filter((flight) => flight.name === 'throw').length };
       };
@@ -2258,7 +2263,7 @@ const CHECKS: Check[] = [
       const page = await table.open('Quigs', 'phone', MOTION);
       table.act('Sam', { type: 'react', kind: 'fish', to: table.auth('Quigs').id });
       await page.waitForSelector('.seat-reaction[data-reaction="fish"]');
-      assert.equal(await page.evaluate('window.flights.length'), 0, 'something moved with motion off');
+      assert.equal(await page.evaluate(`${flightsSince()}.length`), 0, 'something moved with motion off');
       await assertMarkOn(page, 'fish', 0, 'Sam threw a fish at Quigs');
 
       await page.tap('[data-action="menu"]');
@@ -2268,12 +2273,11 @@ const CHECKS: Check[] = [
       await shot(page, 'reactions-preference-phone');
       await page.tap('.dialog [data-action="close"]');
 
-      // Everyone else's are hidden, at the tap and from the table alike; the chat line after them says they have arrived
+      // Everyone else's are hidden, at the tap and from the table alike
       rig.advance(REACTION_GAP_MS);
       table.act('Pam', { type: 'react', kind: 'laugh' });
       table.act('Al', { type: 'react', kind: 'poop', to: table.auth('Quigs').id });
-      table.act('Al', { type: 'chat', text: 'take that' });
-      await page.waitForSelector('.feed li:has-text("take that")', { state: 'attached' });
+      await table.heardBy(page);
       assert.equal(await page.locator('.seat-reaction:not([data-reaction="fish"])').count(), 0, 'another player’s reaction shows with them switched off');
 
       // A tap anywhere else puts the picker away
@@ -2313,7 +2317,8 @@ const CHECKS: Check[] = [
 
       // Two throws back to back as the river comes face down, in the one view so that none can reach the page after the river has turned,
       // and each stopped halfway for as long as the check looks, while the page turns the river in its own time
-      await page.evaluate(`window.holdAt = 0.5; window.holdOnly = 'throw'; window.flights.length = 0`);
+      await page.evaluate(`window.holdAt = 0.5; window.holdOnly = 'throw'`);
+      const before = table.version;
       rig.advance(table.view('Quigs').hand!.deadline! - rig.now());
       table.act('Pam', { type: 'react', kind: 'tomato', to: table.auth('Quigs').id });
       table.act('Al', { type: 'react', kind: 'fish', to: table.auth('Stu').id });
@@ -2321,7 +2326,7 @@ const CHECKS: Check[] = [
       await page.waitForSelector('.message.result');
       await dealt(page);
 
-      const began = (await page.evaluate('window.flights.map((flight) => flight.name)')) as string[];
+      const began = (await page.evaluate(`${flightsSince(before)}.map((flight) => flight.name)`)) as string[];
       assert.ok(began.includes('facedown') && began.lastIndexOf('throw') < began.indexOf('chips'), `the throws were not in the air while the river lay face down: ${began.join(', ')}`);
       assert.equal(await page.locator('.board-card.stand-in').count(), 0, 'the river is still face down');
       // Still in the air, or taken off with the table they flew over when it was drawn again: never landed, which would end the check's hold
@@ -7148,7 +7153,7 @@ const CHECKS: Check[] = [
 
         for (const [name, { moving }] of watched) {
           const winner = ((await moving.evaluate(SPOTS)) as Spots).plates[1]!;
-          const thrown = ((await moving.evaluate('window.flights')) as Flight[]).filter((flight) => flight.what === 'confetti');
+          const thrown = ((await moving.evaluate(flightsSince())) as Flight[]).filter((flight) => flight.what === 'confetti');
           const air = await inTheAir(moving);
 
           assert.equal(thrown.length, CONFETTI_PIECES, where(`the burst, as ${name}`));
@@ -9577,26 +9582,28 @@ const CHECKS: Check[] = [
 
       const nextDeal = async (hunting: boolean) => {
         foldedTo(table, 3);
+        await table.heardBy(page);
         await page.waitForSelector('.message.result [data-action="hunt"]');
         await dealt(page);
 
         if (hunting) {
           rig.advance(table.view('Stu').hand!.deadline! - rig.now() - 1);
           await page.evaluate('window.holdAt = 0.5');
+          const before = table.version;
           table.act('Stu', { type: 'huntRabbit', hand: table.view('Stu').hand!.number });
-          await page.waitForFunction(`window.flights.filter((flight) => flight.name === 'hunt').length === 2`);
+          await page.waitForFunction(`${flightsSince(before)}.filter((flight) => flight.name === 'hunt').length === 2`);
           await page.evaluate(`window.holdAt = null; window.hunting = document.getAnimations().filter((animation) => animation.id === 'hunt')`);
           await dealt(page);
         }
 
-        await page.evaluate('window.flights.splice(0)');
         table.act('Quigs', { type: 'pause' });
         table.play(() => null, (view) => view.hand === null);
+        const cleared = table.version;
         table.deal({ button: 0, holes: RABBIT_HOLES, board: RABBIT_BOARD });
 
-        await page.waitForFunction(`window.flights.filter((flight) => flight.name === 'deal').length === ${2 * RABBIT_PLAYERS.length}`);
+        await page.waitForFunction(`${flightsSince(cleared)}.filter((flight) => flight.name === 'deal').length === ${2 * RABBIT_PLAYERS.length}`);
         await dealt(page);
-        const flights = await flown(page);
+        const flights = await flown(page, cleared);
         playOut(table);
 
         return flights.filter((flight) => flight.name === 'deal').map(({ seat, delay, duration }) => [seat, delay, duration]);
@@ -10234,16 +10241,18 @@ const CHECKS: Check[] = [
 
       const nextDeal = async (showing: boolean) => {
         nextFoldedToQuigs(table, PAM_HOLE);
+        await table.heardBy(page);
         await page.waitForSelector('.message.result');
         await dealt(page);
 
         if (showing) {
           rig.advance(table.view('Stu').hand!.deadline! - rig.now() - 1);
           await page.evaluate('window.holdAt = 0.5');
+          const before = table.version;
           table.act('Pam', { type: 'showCards', hand: table.view('Stu').hand!.number, cards: [0] });
-          await page.waitForFunction(`window.flights.filter((flight) => flight.name === 'flip').length === 1`);
+          await page.waitForFunction(`${flightsSince(before)}.filter((flight) => flight.name === 'flip').length === 1`);
           await page.evaluate(`window.holdAt = null; window.flipping = document.getAnimations().filter((animation) => animation.id === 'flip')`);
-          assert.deepEqual(await page.evaluate(`window.flights.filter((flight) => flight.name === 'flip').map((flight) => [flight.seat, flight.text])`), [[2, 'A♠']], 'what turned over');
+          assert.deepEqual(await page.evaluate(`${flightsSince(before)}.filter((flight) => flight.name === 'flip').map((flight) => [flight.seat, flight.text])`), [[2, 'A♠']], 'what turned over');
           await dealt(page);
         }
 
@@ -10819,14 +10828,17 @@ const CHECKS: Check[] = [
 
       const nextDeal = async (showing: boolean) => {
         table.act('Quigs', { type: 'setAutoShow', when: 'foldedTo', on: showing });
-        await page.evaluate('window.flights.splice(0)');
+        const before = table.version;
         nextFoldedToQuigs(table, PAM_HOLE);
+
+        // A result, cards at rest and Quigs's cards face down are as true of the hand before as of this one: only the version says which the page shows
+        await table.heardBy(page);
         await page.waitForSelector('.message.result');
 
         if (showing) {
-          await page.waitForFunction(`window.flights.some((flight) => flight.name === 'flip')`);
+          await page.waitForFunction(`${flightsSince(before)}.some((flight) => flight.name === 'flip')`);
           await page.evaluate(`window.flipping = document.getAnimations().filter((animation) => animation.id === 'flip'); window.flipping.forEach((animation) => animation.pause())`);
-          assert.deepEqual(await page.evaluate(`window.flights.filter((flight) => flight.name === 'flip' || flight.name === 'show').map((flight) => [flight.name, flight.seat])`), [['flip', 0], ['flip', 0]], 'what turned over: both of Quigs’s cards, beside the game');
+          assert.deepEqual(await page.evaluate(`${flightsSince(before)}.filter((flight) => flight.name === 'flip' || flight.name === 'show').map((flight) => [flight.name, flight.seat])`), [['flip', 0], ['flip', 0]], 'what turned over: both of Quigs’s cards, beside the game');
         }
 
         await dealt(page);
@@ -10843,6 +10855,49 @@ const CHECKS: Check[] = [
     },
   ],
   [
+    'with animations on, a hand a page first hears of when it is already over is told in short: cards go out to the seats that still hold them, the cards of everyone else go in, the chips cross to the winner last, and the table comes to rest as a still page has it',
+    async (rig) => {
+      const table = foldedToQuigs(rig);
+      const moving = await table.open('Stu', 'smallPhone', MOTION, { moving: true });
+      const still = await table.open('Stu', 'smallPhone');
+      const polls = await Gate.on(moving, 'polls');
+
+      playOut(table);
+      await table.heardBy(moving);
+      await dealt(moving);
+
+      // The whole of the next hand is played while the answer to the page's poll is on its way, as on a machine too busy to get to the page
+      const before = table.version;
+      await polls.close('answers');
+      nextFoldedToQuigs(table, PAM_HOLE);
+      await polls.holding();
+      await polls.open();
+      await table.heardBy(moving);
+
+      // On purpose, and not an accident of how the moves are worked out: a page that was behind is told what happened in a few moves and
+      // nothing is left wrong on it. Whoever changes what `TableMotion` makes of such a view changes this list knowingly
+      const flights = await flown(moving, before);
+      assert.deepEqual(
+        flights.map((flight) => (flight.name === 'chips' ? [flight.name, flight.text] : [flight.name, flight.seat])),
+        [
+          // To Stu, whose page it is, and to Quigs, who won: the two who still have cards
+          ...[1, 1, 0, 0].map((seat) => ['deal', seat]),
+          // The cards of each of the seven others
+          ...SHOW_PLAYERS.slice(2).map(() => ['muck', null]),
+          // What Quigs bet over the big blind comes back to him, the three bets go to the middle, and the pot crosses to him
+          ...['40', '20', '10', '20', '50'].map((chips) => ['chips', chips]),
+        ],
+        'what a hand heard of when it was over set moving',
+      );
+
+      const startOf = (name: string) => flights.filter((flight) => flight.name === name).map((flight) => flight.delay);
+      assert.ok(flights.at(-1)!.delay >= Math.max(...startOf('muck')), 'the pot crossed before the last cards went in');
+
+      await table.heardBy(still);
+      await assertAsStill(moving, still, 'a hand heard of when it was over');
+    },
+  ],
+  [
     'with animations on and nobody choosing to show, seven-deuce everyone folded to turns up for its bounty with the pot, before the bounty’s chips, and the badge’s toast comes only once the hand is cleared',
     async (rig) => {
       const table = rig.table(SHOW_PLAYERS, { bounties: [['72', 10]] });
@@ -10854,7 +10909,7 @@ const CHECKS: Check[] = [
       assert.ok(table.view('Stu').hand!.result!.bounty, 'no bounty was paid');
 
       await stu.waitForSelector('.entries li:has-text("for the 72 bounty")', { state: 'attached' });
-      await stu.waitForFunction(`window.flights.some((flight) => flight.name === 'flip')`);
+      await stu.waitForFunction(`${flightsSince()}.some((flight) => flight.name === 'flip')`);
       await dealt(stu);
       const flights = (await flown(stu)).filter((flight) => flight.name === 'flip' || flight.name === 'show' || flight.name === 'chips');
       const startOf = (name: string) => flights.filter((flight) => flight.name === name).map((flight) => flight.delay);
@@ -12371,7 +12426,7 @@ await mkdir(OUT, { recursive: true });
 // Told to stop, Playwright closes the browsers and leaves the script running, and the workers would launch new ones and go on
 process.once('SIGTERM', () => process.exit(143));
 
-const passed = await runChecks(CHECKS, { only: process.argv[2], picturesIn: OUT });
+const passed = await runChecks(CHECKS, { only: process.argv.slice(2), picturesIn: OUT });
 
 // Ended outright once the report is out: a check that was stopped may have left a timer behind that would keep the script going
 process.stdout.write('', () => process.exit(passed ? 0 : 1));

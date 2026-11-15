@@ -1,0 +1,103 @@
+/* ---- Standings: every known player's record, and under each their nights ---- */
+
+.standings,
+.standings-asked,
+.standings-about {
+  display: grid;
+  gap: 14px;
+}
+
+.standings-about {
+  gap: 6px;
+}
+
+/* Which money and which order sit side by side while both fit, and one under the other on a narrow phone */
+.standings-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  justify-content: space-between;
+  gap: 10px 16px;
+}
+
+.standings-units {
+  display: flex;
+  gap: 6px;
+}
+
+.standings-units [aria-pressed='true'] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* A player's line, as player-lines.css draws it, with where the player stands before the name, and what they did under the other three */
+.standings-players summary {
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.standings-players .place {
+  min-width: 2ch;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* Under the name, clear of the place before it */
+.standings-players summary .counts,
+.standings-players summary .badges {
+  grid-column: 2 / -1;
+  margin-left: 0;
+}
+
+/* A player's nights, inside their line: a list of its own, whose money and counts are set as the line's are */
+.standings-nights {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.standings-nights .when {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.standings-nights .when small {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.standings-player-nights {
+  display: grid;
+  gap: 8px;
+  padding-bottom: 14px;
+}
+
+/* A night: its day and table in what the money leaves them, and what the player did in it under both */
+.standings-nights li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 2px 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.standings-nights li:last-child {
+  border-bottom: 0;
+}
+
+.standings-nights .counts,
+.standings-nights .badges {
+  grid-column: 1 / -1;
+  margin-left: 0;
+}
+
+/* The way in from the first screen */
+.standings-door {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  text-align: center;
+}

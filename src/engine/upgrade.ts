@@ -1,0 +1,233 @@
+import { SEVEN_DEUCE } from './bounties.ts';
+import { HOLE_CARDS } from './cards.ts';
+import { startingConfig, withRetiredSettings } from './config.ts';
+import type { HandEvent } from './events.ts';
+import { highHandsFrom } from './highHand.ts';
+import { newTonight } from './tonight.ts';
+import { STATE_SCHEMA } from './types.ts';
+import type { Hand, HandPlayer, HandRecord, HandRecordPlayer, HandResult, Member, PlayerTonight, Seat, TableState, Tonight } from './types.ts';
+
+/** What schema 3 kept of straddles: whether a player posts one under the gun, the only kind there was, and the one seat that did in a hand. */
+interface SchemaThree {
+  seats: ((Partial<Seat> & { straddle?: boolean }) | null)[];
+  hand: (Partial<Hand> & { straddleSeat?: number | null }) | null;
+}
+
+/** A pick of schema 4: whether the player agreed to run it twice. */
+type SchemaFourVote = boolean | number | null;
+
+/** A pick as a number of runs: a yes was to run it twice and a no was to run it once. */
+function runsOf(vote: SchemaFourVote): number | null {
+  return typeof vote === 'boolean' ? (vote ? 2 : 1) : vote;
+}
+
+/** A hand's events with each yes or no to running it twice as the number of runs it was. Records keep no schema, so both kinds may be read. */
+function votesAsRuns(events: HandEvent[]): HandEvent[] {
+  return events.map((event) => (event[0] === 'vote' ? ['vote', event[1], runsOf(event[2] as SchemaFourVote)!] : event));
+}
+
+/** What schema 6 and those before it kept of a bounty: one amount, for seven-deuce, 0 for none. */
+interface SchemaSix {
+  config: { sevenDeuceBounty?: number };
+  hand: (Partial<Hand> & { bounty?: number }) | null;
+}
+
+/*
+ * A bounty that names no hand was paid before a table could have any bounty but seven-deuce. Records
+ * keep no schema, so both kinds may be read.
+ */
+
+function nameBountyHand(result: HandResult | null): void {
+  if (result?.bounty) {
+    result.bounty.hand ??= SEVEN_DEUCE;
+  }
+}
+
+function bountyEventsNamed(events: HandEvent[]): HandEvent[] {
+  return events.map((event) => (event[0] === 'bounty' && event[3] === undefined ? ['bounty', event[1], event[2], SEVEN_DEUCE] : event));
+}
+
+/**
+ * One step per schema number, taking a table saved with that schema to the next one. A step is for a
+ * change of shape: a field renamed, retyped or removed. It can treat what it is given as a table.
+ */
+const STEPS: Record<number, (state: TableState) => void> = {
+  2: (state) => {
+    const { config, hand } = state as unknown as SchemaSix;
+
+    if (hand) {
+      hand.bounty = config.sevenDeuceBounty;
+    }
+  },
+  3: (state) => {
+    const { seats, hand } = state as SchemaThree;
+
+    for (const seat of seats) {
+      if (seat) {
+        seat.straddles = seat.straddle ? ['straddle'] : [];
+        delete seat.straddle;
+      }
+    }
+
+    if (hand) {
+      const straddler = hand.straddleSeat ?? null;
+
+      // It was posted whole or not at all, at twice the big blind the hand was dealt under
+      hand.straddles = straddler === null ? [] : [{ seat: straddler, what: 'straddle', amount: 2 * hand.bigBlind! }];
+      delete hand.straddleSeat;
+    }
+  },
+  4: (state) => {
+    state.config = withRetiredSettings(state.config as unknown as Record<string, unknown>) as unknown as TableState['config'];
+
+    if (state.hand) {
+      state.hand.maxRuns = state.config.maxRuns;
+
+      for (const player of state.hand.players) {
+        player.ritVote = runsOf(player.ritVote);
+      }
+
+      state.hand.events = votesAsRuns(state.hand.events ?? []);
+    }
+  },
+  5: (state) => {
+    // Shown was the whole hand or none of it
+    for (const player of state.hand?.players ?? []) {
+      const shown = player.shown as unknown as boolean;
+
+      player.shown = player.cards.map(() => shown);
+    }
+  },
+  6: (state) => {
+    state.config = withRetiredSettings(state.config as unknown as Record<string, unknown>) as unknown as TableState['config'];
+
+    const { hand } = state as unknown as SchemaSix;
+    if (hand) {
+      hand.bounties = hand.bounty! > 0 ? [[SEVEN_DEUCE, hand.bounty!]] : [];
+      delete hand.bounty;
+      hand.events = bountyEventsNamed(hand.events ?? []);
+      nameBountyHand(hand.result ?? null);
+    }
+  },
+};
+
+interface SavedDefaults {
+  table(): Partial<TableState>;
+  member(): Partial<Member>;
+  seat(): Partial<Seat>;
+  hand(): Partial<Hand>;
+  handPlayer(): Partial<HandPlayer>;
+  record(): Partial<HandRecord>;
+  recordPlayer(): Partial<HandRecordPlayer>;
+  playerTonight(): Partial<PlayerTonight>;
+  /** Given what the night's numbers already hold, since a default can come from them. */
+  tonight(saved: Tonight): Partial<Tonight>;
+}
+
+/**
+ * The default of every field added to what is saved since schema 3, by where it lives. A table or a
+ * hand record saved before the field existed is given it when read, so a change that only adds a field
+ * puts its default here and leaves the schema number alone. A setting is not listed: its default is in
+ * the config registry. Each entry is a function so that no two tables are handed the same list.
+ */
+export const SAVED_DEFAULTS: SavedDefaults = {
+  table: () => ({ cohostIds: [], shuffleAfterHand: false, bombPotCalled: false, handsSinceBombPot: 0, lastHand: null, nightEndedAt: null, blinds: null, tonight: newTonight(), reactions: [] }),
+  member: () => ({ transferred: 0, identity: null }),
+  seat: () => ({ moveTo: null, owesBigBlind: false, owesSmallBlind: false, postsOwed: false, alwaysChop: false, autoShow: [] }),
+  hand: () => ({ events: [], bombPot: null, passedOver: [], chopOffered: false, hunted: null }),
+  handPlayer: () => ({ dead: 0 }),
+  record: () => ({ events: [], bombPot: null, bigBlind: 0 }),
+  recordPlayer: () => ({ playerId: '' }),
+  playerTonight: () => ({ busts: 0, streak: 0, badges: {} }),
+  // Saved with each player's best hand and nobody holding the high hand: it is theirs, as the night's numbers tell it
+  tonight: (saved) => ({ highHand: highHandsFrom(saved) }),
+};
+
+function fillMissing<T extends object>(saved: T, defaults: Partial<T>): void {
+  for (const key of Object.keys(defaults) as (keyof T)[]) {
+    if (saved[key] === undefined) {
+      saved[key] = defaults[key]!;
+    }
+  }
+}
+
+function fillDefaults(table: TableState): void {
+  fillMissing(table, SAVED_DEFAULTS.table());
+  // A setting added since starts where a new table of this one's kind would start it
+  fillMissing(table.config, startingConfig(table.config));
+
+  for (const member of table.members) {
+    fillMissing(member, SAVED_DEFAULTS.member());
+  }
+
+  for (const numbers of Object.values(table.tonight.players)) {
+    fillMissing(numbers, SAVED_DEFAULTS.playerTonight());
+  }
+
+  fillMissing(table.tonight, SAVED_DEFAULTS.tonight(table.tonight));
+
+  for (const seat of table.seats) {
+    if (seat) {
+      fillMissing(seat, SAVED_DEFAULTS.seat());
+    }
+  }
+
+  if (table.hand) {
+    fillMissing(table.hand, SAVED_DEFAULTS.hand());
+
+    for (const player of table.hand.players) {
+      fillMissing(player, SAVED_DEFAULTS.handPlayer());
+    }
+  }
+}
+
+/**
+ * A table saved by a newer version of the game than this one, as is met when older code is put back.
+ * There is no way down from a newer shape, and guessing at one would save the table wrong.
+ */
+export class NewerTable extends Error {
+  constructor(schema: number) {
+    super(`This table was saved by a newer version of the game (schema ${schema}; this version reads up to schema ${STATE_SCHEMA}). Deploy that version again, or restore the Sheet to before it was deployed`);
+    this.name = 'NewerTable';
+  }
+}
+
+/**
+ * Brings a saved table up to the shape this code reads, so a game in progress survives a new version:
+ * first the steps, for what changed shape, then the defaults, for what was added.
+ */
+export function upgradeState(saved: TableState): TableState {
+  if (saved.schema > STATE_SCHEMA) {
+    throw new NewerTable(saved.schema);
+  }
+
+  while (saved.schema !== STATE_SCHEMA) {
+    const step = STEPS[saved.schema];
+    if (!step) {
+      throw new Error(`Table ${saved.id} was saved with schema ${saved.schema}, and this code only knows the way to schema ${STATE_SCHEMA} from ${Object.keys(STEPS).join(', ')}`);
+    }
+
+    step(saved);
+    saved.schema += 1;
+  }
+
+  fillDefaults(saved);
+
+  return saved;
+}
+
+/** Gives a hand record saved by older code the fields added since. Records keep no schema, so what changed shape is read either way. */
+export function upgradeRecord(saved: HandRecord): HandRecord {
+  fillMissing(saved, SAVED_DEFAULTS.record());
+  saved.events = bountyEventsNamed(votesAsRuns(saved.events));
+  nameBountyHand(saved.result);
+
+  for (const player of saved.players) {
+    fillMissing(player, SAVED_DEFAULTS.recordPlayer());
+
+    // Cards that were never shown were once kept as none at all
+    player.cards ??= Array<null>(HOLE_CARDS).fill(null);
+  }
+
+  return saved;
+}

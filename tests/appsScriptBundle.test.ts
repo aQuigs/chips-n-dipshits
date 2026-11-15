@@ -4,12 +4,22 @@
  * browser fails here instead of on the first real deployment.
  */
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 import vm from 'node:vm';
 
-import { appsScriptCode, clientPage } from '../scripts/bundle.ts';
-import type { ApiRequest, ApiResponse } from '../src/server/api.ts';
+import type { Plugin } from 'esbuild';
+
+import { answersOver, QUESTION } from '../scripts/answering.ts';
+import { buildAll, buildFiles, buildOf, pushedMark } from '../scripts/bundle.ts';
+import type { Build } from '../scripts/bundle.ts';
+import { arrivalEntry } from '../src/gas/cacheArrivalKeys.ts';
+import type { ApiRequest, ApiResponse, Built } from '../src/server/api.ts';
+import { UNSTAMPED_BUILD } from '../src/server/build.ts';
 import { FakeCache, FakeLock, FakeSpreadsheet } from './fakes.ts';
 
 const DEPLOYED_AT = 'https://script.example/macros/s/abc/exec';
@@ -77,10 +87,20 @@ interface DeployedScript {
   doGet(event: unknown): FakeHtmlOutput;
   doPost(event: unknown): { content: string; mimeType: string };
   spreadsheet: FakeSpreadsheet;
+  cache: FakeCache;
+  /** The id of the build that was deployed, which its page sends with every request. */
+  build: string;
 }
 
+const appScript = (html: string) => [...html.matchAll(SCRIPT_ELEMENT)].map((found) => found[2]!).sort((a, b) => b.length - a.length)[0]!;
+
+// Built once for every test here: each deploys it anew, with a Sheet of its own
+const BUILT: Promise<Build> = buildFiles(DEPLOYED_AT);
+
 async function deploy(): Promise<DeployedScript> {
-  const [code, page] = await Promise.all([appsScriptCode(DEPLOYED_AT), clientPage(null)]);
+  const { id, files } = await BUILT;
+  const code = files['gas/Code.js']!;
+  const page = files['gas/index.html']!;
   const spreadsheet = new FakeSpreadsheet();
   const cache = new FakeCache();
   const lock = new FakeLock();
@@ -112,11 +132,12 @@ async function deploy(): Promise<DeployedScript> {
 
   vm.runInContext(code, context);
 
-  return { api: context.api, doGet: context.doGet, doPost: context.doPost, spreadsheet };
+  return { api: context.api, doGet: context.doGet, doPost: context.doPost, spreadsheet, cache, build: id };
 }
 
-function call(script: DeployedScript, request: ApiRequest): ApiResponse {
-  return JSON.parse(script.api(JSON.stringify(request))) as ApiResponse;
+/** Asks as the page of the same build does. */
+function call(script: DeployedScript, request: ApiRequest): ApiResponse & Built {
+  return JSON.parse(script.api(JSON.stringify({ ...request, build: script.build }))) as ApiResponse & Built;
 }
 
 test('the script pushed to Apps Script plays a hand using nothing but Apps Script services', async () => {
@@ -155,6 +176,22 @@ test('the script pushed to Apps Script plays a hand using nothing but Apps Scrip
   assert.ok(script.spreadsheet.getSheetByName('Ledger'), 'the buy-ins were written to the ledger');
 });
 
+test('the script pushed to Apps Script answers an arrival asked again under its key as it did the first time, from what it kept in the script cache', async () => {
+  const script = await deploy();
+  const key = 'k3Y-of_one-request-0001';
+
+  const created = call(script, { op: 'create', name: 'Host', key });
+  assert.ok(created.ok && created.kind === 'joined');
+
+  // Every run of the script starts with an empty memory, so only the cache can be what a later run finds
+  assert.deepEqual([...script.cache.entries.keys()].filter((entry) => entry.includes(key)), [arrivalEntry(key)]);
+
+  const again = call(script, { op: 'create', name: 'Host', key });
+  assert.ok(again.ok && again.kind === 'joined');
+  assert.deepEqual([again.view.id, again.auth], [created.view.id, created.auth]);
+  assert.equal(script.spreadsheet.sheets.get('Tables')!.cells.length, 2, 'one table under the headings');
+});
+
 test('a held poll gives up after the time it was asked to wait', async () => {
   const script = await deploy();
   const created = call(script, { op: 'create', name: 'Host' });
@@ -169,13 +206,118 @@ test('a held poll gives up after the time it was asked to wait', async () => {
 });
 
 test("the page's script reaches the browser whole, although Apps Script takes out what it reads as comments", async () => {
-  const appScript = (html: string) => [...html.matchAll(SCRIPT_ELEMENT)].map((found) => found[2]!).sort((a, b) => b.length - a.length)[0]!;
-
+  const built = await BUILT;
   const script = await deploy();
-  const served = appScript(script.doGet({}).getContent());
+  const page = script.doGet({}).getContent();
+  const served = appScript(page);
 
-  assert.equal(served.length, appScript(await clientPage(null)).length, 'nothing was cut out of it');
+  assert.equal(served.length, appScript(built.files['gas/index.html']!).length, 'nothing was cut out of it');
   assert.doesNotThrow(() => new vm.Script(served));
+  assert.equal(buildOf(page), built.id, 'nor out of the line that says which build the page is');
+});
+
+test('what is pushed to Apps Script has a mark that changes with any of it, the manifest included, which the build\'s id leaves out', async () => {
+  const { files } = await BUILT;
+  const withOtherAccess = { ...files, 'gas/appsscript.json': files['gas/appsscript.json']!.replace('ANYONE_ANONYMOUS', 'MYSELF') };
+
+  assert.notEqual(withOtherAccess['gas/appsscript.json'], files['gas/appsscript.json'], 'the manifest says who may open the game');
+  assert.match(pushedMark(files), /^[0-9a-f]{12}$/);
+  assert.equal(pushedMark({ ...files }), pushedMark(files));
+  assert.notEqual(pushedMark(withOtherAccess), pushedMark(files), 'a deploy with another manifest is not the deploy that was staged');
+  assert.notEqual(pushedMark({ ...files, 'gas/Code.js': `${files['gas/Code.js']}\n` }), pushedMark(files));
+  assert.equal(pushedMark({ ...files, 'web/index.html': 'anything' }), pushedMark(files), 'the page for another host is not pushed');
+});
+
+test('the same sources build to the same id from whatever folder the build is run in', async () => {
+  const elsewhere = await mkdtemp(join(tmpdir(), 'cnd-elsewhere-'));
+
+  try {
+    // In a process of its own: the bundler takes the folder it works from when it is first loaded
+    const built = execFileSync(
+      process.execPath,
+      ['--input-type=module', '-e', `const { buildFiles } = await import(${JSON.stringify(new URL('../scripts/bundle.ts', import.meta.url).href)}); console.log((await buildFiles(${JSON.stringify(DEPLOYED_AT)})).id);`],
+      { cwd: elsewhere, encoding: 'utf8' },
+    );
+
+    // A deploy waits to hear the id it built at the address, and a page stops at an answer that carries another
+    assert.equal(built.trim(), (await BUILT).id);
+  } finally {
+    await rm(elsewhere, { recursive: true, force: true });
+  }
+});
+
+test('a deploy is handed the id its build answers with, and the mark of the files it wrote for Apps Script, appsscript.json among them', async () => {
+  const folder = await mkdtemp(join(tmpdir(), 'cnd-build-'));
+
+  try {
+    const { id, mark } = await buildAll(DEPLOYED_AT, folder);
+    const names = (await readdir(join(folder, 'gas'))).sort();
+    const written = Object.fromEntries(await Promise.all(names.map(async (name) => [`gas/${name}`, await readFile(join(folder, 'gas', name), 'utf8')] as const)));
+
+    assert.deepEqual(names, ['Code.js', 'appsscript.json', 'index.html']);
+    assert.equal(id, buildOf(written['gas/index.html']!), 'the deploy waits for this to be the only build that answers');
+    assert.equal(id, (await BUILT).id);
+    assert.equal(mark, pushedMark(written), 'going live compares this with what staging was given');
+    assert.notEqual(pushedMark({ ...written, 'gas/appsscript.json': `${written['gas/appsscript.json']} ` }), mark, 'so a change to appsscript.json alone is not the code that was staged');
+  } finally {
+    await rm(folder, { recursive: true, force: true });
+  }
+});
+
+test('the page and the script of one build say they are the same build', async () => {
+  const built = await BUILT;
+  const script = await deploy();
+
+  assert.match(built.id, /^[0-9a-f]{12}$/);
+  assert.equal(buildOf(built.files['gas/index.html']!), built.id);
+  assert.equal(buildOf(built.files['web/index.html']!), built.id, 'the page for another host is the same build');
+  assert.equal(call(script, { op: 'info', tableId: 'NOPE99' }).build, built.id, 'the script answers as that build');
+  assert.equal(JSON.parse(script.api('not json')).build, built.id, 'even when it fails');
+
+  for (const [path, content] of Object.entries(built.files)) {
+    assert.equal(content.includes(UNSTAMPED_BUILD), false, `${path} was left unstamped`);
+  }
+
+  // The page that is served is refused nothing, and one that says it is another build is
+  const created = call(script, { op: 'create', name: 'Host' });
+  assert.ok(created.ok && created.kind === 'joined');
+
+  const fromAnother = JSON.parse(script.api(JSON.stringify({ op: 'create', name: 'Host', build: '000000000000' }))) as ApiResponse & Built;
+  assert.ok(!fromAnother.ok && fromAnother.code === 'stale', JSON.stringify(fromAnother));
+  assert.equal(fromAnother.build, built.id);
+});
+
+/** Builds as if a line had been added to one source file, without touching the file. */
+function withALineAddedTo(file: string): Plugin {
+  return {
+    name: 'edited',
+    setup(build) {
+      build.onLoad({ filter: new RegExp(`${file.replaceAll('.', '[.]')}$`) }, async ({ path }) => ({
+        contents: `${await readFile(path, 'utf8')}\nglobalThis.edited = true;\n`,
+        loader: 'ts',
+      }));
+    },
+  };
+}
+
+test('the build id follows what was built: the same twice over, and another when the page or the rules change', async () => {
+  const [first, second, otherPage, otherRules] = await Promise.all([
+    BUILT,
+    buildFiles(DEPLOYED_AT),
+    buildFiles(DEPLOYED_AT, [withALineAddedTo('src/client/app.ts')]),
+    buildFiles(DEPLOYED_AT, [withALineAddedTo('src/engine/hand.ts')]),
+  ]);
+
+  assert.equal(second.id, first.id);
+  assert.deepEqual(second.files, first.files);
+
+  assert.notEqual(otherPage.id, first.id, 'a change to the page');
+  assert.notEqual(otherRules.id, first.id, 'a change to the rules');
+  assert.notEqual(otherRules.id, otherPage.id);
+
+  // The rules run on the server alone, and the page of that build still has to know it is not the page of this one
+  assert.equal(appScript(otherRules.files['gas/index.html']!), appScript(first.files['gas/index.html']!));
+  assert.equal(buildOf(otherRules.files['gas/index.html']!), otherRules.id);
 });
 
 test('the served page is told its address and the table in the link, and nothing else from the link', async () => {
@@ -194,12 +336,27 @@ test('the served page is told its address and the table in the link, and nothing
   assert.match(bare.getContent(), /"table":null,"me":null/);
 });
 
+test('what a deploy asks an address, to learn which build answers there, is answered with the build before the Sheet or the cache is touched', async () => {
+  const script = await deploy();
+  const asked: string[] = [];
+  const answers = answersOver(async (_url, { body }) => {
+    asked.push(body);
+
+    return { status: 200, text: async () => script.doPost({ postData: { contents: body } }).content };
+  });
+
+  assert.deepEqual(await answers.ask(DEPLOYED_AT), { build: script.build });
+  assert.deepEqual(asked, [QUESTION]);
+  assert.equal(script.spreadsheet.sheets.size, 0, 'no tab was read or made');
+  assert.equal(script.cache.entries.size, 0);
+});
+
 test('the same API answers over HTTP for a page hosted elsewhere, and bad input is an error, not a crash', async () => {
   const script = await deploy();
 
-  const posted = script.doPost({ postData: { contents: JSON.stringify({ op: 'info', tableId: 'NOPE99' }) } });
+  const posted = script.doPost({ postData: { contents: JSON.stringify({ op: 'info', tableId: 'NOPE99', build: script.build }) } });
   assert.equal(posted.mimeType, 'application/json');
-  assert.deepEqual(JSON.parse(posted.content), { ok: false, code: 'not_found', error: JSON.parse(posted.content).error });
+  assert.deepEqual(JSON.parse(posted.content), { ok: false, code: 'not_found', error: JSON.parse(posted.content).error, build: script.build });
 
   for (const body of ['not json', 'null', '[]', '{"op":"launch"}', '{"op":"poll","tableId":5,"since":"x","holdMs":{}}']) {
     const answer = JSON.parse(script.api(body)) as ApiResponse;
@@ -207,7 +364,7 @@ test('the same API answers over HTTP for a page hosted elsewhere, and bad input 
   }
 
   // Longer than a cache key may be: it has to be turned away before the cache is asked
-  const endless = JSON.stringify({ op: 'poll', tableId: 'X'.repeat(300), auth: { id: 'a', token: 'b' }, since: 0, holdMs: 5000 });
+  const endless = JSON.stringify({ op: 'poll', tableId: 'X'.repeat(300), auth: { id: 'a', token: 'b' }, since: 0, holdMs: 5000, build: script.build });
   const asked = Date.now();
   assert.deepEqual(JSON.parse(script.api(endless)).code, 'not_found');
   assert.ok(Date.now() - asked < 1000, 'and without being held open');

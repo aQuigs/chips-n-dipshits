@@ -1,10 +1,29 @@
 import { bettingOptions } from './betting.ts';
 import type { BettingOptions } from './betting.ts';
+import { bombPotDue, bombPotHangsOnCall } from './bombPots.ts';
+import { bountyFor } from './bounties.ts';
+import type { Bounty } from './bounties.ts';
 import type { Card } from './cards.ts';
+import { foldChops, mayOfferChop } from './chop.ts';
+import type { HandEvent } from './events.ts';
+import { readHand } from './handNames.ts';
+import type { HandRead } from './handNames.ts';
+import { mayHunt } from './hand.ts';
+import { comingIn } from './handPlan.ts';
+import type { ComesIn } from './handPlan.ts';
+import { reaches, roleOf } from './hosts.ts';
+import type { Role } from './hosts.ts';
+import { handsLeft, nightIsOver, onLastHand } from './night.ts';
 import { buildPots } from './pots.ts';
 import type { Pot } from './pots.ts';
+import { facingOf } from './preAction.ts';
+import type { Facing } from './preAction.ts';
+import { liveReactions } from './reactions.ts';
 import { memberOf, seatIndexOf } from './seats.ts';
-import type { FeedEntry, HandResult, HandStage, PlayerAction, RequestKind, Street, TableConfig, TableState } from './types.ts';
+import { asSeen, fullyShown } from './shown.ts';
+import { tonightView } from './tonight.ts';
+import type { TonightView } from './tonight.ts';
+import type { AutoShow, BombPot, FeedEntry, Hand, HandPlayer, HandResult, HandStage, PassedOver, PlayerAction, PreAction, Reaction, RequestKind, Straddle, StraddlePost, Street, TableConfig, TableState } from './types.ts';
 
 /** A hole card as one viewer sees it: the card, or null when it is face down for them. */
 export type VisibleCard = Card | null;
@@ -17,8 +36,18 @@ export interface SeatView {
   sittingOut: boolean;
   away: boolean;
   leaving: boolean;
-  straddle: boolean;
+  /** The kinds of straddle they post whenever one is theirs to post. */
+  straddles: Straddle[];
+  /** They chop the blinds whenever the other blind would too. Said aloud at a real table, so for everyone to see. */
+  alwaysChop: boolean;
   pendingAdd: number;
+  /** The seat the host is moving them to when the hand ends. */
+  moveTo: number | null;
+  /** The blinds they missed and have yet to settle. For the whole table to see, as a missed-blind button on the felt is. */
+  owesBigBlind: boolean;
+  owesSmallBlind: boolean;
+  /** How a player who owes blinds and is there to play gets back in, as things stand, which says what they chose; null for anyone else. */
+  comesIn: ComesIn | null;
   /** Dealt into the hand on the table. */
   inHand: boolean;
   bet: number;
@@ -27,9 +56,18 @@ export interface SeatView {
   lastAction: PlayerAction | null;
   /** Null when the seat has no cards. */
   cards: VisibleCard[] | null;
-  /** The cards are face up for the whole table, not just for this viewer. */
-  shown: boolean;
-  ritVote: boolean | null;
+  /** Which of the cards are face up for the whole table, not just for this viewer, a flag for each in the order of `cards`. Empty when the seat has none. */
+  shown: boolean[];
+  /** How many times they picked to run the rest, for everyone to see as at a real table; null until they pick. */
+  ritVote: number | null;
+}
+
+/** What the viewer's own two cards make, for them alone. */
+export interface Holding {
+  /** One for each board on the table, which grows as a hand run more than once lays each next board. */
+  reads: HandRead[];
+  /** The bounty the cards would collect on if they win the hand: of those it was dealt under, the one for this very hand. */
+  bounty: Bounty | null;
 }
 
 export interface HandView {
@@ -38,11 +76,17 @@ export interface HandView {
   street: Street;
   boards: Card[][];
   runs: number;
+  /** The most times the rest may be run in this hand, which is what the viewer may pick up to. */
+  maxRuns: number;
   button: number;
   sbSeat: number;
   bbSeat: number;
-  straddleSeat: number | null;
+  /** The hand's straddles, in the order they were posted. */
+  straddles: StraddlePost[];
+  /** Why the viewer posted no straddle in this hand, when they had asked for one their seat could have posted; null otherwise. */
+  passedOver: PassedOver | null;
   bigBlind: number;
+  bombPot: BombPot | null;
   /** Every chip in the middle, bets in front of players included. */
   pot: number;
   pots: Pot[];
@@ -53,11 +97,27 @@ export interface HandView {
   deadline: number | null;
   /** What the viewer may do, when the action is on them. */
   options: BettingOptions | null;
-  /** The viewer still owes a run-it-twice vote. */
+  /** What the viewer would face if the action reached them now, while they wait for it and may choose their move ahead (`preAction.ts`); null when they have no turn to choose for. */
+  ahead: Facing | null;
+  /** The viewer is the small blind on the clock and may offer to chop instead of a move. */
+  canOfferChop: boolean;
+  /** The viewer folding now ends the hand in a chop with nobody asked, so a page showing the fold names nobody next. */
+  foldChops: boolean;
+  /** The viewer is the big blind, on the clock to answer an offer to chop. */
+  canAnswerChop: boolean;
+  /** The viewer has yet to pick how many times to run the rest, up to `maxRuns`. */
   canVote: boolean;
-  /** The viewer may turn their cards face up. */
+  /** The viewer may turn face up those of their cards that are not (`shown` on their seat), one at a time or together. */
   canShow: boolean;
+  /** The viewer may ask to see the cards that would have come: see `huntRabbit`. */
+  canHunt: boolean;
+  /** The cards each board would have been dealt next, once someone hunted them, the same for every viewer; null until then. No part of `boards`. */
+  hunted: Card[][] | null;
   result: HandResult | null;
+  /** Everything that has happened in the hand so far, in order. The same for every viewer: it holds no face-down card. */
+  events: HandEvent[];
+  /** Null for a viewer who has no cards in the hand or has folded them. */
+  holding: Holding | null;
 }
 
 export interface RequestView {
@@ -73,6 +133,8 @@ export interface LedgerRow {
   name: string;
   buyIn: number;
   cashOut: number;
+  /** Chips the host moved to this player from others, less those moved away. Already counted in `stack` or `cashOut`, so shown here but never added to `net` again. */
+  transferred: number;
   /** Chips on the table right now. */
   stack: number;
   net: number;
@@ -85,26 +147,49 @@ export interface TableView {
   now: number;
   config: TableConfig;
   hostId: string;
+  cohostIds: string[];
   running: boolean;
   nextHandAt: number | null;
   /** Hands dealt at this table so far. */
   handCount: number;
-  you: { id: string; name: string; isHost: boolean; seat: number | null };
+  /** `role` says which of the host's powers the viewer has: whether a command needs them is its handler's `by`. */
+  you: { id: string; name: string; role: Role; seat: number | null; identity: string | null };
+  /** When the viewer's seat shows cards without their asking: theirs alone to see, and empty without a seat. */
+  autoShow: AutoShow[];
+  /** The move the viewer chose ahead of their turn in the hand on the table, or null: theirs alone to see. */
+  preAction: PreAction | null;
   seats: (SeatView | null)[];
   hand: HandView | null;
+  /** The seats are shuffled when the hand ends. */
+  shuffleAfterHand: boolean;
+  /** The bomb pot the next hand dealt will be as things stand, or null for an ordinary hand or when no next hand is coming. */
+  nextBombPot: BombPot | null;
+  /** That bomb pot is one only because it was called: called off, the next hand is an ordinary one. */
+  bombPotCalled: boolean;
+  /** Hands still to be dealt before the night ends, not counting the one on the table; null while no last hands are called. */
+  handsLeft: number | null;
+  /** When the night ended, or null while it goes on. */
+  nightEndedAt: number | null;
   feed: FeedEntry[];
-  /** Requests waiting on the host: all of them for the host, only their own for everyone else. */
+  /** The reactions still live, oldest first, the same for every viewer. */
+  reactions: Reaction[];
+  /** Requests waiting on the host: all of them for the host and co-hosts, only their own for everyone else. */
   requests: RequestView[];
   ledger: LedgerRow[];
-  members: { id: string; name: string }[];
+  /** The night's numbers and who leads in what, the same for every viewer. */
+  tonight: TonightView;
+  /** Everyone at the table, each with the known player they said they are, or null: see `Member.identity`. */
+  members: { id: string; name: string; identity: string | null }[];
 }
 
 /** The table as one member is allowed to see it. Never includes the deck, tokens, or face-down cards. */
 export function viewFor(state: TableState, playerId: string, now: number): TableView {
   const me = memberOf(state, playerId);
   const mySeat = seatIndexOf(state, playerId);
-  const isHost = state.hostId === playerId;
+  const role = roleOf(state, playerId);
   const hand = state.hand;
+
+  const comesIn = comingIn(state);
 
   const seats = state.seats.map((seat, index): SeatView | null => {
     if (!seat) {
@@ -112,7 +197,6 @@ export function viewFor(state: TableState, playerId: string, now: number): Table
     }
 
     const player = hand?.players.find((p) => p.seat === index);
-    const visible = player ? player.shown || index === mySeat : false;
 
     return {
       seat: index,
@@ -122,22 +206,28 @@ export function viewFor(state: TableState, playerId: string, now: number): Table
       sittingOut: seat.sittingOut,
       away: seat.away,
       leaving: seat.leaving,
-      straddle: seat.straddle,
+      straddles: seat.straddles,
+      alwaysChop: seat.alwaysChop,
       pendingAdd: seat.pendingAdd,
+      moveTo: seat.moveTo,
+      owesBigBlind: seat.owesBigBlind,
+      owesSmallBlind: seat.owesSmallBlind,
+      comesIn: comesIn.get(index) ?? null,
       inHand: player !== undefined,
       bet: player?.bet ?? 0,
       folded: player?.folded ?? false,
       allIn: player?.allIn ?? false,
       lastAction: player?.lastAction ?? null,
-      cards: player ? player.cards.map((card) => (visible ? card : null)) : null,
-      shown: player?.shown ?? false,
+      cards: player ? (index === mySeat ? [...player.cards] : asSeen(player.cards, player.shown)) : null,
+      shown: player ? [...player.shown] : [],
       ritVote: player?.ritVote ?? null,
     };
   });
 
+  const mine = hand?.players.find((p) => p.seat === mySeat);
+
   let handView: HandView | null = null;
   if (hand) {
-    const mine = hand.players.find((p) => p.seat === mySeat);
     const myTurn = hand.stage === 'betting' && mine !== undefined && hand.toAct === mySeat;
 
     handView = {
@@ -146,25 +236,38 @@ export function viewFor(state: TableState, playerId: string, now: number): Table
       street: hand.street,
       boards: hand.boards,
       runs: hand.runs,
+      maxRuns: hand.maxRuns,
       button: hand.button,
       sbSeat: hand.sbSeat,
       bbSeat: hand.bbSeat,
-      straddleSeat: hand.straddleSeat,
+      straddles: hand.straddles,
+      passedOver: hand.passedOver.find((passed) => passed.seat === mySeat) ?? null,
       bigBlind: hand.bigBlind,
-      pot: hand.players.reduce((sum, p) => sum + p.committed, 0),
+      bombPot: hand.bombPot,
+      pot: hand.players.reduce((sum, p) => sum + p.committed + p.dead, 0),
       pots: buildPots(hand.players),
       currentBet: hand.currentBet,
       toAct: hand.toAct,
       turn: state.turn,
       deadline: hand.deadline,
       options: myTurn ? bettingOptions(state, hand, mine) : null,
+      ahead: mine ? facingOf(state, hand, mine) : null,
+      canOfferChop: mySeat >= 0 && mayOfferChop(state, mySeat),
+      foldChops: mySeat >= 0 && foldChops(state, mySeat),
+      canAnswerChop: hand.stage === 'chop' && mine !== undefined && hand.toAct === mySeat,
       canVote: hand.stage === 'ritVote' && mine !== undefined && !mine.folded && mine.ritVote === null,
-      canShow: hand.stage === 'done' && mine !== undefined && !mine.shown,
+      canShow: hand.stage === 'done' && mine !== undefined && !fullyShown(mine.shown),
+      canHunt: mySeat >= 0 && mayHunt(state, mySeat),
+      hunted: hand.hunted,
       result: hand.result,
+      events: hand.events,
+      holding: mine && !mine.folded ? holdingOf(hand, mine) : null,
     };
   }
 
-  const visibleRequests = state.requests.filter((request) => isHost || request.playerId === playerId);
+  const approves = reaches(role, 'host or cohost');
+  const visibleRequests = state.requests.filter((request) => approves || request.playerId === playerId);
+  const ledger = ledgerOf(state);
 
   return {
     id: state.id,
@@ -172,16 +275,33 @@ export function viewFor(state: TableState, playerId: string, now: number): Table
     now,
     config: state.config,
     hostId: state.hostId,
+    cohostIds: state.cohostIds,
     running: state.running,
     nextHandAt: state.nextHandAt,
     handCount: state.handCount,
-    you: { id: me.id, name: me.name, isHost, seat: mySeat >= 0 ? mySeat : null },
+    you: { id: me.id, name: me.name, role, seat: mySeat >= 0 ? mySeat : null, identity: me.identity },
+    autoShow: mySeat >= 0 ? state.seats[mySeat]!.autoShow : [],
+    preAction: mine?.pre ?? null,
     seats,
     hand: handView,
+    shuffleAfterHand: state.shuffleAfterHand,
+    nextBombPot: nightIsOver(state) || onLastHand(state) ? null : bombPotDue(state),
+    bombPotCalled: bombPotHangsOnCall(state),
+    handsLeft: handsLeft(state),
+    nightEndedAt: state.nightEndedAt,
     feed: state.feed,
+    reactions: liveReactions(state.reactions, now),
     requests: visibleRequests.map((request) => ({ ...request, name: memberOf(state, request.playerId).name })),
-    ledger: ledgerOf(state),
-    members: state.members.map((m) => ({ id: m.id, name: m.name })),
+    ledger,
+    tonight: tonightView(state, ledger, nightIsOver(state)),
+    members: state.members.map((m) => ({ id: m.id, name: m.name, identity: m.identity })),
+  };
+}
+
+function holdingOf(hand: Hand, player: HandPlayer): Holding {
+  return {
+    reads: hand.boards.map((board) => readHand(player.cards, board)),
+    bounty: bountyFor(player.cards, hand.bounties),
   };
 }
 
@@ -194,7 +314,8 @@ export function ledgerOf(state: TableState): LedgerRow[] {
 
   for (const member of state.members) {
     const seat = state.seats.find((s) => s?.playerId === member.id);
-    const inPot = unsettled.find((p) => p.playerId === member.id)?.committed ?? 0;
+    const mine = unsettled.find((p) => p.playerId === member.id);
+    const inPot = mine ? mine.committed + mine.dead : 0;
     const stack = seat ? seat.stack + inPot : 0;
 
     if (member.buyIn === 0 && member.cashOut === 0 && stack === 0) {
@@ -206,6 +327,7 @@ export function ledgerOf(state: TableState): LedgerRow[] {
       name: member.name,
       buyIn: member.buyIn,
       cashOut: member.cashOut,
+      transferred: member.transferred,
       stack,
       net: stack + member.cashOut - member.buyIn,
     });

@@ -1,0 +1,269 @@
+/* ---- A hand played back: its own table and controls, over the whole app ---- */
+
+.replay {
+  position: absolute;
+  inset: 0;
+  /* Over a dialog, under a toast */
+  z-index: 25;
+  display: grid;
+  grid-template:
+    'head' auto
+    'stage' minmax(0, 1fr)
+    'told' auto
+    'controls' auto / minmax(0, 1fr);
+  background: var(--bg);
+}
+
+.replay:focus {
+  outline: none;
+}
+
+.replay-head {
+  grid-area: head;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-raised);
+}
+
+.replay-head h2 {
+  display: grid;
+  min-width: 0;
+  font: var(--display-weight) calc(16px * var(--display-scale) * var(--text-scale)) / 1.2 var(--font-display);
+  letter-spacing: var(--display-spacing);
+  text-transform: var(--display-case);
+}
+
+.replay-count {
+  color: var(--muted);
+  font: 400 calc(12px * var(--text-scale))/1.3 var(--font-ui);
+  letter-spacing: 0;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+/* A seat nobody was dealt in at says nothing: the record does not tell an empty seat from one sitting out */
+.replay .seat.open .plate {
+  display: none;
+}
+
+.replay-told {
+  grid-area: told;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 6px 12px;
+  border-top: 1px solid var(--line);
+  background: var(--bg-raised);
+  font-size: calc(13px * var(--text-scale));
+  line-height: 1.4;
+}
+
+/*
+ * The step's own lines keep one height, so the table does not move from one step to the next: three
+ * lines and the top of a fourth, which is what says a step with more is to be scrolled.
+ */
+.replay-line {
+  flex: none;
+  height: 4.7em;
+  overflow-y: auto;
+  font-weight: 600;
+}
+
+/*
+ * What was said before the step, where there is a column for it: it stands on the step's own lines,
+ * the latest nearest, and is what gives way when the two do not both fit.
+ */
+.replay-log {
+  display: none;
+  flex: 0 1000 auto;
+  min-height: 0;
+  margin: auto 0 6px;
+  padding: 0;
+  overflow-y: auto;
+  color: var(--muted);
+  list-style: none;
+}
+
+.replay-controls {
+  grid-area: controls;
+  display: grid;
+  gap: 6px;
+  padding: 6px 12px 10px;
+  background: var(--bg-raised);
+}
+
+.replay-scrub {
+  /* Half the thumb, which is how far short of the bar's ends its middle stops */
+  --thumb-half: 8px;
+
+  position: relative;
+  padding-bottom: 14px;
+}
+
+.replay-scrub input {
+  display: block;
+  width: 100%;
+  height: 32px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.replay-marks {
+  position: absolute;
+  inset: auto var(--thumb-half) 0;
+  height: 14px;
+  pointer-events: none;
+}
+
+.replay-marks span {
+  position: absolute;
+  left: calc(var(--at) * 100%);
+  color: var(--muted);
+  font-size: calc(10px * var(--text-scale));
+  font-weight: 700;
+  line-height: 14px;
+  transform: translateX(-50%);
+}
+
+.replay-marks span::before {
+  content: '';
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  width: 1px;
+  height: 6px;
+  background: var(--muted);
+}
+
+.replay-buttons {
+  display: grid;
+  grid-template-areas:
+    'back play forward'
+    'previous speed next';
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.replay-buttons .btn {
+  padding: 0 4px;
+}
+
+.replay-buttons [data-replay='previous-street'] {
+  grid-area: previous;
+}
+
+.replay-buttons [data-replay='back'] {
+  grid-area: back;
+}
+
+.replay-buttons [data-replay='play'] {
+  grid-area: play;
+  border-color: transparent;
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.replay-buttons [data-replay='forward'] {
+  grid-area: forward;
+}
+
+.replay-buttons [data-replay='next-street'] {
+  grid-area: next;
+}
+
+.replay-buttons [data-replay='speed'] {
+  grid-area: speed;
+}
+
+/* A wide, short box, as on a phone held sideways: everything but the table stands beside it */
+@container app (min-width: 560px) and (max-height: 520px) {
+  .replay {
+    grid-template:
+      'stage head' auto
+      'stage told' minmax(0, 1fr)
+      'stage controls' auto / minmax(0, 1fr) minmax(280px, 34%);
+  }
+
+  .replay-head,
+  .replay-told,
+  .replay-controls {
+    border-left: 1px solid var(--line);
+  }
+
+  .replay-head {
+    padding-block: 4px;
+  }
+
+  .replay-log {
+    display: block;
+  }
+
+  /* The hand so far gives way above them, so the step's lines take the room they need */
+  .replay-line {
+    flex: 0 1 auto;
+    height: auto;
+    min-height: 2.8em;
+  }
+
+  .replay-controls {
+    padding-bottom: 6px;
+  }
+
+  .replay-buttons .btn {
+    font-size: calc(13px * var(--text-scale));
+  }
+}
+
+/* Room for a column: the hand so far runs down the side, and the controls lie in one row under the table */
+@container app (min-width: 900px) and (min-height: 521px) {
+  .replay {
+    grid-template:
+      'head head' auto
+      'stage told' minmax(0, 1fr)
+      'controls told' auto / minmax(0, 1fr) 320px;
+  }
+
+  .replay-told {
+    border-top: 0;
+    border-left: 1px solid var(--line);
+    padding: 12px;
+  }
+
+  .replay-log {
+    display: block;
+  }
+
+  .replay-line {
+    flex: 0 1 auto;
+    height: auto;
+    min-height: 4.2em;
+    padding-top: 6px;
+    border-top: 1px solid var(--line);
+  }
+
+  .replay-controls {
+    width: 100%;
+    max-width: 880px;
+    margin-inline: auto;
+    background: none;
+  }
+
+  .replay-buttons {
+    grid-template-areas: 'previous back play forward next speed';
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+}
+
+/* ---- In the history: the way into a hand's replay, or why there is none ---- */
+
+.history .replay-open {
+  margin-bottom: 10px;
+}
+
+.history .no-replay {
+  margin: 0 0 8px;
+}

@@ -1,0 +1,12713 @@
+/*
+ * Checks, in real browsers, that the screens hold up where play testing found them breaking: on small
+ * phones, with long chat, with the largest stacks, with a result too long for the felt, and under the
+ * keyboard; and that a table playing dollars and cents shows and takes every amount in dollars.
+ * Each check sets its table up on the rig, so the cards and the seats are the same every run.
+ * Pictures of what was checked are left in screenshots/.
+ */
+import assert from 'node:assert/strict';
+import { mkdir } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+
+import type { Page } from 'playwright';
+
+import { BUZZ_PATTERN } from '../src/client/attentionWays.ts';
+import { MOST_SWEAT_MS } from '../src/client/celebrations.ts';
+import { CONFETTI_PIECES } from '../src/client/confetti.ts';
+import { MOST_MOVE_MS, MOST_VIEW_MS, STEP_GAP_MS } from '../src/client/handMoves.ts';
+import { MOVE_MS } from '../src/client/motion.ts';
+import type { MoveName } from '../src/client/motion.ts';
+import { KEYS_SETTLE_MS } from '../src/client/hotkeys.ts';
+import { UNCONFIRMED_AFTER_MS } from '../src/client/pendingMove.ts';
+import { STEP_MS } from '../src/client/replayPlayer.ts';
+import { RECIPES } from '../src/client/soundRecipes.ts';
+import { cardSaid, RECAP_GONE } from '../src/client/spoken.ts';
+import { spotsOf } from '../src/client/tableChances.ts';
+import { THEMES } from '../src/client/themes.ts';
+import { shortAmount, signedAmount } from '../src/engine/amounts.ts';
+import { BADGES, badgeOf, DEFAULT_CONFIG, LIMITS, onTheClock, presetSettings, REACTION_GAP_MS, REACTION_LIFE_MS } from '../src/engine/index.ts';
+import { cardWords } from '../src/engine/handNames.ts';
+import type { Bounty, Card, Command, KnownPlayer, PreActionKind, Straddle, TableConfig, TableView } from '../src/engine/index.ts';
+import { PUT_AWAY_AFTER_MS, PUT_AWAY_MESSAGE } from '../src/server/putAway.ts';
+import { contrast } from '../tests/colorVision.ts';
+import { boxes, Gate, overlap, Rig, RigTable, SCREENS, setStageHeight, squeezed, textBoxes, WIDE_ASPECT } from './rig.ts';
+import type { Box, RigDeal, RigPlayer, ScreenName } from './rig.ts';
+import { answeredAfter, answeredTo, complaints, flightsSince, LISTEN, MOTION, movesSent, NOTICES, opsSent, ownComplaints, replayDrawn, soundOf, SPOTS, TITLES, toastTold, toasts, toldOf } from './pageSpies.ts';
+import type { Flight, Spots } from './pageSpies.ts';
+import { STAND_IN_HOST } from './standInHost.ts';
+import { focused, focusIn, heard, SPOKEN, spoken } from './a11y.ts';
+import { ACCESSIBILITY_CHECKS } from './accessibilityChecks.ts';
+import { runChecks } from './checkRunner.ts';
+import { layoutSweep } from './layoutSweep.ts';
+import { tapsLive } from './underTheFinger.ts';
+
+const OUT = fileURLToPath(new URL('../screenshots/', import.meta.url));
+
+const LONG_NAMES = ['Quigs', 'WWWWWWWWWWWWWWWW', 'Ünïcödé Ñandú Ø!', 'Marge Simpson-Jr', 'Stu', 'Big Al', 'Pocket Pam', 'iiiiiiiiiiiiiiii', 'Zed', '你好你好你好你好'];
+const MIXED_STACKS = [1000, 1_000_000_000, 1500, 12_345, 999_999, 50_000, 700, 1500, 100_000_000, 400];
+
+const tenPlayers = (): RigPlayer[] => LONG_NAMES.map((name, index) => ({ name, stack: MIXED_STACKS[index]! }));
+
+/** Checks or calls, whatever the decision. */
+const passive = (view: TableView): Command => ({ type: view.hand!.options!.canCheck ? 'check' : 'call' });
+
+/** Puts everything in, and picks running it `runs` times. */
+const allInPicking =
+  (runs: number) =>
+  (view: TableView): Command => {
+    const hand = view.hand!;
+    if (hand.canVote) {
+      return { type: 'ritVote', runs };
+    }
+
+    return hand.options!.canRaise ? { type: 'raise', to: hand.options!.maxRaiseTo } : { type: 'call' };
+  };
+
+const allIn = allInPicking(2);
+
+async function shot(page: Page, name: string): Promise<void> {
+  await page.screenshot({ path: `${OUT}check-${name}.png` });
+}
+
+function assertOnScreen(found: Box[], screen: ScreenName, what: string): void {
+  const { width, height } = SCREENS[screen];
+
+  assert.ok(found.length > 0, `${what}: nothing to look at`);
+  for (const box of found) {
+    assert.ok(box.left >= -1 && box.right <= width + 1 && box.top >= -1 && box.bottom <= height + 1, `${what} runs off the screen: ${JSON.stringify(box)} on ${width}x${height}`);
+  }
+}
+
+function assertApart(these: Box[], those: Box[], what: string): void {
+  for (const a of these) {
+    for (const b of those) {
+      assert.ok(!overlap(a, b), `${what}: ${JSON.stringify(a)} is drawn over ${JSON.stringify(b)}`);
+    }
+  }
+}
+
+/** Every bet on the table can be read: none is drawn over the board, the pot, another bet or what a seat says. */
+async function assertBetsApart(page: Page): Promise<void> {
+  const bets = await boxes(page, '.bet');
+
+  assertApart(bets, await textBoxes(page, '.plate .stack, .plate .status'), 'a bet and what a seat says');
+  assertApart(bets, await boxes(page, '.board .card, .pot'), 'a bet and the middle of the table');
+  assertApart(await boxes(page, '.pot'), await boxes(page, '.seat .plate'), 'the pot and a seat');
+  bets.forEach((bet, index) => assertApart([bet], bets.slice(index + 1), 'two bets'));
+}
+
+/** Taps on a touch screen and clicks on the desktop, as the rig opens every screen but the desktop as a touch one. */
+const pressOn = (page: Page, screen: ScreenName) => (selector: string) => (screen === 'desktop' ? page.click(selector) : page.tap(selector));
+
+const text = async (page: Page, selector: string) => ((await page.locator(selector).first().textContent()) ?? '').trim();
+
+/** What the page has played since `from`, each sound by name, at the volume it was played at. */
+async function played(page: Page, from = 0): Promise<{ sound: string; gain: number }[]> {
+  const sounds = (await page.evaluate('window.played')) as { gain: number; voices: string[] }[];
+
+  // The page keeps a gain to single precision
+  const rounded = (gain: number) => Math.round(gain * 1000) / 1000;
+
+  return sounds.slice(from).map(({ gain, voices }) => ({ sound: soundOf(voices), gain: rounded(gain) }));
+}
+
+const playedNames = async (page: Page, from = 0) => (await played(page, from)).map((sound) => sound.sound);
+
+/** When each sound the page has played starts, in seconds on the page's audio clock. */
+const playedAt = async (page: Page) => ((await page.evaluate('window.played.map((sound) => Math.min(...sound.starts))')) as number[]);
+
+// Two starts worked out from one reading of the audio clock are apart by the delay between them only as nearly as
+// the sums round: for one reading in three the difference comes out a hair under it
+const CLOCK_ROUNDING = 1e-9;
+
+/** The color a token stands for in the page's theme, as the browser writes a computed color. */
+const tokenColor = (page: Page, token: string) =>
+  page.evaluate(`(() => {
+    const probe = document.createElement('i');
+    probe.style.color = 'var(${token})';
+    document.body.append(probe);
+    const color = getComputedStyle(probe).color;
+    probe.remove();
+    return color;
+  })()`) as Promise<string>;
+
+const style = (page: Page, selector: string, property: string, pseudo = '') =>
+  page.evaluate(`getComputedStyle(document.querySelector(${JSON.stringify(selector)}), ${JSON.stringify(pseudo)})[${JSON.stringify(property)}]`) as Promise<string>;
+
+/** The colors the cards on the table are drawn in, one card of each suit. */
+async function suitColors(page: Page): Promise<Record<string, string>> {
+  const colors: Record<string, string> = {};
+
+  for (const suit of ['s', 'h', 'd', 'c']) {
+    colors[suit] = await style(page, `.table .card.suit-${suit}`, 'color');
+  }
+
+  return colors;
+}
+
+const FACE_DOWN = '.seat:not(.me) .card.back';
+
+const CENTS = { unit: 'cents', smallBlind: 25, bigBlind: 50 } as const;
+const PHONE_AND_DESKTOP = ['phone', 'desktop'] as const;
+
+// The least height at which a phone's table stands up
+const JUST_STANDING = Math.ceil(SCREENS.phone.width / WIDE_ASPECT) + 1;
+
+/**
+ * Pins the table's shape for a check about what sits on its seats: a phone's standing up at the least
+ * height it does so, where its seats come closest, and a desktop's lying down.
+ */
+async function standOrLie(page: Page, screen: ScreenName): Promise<void> {
+  if (screen !== 'desktop') {
+    await setStageHeight(page, JUST_STANDING);
+  }
+
+  await page.waitForSelector(screen === 'desktop' ? '.table.wide' : '.table.tall');
+}
+
+const TO_THE_CENT = 'This table plays to the cent, so an amount has at most two decimals';
+
+/** A page that asks "who are you?", the front page or a table's link, once it has heard which players the game knows. */
+async function askedWho(rig: Rig, screen: ScreenName, path: string): Promise<Page> {
+  const page = await rig.page(screen, 'a visitor');
+  const heard = page.waitForResponse((response) => (response.request().postData() ?? '').includes('"op":"players"'));
+
+  await page.goto(`${rig.url}${path}`);
+  await heard;
+  await page.waitForSelector(path ? '[data-action="join-table"]:enabled' : '[data-action="create-table"]');
+  await page.evaluate('document.fonts.ready.then(() => undefined)');
+
+  return page;
+}
+
+const texts = (page: Page, selector: string) => page.locator(selector).allInnerTexts();
+
+/**
+ * A table of whole chips where everyone antes and one of dollars and cents where the big blind antes
+ * for the table, with what six players who each sat down with `stack` see when the first hand is dealt.
+ */
+const ANTE_TABLES = [
+  {
+    name: 'chips',
+    config: { ante: 5 } as Partial<TableConfig>,
+    stack: 1000,
+    blinds: '10/20',
+    stakes: '10/20 · ante 5',
+    pot: '60',
+    bets: ['10', '20'],
+    stacks: ['995', '985', '975', '995', '995', '995'],
+    lines: ['Hand #123 · blinds 10/20 · ante 5 · Quigs has the button', 'Everyone posts ante 5', 'WWWWWWWWWWWWWWWW posts small blind 10', 'Ünïcödé Ñandú Ø! posts big blind 20'],
+    noAnte: '0',
+    typed: '5',
+    shown: '5',
+    said: 'The ante is 5, paid by everyone',
+  },
+  {
+    name: 'cents',
+    config: { ...CENTS, ante: 50, anteFrom: 'bigBlind' } as Partial<TableConfig>,
+    stack: 10_000,
+    blinds: '0.25/0.50',
+    stakes: '0.25/0.50 · BB ante 0.50',
+    pot: '1.25',
+    bets: ['0.25', '0.50'],
+    stacks: ['100.00', '99.75', '99.00', '100.00', '100.00', '100.00'],
+    lines: [
+      'Hand #123 · blinds 0.25/0.50 · BB ante 0.50 · Quigs has the button',
+      'WWWWWWWWWWWWWWWW posts small blind 0.25',
+      'Ünïcödé Ñandú Ø! posts big blind 0.50',
+      'Ünïcödé Ñandú Ø! posts big blind ante 0.50',
+    ],
+    noAnte: '0.00',
+    typed: '.5',
+    shown: '0.50',
+    said: 'The ante is 0.50, paid by the big blind for the table',
+  },
+];
+
+/**
+ * A table of whole chips and one of dollars and cents, each playing an ante that a bomb pot takes the
+ * place of, with what six players see when the host calls a bomb pot and it is dealt: five who sat down
+ * with `stack` and Marge, in seat 3, who sat down with `short` and cannot cover it.
+ */
+const BOMB_POT_TABLES = [
+  {
+    name: 'chips',
+    config: { ante: 5 } as Partial<TableConfig>,
+    stack: 1000,
+    short: 30,
+    amount: '100',
+    pot: '530',
+    stacks: ['900', '900', '900', '0', '900', '900'],
+    lines: ['Hand #123 · bomb pot 100 · Quigs has the button', 'Marge Simpson-Jr posts bomb pot 30 and is all in', 'Everyone else posts bomb pot 100', 'Flop: 2♣ 7♦ 9♥'],
+    bet: '20',
+    typed: '250',
+    shown: '250',
+  },
+  {
+    name: 'cents',
+    config: { ...CENTS, ante: 50, anteFrom: 'bigBlind' } as Partial<TableConfig>,
+    stack: 10_000,
+    short: 75,
+    amount: '2.50',
+    pot: '13.25',
+    stacks: ['97.50', '97.50', '97.50', '0.00', '97.50', '97.50'],
+    lines: ['Hand #123 · bomb pot 2.50 · Quigs has the button', 'Marge Simpson-Jr posts bomb pot 0.75 and is all in', 'Everyone else posts bomb pot 2.50', 'Flop: 2♣ 7♦ 9♥'],
+    bet: '0.50',
+    typed: '7.5',
+    shown: '7.50',
+  },
+];
+
+const nextIsBombPot = (amount: string) => `Next hand is a bomb pot: ${amount} each`;
+
+/** What the bar says about the hands to come is whole, on the screen and clear of the table and the buttons. */
+async function assertNextHandsFit(page: Page, screen: ScreenName, who: string): Promise<void> {
+  assert.deepEqual(await squeezed(page, '.controls .waiting, .controls .next-hand span'), [], `what the ${who} is told about the hands to come is cut off`);
+  assertOnScreen(await boxes(page, '.controls .next-hand span, .seat .plate'), screen, `the ${who}'s table and what is said under it`);
+  assertApart(await boxes(page, '.controls .next-hand span'), await boxes(page, '.stage, .controls .extras'), 'word of the hands to come and what is around it');
+}
+
+/*
+ * Three double-board bomb pots at a table of BOMB_POT_TABLES, every card fixed, played one after the
+ * other with a bet on the first flop and checks from there. Each is named for how its pots are won.
+ */
+const DOUBLE_BOARD_HANDS = {
+  // Marge's deuces make three on the first board, where Quigs has two pair, and his king is best on the second
+  sidePot: { holes: { 0: 'Ks 7d', 1: 'Qc Qd', 2: 'Jc Jd', 3: '2d 2h', 4: 'Ac 3c', 5: '6c 6d' }, board: 'Kh 7s 2c 9d 4h', secondBoard: 'Kd 9c 8h Ts 3s' },
+  // Aces make three on the first board and kings on the second
+  oneEach: { holes: { 0: 'Qc 2d', 1: 'As Ad', 2: 'Ks Kc', 3: '6c 6d', 4: '5c 5d', 5: 'Jc 4d' }, board: 'Ah 7s 2c 9d 4h', secondBoard: 'Kd 9c 8h Ts 3s' },
+  // Aces make three on both, with Marge out of chips
+  both: { holes: { 0: 'Qc 2d', 1: 'As Ad', 2: 'Ks Kc', 4: '5c 5d', 5: 'Jc 4d' }, board: 'Ah 7s 2c 9d 4h', secondBoard: 'Ac 9c 8h Ts 3s' },
+};
+
+/** What the felt says of each of DOUBLE_BOARD_HANDS, by the name of the table. The odd cent of a pot is on the first board. */
+const DOUBLE_BOARD_RESULTS: Record<string, Record<keyof typeof DOUBLE_BOARD_HANDS, string[]>> = {
+  chips: {
+    sidePot: ['Board 1: Marge Simpson-Jr +90, Quigs +225', 'Board 2: Quigs wins 315 with pair of kings'],
+    oneEach: ['Board 1: WWWWWWWWWWWWWWWW wins 295 with three aces', 'Board 2: Ünïcödé Ñandú Ø! wins 295 with three kings'],
+    both: ['Both boards: WWWWWWWWWWWWWWWW wins 500'],
+  },
+  cents: {
+    sidePot: ['Board 1: Marge Simpson-Jr +2.25, Quigs +5.63', 'Board 2: Quigs wins 7.87 with pair of kings'],
+    oneEach: ['Board 1: WWWWWWWWWWWWWWWW wins 7.38 with three aces', 'Board 2: Ünïcödé Ñandú Ø! wins 7.37 with three kings'],
+    both: ['Both boards: WWWWWWWWWWWWWWWW wins 12.50'],
+  },
+};
+
+/**
+ * A table of whole chips and one of dollars and cents for the checks of missed blinds, with the blinds
+ * as each writes them: the big blind, the small blind, the two together, the smallest raise over the
+ * big blind, and the pot of a hand where one player posted both blinds they missed beside the hand's own.
+ */
+const MISSED_BLIND_TABLES = [
+  { name: 'chips', config: {} as Partial<TableConfig>, stack: 1000, blinds: '10/20', big: '20', small: '10', both: '30', raiseTo: '40', pot: '60' },
+  { name: 'cents', config: { ...CENTS } as Partial<TableConfig>, stack: 10_000, blinds: '0.25/0.50', big: '0.50', small: '0.25', both: '0.75', raiseTo: '1.00', pot: '1.50' },
+];
+
+const MARGE = 'Marge Simpson-Jr';
+
+/** Folds, or checks where that is free, so a hand nobody raises goes to the big blind or to a showdown. */
+const folding = (view: TableView): Command => ({ type: view.hand!.options!.canCheck ? 'check' : 'fold' });
+
+/** Ends the hand on the table without a bet, with the game paused so that the next hand is the check's to deal. */
+function playOut(table: RigTable): void {
+  table.act('Quigs', { type: 'pause' });
+  table.play(folding, (view) => view.hand === null);
+}
+
+/**
+ * Six players, of whom Marge, in seat 3, sat out as the big blind came to her and so owes both blinds.
+ * Handed back between hands with the game paused. The button is due on seat 2 next and the big blind on
+ * seat 5, with Marge between them, where nobody comes in by posting. The hand after next is hand 123.
+ */
+function blindsOwed(rig: Rig, kind: (typeof MISSED_BLIND_TABLES)[number]): RigTable {
+  const table = rig.table(
+    LONG_NAMES.slice(0, 6).map((name) => ({ name, stack: kind.stack })),
+    kind.config,
+  );
+
+  table.alter((state) => {
+    state.handCount = 119;
+  });
+  table.deal({ button: 0 });
+  playOut(table);
+  table.act(MARGE, { type: 'sitOut' });
+  table.dealNext();
+  playOut(table);
+
+  return table;
+}
+
+/** Opens or closes the play-by-play on a phone, where it is folded away; a desktop has it beside the table. */
+async function toggleFeed(page: Page, screen: ScreenName): Promise<void> {
+  if (screen !== 'desktop') {
+    await page.tap('.feed-toggle');
+  }
+}
+
+/** The bar under the table has room for what it says to the player alone, about blinds they owe or a straddle they did not post, and for its buttons, and no seat's status is cut off. */
+async function assertOwedBarFits(page: Page, screen: ScreenName): Promise<void> {
+  assert.deepEqual(await squeezed(page, '.controls .waiting, .controls .own-note, .controls .extras button, .seat .plate .status'), [], 'what the bar or a seat says is cut off');
+  assertOnScreen(await boxes(page, '.controls .own-note, .controls .extras button, .controls .extras .toggle, .seat .plate'), screen, 'the table and the bar under it');
+  assertApart(await boxes(page, '.controls .waiting'), await boxes(page, '.stage, .controls .extras'), 'what the bar says and what is around it');
+}
+
+const stacksBySeat = (page: Page, seats: number) => Promise.all(Array.from({ length: seats }, (_, seat) => text(page, `.seat[data-seat="${seat}"] .stack`)));
+
+async function openLedger(page: Page, screen: ScreenName): Promise<void> {
+  const press = pressOn(page, screen);
+
+  await press('[data-action="menu"]');
+  await press('.menu [data-action="ledger"]');
+  await page.waitForSelector('.ledger');
+}
+
+const ledgerRows = async (page: Page) => (await texts(page, '.ledger tbody tr')).map((row) => row.split(/\s*\t\s*/));
+
+async function assertNoSidewaysScroll(page: Page): Promise<void> {
+  assert.equal(await page.evaluate('document.documentElement.scrollWidth <= window.innerWidth'), true, 'the page scrolls sideways');
+}
+
+/** What the browser would tell someone about a field it won't accept; empty when the field is fine. */
+const complaintOf = (page: Page, selector: string) => page.evaluate(`document.querySelector(${JSON.stringify(selector)}).validationMessage`) as Promise<string>;
+
+/** Whether the key hint on a button is drawn. */
+const hintShown = async (page: Page, selector: string) => (await style(page, selector, 'content', '::after')) !== 'none';
+
+/** Lets the buttons just drawn settle, so a key pressed next is taken. */
+const settle = (page: Page) => page.waitForTimeout(KEYS_SETTLE_MS + 100);
+
+/**
+ * Has the page press a key itself the moment `selector` first matches, for a key that must come before
+ * the buttons have settled: pressed from here it arrives when the machine gets to it, which on a busy
+ * one is too late. `window.pressedEarly` says when it has been pressed.
+ */
+const pressAsSoonAs = (page: Page, key: string, selector: string) =>
+  page.evaluate(`(() => {
+    window.pressedEarly = false;
+    new MutationObserver((changes, watch) => {
+      if (document.querySelector(${JSON.stringify(selector)})) {
+        watch.disconnect();
+        document.body.dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(key)}, bubbles: true, cancelable: true }));
+        window.pressedEarly = true;
+      }
+    }).observe(document.body, { childList: true, subtree: true, attributes: true });
+  })()`);
+
+const HINT = '.seat.me .hint';
+
+/**
+ * Waits for whatever is moving on the table to land where it will sit, and for the chances of hands that
+ * are face up to be those of the cards on it. On a still table, as the rig keeps its pages, nothing moves,
+ * and the chances are a moment's work behind the cards.
+ */
+const dealt = (page: Page) => page.waitForSelector('.stage:not([data-moving]):not([data-chances-pending])');
+
+/** The cards on the table the hand hint picks out as making the viewer's hand, and the ones it says do not. */
+const marking = (page: Page) =>
+  page.evaluate(`({
+    plays: [...document.querySelectorAll('.table .card.plays')].map((card) => card.dataset.card).sort(),
+    idle: [...document.querySelectorAll('.table .card.idle')].map((card) => card.dataset.card).sort(),
+  })`) as Promise<{ plays: string[]; idle: string[] }>;
+
+const sortedCards = (text: string) => text.split(' ').sort();
+
+/** Waits for the hint to name a hand and the cards to land, so the page shows the street the check moved the table to. */
+async function hintSays(page: Page, ...names: string[]): Promise<void> {
+  await page.waitForFunction(`JSON.stringify([...document.querySelectorAll(${JSON.stringify(`${HINT} .name`)})].map((name) => name.textContent)) === ${JSON.stringify(JSON.stringify(names))}`);
+  await dealt(page);
+}
+
+/** That the hint is whole, inside the table's part of the screen and clear of everything else on the table, and the seat's own text is not squeezed by it. */
+async function assertHintFits(page: Page): Promise<void> {
+  // The text, not the pill around it: the seats beside are drawn over the pill's ends
+  const hint = await textBoxes(page, `${HINT} .read`);
+  const [stage] = await boxes(page, '.stage');
+
+  assert.ok(hint.length > 0, 'the hand hint: nothing to look at');
+  for (const box of hint) {
+    assert.ok(box.left >= stage!.left - 1 && box.right <= stage!.right + 1 && box.top >= stage!.top - 1 && box.bottom <= stage!.bottom + 1, `the hand hint runs off the table: ${JSON.stringify(box)} in ${JSON.stringify(stage)}`);
+  }
+
+  assert.deepEqual(await squeezed(page, `${HINT}, ${HINT} .read, .seat.me .plate .name span, .plate .stack`), [], 'the hint, or the seat it is under, is cut off');
+  assertApart(hint, await boxes(page, '.board .card, .seat:not(.me) .plate, .seat:not(.me) .hole .card, .bet, .pot'), 'the hand hint and the table');
+
+  // The hint makes the viewer's seat taller and the lift raises cards, so both are checked against the middle of the table
+  assertApart(await boxes(page, '.seat.me .hole .card'), await boxes(page, '.board .card, .pot, .message.result > div'), 'the viewer\'s cards and the middle of the table');
+  await assertBetsApart(page);
+}
+
+/**
+ * Runs `look` on a phone's table standing up and lying down, which one it is being left to how the
+ * buttons under it wrap: standing at the least height it stands at, lying at the most, and, while
+ * someone can act and the buttons for it take room, lying at a short one.
+ */
+async function inEveryShape(page: Page, look: (shape: string) => Promise<void>, { buttonsUp = true } = {}): Promise<void> {
+  const { width } = page.viewportSize()!;
+  const shapes: [string, number][] = [
+    ['tall', Math.ceil(width / WIDE_ASPECT) + 1],
+    ['wide', Math.floor(width / WIDE_ASPECT) - 1],
+  ];
+
+  // The shortest a phone's table gets with a turn's buttons under it, measured on a 360 and a 375 phone in each font
+  if (buttonsUp) {
+    shapes.push(['wide', Math.round(width * 0.78)]);
+  }
+
+  for (const [shape, height] of shapes) {
+    await setStageHeight(page, height);
+    await page.waitForSelector(`.table.${shape}`);
+    await dealt(page);
+    await look(`${shape}-${height}`);
+  }
+}
+
+/** `inEveryShape` on a phone; on a desktop, whose table always lies down, one look. */
+const inShapesOf = (page: Page, screen: ScreenName, look: (shape: string) => Promise<void>, options?: { buttonsUp?: boolean }) =>
+  screen === 'desktop' ? look('wide') : inEveryShape(page, look, options);
+
+/**
+ * That the playing cards stand apart from the rest by where they sit, which reads the same in any theme or deck, and the
+ * rest are faded. A theme that fades nothing (High Contrast, where a faded card is under 7 to 1) leaves it to where they sit.
+ */
+async function assertMarked(page: Page): Promise<void> {
+  const fades = await page.evaluate(`getComputedStyle(document.querySelector('.table')).getPropertyValue('--dim').trim() !== '0'`);
+  const faded = await page.evaluate(`[...document.querySelectorAll('.table .card.idle')].every((card) => (Number(getComputedStyle(card).opacity) < 1) === ${fades})`);
+  assert.equal(faded, true, fades ? 'a card that does not play is not faded' : 'a card is faded in a theme that fades nothing');
+
+  for (const where of ['.board[data-run="0"]', '.board[data-run="1"]', '.seat.me .hole']) {
+    const [playing] = await boxes(page, `${where} .card.plays`);
+    const [resting] = await boxes(page, `${where} .card.idle`);
+
+    if (playing && resting) {
+      assert.ok(resting.top - playing.top >= 3, `in ${where} a card that plays sits only ${resting.top - playing.top}px above one that does not`);
+    }
+  }
+}
+
+/** Sets the viewer's own choices as if made on an earlier visit, and loads the page again with them. */
+async function choose(page: Page, prefs: Record<string, string>): Promise<void> {
+  await page.evaluate(`Object.entries(${JSON.stringify(prefs)}).forEach(([key, value]) => localStorage.setItem('cnd.' + key, value))`);
+  await page.reload();
+  await page.waitForSelector('.stage .table');
+  await page.evaluate('document.fonts.ready.then(() => undefined)');
+}
+
+const TRANSPARENT = 'rgba(0, 0, 0, 0)';
+
+// Run in the page as it waits for the flash: catches it as it starts and holds it at its brightest, in `window.flash`
+const PAUSE_FLASH = `(() => {
+  const flash = document.querySelector('.stage')?.getAnimations().find((animation) => animation.animationName === 'attention-flash');
+  if (flash) {
+    flash.pause();
+    flash.currentTime = 60;
+    window.flash = flash;
+  }
+  return !!flash;
+})()`;
+
+// Run in the page: what is drawn on top at the middle of each card, bet and button on the table, which a flash must leave as it was
+const ON_TOP = `[...document.querySelectorAll('.table .card, .bet, .turn button')]
+  .map((element) => element.getBoundingClientRect())
+  .filter((box) => box.width > 0)
+  .map((box) => document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)?.outerHTML.slice(0, 80) ?? 'nothing')`;
+
+// Run in the page: lets a check put the page out of sight and back, as another tab does, which a headless browser can't
+const SIGHT = `(() => {
+  let hidden = false;
+  Object.defineProperty(document, 'hidden', { get: () => hidden, configurable: true });
+  Object.defineProperty(document, 'visibilityState', { get: () => (hidden ? 'hidden' : 'visible'), configurable: true });
+  window.outOfSight = (out) => {
+    hidden = out;
+    document.dispatchEvent(new Event('visibilitychange'));
+  };
+})()`;
+
+// Run in the page: every buzz asked for, and whether the page had been touched by then
+const BUZZ = `(() => {
+  window.buzzes = [];
+  Object.defineProperty(Navigator.prototype, 'vibrate', {
+    value: (pattern) => {
+      window.buzzes.push({ pattern, touched: navigator.userActivation.hasBeenActive });
+      return true;
+    },
+    configurable: true,
+  });
+})()`;
+
+const middle = (box: Box) => ({ x: (box.left + box.right) / 2, y: (box.top + box.bottom) / 2 });
+
+/**
+ * Run in a page: every emoji of the reactions, the rabbit hunt and the muted mark drawn half as wide again as their own
+ * size, as no font here draws them but some phones' fonts come near. A check run with it shows no layout
+ * of theirs depends on how wide this machine's emoji are. The rabbit's sits in a line of words, where only
+ * a box of its own takes an indent.
+ */
+const WIDE_EMOJI = '.seat-reaction, .thrown, .react-choice, .react-toggle, .rabbit-mark, .muted-mark { letter-spacing: 0.25em; text-indent: 0.25em; } .rabbit-mark { display: inline-block; }';
+
+/** That every box in `found` is inside `frame`. */
+function within(found: Box[], [frame]: Box[], what: string): void {
+  assert.ok(found.length > 0 && frame, `${what}: nothing to look at`);
+  for (const box of found) {
+    assert.ok(box.left >= frame.left - 1 && box.right <= frame.right + 1 && box.top >= frame.top - 1 && box.bottom <= frame.bottom + 1, `${what} reaches outside ${JSON.stringify(frame)}: ${JSON.stringify(box)}`);
+  }
+}
+
+/** Nine at the table, each named for a check to throw at by name: Quigs in seat 0, Pam 2, Lu 3, Sam 4, Al 5, Dot 6. */
+const NINE_REACTING: RigPlayer[] = ['Quigs', 'Stu', 'Pam', 'Lu', 'Sam', 'Al', 'Dot', 'Bo', 'Kai'].map((name) => ({ name, stack: 1000 }));
+
+// How far a button that does not bet must be from one that does, so that a finger meant for one never lands on the other
+const MIS_TAP_PX = 24;
+
+/** The space between two boxes, along whichever way they are apart; 0 or less when they touch or overlap. */
+const gap = (a: Box, b: Box) => Math.max(a.left - b.right, b.left - a.right, a.top - b.bottom, b.top - a.bottom);
+
+// Run in the page: whether a tap in the middle of the fold button reaches it
+const FOLD_ON_TOP = `(() => {
+  const fold = document.querySelector('.turn [data-action="fold"]');
+  const box = fold.getBoundingClientRect();
+
+  return fold.contains(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2));
+})()`;
+
+/** That `box`'s middle is inside `around`. */
+function assertInside(box: Box, around: Box, what: string): void {
+  const { x, y } = middle(box);
+
+  assert.ok(x >= around.left && x <= around.right && y >= around.top && y <= around.bottom, `${what}: ${JSON.stringify(box)} is not over ${JSON.stringify(around)}`);
+}
+
+/** That the page shows reaction `kind` over the seat `seat`, named `label`, standing on the top of its plate. */
+async function assertMarkOn(page: Page, kind: string, seat: number, label: string): Promise<void> {
+  const mark = page.locator(`.seat-reaction[data-reaction="${kind}"]`).last();
+
+  assert.equal(await mark.getAttribute('data-seat'), String(seat), `${kind} is over the wrong seat`);
+  assert.equal(await mark.getAttribute('aria-label'), label);
+
+  const [shown] = await boxes(page, `.seat-reaction[data-reaction="${kind}"]`);
+  const [plate] = await boxes(page, `.seat[data-seat="${seat}"] .plate`);
+  const x = middle(shown!).x;
+
+  assert.ok(x >= plate!.left && x <= plate!.right, `${kind} is not over seat ${seat}'s plate: ${JSON.stringify(shown)} and ${JSON.stringify(plate)}`);
+  assert.ok(shown!.top < plate!.top && shown!.bottom > plate!.top - (shown!.bottom - shown!.top), `${kind} does not stand on seat ${seat}'s plate: ${JSON.stringify(shown)} and ${JSON.stringify(plate)}`);
+}
+
+/** Whether one thing lies with its middle on the middle of another. */
+const over = (a: Box, b: Box) => Math.hypot(middle(a).x - middle(b).x, middle(a).y - middle(b).y) <= 1.5;
+
+function assertOver(found: Box, wanted: Box | undefined, what: string): void {
+  assert.ok(wanted && over(found, wanted), `${what}: its middle is at ${JSON.stringify(middle(found))}, not ${JSON.stringify(wanted && middle(wanted))}`);
+}
+
+/** Whether two measures are the same to the browser: what one layout gives twice. */
+const same = (a: number, b: number) => Math.abs(a - b) < 0.05;
+
+// Every animation the page's script has running, what each changes, and every stand-in on the table.
+// The flash of a turn is the stylesheet's own, on the table's background
+const inTheAir = (page: Page) =>
+  page.evaluate(`(() => {
+    const animations = document.getAnimations().filter((animation) => !(animation instanceof CSSAnimation));
+
+    // What a tap would land on where each thing in flight is right now: never the thing itself
+    const inTheWay = animations.filter(({ effect: { target } }) => {
+      const box = target.getBoundingClientRect();
+
+      return target.contains(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2));
+    });
+
+    return {
+      moving: document.querySelector('.stage').hasAttribute('data-moving'),
+      animations: animations.length,
+      animated: [...new Set(animations.flatMap((animation) => animation.effect.getKeyframes().flatMap(Object.keys)))].filter((key) => !['offset', 'computedOffset', 'easing', 'composite'].includes(key)).sort(),
+      standIns: document.querySelectorAll('.stand-in').length,
+      inTheWay: inTheWay.length,
+    };
+  })()`) as Promise<{ moving: boolean; animations: number; animated: string[]; standIns: number; inTheWay: number }>;
+
+/**
+ * How long after its view a celebration's move may still be moving: a last card held and turned over is
+ * bounded by the sweat, confetti by its own flight thrown as the pot lands, and a throw, set off the moment
+ * its view arrives, by its own flight. Every other move is the
+ * hand's own, bound by its budgets.
+ */
+const CELEBRATION_MS: Partial<Record<MoveName, number>> = { facedown: MOST_SWEAT_MS, reveal: MOST_SWEAT_MS, confetti: MOST_VIEW_MS + MOVE_MS.confetti, throw: MOVE_MS.throw };
+
+/**
+ * What the page has set moving since it was last asked, once all of it has landed; with `since`, only
+ * what of that was for a view of its table newer than that version. Moves held in the air are let go first.
+ */
+async function flown(page: Page, since = -Infinity): Promise<Flight[]> {
+  await page.evaluate('window.land()');
+  await dealt(page);
+
+  const flights = ((await page.evaluate('window.unread()')) as Flight[]).filter((flight) => flight.version > since);
+
+  for (const flight of flights) {
+    const most = CELEBRATION_MS[flight.name];
+
+    assert.deepEqual(flight.properties.filter((property) => property !== 'transform' && property !== 'opacity'), [], `a ${flight.what} is moved by more than transform and opacity`);
+    assert.ok(flight.duration <= (most === undefined ? MOST_MOVE_MS : MOVE_MS[flight.name]), `a ${flight.what} takes ${flight.duration} ms to move`);
+    assert.ok(flight.delay + flight.duration <= (most ?? MOST_VIEW_MS), `a ${flight.what} is still moving ${flight.delay + flight.duration} ms after the view`);
+  }
+
+  return flights;
+}
+
+/** The table's part of a page as it is drawn: its markup, and the box of every element of it in the order they are drawn. */
+interface Drawn {
+  markup: string;
+  boxes: Box[];
+}
+
+// Run in the page
+const drawnOf = (selector: string) => `(() => {
+  const part = document.querySelector(${JSON.stringify(selector)});
+
+  return {
+    markup: part.outerHTML,
+    boxes: [...part.querySelectorAll('*')].map((element) => {
+      const { left, top, right, bottom } = element.getBoundingClientRect();
+
+      return { left, top, right, bottom };
+    }),
+  };
+})()`;
+
+const DRAWN = drawnOf('.stage');
+
+const sameBox = (a: Box, b: Box | undefined) => b !== undefined && (['left', 'top', 'right', 'bottom'] as const).every((edge) => same(a[edge], b[edge]));
+
+/**
+ * That a page whose motion has landed is, to the last attribute and the last box, what a page that
+ * never moved shows of the same table. Answers with what the still page shows.
+ */
+async function assertAsStill(moving: Page, still: Page, when: string): Promise<Drawn> {
+  await Promise.all([dealt(moving), dealt(still)]);
+
+  const moved = (await moving.evaluate(DRAWN)) as Drawn;
+  const stood = (await still.evaluate(DRAWN)) as Drawn;
+
+  assert.equal(moved.markup, stood.markup, `${when}: the table that moved is not the table that stood still`);
+  moved.boxes.forEach((box, index) => assert.ok(sameBox(box, stood.boxes[index]), `${when}: something lies at ${JSON.stringify(box)} that the still table has at ${JSON.stringify(stood.boxes[index])}`));
+
+  return stood;
+}
+
+/** Waits for a page to show the table as the server has it for a viewer: whose turn it is, the cards out, the bets, the folds and the result. */
+async function caughtUp(page: Page, view: TableView): Promise<void> {
+  const hand = view.hand;
+  const seats = view.seats.filter((seat) => seat !== null);
+  const wanted = [
+    hand ? onTheClock(hand) : null,
+    hand?.boards.flat().length ?? 0,
+    seats.filter((seat) => seat.bet > 0).length,
+    seats.filter((seat) => seat.folded).length,
+    hand?.stage === 'done',
+    hand?.hunted?.flat().length ?? 0,
+  ];
+
+  await page.waitForFunction(`JSON.stringify([
+    document.querySelector('.seat.acting') ? Number(document.querySelector('.seat.acting').dataset.seat) : null,
+    document.querySelectorAll('.board .card[data-card]:not(.hunted)').length,
+    document.querySelectorAll('.bet[data-bet]').length,
+    document.querySelectorAll('.seat.folded').length,
+    document.querySelector('.message.result') !== null,
+    document.querySelectorAll('.board .card.hunted').length,
+  ]) === ${JSON.stringify(JSON.stringify(wanted))}`);
+}
+
+interface MotionLayout {
+  name: string;
+  screen: ScreenName;
+  /** The height a phone's table is held at, which makes it stand or lie. */
+  height?: number;
+  /** Moves play out in their own time on a processor this many times slower. On the others they are held where they start and let go, so no check waits on them. */
+  slower?: number;
+  config?: Partial<TableConfig>;
+}
+
+const MOTION_LAYOUTS: MotionLayout[] = [
+  { name: 'phone-standing', screen: 'phone', height: JUST_STANDING },
+  { name: 'phone-lying', screen: 'phone', height: Math.floor(SCREENS.phone.width / WIDE_ASPECT) - 1 },
+  { name: 'desktop', screen: 'desktop', config: CENTS },
+  { name: 'phone-slow', screen: 'phone', height: JUST_STANDING, slower: 4 },
+];
+
+const MOTION_PLAYERS: RigPlayer[] = ['Quigs', 'Stu', 'Pam', 'Al'].map((name) => ({ name, stack: 10_000 }));
+
+/** What a step of a hand set moving, and where things lay on the still table before it and after. */
+interface Seen {
+  flights: Flight[];
+  before: Spots;
+  after: Spots;
+}
+
+/** A table watched twice by one of its players, on the same screen: on a page that moves, which writes its moves down, and on one that stands still to measure the first against. */
+interface Watched {
+  moving: Page;
+  still: Page;
+  /** Does something to the table, waits for both pages to show it and for the moving one to land, and checks that it landed as the still one stands. */
+  step(what: string, act: () => unknown): Promise<Seen>;
+}
+
+/** Holds a phone's table at the layout's height for the whole hand, whatever the buttons under it come to: its shape is the check's to choose. */
+async function holdShape(page: Page, layout: MotionLayout): Promise<void> {
+  if (!layout.height) {
+    return;
+  }
+
+  await page.setViewportSize({ width: SCREENS[layout.screen].width, height: layout.height + 600 });
+  // And at a width that is no whole number of pixels, as a zoomed browser gives it, which is where a rounded measure shows
+  await page.addStyleTag({ content: `.stage { align-self: start; width: calc(100% - 0.4px); height: ${layout.height}px; }` });
+  await page.waitForSelector(layout.height >= JUST_STANDING ? '.table.tall' : '.table.wide');
+}
+
+async function watch(table: RigTable, name: string, layout: MotionLayout, holdAt: number | null = 0): Promise<Watched> {
+  const moving = await table.open(name, layout.screen, MOTION, { moving: true });
+  const still = await table.open(name, layout.screen);
+
+  await holdShape(moving, layout);
+  await holdShape(still, layout);
+
+  if (layout.slower) {
+    const session = await moving.context().newCDPSession(moving);
+    await session.send('Emulation.setCPUThrottlingRate', { rate: layout.slower });
+  } else {
+    await moving.evaluate(`window.holdAt = ${holdAt}`);
+  }
+
+  return {
+    moving,
+    still,
+    step: async (what, act) => {
+      const before = (await still.evaluate(SPOTS)) as Spots;
+
+      act();
+
+      const view = table.view(name);
+      await Promise.all([caughtUp(moving, view), caughtUp(still, view)]);
+
+      const flights = await flown(moving);
+      const stood = await assertAsStill(moving, still, `${layout.name}, ${what}`);
+
+      // What the table draws ends its move exactly where the still table has it
+      for (const flight of flights.filter((flight) => !flight.standIn)) {
+        assert.ok(sameBox(flight.to, stood.boxes[flight.index]), `${layout.name}, ${what}: a ${flight.what} lands at ${JSON.stringify(flight.to)}, and rests at ${JSON.stringify(stood.boxes[flight.index])}`);
+      }
+
+      return { flights, before, after: (await still.evaluate(SPOTS)) as Spots };
+    },
+  };
+}
+
+/**
+ * That folded cards leave from the place their seat keeps for cards, drawn as they were. A seat that
+ * says it folded has grown a line, so that place is not quite where the cards lay a moment ago.
+ */
+function assertLeavesSeat(flight: Flight, { before, after }: Seen, seat: number, what: string): void {
+  const [cards, hole] = [before.cards[seat]!, after.holes[seat]!];
+  const fits = same(flight.from.top, hole.top) && same(flight.from.bottom, hole.bottom) && same(middle(flight.from).x, middle(hole).x);
+
+  assert.ok(fits && same(flight.from.right - flight.from.left, cards.right - cards.left), `${what}: the folded cards start at ${JSON.stringify(flight.from)}, their place is ${JSON.stringify(hole)} and they lay at ${JSON.stringify(cards)}`);
+  assertOver(flight.to, after.felt, `${what}: the folded cards go to the middle of the table`);
+}
+
+/** That a card of a board comes down onto its own place from just above it. */
+function assertDrops(card: Flight, what: string): void {
+  assert.ok(same(middle(card.from).x, middle(card.to).x) && card.from.top < card.to.top && card.from.bottom > card.to.top, `${what} drops onto its place from just above it`);
+}
+
+/** The flights of one kind, in the order the page set them off. */
+const flightsOf = (seen: Seen, what: Flight['what'], standIn: boolean) => seen.flights.filter((flight) => flight.what === what && flight.standIn === standIn);
+
+/**
+ * Run in the page once a hand is all in, before its river: notes how the felt, the seats, the hint, the
+ * play-by-play and the bar under the table stand, then writes down when the last card is face up and the first moment each of them
+ * says more, so a check on a page moving in its own time can tell which came first.
+ */
+const SWEAT = `(() => {
+  const stacks = () => [...document.querySelectorAll('.seat .stack')].map((stack) => stack.textContent).join();
+  const hint = () => document.querySelector('.seat.me .hint')?.textContent ?? '';
+  // The play-by-play and the chat, as the list has them and as the line a phone shows of them while it is closed
+  const bar = () => document.querySelector('.controls-slot').innerHTML;
+  const feed = () => [...document.querySelectorAll('.feed li')].map((line) => line.textContent).join('|') + document.querySelector('.feed .latest').textContent;
+  const chances = () => [...document.querySelectorAll('.status.chance')].map((line) => line.textContent).join();
+  const telling = () => [
+    document.querySelector('.message.result') && 'the result on the felt',
+    document.querySelector('.seat.winner, .status.won') && 'a winner’s seat',
+    stacks() !== window.sweat.stacks && 'a stack',
+    hint() !== window.sweat.hint && 'the hint',
+    feed() !== window.sweat.feed && 'the play-by-play or the chat',
+    bar() !== window.sweat.bar && 'the bar under the table',
+    chances() !== window.sweat.chances && 'a hand’s chance to win',
+  ].filter(Boolean);
+
+  window.sweat = { stacks: stacks(), hint: hint(), feed: feed(), bar: bar(), chances: chances(), up: [], said: {}, telling };
+
+  if (window.sweatSeen) {
+    return;
+  }
+
+  window.sweatSeen = true;
+
+  const animate = Element.prototype.animate;
+  Element.prototype.animate = function (frames, options) {
+    const animation = animate.call(this, frames, options);
+    if (options?.id === 'reveal') {
+      animation.finished.then(() => window.sweat.up.push(performance.now()), () => undefined);
+    }
+
+    return animation;
+  };
+
+  new MutationObserver(() => window.sweat.telling().forEach((what) => (window.sweat.said[what] ??= performance.now()))).observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true });
+})()`;
+
+/** That the last card of a runout lies face down over its place, its face unseen, and nothing on the page says more than before the river. */
+async function sweating(page: Page, what: string, river: string, board = 0): Promise<void> {
+  await page.waitForSelector('.board-card.stand-in');
+
+  assert.deepEqual(await page.evaluate('window.sweat.telling()'), [], `${what}: the page gives the result away while the river is face down`);
+  assert.equal(await style(page, `.board .card[data-card="${river}"]`, 'opacity'), '0', `${what}: the river’s face can be seen before it is turned`);
+
+  // The river's own place, in the board's row a step on from the turn as the turn is from the card before it: the
+  // river itself is on its edge, and a card the hand hint lifts is out of the row
+  const [down] = await boxes(page, '.board-card.stand-in .card');
+  const [row] = await boxes(page, `.board[data-run="${board}"]`);
+  const [, , third, turn] = await boxes(page, `.board[data-run="${board}"] .card`);
+  const place = { left: 2 * turn!.left - third!.left, right: 2 * turn!.right - third!.right, top: row!.top, bottom: row!.bottom };
+  assertOver(down!, place, `${what}: the face-down card lies on the river’s place`);
+}
+
+/** That every last card was turned over, and nothing said more than the cards before the last of them was up. */
+async function assertCardsFirst(page: Page, cards: number, what: string): Promise<void> {
+  const { up, said } = (await page.evaluate('window.sweat')) as { up: number[]; said: Record<string, number> };
+
+  assert.equal(up.length, cards, `${what}: the last cards were not all turned over`);
+  for (const [telling, at] of Object.entries(said)) {
+    assert.ok(at >= Math.max(...up), `${what}: ${telling} gave the result away ${Math.round(Math.max(...up) - at)} ms before the last card was up`);
+  }
+}
+
+// Run in the page: the pieces of confetti that are what a tap at their own middle would land on
+const UNDER_CONFETTI = `[...document.querySelectorAll('.confetti')].filter((piece) => {
+  const box = piece.getBoundingClientRect();
+
+  return document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)?.closest('.confetti, .stand-in');
+}).length`;
+
+/**
+ * A table of whole chips and one of dollars and cents for the checks of straddles, with the amounts as
+ * each writes them: the blinds, a straddle and a double, a raise over the double, what each blind has
+ * left to call of a straddle and of a double, and the pot once each of those is posted.
+ */
+const STRADDLE_TABLES = [
+  { name: 'chips', config: {} as Partial<TableConfig>, stack: 1000, blinds: '10/20', small: '10', big: '20', straddle: '40', double: '80', quadruple: '160', smallCalls: ['30', '70'], bigCalls: ['20', '60'], pots: ['70', '150'], called: ['240', '480'] },
+  { name: 'cents', config: { ...CENTS } as Partial<TableConfig>, stack: 10_000, blinds: '0.25/0.50', small: '0.25', big: '0.50', straddle: '1.00', double: '2.00', quadruple: '4.00', smallCalls: ['0.75', '1.75'], bigCalls: ['0.50', '1.50'], pots: ['1.75', '3.75'], called: ['6.00', '12.00'] },
+];
+
+type StraddleTable = (typeof STRADDLE_TABLES)[number];
+
+const WIDEST = 'WWWWWWWWWWWWWWWW';
+const STRADDLE_LABELS = ['Straddle under the gun', 'Double straddle', 'Button straddle', 'Mississippi straddle'];
+const EVERY_STRADDLE = { allowStraddle: true, allowDoubleStraddle: true, allowButtonStraddle: true, allowMississippiStraddle: true };
+
+/** Six players, Quigs in seat 0 and the host, before the first hand. Dealt with the button on Quigs, the blinds are on seats 1 and 2, Marge in seat 3 is under the gun, Stu sits next to her and Big Al is the cutoff. */
+const sixFor = (rig: Rig, kind: StraddleTable, config: Partial<TableConfig> = {}) =>
+  rig.table(
+    LONG_NAMES.slice(0, 6).map((name) => ({ name, stack: kind.stack })),
+    { ...kind.config, ...config },
+  );
+
+/** A hand of those six with one kind of straddle in it. */
+interface StraddledHand {
+  slug: string;
+  says: string;
+  allow: Partial<TableConfig>;
+  asks: [name: string, what: Straddle][];
+  /** What the play-by-play says of the straddles, after the blinds. */
+  posts(kind: StraddleTable): string[];
+  /** What the straddlers' seats say. */
+  statuses: Record<number, string>;
+  /** The first to act, by seat, and the last, who posted the biggest straddle. */
+  first: number;
+  last: number;
+  /** Whether the biggest is a double. */
+  doubled: boolean;
+}
+
+const STRADDLED_HANDS: StraddledHand[] = [
+  {
+    slug: 'double',
+    says: 'a straddle and a double straddle',
+    allow: { allowDoubleStraddle: true },
+    asks: [[MARGE, 'straddle'], ['Stu', 'double straddle']],
+    posts: (kind) => [`${MARGE} posts straddle ${kind.straddle}`, `Stu posts double straddle ${kind.double}`],
+    statuses: { 3: 'Straddle', 4: 'Double straddle' },
+    first: 5,
+    last: 4,
+    doubled: true,
+  },
+  {
+    slug: 'button',
+    says: 'a button straddle',
+    allow: { allowButtonStraddle: true },
+    asks: [['Quigs', 'button straddle']],
+    posts: (kind) => [`Quigs posts button straddle ${kind.straddle}`],
+    statuses: { 0: 'Straddle' },
+    first: 1,
+    last: 0,
+    doubled: false,
+  },
+  {
+    slug: 'mississippi',
+    says: 'a Mississippi straddle from the cutoff',
+    allow: { allowMississippiStraddle: true },
+    asks: [['Big Al', 'Mississippi straddle']],
+    posts: (kind) => [`Big Al posts Mississippi straddle ${kind.straddle}`],
+    statuses: { 5: 'Straddle' },
+    first: 0,
+    last: 5,
+    doubled: false,
+  },
+];
+
+/** The table, the bets and the turn's buttons all have room, in every shape the screen gives the table. */
+async function assertStraddledTableFits(page: Page, screen: ScreenName, name: string): Promise<void> {
+  await inShapesOf(page, screen, async (shape) => {
+    assert.deepEqual(await squeezed(page, '.pot, .bet, .plate .stack, .plate .status, .turn .buttons button'), [], 'an amount, a status or a button is cut off');
+    assertOnScreen(await boxes(page, '.seat .plate, .bet, .pot, .turn .buttons button'), screen, 'a seat, a bet, the pot or a button of the turn');
+    await assertBetsApart(page);
+    await assertNoSidewaysScroll(page);
+    await shot(page, `${name}-${screen}-${shape}`);
+  });
+}
+
+/** One hand with a kind of straddle, on a table of chips or of cents, looked at on a phone and a desktop. */
+const straddledHandCheck = (hand: StraddledHand, kind: StraddleTable): Check => [
+  `${hand.says} at a table of ${kind.name}: each is in front of its seat and in the play-by-play, the first to act, both blinds and the straddler with the option are asked for the right amounts, and the history tells it`,
+  async (rig) => {
+    const nth = hand.doubled ? 1 : 0;
+    const biggest = hand.doubled ? kind.double : kind.straddle;
+    const raiseTo = hand.doubled ? kind.quadruple : kind.double;
+    const toCall = (seat: number) => (seat === 1 ? kind.smallCalls[nth]! : seat === 2 ? kind.bigCalls[nth]! : seat === 3 && hand.doubled ? kind.straddle : biggest);
+    const names = LONG_NAMES.slice(0, 6);
+
+    for (const screen of PHONE_AND_DESKTOP) {
+      const table = sixFor(rig, kind, hand.allow);
+      for (const [name, what] of hand.asks) {
+        table.act(name, { type: 'setStraddle', kind: what, on: true });
+      }
+
+      table.deal({ button: 0, holes: { 0: 'Ks Kh', 3: 'As Ah' }, board: '2c 7d 9h Jc 3s' });
+
+      const lines = [`Hand #1 · blinds ${kind.blinds} · Quigs has the button`, `${WIDEST} posts small blind ${kind.small}`, `${names[2]} posts big blind ${kind.big}`, ...hand.posts(kind)];
+
+      // The first to act: every straddle is a bet in front of its seat, named on the seat, and the price to call is the biggest
+      const page = await table.open(names[hand.first]!, screen);
+      const press = pressOn(page, screen);
+
+      assert.deepEqual((await texts(page, '.bet')).sort(), [kind.small, kind.big, kind.straddle, ...(hand.doubled ? [kind.double] : [])].sort());
+      assert.equal(await text(page, '.pot'), `Pot${kind.pots[nth]}`);
+      assert.equal(await page.locator('.seat.acting').getAttribute('data-seat'), String(hand.first));
+
+      for (const [seat, status] of Object.entries(hand.statuses)) {
+        assert.equal(await text(page, `.seat[data-seat="${seat}"] .status`), status);
+      }
+
+      assert.equal(await text(page, '.turn [data-action="call"]'), `Call ${toCall(hand.first)}`);
+      assert.equal(await text(page, '.turn [data-action="raise"]'), `Raise to ${raiseTo}`);
+      await assertStraddledTableFits(page, screen, `straddles-${hand.slug}-first-${kind.name}`);
+
+      await toggleFeed(page, screen);
+      const said = await texts(page, '.entries li');
+      const from = said.indexOf(lines[0]!);
+      assert.deepEqual(said.slice(from, from + lines.length), lines);
+      assert.deepEqual(await squeezed(page, '.entries li'), [], 'a line of the play-by-play is cut off');
+      await assertNoSidewaysScroll(page);
+      await shot(page, `straddles-${hand.slug}-play-by-play-${kind.name}-${screen}`);
+      await toggleFeed(page, screen);
+
+      // Each blind is asked for what is left of the biggest straddle, and may raise to the same as anyone
+      for (const blind of [1, 2].filter((seat) => seat !== hand.first)) {
+        table.play(passive, (view) => view.hand!.toAct === blind);
+
+        const theirs = await table.open(names[blind]!, screen);
+        assert.equal(await text(theirs, '.turn [data-action="call"]'), `Call ${toCall(blind)}`);
+        assert.equal(await text(theirs, '.turn [data-action="raise"]'), `Raise to ${raiseTo}`);
+        await theirs.context().close();
+      }
+
+      // Everyone calls, and the player who posted the biggest straddle acts last with nothing to call
+      table.play(passive, (view) => view.hand!.toAct === hand.last);
+
+      const last = await table.open(names[hand.last]!, screen);
+      assert.equal(await text(last, '.turn [data-action="check"]'), 'Check');
+      assert.equal(await text(last, '.turn [data-action="raise"]'), `Raise to ${raiseTo}`);
+      assert.equal(await last.locator('.turn [data-action="call"]').count(), 0);
+      assert.equal(await text(last, '.pot'), `Pot${kind.called[nth]}`);
+      await assertStraddledTableFits(last, screen, `straddles-${hand.slug}-option-${kind.name}`);
+      await last.context().close();
+
+      playOut(table);
+      await press('[data-action="menu"]');
+      await press('.menu [data-action="history"]');
+      await page.waitForSelector('.history summary');
+      assert.match(await text(page, '.history summary'), /^Hand #1/);
+      await press('.history summary');
+      assert.deepEqual((await text(page, '.history pre')).split('\n').slice(0, lines.length), lines);
+      assert.deepEqual(await squeezed(page, '.history summary'), [], 'the hand\'s line in the history is cut off');
+      await shot(page, `straddles-${hand.slug}-history-${kind.name}-${screen}`);
+
+      await page.context().close();
+    }
+  },
+];
+
+/** What the table of `tonightTable` comes to in whole chips and in dollars and cents, as its dialog writes it. */
+const TONIGHT_TABLES = [
+  { name: 'chips', config: {} as Partial<TableConfig>, first: '200', up: '+999,999,990', pot: '1,999,999,990', down: '1,000,000,000', afterTransfer: '-13' },
+  { name: 'cents', config: CENTS as Partial<TableConfig>, first: '5.00', up: '+9,999,999.75', pot: '19,999,999.75', down: '10,000,000.00', afterTransfer: '-0.43' },
+];
+
+/**
+ * Ten players two hands into a night, between hands with the game paused. Quigs won the first with
+ * aces, everyone having called; in the second the two who sat down with the most chips a player can
+ * hold put them all in, and Zed lost his and bought more. Stu has left since, and Lurker has only watched.
+ */
+function tonightTable(rig: Rig, config: Partial<TableConfig>): RigTable {
+  const table = rig.table(LONG_NAMES.map((name, index) => ({ name, stack: name === 'Zed' ? LIMITS.chips : MIXED_STACKS[index]! })), { ...config, maxRuns: 1 });
+  const board = '2c 7d 9h Jc 3s';
+
+  table.deal({ button: 0, holes: { 0: 'As Ah', 1: 'Ks Kh', 2: 'Qs Qh', 3: 'Ts Th', 4: '8s 8h', 5: '6s 6h', 6: '5s 5h', 7: '4s 4h', 8: 'Ad Kd', 9: 'Qd Td' }, board });
+  table.act('Quigs', { type: 'pause' });
+  table.play(passive, (view) => view.hand === null);
+
+  table.dealNext({ holes: { 1: 'Jd Js', 8: 'Ks Kh' }, board });
+  table.act('Quigs', { type: 'pause' });
+  table.play((view, name) => (name === WIDEST || name === 'Zed' ? allIn(view) : { type: 'fold' }), (view) => view.hand === null);
+
+  table.act('Zed', { type: 'requestRebuy', amount: 500 });
+  table.act('Quigs', { type: 'approve', playerId: table.auth('Zed').id });
+  table.act('Stu', { type: 'standUp' });
+  table.join('Lurker');
+
+  return table;
+}
+
+// Run in the page before anything of its own: a browser that lets the page copy nothing, neither way it knows
+const NO_COPYING = `(() => {
+  Object.defineProperty(navigator, 'clipboard', { value: { writeText: () => Promise.reject(new Error('refused')) } });
+  document.execCommand = () => false;
+})()`;
+
+/** Opens the Tonight dialog from the menu, and waits for what it should show. */
+async function openTonight(page: Page, screen: ScreenName, shows = '.tonight-players'): Promise<void> {
+  const press = pressOn(page, screen);
+
+  await press('[data-action="menu"]');
+  await press('.menu [data-action="tonight"]');
+  await page.waitForSelector(`.dialog[aria-label="Tonight"] ${shows}`);
+}
+
+const RECAP = '.dialog[aria-label="Tonight"] .tonight-crown';
+
+// How often the page looks whether a dialog it means to open may come up now: COUNTDOWN_TICK_MS in src/client/app.ts
+const OFFER_TICK_MS = 250;
+
+/** Quigs, Stu and Big Al one hand into a night that Quigs is up in and the other two are level in, with Zed watching, between hands and paused. */
+function nightOfOneHand(rig: Rig): RigTable {
+  const table = rig.table([{ name: 'Quigs', stack: 1000 }, { name: 'Stu', stack: 1000 }, { name: 'Big Al', stack: 1000 }], { maxRuns: 1 });
+
+  table.join('Zed');
+  table.deal({ button: 0, holes: { 0: 'As Ah', 1: 'Ks Kh', 2: 'Qs Qh' }, board: '2c 7d 9h Jc 3s' });
+  table.act('Quigs', { type: 'pause' });
+  table.play(passive, (view) => view.hand === null);
+
+  return table;
+}
+
+/** That no dialog opens by itself, given longer than the page takes to open one that is waiting. With `open`, that the dialog of that title stays as it is. */
+async function assertNoDialogComes(page: Page, otherwise: string, open?: string): Promise<void> {
+  await page.waitForTimeout(3 * OFFER_TICK_MS);
+  assert.deepEqual(await texts(page, '.dialog h2'), open ? [open] : [], otherwise);
+}
+
+/** Closes the recap that comes up by itself when the night ends, for a check of what lies under it. */
+async function closeRecap(page: Page): Promise<void> {
+  await page.click('.dialog[aria-label="Tonight"] [data-action="close"]');
+  await page.waitForSelector('.dialog', { state: 'detached' });
+}
+
+/** The Tonight dialog can be read whole: it is on the screen, nothing in it is cut off or runs out sideways, and no name is drawn over what its player is up or down. */
+async function assertTonightFits(page: Page, screen: ScreenName): Promise<void> {
+  assertOnScreen(await boxes(page, '.dialog'), screen, 'the Tonight dialog');
+  assert.deepEqual(await squeezed(page, '.dialog :is(h2, h3, p, dt, dd, strong, button, textarea, .who, .net, .counts), .dialog-body'), [], 'part of the Tonight dialog is cut off');
+
+  const rows = await page.locator('.tonight-players > li').count();
+  for (let row = 1; row <= rows; row++) {
+    const line = `.tonight-players > li:nth-child(${row}) summary`;
+
+    assertApart(await textBoxes(page, `${line} .who`), await boxes(page, `${line} .net, ${line} .fold`), 'a name and what its player is up or down');
+  }
+}
+
+/** Every player with what they are up or down, by name, as the Tonight dialog and as the ledger write it. */
+const tonightNets = (page: Page) => page.evaluate(`[...document.querySelectorAll('.tonight-players > li')].map((row) => [row.dataset.player, row.querySelector('.net').textContent]).sort()`) as Promise<string[][]>;
+const ledgerNets = (page: Page) => page.evaluate(`[...document.querySelectorAll('.ledger tbody tr')].map((row) => [row.firstElementChild.textContent, row.lastElementChild.textContent]).sort()`) as Promise<string[][]>;
+
+/** The table and the bar under it as a page draws them, less the mark of a move the server has yet to confirm. */
+interface Shown {
+  table: Drawn;
+  bar: Drawn;
+  /** The player's own move is marked as not confirmed yet. */
+  marked: boolean;
+}
+
+const UNCONFIRMED_MARK = ' data-unconfirmed=""';
+
+/** What a page shows once whatever was moving on it has landed. */
+async function shownOn(page: Page): Promise<Shown> {
+  await dealt(page);
+  // A control that has just come up in another's place wears the mark of it for a moment (the tap guard)
+  await tapsLive(page);
+
+  const { table, bar } = (await page.evaluate(`({ table: ${DRAWN}, bar: ${drawnOf('.controls-slot')} })`)) as { table: Drawn; bar: Drawn };
+
+  return { table: { ...table, markup: table.markup.replace(UNCONFIRMED_MARK, '') }, bar, marked: table.markup.includes(UNCONFIRMED_MARK) };
+}
+
+function assertSameDrawn(found: Drawn, wanted: Drawn, what: string): void {
+  assert.equal(found.markup, wanted.markup, `${what}: it is not drawn as it was`);
+  found.boxes.forEach((box, index) => assert.ok(sameBox(box, wanted.boxes[index]), `${what}: something lies at ${JSON.stringify(box)} that lay at ${JSON.stringify(wanted.boxes[index])}`));
+}
+
+/**
+ * That a page shows the table and the bar under it as it did at another moment, to the last attribute
+ * and the last box. The mark of a move not confirmed yet is the one thing that may differ: it is left
+ * out of the table's markup, and the bar is compared only where neither moment has it, since the mark
+ * puts its own sentence there.
+ */
+function assertAsShown(found: Shown, wanted: Shown, what: string): void {
+  assertSameDrawn(found.table, wanted.table, `${what}, the table`);
+
+  if (!found.marked && !wanted.marked) {
+    assertSameDrawn(found.bar, wanted.bar, `${what}, the bar`);
+  }
+}
+
+/** An amount as a player types it at a table. */
+const typedAs = (amount: number, view: TableView) => (view.config.unit === 'cents' ? (amount / 100).toFixed(2) : String(amount));
+
+/** Where a player's own move is shown early: a phone's table standing up, with motion on, and lying down, and a desktop that plays to the cent. */
+const TAP_FIRST_LAYOUTS: (MotionLayout & { moving?: boolean })[] = [{ ...MOTION_LAYOUTS[0]!, moving: true }, MOTION_LAYOUTS[1]!, MOTION_LAYOUTS[2]!];
+/** Every badge there is, each earned `times`, as a player's badges are saved. */
+const everyBadge = (times: number): Record<string, number> => Object.fromEntries(BADGES.map((badge) => [badge.id, times]));
+
+/** The table of `tonightTable` with every badge on every player who has played, the widest name having earned each one 99 times: the most a row has to fit. */
+function badgedTable(rig: Rig): RigTable {
+  const table = tonightTable(rig, {});
+  const widest = table.auth(WIDEST).id;
+
+  table.alter((state) => {
+    for (const [id, numbers] of Object.entries(state.tonight.players)) {
+      numbers.badges = everyBadge(id === widest ? 99 : 1);
+    }
+  });
+
+  return table;
+}
+
+/** The badges beside each player's name can all be seen: on the screen, none cut off, clear of the name and of what follows it. */
+async function assertBadgesFit(page: Page, screen: ScreenName, rows: string, apartFrom: string, what: string): Promise<void> {
+  const count = await page.locator(rows).count();
+  const [body] = await boxes(page, '.dialog-body');
+
+  // Up and down the dialog scrolls, so only its sides are a limit
+  assert.ok((await boxes(page, `${rows} .badge`)).every((badge) => badge.left >= body!.left && badge.right <= body!.right), `a badge in ${what} runs out of the dialog on ${screen}`);
+  assert.deepEqual(await squeezed(page, `${rows} .badge, ${rows} .badges`), [], `a badge in ${what} is cut off`);
+  await assertNoSidewaysScroll(page);
+
+  for (let row = 1; row <= count; row++) {
+    const line = `${rows}:nth-child(${row})`;
+
+    assertApart(await boxes(page, `${line} .badge`), await textBoxes(page, `${line} ${apartFrom}`), `a badge and the rest of a row in ${what}`);
+  }
+}
+
+/** Quigs's line in the play-by-play for the badges of a hand in which his aces took every chip of Stu's kings, all in for 1000 each. */
+const FELTED_LINES = ['Quigs earned 💰 Retirement Fund: took 100 big blinds or more out of one hand', "Quigs earned 💀 Felted: took Stu's last chip"];
+// The hand is the first shown down, so its aces take the high hand too, which the same toast tells
+const FELTED_TOAST = 'You earned 💰 Retirement Fund and 💀 Felted, and 🏆 the high hand with pair of aces';
+
+/** Quigs, Stu and Pam with 1000 each and Kibitz watching: Pam folds, and Quigs's aces and Stu's kings go all in before the flop. */
+function feltingHand(rig: Rig): RigTable {
+  const table = rig.table([{ name: 'Quigs', stack: 1000 }, { name: 'Stu', stack: 1000 }, { name: 'Pam', stack: 1000 }], { maxRuns: 1 });
+
+  table.join('Kibitz');
+  table.deal({ button: 0, holes: { 0: 'As Ah', 1: 'Ks Kh', 2: '8c 3d' }, board: '2c 7d 9h Jc 3s' });
+  table.act('Quigs', { type: 'pause' });
+  table.play((view, name) => (name === 'Pam' ? { type: 'fold' } : allIn(view)), (view) => view.hand!.stage !== 'betting');
+
+  return table;
+}
+
+/** How many toasts a page has told since it was loaded. */
+const toastsTold = async (page: Page) => (await toasts(page)).length;
+
+/**
+ * What the seats say of their hands' chances to win, by seat: the figure of each board as it is written,
+ * the favorite's with a star after it.
+ */
+const chancesShown = (page: Page) =>
+  page.evaluate(`Object.fromEntries([...document.querySelectorAll('.seat[data-seat] .status.chance')].map((line) => [
+    line.closest('.seat').dataset.seat,
+    [...line.children].map((figure) => figure.textContent + (figure.classList.contains('favorite') ? '*' : '')).join(' '),
+  ]))`) as Promise<Record<string, string>>;
+
+/** Waits for a page to show the table as the server has it for its viewer, at rest, and reads the chances off its seats. */
+async function chancesOn(page: Page, table: RigTable, name: string): Promise<Record<string, string>> {
+  const view = table.view(name);
+
+  // As many seats with a chance as the server's table has hands face up against each other: a table with no hand on
+  // it yet looks, by its cards and its bets, like one whose players have just gone all in
+  await page.waitForFunction(`document.querySelectorAll('.seat[data-seat] .status.chance').length === ${spotsOf(view)?.seats.length ?? 0}`);
+  await caughtUp(page, view);
+  await dealt(page);
+
+  return chancesShown(page);
+}
+
+/** Deals the next street of a runout, or its result. */
+const nextStreet = (rig: Rig, table: RigTable, name: string) => rig.advance(table.view(name).hand!.deadline! - rig.now());
+
+/** That every chance is whole and inside its own seat, squeezes nothing there, and lies clear of the cards, the bets and the middle of the table. */
+async function assertChancesFit(page: Page, what: string): Promise<void> {
+  const figures = await textBoxes(page, '.status.chance');
+  const plates = await boxes(page, '.plate:has(.status.chance)');
+  assert.ok(figures.length > 0 && figures.length === plates.length, `${what}: no chances to look at`);
+
+  figures.forEach((text, seat) => {
+    const plate = plates[seat]!;
+
+    assert.ok(text.left >= plate.left && text.right <= plate.right && text.top >= plate.top && text.bottom <= plate.bottom, `${what}: a chance at ${JSON.stringify(text)} runs out of its seat at ${JSON.stringify(plate)}`);
+  });
+
+  assert.deepEqual(await squeezed(page, '.status.chance, .plate .stack'), [], `${what}: a chance, or the stack over it, is cut off`);
+  assertApart(figures, await boxes(page, '.board .card, .pot, .seat .hole .card, .bet'), `${what}: a chance and the cards or the middle of the table`);
+  await assertBetsApart(page);
+}
+
+// Run in a page that is on a table: from here on its clock stands still, so the whole of a spot is worked out
+// the moment the table takes it, before anything it set moving can have landed
+const STOP_CLOCK = `(() => {
+  const at = performance.now();
+  performance.now = () => at;
+})()`;
+
+/** One change of what the seats say of their chances, as `CHANCE_LOG` wrote it down. */
+interface ChanceChange {
+  text: string;
+  /** How many things the page had set moving that had not landed when the seats were drawn saying this. */
+  inFlight: number;
+}
+
+/*
+ * Run in a page that is on a table and has `MOTION`: writes down in `window.chanceLog` every change of
+ * what the seats say of their chances, with how much was in flight by `MOTION`'s count. The stage's own
+ * mark would not do: a table drawn again mid-move ends its moves and says it is still before anyone
+ * watching it is told.
+ */
+const CHANCE_LOG = `(() => {
+  const read = () => [...document.querySelectorAll('.seat[data-seat] .status.chance')].map((line) => line.textContent).join(' ');
+  let last = read();
+
+  window.chanceLog = [];
+  new MutationObserver(() => {
+    if (read() !== last) {
+      last = read();
+      window.chanceLog.push({ text: last, inFlight: window.inFlight.size });
+    }
+  }).observe(document.querySelector('.stage'), { subtree: true, childList: true, characterData: true });
+})()`;
+
+// Run in the page before anything of its own: writes down how long the page went between one frame and the next
+const FRAME_GAPS = `(() => {
+  window.frameGaps = [];
+
+  let last = performance.now();
+  const frame = (now) => {
+    window.frameGaps.push(now - last);
+    last = now;
+    requestAnimationFrame(frame);
+  };
+  requestAnimationFrame(frame);
+})()`;
+
+const NINE_HOLES = { 0: 'As Ah', 1: 'Kd Kc', 2: 'Qs Qh', 3: 'Jd Jc', 4: 'Ts Th', 5: '9d 9c', 6: '8s 8h', 7: '7d 7c', 8: 'Ac Kh' };
+
+/** Nine players with the longest names and a thousand each, the cards of NINE_HOLES, and two boards for a hand run twice: the jacks win the first. */
+function nineHandsDealt(rig: Rig, config: Partial<TableConfig> = {}): RigTable {
+  const table = rig.table(LONG_NAMES.slice(0, 9).map((name) => ({ name, stack: 1000 })), config);
+
+  table.deal({ button: 0, holes: NINE_HOLES, board: '2c 5h 3d 6s Jh', secondBoard: '2d 4h 9s Td 3c' });
+
+  return table;
+}
+
+/** A table of whole chips and one of dollars and cents for the checks of the high hand, with its bonus as each writes it and what two players pay. */
+const HIGH_HAND_TABLES = [
+  { name: 'chips', config: { highHandBonus: 5 } as Partial<TableConfig>, stack: 1000, bonus: '5', total: '10', zero: '0' },
+  { name: 'cents', config: { ...CENTS, highHandBonus: 25 } as Partial<TableConfig>, stack: 10_000, bonus: '0.25', total: '0.50', zero: '0.00' },
+];
+
+const HIGH_HAND_BOARD = '2c 7d 9h Jc 3s';
+
+/** Quigs, Stu and Pam, Quigs the host, with Kibitz watching. */
+function highHandTable(rig: Rig, config: Partial<TableConfig>, stack: number): RigTable {
+  const table = rig.table([{ name: 'Quigs', stack }, { name: 'Stu', stack }, { name: 'Pam', stack }], { ...config, maxRuns: 1 });
+
+  table.join('Kibitz');
+
+  return table;
+}
+
+/** A hand everyone checks or calls down to a showdown, played to the end of its result with the game paused after it. */
+function toShowdown(table: RigTable, holes: Record<number, string>, board = HIGH_HAND_BOARD, first = false): void {
+  if (first) {
+    table.deal({ button: 0, holes, board });
+  } else {
+    table.dealNext({ holes, board });
+  }
+
+  table.act('Quigs', { type: 'pause' });
+  table.play(passive, (view) => view.hand!.stage === 'done');
+}
+
+/** Takes the finished hand off the table. */
+const clear = (rig: Rig, table: RigTable) => rig.advance(table.view('Quigs').hand!.deadline! - rig.now());
+
+/** Whose plates carry the high hand's trophy. */
+const markedOn = (page: Page) => texts(page, '.plate:has(.high-hand) .name > span:first-child');
+
+
+type Check = [name: string, run: (rig: Rig) => Promise<void>];
+
+/**
+ * A table of whole chips and one of dollars and cents for the checks of chops, with the amounts as each
+ * writes them: the blinds, what the small blind has to call, the smallest raise, and a whole stack.
+ */
+const CHOP_TABLES = [
+  { name: 'chips', config: { allowChop: true, actionSeconds: 30 } as Partial<TableConfig>, stack: 1000, blinds: '10/20', small: '10', big: '20', call: '10', raiseTo: '40', whole: '1,000' },
+  { name: 'cents', config: { ...CENTS, allowChop: true, actionSeconds: 30 } as Partial<TableConfig>, stack: 10_000, blinds: '0.25/0.50', small: '0.25', big: '0.50', call: '0.25', raiseTo: '1.00', whole: '100.00' },
+];
+
+type ChopTable = (typeof CHOP_TABLES)[number];
+
+const UNICODE = LONG_NAMES[2]!;
+
+/** Four players, Quigs the host on the button: the widest name has the small blind, Ünïcödé the big blind, and Marge and Quigs fold to them. */
+function foldedToTheBlinds(rig: Rig, kind: ChopTable, config: Partial<TableConfig> = {}): RigTable {
+  const table = rig.table(
+    LONG_NAMES.slice(0, 4).map((name) => ({ name, stack: kind.stack })),
+    { ...kind.config, ...config },
+  );
+
+  table.deal({ button: 0, holes: { 1: 'Ks Qd', 2: '9c 8c' } });
+  table.act(MARGE, { type: 'fold' });
+  table.act('Quigs', { type: 'fold' });
+
+  return table;
+}
+
+// ---- A move chosen ahead of a turn ----
+
+const AHEAD_BUTTONS = '.ahead [data-action^="ahead-"]';
+const aheadChoice = (what: string) => `.ahead [data-action="ahead-${what}"]`;
+const aheadSet = (what: string) => `${aheadChoice(what)}[aria-pressed="true"]`;
+
+/** The choices ahead a page offers, leaving out the dimmed ones, as they read, the one that is set marked. */
+const aheadOffered = (page: Page) => page.locator(`${AHEAD_BUTTONS}:enabled`).evaluateAll((buttons) => buttons.map((button) => `${button.textContent}${button.getAttribute('aria-pressed') === 'true' ? ' ✓' : ''}`));
+
+/** A player chooses a move ahead from another device, for the spot the table is in. */
+function chooseAhead(table: RigTable, name: string, what: PreActionKind | null): void {
+  const hand = table.view(name).hand!;
+
+  table.act(name, { type: 'preAct', what, hand: hand.number, street: hand.street, facing: hand.currentBet });
+}
+
+// A 360 phone with its table standing and lying, and the desktop, where the bar keeps the height of a turn, and a phone
+// held sideways, where the bar stands beside the table and keeps none
+const AHEAD_LAYOUTS: { name: string; screen: ScreenName; height?: number }[] = [
+  { name: 'phone-standing', screen: 'smallPhone', height: Math.ceil(SCREENS.smallPhone.width / WIDE_ASPECT) + 1 },
+  { name: 'phone-lying', screen: 'smallPhone', height: Math.floor(SCREENS.smallPhone.width / WIDE_ASPECT) - 1 },
+  { name: 'phone-sideways', screen: 'phoneSideways' },
+  { name: 'desktop', screen: 'desktop' },
+];
+
+/** That the choices lie where they lay, to the pixel a bar beside the table may round its width by. */
+function assertSamePlaces(now: Box[], before: Box[], what: string): void {
+  const moved = now.some((box, nth) => (['left', 'top', 'right', 'bottom'] as const).some((edge) => Math.abs(box[edge] - before[nth]![edge]) > 1));
+
+  assert.ok(now.length === before.length && !moved, `${what}: ${JSON.stringify(now)}, and before ${JSON.stringify(before)}`);
+}
+
+/** The five choices ahead are whole, on the screen and apart, with what the bar says around them, and nothing scrolls sideways. Gives where they lie. */
+async function assertAheadFits(page: Page, what: string): Promise<Box[]> {
+  const { width, height } = page.viewportSize()!;
+  const choices = await boxes(page, AHEAD_BUTTONS);
+
+  assert.equal(choices.length, 5, `${what}: the choices`);
+  for (const box of [...choices, ...(await boxes(page, '.ahead-title'))]) {
+    assert.ok(box.left >= -1 && box.right <= width + 1 && box.top >= -1 && box.bottom <= height + 1, `${what}: a choice runs off the screen: ${JSON.stringify(box)} on ${width}x${height}`);
+  }
+
+  choices.forEach((one, index) => assertApart([one], choices.slice(index + 1), `${what}: two choices`));
+  assertApart(choices, await boxes(page, '.ahead-title, .extras > *, .waiting .next-hand, .seat .plate'), `${what}: a choice and what is around it`);
+  assert.deepEqual(await squeezed(page, `${AHEAD_BUTTONS}, ${AHEAD_BUTTONS} span, .ahead-title`), [], `${what}: a choice is cut off`);
+  await assertNoSidewaysScroll(page);
+
+  return choices;
+}
+
+/** What the buttons of the turn are, in the order they are drawn. */
+const turnActions = (page: Page) => page.locator('.turn .buttons button').evaluateAll((buttons) => buttons.map((button) => button.getAttribute('data-action')));
+
+/** The buttons of the turn, and what the bar says above them, are whole, on the screen and apart, and the table above them still fits. */
+async function assertTurnFits(page: Page, what: string): Promise<void> {
+  const { width, height } = page.viewportSize()!;
+  const buttons = await boxes(page, '.turn .buttons button');
+
+  assert.deepEqual(await squeezed(page, '.turn .buttons button, .turn .buttons button span, .turn .prompt, .plate .stack, .plate .status, .bet, .pot'), [], `${what}: a button, an amount or a status is cut off`);
+  assert.ok(buttons.length > 0, `${what}: no buttons`);
+  for (const box of [...buttons, ...(await boxes(page, '.turn .prompt, .seat .plate'))]) {
+    assert.ok(box.left >= -1 && box.right <= width + 1 && box.top >= -1 && box.bottom <= height + 1, `${what}: something runs off the screen: ${JSON.stringify(box)} on ${width}x${height}`);
+  }
+
+  buttons.forEach((one, index) => assertApart([one], buttons.slice(index + 1), `${what}: two buttons`));
+  assertApart(await boxes(page, '.turn .prompt'), buttons, `${what}: the question and its buttons`);
+  await assertBetsApart(page);
+  await assertNoSidewaysScroll(page);
+}
+
+/** The play-by-play of a hand folded round to the blinds, up to the offer. */
+const chopLines = (kind: ChopTable) => [`Hand #1 · blinds ${kind.blinds} · Quigs has the button`, `${WIDEST} posts small blind ${kind.small}`, `${UNICODE} posts big blind ${kind.big}`, `${MARGE} folds`, 'Quigs folds', `${WIDEST} offers to chop the blinds`];
+
+/** The small blind offers, the big blind is asked, and the others see the offer stand; then the big blind says yes, and the play-by-play and the history tell it. */
+const chopAgreedCheck = (kind: ChopTable): Check => [
+  `folded to the blinds at a table of ${kind.name}, the small blind is offered a chop beside Fold, the big blind is asked, the others see the offer stand, and a yes gives each blind back and is told in the play-by-play and the history`,
+  async (rig) => {
+    for (const screen of PHONE_AND_DESKTOP) {
+      const table = foldedToTheBlinds(rig, kind);
+      const small = await table.open(WIDEST, screen);
+
+      // The small blind's turn: Chop beside Fold, and the usual call and raise
+      await small.waitForSelector('.turn [data-action="offer-chop"]');
+      assert.deepEqual(await turnActions(small), ['fold', 'offer-chop', 'call', 'raise']);
+      assert.equal(await text(small, '.turn [data-action="offer-chop"]'), 'Chop');
+      assert.equal(await text(small, '.turn [data-action="call"]'), `Call ${kind.call}`);
+      assert.equal(await text(small, '.turn [data-action="raise"]'), `Raise to ${kind.raiseTo}`);
+      await inShapesOf(small, screen, async (shape) => {
+        await assertTurnFits(small, `the small blind's turn, ${shape}`);
+        await shot(small, `chop-offer-${kind.name}-${screen}-${shape}`);
+      });
+
+      await answeredAfter(small, () => pressOn(small, screen)('.turn [data-action="offer-chop"]'));
+      await small.waitForSelector('.controls .waiting:has-text("You offered to chop")');
+      assert.equal(await text(small, '.controls .waiting'), `You offered to chop. Waiting for ${UNICODE}`);
+      assert.equal(await small.locator('.turn').count(), 0, 'the small blind still has a turn after offering');
+
+      // The big blind is on the clock to answer, with the question in place of a turn
+      const big = await table.open(UNICODE, screen);
+      await big.waitForSelector('.chop-question');
+      assert.equal(await text(big, '.chop-question .prompt'), `${WIDEST} offers to chop: you each take back your blind and the hand ends`);
+      assert.deepEqual(await turnActions(big), ['chop-no', 'chop-yes']);
+      assert.deepEqual(await texts(big, '.turn .buttons button'), ['Play on', 'Chop']);
+      assert.equal(await big.locator('.seat.me.acting .status.clock').count(), 1, 'the big blind has no clock running');
+      await inShapesOf(big, screen, async (shape) => {
+        await assertTurnFits(big, `the big blind's question, ${shape}`);
+        await shot(big, `chop-question-${kind.name}-${screen}-${shape}`);
+      });
+
+      // Everyone else: the offer on the small blind's seat and under the table, the big blind's clock, and the pot as one total
+      const other = await table.open(MARGE, screen);
+      await other.waitForSelector('.controls .waiting:has-text("offered to chop")');
+      assert.equal(await text(other, '.controls .waiting'), `${WIDEST} offered to chop. Waiting for ${UNICODE}`);
+      assert.equal(await other.locator('.message, .sidepots').count(), 0, 'the middle of the table says more than the pot');
+      assert.equal(await text(other, '.seat[data-seat="1"] .status'), 'Chop?');
+      assert.equal(await other.locator('.seat.acting').getAttribute('data-seat'), '2');
+      await inShapesOf(
+        other,
+        screen,
+        async (shape) => {
+          assert.deepEqual(await squeezed(other, '.controls .waiting, .plate .status, .bet, .pot'), [], 'what the table or the bar says of the offer is cut off');
+          await assertBetsApart(other);
+          await assertNoSidewaysScroll(other);
+          await shot(other, `chop-waiting-${kind.name}-${screen}-${shape}`);
+        },
+        { buttonsUp: false },
+      );
+
+      // Yes: the hand is over with each blind back on its seat and nobody a winner
+      await answeredAfter(big, () => pressOn(big, screen)('.turn [data-action="chop-yes"]'));
+      const result = `${WIDEST} and ${UNICODE} chop the blinds`;
+
+      for (const page of [small, big, other]) {
+        await page.waitForSelector(`.message.result:has-text("${result}")`);
+        assert.deepEqual(await stacksBySeat(page, 4), [kind.whole, kind.whole, kind.whole, kind.whole]);
+        assert.equal(await page.locator('.bet, .seat.winner, .status.won').count(), 0, 'chips are left in front of a seat, or someone is shown winning');
+      }
+
+      await inShapesOf(
+        other,
+        screen,
+        async (shape) => {
+          assert.deepEqual(await squeezed(other, '.message.result > div'), [], 'the result is cut off');
+          assertApart(await textBoxes(other, '.message.result > div'), await boxes(other, '.seat .plate, .seat .hole .card'), 'the result and the seats');
+          await shot(other, `chop-agreed-${kind.name}-${screen}-${shape}`);
+        },
+        { buttonsUp: false },
+      );
+
+      const lines = [...chopLines(kind), `${UNICODE} agrees to chop`, `${WIDEST} and ${UNICODE} chop the blinds: each takes back their own`];
+      await toggleFeed(other, screen);
+      const said = await texts(other, '.entries li');
+      const from = said.indexOf(lines[0]!);
+      assert.deepEqual(said.slice(from, from + lines.length), lines);
+      assert.deepEqual(await squeezed(other, '.entries li'), [], 'a line of the play-by-play is cut off');
+      await assertNoSidewaysScroll(other);
+      await shot(other, `chop-play-by-play-${kind.name}-${screen}`);
+      await toggleFeed(other, screen);
+
+      playOut(table);
+      const press = pressOn(other, screen);
+      await press('[data-action="menu"]');
+      await press('.menu [data-action="history"]');
+      await other.waitForSelector('.history summary');
+      assert.equal(await text(other, '.history summary small'), 'Blinds chopped');
+      await press('.history summary');
+      assert.deepEqual((await text(other, '.history pre')).split('\n'), lines);
+      assert.deepEqual(await squeezed(other, '.history summary, .history summary small'), [], 'the hand\'s line in the history is cut off');
+      await shot(other, `chop-history-${kind.name}-${screen}`);
+
+      for (const page of [small, big, other]) {
+        await page.context().close();
+      }
+    }
+  },
+];
+
+/** The big blind says no: the small blind is back on the clock with the usual buttons and no second offer. */
+const chopTurnedDownCheck = (kind: ChopTable): Check => [
+  `at a table of ${kind.name}, a big blind who says no to a chop puts the small blind back on the clock with Fold, Call and Raise, and the table is told`,
+  async (rig) => {
+    for (const screen of PHONE_AND_DESKTOP) {
+      const table = foldedToTheBlinds(rig, kind);
+      const small = await table.open(WIDEST, screen);
+      await small.waitForSelector('.turn [data-action="offer-chop"]');
+      table.act(WIDEST, { type: 'offerChop' });
+
+      const big = await table.open(UNICODE, screen);
+      await answeredAfter(big, () => pressOn(big, screen)('.turn [data-action="chop-no"]'));
+      await big.waitForSelector(`.controls .waiting:has-text("Waiting for ${WIDEST}")`);
+
+      // The small blind's page had Call before the offer too: only the table's answer says it has heard the no
+      await table.heardBy(small);
+      await small.waitForSelector('.turn [data-action="call"]');
+      assert.deepEqual(await turnActions(small), ['fold', 'call', 'raise']);
+      assert.equal(await text(small, '.turn [data-action="call"]'), `Call ${kind.call}`);
+      assert.equal(await small.locator('.seat.me.acting .status.clock').count(), 1, 'the small blind has no clock running');
+      await inShapesOf(small, screen, async (shape) => {
+        await assertTurnFits(small, `the small blind's turn after a no, ${shape}`);
+        await shot(small, `chop-turned-down-${kind.name}-${screen}-${shape}`);
+      });
+
+      await toggleFeed(small, screen);
+      const said = await texts(small, '.entries li');
+      const lines = [...chopLines(kind), `${UNICODE} says no to the chop`];
+      const from = said.indexOf(lines[0]!);
+      assert.deepEqual(said.slice(from, from + lines.length), lines);
+      assert.deepEqual(await squeezed(small, '.entries li'), [], 'a line of the play-by-play is cut off');
+      await shot(small, `chop-turned-down-play-by-play-${kind.name}-${screen}`);
+
+      await small.context().close();
+      await big.context().close();
+    }
+  },
+];
+
+
+/** For a check that looks at the presets more than once, as in a round for each screen: the lobby of the next round would offer the ones the last saved. */
+const forgetPresets = (rig: Rig) => rig.presets.list().forEach((preset) => rig.presets.delete(preset.name));
+
+/** Nine players, four of them all in before the flop for different stacks, so with two side pots, and a pair each, with a winner of their own on each of three boards. */
+const THREE_RUNS = {
+  names: LONG_NAMES.slice(0, 9),
+  stacks: [3000, 1000, 5000, 300, 20_000, 777, 2500, 12_345, 1200],
+  allIn: ['Quigs', 'WWWWWWWWWWWWWWWW', 'Ünïcödé Ñandú Ø!', 'Stu'],
+  deal: {
+    button: 0,
+    holes: { 0: 'As Ah', 1: 'Ks Kh', 2: 'Qs Qh', 3: 'Js Jh', 4: 'Ts Th', 5: '9s 9h', 6: '8s 8h', 7: '7s 7h', 8: '6s 6h' },
+    board: '2c 3d 4c 5d Jc',
+    secondBoard: 'Kd Qc 8d 7c 2d',
+    thirdBoard: 'Ad Tc 9d 4d 3c',
+  },
+};
+
+/** The middle of a table on several boards can be read: each board, the pot or the result under them, clear of each other and of every seat, and whole. */
+async function assertMiddleFits(page: Page, screen: ScreenName): Promise<void> {
+  const under = '.pot, .message > div, .message:not(:has(div))';
+  const runs = await page.locator('.board').count();
+  const middle = await boxes(page, `.board .card, ${under}`);
+
+  assertOnScreen([...middle, ...(await boxes(page, '.seat .plate'))], screen, 'a seat or the middle of the table');
+  assertApart(middle, await boxes(page, '.seat .plate, .seat .hole .card, .seat .tag'), 'the middle of the table and a seat');
+  for (let run = 0; run < runs; run++) {
+    assertApart(await boxes(page, `.board[data-run="${run}"] .card`), await boxes(page, `.board:not([data-run="${run}"]) .card, ${under}`), `board ${run + 1} and what is around it`);
+  }
+  assert.deepEqual(await squeezed(page, `.pot, .plate .stack, .message > div, .seat .tag`), [], 'something on the table is cut off');
+}
+
+const RABBIT_PLAYERS: RigPlayer[] = ['Quigs', 'Stu', 'Pam'].map((name) => ({ name, stack: 1000 }));
+const RABBIT_HOLES = { 0: 'As Kd', 1: 'Qc Jc', 2: '7h 2d' };
+const RABBIT_BOARD = 'Kh 9c 4s Th 2c';
+const RABBIT_NOTE = '🐇 Rabbit hunt: didn’t count';
+
+/** Three players at a table that hunts, and Kibitz watching. */
+function rabbitTable(rig: Rig, config: Partial<TableConfig> = {}): RigTable {
+  const table = rig.table(RABBIT_PLAYERS, { rabbitHunting: true, ...config });
+
+  table.join('Kibitz');
+
+  return table;
+}
+
+/** Quigs, on the button, bets with `cards` of the board out and Stu and Pam fold to him; until then everyone checks or calls. */
+function foldedTo(table: RigTable, cards: number): void {
+  table.deal({ button: 0, holes: RABBIT_HOLES, board: RABBIT_BOARD });
+
+  if (cards > 0) {
+    table.act('Quigs', { type: 'call' });
+    table.act('Stu', { type: 'call' });
+    table.act('Pam', { type: 'check' });
+
+    for (let out = 3; out < cards; out++) {
+      for (const name of ['Stu', 'Pam', 'Quigs']) {
+        table.act(name, { type: 'check' });
+      }
+    }
+
+    table.act('Stu', { type: 'check' });
+    table.act('Pam', { type: 'check' });
+  }
+
+  table.act('Quigs', { type: 'raise', to: 3 * table.view('Quigs').config.bigBlind });
+  table.act('Stu', { type: 'fold' });
+  table.act('Pam', { type: 'fold' });
+}
+
+/** The hunted cards on a page, board by board, and that each is drawn as no part of the board: faded, ringed with a dashed line and named so. */
+async function assertHuntedMarked(page: Page, boards: string[][], what: string): Promise<void> {
+  const drawn = (await page.evaluate(`[...document.querySelectorAll('.board')].map((board) => [...board.querySelectorAll('.card.hunted')].map((card) => card.dataset.card))`)) as string[][];
+  assert.deepEqual(drawn, boards, `${what}: the hunted cards`);
+
+  const looks = (await page.evaluate(`[...document.querySelectorAll('.board .card[data-card]')].map((card) => ({
+    hunted: card.classList.contains('hunted'),
+    opacity: Number(getComputedStyle(card).opacity),
+    outline: getComputedStyle(card).outlineStyle,
+    label: card.getAttribute('aria-label'),
+  }))`)) as { hunted: boolean; opacity: number; outline: string; label: string }[];
+
+  for (const look of looks) {
+    if (look.hunted) {
+      assert.ok(look.opacity < 0.7 && look.outline === 'dashed' && look.label.endsWith('would have come, did not count'), `${what}: a hunted card is drawn like one in play: ${JSON.stringify(look)}`);
+    } else {
+      assert.ok(look.opacity === 1 && look.outline !== 'dashed', `${what}: a card of the board is drawn like a hunted one: ${JSON.stringify(look)}`);
+    }
+  }
+
+  assert.equal(await text(page, '.message.result .rabbit-note'), RABBIT_NOTE, `${what}: the note under the result`);
+  assert.equal(await page.locator('[data-action="hunt"]').count(), 0, `${what}: the button is still there once the cards are out`);
+}
+
+/** The middle of the table after a hand that can be hunted: the boards and the result, as `assertMiddleFits` has them, and the hunt's button clear of them and of every seat. */
+async function assertRabbitFits(page: Page, screen: ScreenName, what: string): Promise<void> {
+  await assertMiddleFits(page, screen);
+
+  const button = await boxes(page, '.message [data-action="hunt"]');
+  if (button.length > 0) {
+    assert.deepEqual(await squeezed(page, '.message [data-action="hunt"]'), [], `${what}: the button is cut off`);
+    assertOnScreen(button, screen, `${what}: the button`);
+    assertApart(button, await boxes(page, '.board .card, .message > div, .seat .plate, .seat .hole .card, .seat .tag'), `${what}: the button and the table`);
+  }
+
+  await assertNoSidewaysScroll(page);
+}
+
+const SHOW_PLAYERS: RigPlayer[] = ['Quigs', 'Stu', 'Pam', 'Ann', 'Bob', 'Cat', 'Dee', 'Eve', 'Fay'].map((name) => ({ name, stack: 1000 }));
+const PAM_HOLE = 'As Kd';
+
+/** Nine players and Kibitz watching. Quigs raises and everyone folds to him: Pam, the big blind, folds A♠ K♦, which she may now show. */
+function foldedToQuigs(rig: Rig): RigTable {
+  const table = rig.table(SHOW_PLAYERS);
+
+  table.join('Kibitz');
+  dealFoldedToQuigs(table, PAM_HOLE);
+
+  return table;
+}
+
+/** Deals with the button on Quigs, Pam in the big blind holding `hole`, and everyone folds to Quigs's raise. */
+function dealFoldedToQuigs(table: RigTable, hole: string): void {
+  table.deal({ button: 0, holes: { 0: 'Qc Jc', 2: hole } });
+  table.play((_view, name) => (name === 'Quigs' ? { type: 'raise', to: 60 } : { type: 'fold' }), (view) => view.hand!.stage === 'done');
+}
+
+/** Pauses the game and ends the hand on the table, which nobody is still playing. */
+function clearTable(table: RigTable): void {
+  table.act('Quigs', { type: 'pause' });
+  table.play(() => null, (view) => view.hand === null);
+}
+
+/** What the bar under the table offers to show: each button's spoken name, and the card drawn on it. */
+const showButtons = (page: Page) =>
+  page.evaluate(`[...document.querySelectorAll('.controls .show-cards button')].map((button) => [button.getAttribute('aria-label'), button.querySelector('.card')?.dataset.card ?? null])`) as Promise<[string, string | null][]>;
+
+/** A seat's cards as drawn on a page, left to right: each face-up card, or null for a back. */
+
+/** That the offer to show is whole and on the screen, its buttons in one row, apart from each other and from the rest of the bar. */
+async function assertShowOfferFits(page: Page, screen: ScreenName, where: string): Promise<void> {
+  const buttons = await boxes(page, '.controls .show-cards button');
+  const others = await boxes(page, '.controls .extras > :not(.show-cards)');
+
+  assertOnScreen(await boxes(page, '.controls .show-cards'), screen, `${where}: the offer to show`);
+  assert.ok(buttons.every((button) => Math.abs(button.top - buttons[0]!.top) < 1), `${where}: the offer to show is split over lines`);
+  buttons.forEach((button, nth) => assertApart([button], buttons.slice(nth + 1), `${where}: two buttons to show`));
+  assertApart(await boxes(page, '.controls .show-cards'), others, `${where}: the offer to show and the switches beside it`);
+  assert.deepEqual(await squeezed(page, '.controls .show-cards .show-label, .controls .extras button, .controls .extras .toggle'), [], `${where}: something in the bar is cut off`);
+  await assertNoSidewaysScroll(page);
+}
+
+function nextFoldedToQuigs(table: RigTable, hole: string): void {
+  clearTable(table);
+  dealFoldedToQuigs(table, hole);
+}
+
+/** A seat's cards as a page draws them, left to right: each face-up card, or null for a back. */
+const drawnCards = (page: Page, seat: number) => page.evaluate(`[...document.querySelectorAll('.seat[data-seat="${seat}"] .hole .card')].map((card) => card.dataset.card ?? null)`) as Promise<(string | null)[]>;
+
+/** Deals the next hand at the nine-seat table, with the game paused, and gives back when each card of the deal left and how long it took on `page`. */
+async function dealFlights(table: RigTable, page: Page): Promise<(number | null)[][]> {
+  clearTable(table);
+
+  const before = table.version;
+  table.deal({ button: 0, holes: { 0: 'Qc Jc', 2: PAM_HOLE } });
+
+  await page.waitForFunction(`${flightsSince(before)}.filter((flight) => flight.name === 'deal').length === ${2 * SHOW_PLAYERS.length}`);
+  await dealt(page);
+  const flights = await flown(page, before);
+  playOut(table);
+
+  return flights.filter((flight) => flight.name === 'deal').map(({ seat, delay, duration }) => [seat, delay, duration]);
+}
+
+/** That Pam's seat is drawn on another page with `cards` up and the rest down, in her order, said so to a screen reader, and clear of what the seats around it say. */
+async function assertPamShows(page: Page, screen: ScreenName, cards: (Card | null)[], where: string): Promise<void> {
+  const pam = '.seat[data-seat="2"]';
+  const up = cards.filter((card) => card !== null).map(cardSaid).join(', ');
+  const said = `, shows ${up}${cards.includes(null) ? ', the other card face down' : ''}`;
+
+  await page.waitForFunction(`JSON.stringify([...document.querySelectorAll('${pam} .hole .card')].map((card) => card.dataset.card ?? null)) === ${JSON.stringify(JSON.stringify(cards))}`);
+  // Said once, in the sentence her seat is read as: the cards drawn are for the eye
+  const sentence = await text(page, `${pam} > .unseen`);
+
+  assert.ok(sentence.includes(said), `${where}: what a screen reader says of Pam's cards`);
+  assert.equal(sentence.includes('face down'), cards.includes(null), `${where}: a card of Pam's is said to be face down that is not, or the other way around`);
+  assertOnScreen(await boxes(page, `${pam} .hole .card`), screen, `${where}: Pam's cards`);
+  // What a seat says, not its plate: on a phone at nine seats any seat's cards reach over the edge of the plate above
+  const around = [...(await textBoxes(page, `.seat:not(${pam}) .plate > *`)), ...(await boxes(page, `.seat:not(${pam}) .hole .card, .board .card`)), ...(await textBoxes(page, '.message.result > div'))];
+  assertApart(await boxes(page, `${pam} .hole .card`), around, `${where}: Pam's cards and the table around them`);
+}
+/** Who plays the showdown of `pamShowsHerLoser`, by seat: Stu's queens show first, Pam's fours and Quigs's fives can't beat them, and Ann's aces win. */
+const SHOWDOWN_HOLES: Record<number, string> = { 0: '5c 5d', 1: 'Qd Qc', 2: '4h 4d', 3: 'As Ah' };
+const SHOWDOWN_LINES = ['Stu shows Q♦ Q♣ (Pair of queens)', 'Pam shows 4♥ 4♦ (Pair of fours)', 'Ann shows A♠ A♥ (Pair of aces)', 'Quigs mucks'];
+
+/** Nine players and Kibitz watching, the button on Quigs. Four of them check a hand down: Pam chose to show her losers and Quigs did not. */
+function pamShowsHerLoser(rig: Rig): RigTable {
+  const table = rig.table(SHOW_PLAYERS);
+  const playing = ['Quigs', 'Stu', 'Pam', 'Ann'];
+
+  table.join('Kibitz');
+  table.act('Pam', { type: 'setAutoShow', when: 'lost', on: true });
+  table.deal({ button: 0, holes: SHOWDOWN_HOLES, board: HIGH_HAND_BOARD });
+  table.play((view, name) => (playing.includes(name) ? passive(view) : { type: 'fold' }), (view) => view.hand!.stage === 'done');
+
+  return table;
+}
+
+// Run in the page: the chat box as the player has it, with the name picked in the list marked
+const CHAT_BOX = `(() => {
+  const input = document.querySelector('#chat-input');
+  const list = document.querySelector('#mention-list');
+
+  return {
+    value: input.value,
+    caret: input.selectionStart,
+    focused: document.activeElement === input,
+    open: !list.hidden,
+    names: list.hidden ? [] : [...list.querySelectorAll('li')].map((option) => option.textContent + (option.getAttribute('aria-selected') === 'true' ? ' (picked)' : '')),
+  };
+})()`;
+
+// ---- A hand played back ----
+
+const REPLAY_HOLES = { 0: 'As Ah', 1: 'Kd Kh', 2: 'Qc Qs' };
+const REPLAY_BOARD = '9s 7s 2h 3c 4d';
+const REPLAY_SECOND = 'Ac Qd 8h 5c 6s';
+const REPLAY_PLAYERS: RigPlayer[] = ['Quigs', 'Pam', 'Sam'].map((name) => ({ name, stack: 1000 }));
+
+/** The sizes a replay is looked at in: a 360 phone standing and lying, and a desktop. */
+const REPLAY_SIZES = [
+  { name: 'phone-standing', width: 360, height: 640 },
+  { name: 'phone-lying', width: 640, height: 360 },
+  { name: 'desktop', width: 1280, height: 800 },
+];
+
+/** What a replay shows of where it is: its count of steps and the part of the hand, as its header says them. */
+const replayCount = (page: Page) => text(page, '.replay-count');
+
+/** The lines the replay says for the step it is at. */
+const replayLines = (page: Page) => texts(page, '.replay-line > div');
+
+/** What the replay's table shows, read off the page: each seat's stack, cards and line, the boards, the bets, the pot and the result. */
+const replayTable = (page: Page) =>
+  page.evaluate(`(() => {
+    const table = document.querySelector('.replay .table');
+    const cards = (within) => [...within.querySelectorAll('.card:not(.slot)')].map((card) => card.dataset.card ?? '??').join(' ');
+
+    return {
+      seats: Object.fromEntries([...table.querySelectorAll('.seat[data-seat]')].map((seat) => [seat.querySelector('.plate .name span').textContent, [seat.querySelector('.stack').textContent, cards(seat), seat.querySelector('.status')?.textContent ?? ''].join(' | ')])),
+      boards: [...table.querySelectorAll('.board:not(.later)')].map(cards),
+      bets: [...table.querySelectorAll('.bet')].map((bet) => bet.textContent).join(' '),
+      pot: table.querySelector('.pot')?.textContent ?? '',
+      result: [...table.querySelectorAll('.message.result > div')].map((line) => line.textContent),
+    };
+  })()`) as Promise<{ seats: Record<string, string>; boards: string[]; bets: string; pot: string; result: string[] }>;
+
+/** The chances the replay's seats say, as `chancesShown` reads the live table's. */
+const replayChances = (page: Page) =>
+  page.evaluate(`Object.fromEntries([...document.querySelectorAll('.replay .seat[data-seat] .status.chance')].map((line) => [
+    line.closest('.seat').dataset.seat,
+    [...line.children].map((figure) => figure.textContent + (figure.classList.contains('favorite') ? '*' : '')).join(' '),
+  ]))`) as Promise<Record<string, string>>;
+
+/** Opens the history from the table and the replay of hand `number` from there. */
+async function openReplay(page: Page, screen: ScreenName, number: number): Promise<void> {
+  const press = pressOn(page, screen);
+
+  await press('[data-action="menu"]');
+  await press('.menu [data-action="history"]');
+  await page.waitForSelector(`.history details[data-hand="${number}"]`);
+  await press(`.history details[data-hand="${number}"] summary`);
+  await press(`.history details[data-hand="${number}"] [data-action="replay"]`);
+  await replayDrawn(page);
+}
+
+/** A table whose first hand was checked down to a showdown and cleared away, with the game paused: hand 1 is in the history, eighteen steps long. */
+function replayTableOf(rig: Rig, config: Partial<TableConfig> = {}): RigTable {
+  const table = rig.table(REPLAY_PLAYERS, config);
+
+  table.deal({ button: 0, holes: REPLAY_HOLES, board: REPLAY_BOARD });
+  table.play(passive, (view) => view.hand?.stage === 'done');
+  playOut(table);
+
+  return table;
+}
+
+/** Whether the replay's table is the very one marked by `markReplay`, which a redraw of it would have replaced. */
+const markReplay = (page: Page) => page.evaluate(`void (document.querySelector('.replay .table').marked = document.querySelector('.replay [data-replay="scrub"]').marked = true)`);
+const replayMarked = (page: Page) => page.evaluate(`document.querySelector('.replay .table').marked === true && document.querySelector('.replay [data-replay="scrub"]').marked === true`) as Promise<boolean>;
+
+/** Steps the replay forward until one of the step's lines matches, and says how many steps that took. */
+async function forwardTo(page: Page, screen: ScreenName, line: RegExp): Promise<number> {
+  for (let steps = 0; steps < 60; steps++) {
+    if ((await replayLines(page)).some((said) => line.test(said))) {
+      await replayDrawn(page);
+
+      return steps;
+    }
+
+    await pressOn(page, screen)('.replay [data-replay="forward"]');
+  }
+
+  throw new Error(`no step of the replay says ${line}`);
+}
+
+/**
+ * Holds the open replay to fitting at each of the sizes, once its table has taken the shape the size gives it, and to
+ * whatever `also` asks of it there, leaves a picture of each, and puts the page back as it was.
+ */
+async function replayFitsEverySize(page: Page, what: string, also: (named: string) => Promise<void> = async () => undefined): Promise<void> {
+  const before = page.viewportSize()!;
+
+  for (const { name, ...size } of [...REPLAY_SIZES, { name: '', ...before }]) {
+    await page.setViewportSize(size);
+    await page.waitForFunction(`(() => {
+      const stage = document.querySelector('.replay-stage').getBoundingClientRect();
+
+      return document.querySelector('.replay .table').classList.contains(stage.height > 0 && stage.width / stage.height >= ${WIDE_ASPECT} ? 'wide' : 'tall');
+    })()`);
+
+    if (name) {
+      await assertReplayFits(page, `${what}-${name}`);
+      await also(`${what}-${name}`);
+      await shot(page, `${what}-${name}`);
+    }
+  }
+}
+
+/**
+ * The replay can be read and worked at the size the page has: its controls are on the screen, clear of each other and of the
+ * table, with their labels whole and room for a finger; its table is whole inside its own part of the screen, the seats
+ * clear of the boards; and the step's lines can all be read, by scrolling them only once the hand so far has given
+ * them all of its room.
+ */
+async function assertReplayFits(page: Page, what: string): Promise<void> {
+  const { width, height } = page.viewportSize()!;
+  const controls = await boxes(page, '.replay button, .replay input');
+  const [stage] = await boxes(page, '.replay-stage');
+  const inside = (found: Box[], around: Box, which: string) => {
+    assert.ok(found.length > 0, `${what}: no ${which} to look at`);
+    for (const box of found) {
+      assert.ok(box.left >= around.left - 1 && box.right <= around.right + 1 && box.top >= around.top - 1 && box.bottom <= around.bottom + 1, `${what}: ${which} at ${JSON.stringify(box)} runs out of ${JSON.stringify(around)}`);
+    }
+  };
+
+  assert.equal(controls.length, 8, `${what}: the replay has ${controls.length} controls to be seen`);
+  inside([...controls, ...(await boxes(page, '.replay-line, .replay-count, .replay-head h2, .replay-marks span'))], { left: 0, top: 0, right: width, bottom: height }, 'part of the controls');
+  inside(await boxes(page, '.replay .seat[data-seat] .plate, .replay .seat[data-seat] .card, .replay .board .card, .replay .pot, .replay .message, .replay .bet'), stage!, 'part of the table');
+  assert.deepEqual(await squeezed(page, '.replay button, .replay-count, .replay-head h2'), [], `${what}: a label of the replay is cut off`);
+
+  controls.forEach((control, nth) => {
+    assert.ok(control.bottom - control.top >= 32 && control.right - control.left >= 44, `${what}: a control of the replay is too small for a finger: ${JSON.stringify(control)}`);
+    assertApart([control], controls.slice(nth + 1), `${what}: two controls of the replay`);
+  });
+  assertApart(controls, [stage!], `${what}: a control of the replay and its table`);
+  assertApart(await boxes(page, '.replay .seat[data-seat] .plate'), await boxes(page, '.replay .board .card, .replay .pot, .replay .message'), `${what}: a seat of the replay and the middle of its table`);
+
+  const lines = (await page.evaluate(`(() => {
+    const line = document.querySelector('.replay-line');
+    const fits = line.scrollHeight <= line.clientHeight + 1;
+
+    line.scrollTop = line.scrollHeight;
+    const reached = line.scrollTop + line.clientHeight >= line.scrollHeight - 1;
+    line.scrollTop = 0;
+
+    return { fits, reached, log: document.querySelector('.replay-log').clientHeight };
+  })()`)) as { fits: boolean; reached: boolean; log: number };
+  assert.ok(lines.fits || (lines.reached && lines.log <= 1), `${what}: not all of the step's lines can be read, or the hand so far takes room they need (${JSON.stringify(lines)})`);
+  await assertNoSidewaysScroll(page);
+}
+
+const CHECKS: Check[] = [
+  [
+    'a long chat line leaves Send on the screen',
+    async (rig) => {
+      const table = rig.table([
+        { name: 'Quigs', stack: 1000 },
+        { name: 'Pam', stack: 1000 },
+      ]);
+      table.act('Pam', { type: 'chat', text: 'that river was criminal and you all know it, Pam, I really cannot believe that card came out' });
+      table.act('Pam', { type: 'chat', text: `https://example.com/${'a'.repeat(80)}` });
+
+      const page = await table.open('Quigs', 'tallPhone');
+      assertOnScreen(await boxes(page, '.feed-toggle'), 'tallPhone', 'the closed chat bar');
+
+      await page.tap('.feed-toggle');
+      assertOnScreen(await boxes(page, '.say button, .say input'), 'tallPhone', 'the chat box and Send');
+      await assertNoSidewaysScroll(page);
+      await shot(page, 'long-chat-phone');
+    },
+  ],
+  [
+    'an open chat leaves the table to look at',
+    async (rig) => {
+      const table = rig.table(tenPlayers().slice(0, 6));
+      table.deal({ button: 0 });
+
+      const page = await table.open('Quigs', 'phone');
+      await page.tap('.feed-toggle');
+
+      const [stage] = await boxes(page, '.stage');
+      assert.ok(stage && stage.bottom - stage.top >= 180, `the table is squeezed to ${stage ? stage.bottom - stage.top : 0}px`);
+
+      // Nothing on the table is drawn outside the table's own part of the screen
+      for (const seat of await boxes(page, '.seat .plate')) {
+        assert.ok(seat.top >= stage.top - 1 && seat.bottom <= stage.bottom + 1, `a seat is drawn outside the table: ${JSON.stringify(seat)}`);
+      }
+
+      assertOnScreen(await boxes(page, '.say button'), 'phone', 'Send');
+      await shot(page, 'chat-open-phone');
+    },
+  ],
+  [
+    'the reactions button is in the chat’s bar, well away from every bet, and its picker opens over the top of the table and never over the moves: a 360 phone standing and lying, the phone sideways and the desktop, in a turn and out of one',
+    async (rig) => {
+      const table = rig.table(NINE_REACTING);
+      const width = SCREENS.smallPhone.width;
+      const layouts: { screen: ScreenName; height?: number; shape: string }[] = [
+        { screen: 'smallPhone', height: Math.ceil(width / WIDE_ASPECT) + 1, shape: 'tall' },
+        { screen: 'smallPhone', height: Math.floor(width / WIDE_ASPECT) - 1, shape: 'wide' },
+        { screen: 'phoneSideways', shape: 'wide' },
+        { screen: 'desktop', shape: 'wide' },
+      ];
+
+      // With the button on seat 6 the first to act is Quigs, in seat 0, who then calls and waits for the others
+      table.deal({ button: 6 });
+
+      for (const state of ['turn', 'waiting'] as const) {
+        if (state === 'waiting') {
+          table.act('Quigs', { type: 'call' });
+        }
+
+        for (const { screen, height, shape } of layouts) {
+          const page = await table.open('Quigs', screen);
+          const press = pressOn(page, screen);
+          const said = `${screen} ${shape}, ${state}`;
+
+          if (height !== undefined) {
+            await setStageHeight(page, height);
+          }
+
+          await page.waitForSelector(`.table.${shape}`);
+          await page.waitForSelector(state === 'turn' ? '.turn [data-action="fold"]:enabled' : '.controls .waiting');
+
+          const [stage] = await boxes(page, '.stage');
+          const controls = await boxes(page, '.controls-slot');
+          const within = (found: Box[], what: string) => {
+            assert.ok(found.length > 0, `${what}: nothing to look at (${said})`);
+            for (const box of found) {
+              assert.ok(box.left >= stage!.left - 1 && box.right <= stage!.right + 1 && box.top >= stage!.top - 1 && box.bottom <= stage!.bottom + 1, `${what} reaches outside the table (${said}): ${JSON.stringify(box)} in ${JSON.stringify(stage)}`);
+            }
+          };
+
+          const toggle = await boxes(page, '.feed [data-action="reactions"]');
+          // A table held to a height of the check's choosing can push the page past the screen's foot, but never sideways
+          if (height === undefined) {
+            assertOnScreen(toggle, screen, 'the reactions button');
+          } else {
+            assert.ok(toggle[0]!.left >= 0 && toggle[0]!.right <= SCREENS[screen].width, `the reactions button runs off the side (${said})`);
+          }
+          for (const button of await boxes(page, '.turn button, .turn input')) {
+            assert.ok(gap(toggle[0]!, button) >= MIS_TAP_PX, `the reactions button is ${gap(toggle[0]!, button)}px from a bet (${said})`);
+          }
+
+          await press('[data-action="reactions"]');
+          const panel = await boxes(page, '.react-panel');
+          within(panel, 'the picker');
+          within(await boxes(page, '.react-choice'), 'a reaction to pick');
+          assertApart(panel, controls, `the picker and the bar of moves (${said})`);
+          assert.equal(await page.locator('.react-choice:enabled').count(), 12, said);
+          assert.deepEqual(await squeezed(page, '.react-heading'), [], said);
+
+          // The moves are still there to tap, uncovered
+          if (state === 'turn') {
+            assert.ok(await page.evaluate(FOLD_ON_TOP), `the fold button is covered with the picker open (${said})`);
+          }
+
+          await shot(page, `reactions-picker-${screen}-${shape}-${state}`);
+
+          await press('[data-react="tomato"]');
+          const targets = await boxes(page, '.react-targets .btn');
+          assert.equal(targets.length, NINE_REACTING.length - 1, said);
+          within(targets, 'a player to throw at');
+          within(await boxes(page, '.react-back'), 'Back');
+          assertApart(await boxes(page, '.react-panel'), controls, `the players to throw at and the bar of moves (${said})`);
+          assert.deepEqual(await squeezed(page, '.react-targets .btn'), [], `a name to throw at is cut short (${said})`);
+          await shot(page, `reactions-targets-${screen}-${shape}-${state}`);
+
+          await press('[data-action="reactions"]');
+          await page.waitForSelector('.react-panel', { state: 'detached' });
+        }
+      }
+    },
+  ],
+  [
+    'a reaction pops up over its sender’s seat and a throw lands on its target’s, at nine seats, on the sender’s page at the tap and on another player’s from the table',
+    async (rig) => {
+      const table = rig.table(NINE_REACTING);
+      table.deal({ button: 0 });
+
+      const quigs = await table.open('Quigs', 'smallPhone');
+      const stu = await table.open('Stu', 'desktop');
+      const gate = await Gate.on(quigs, 'reactions');
+
+      // Quigs's own, shown before the server has it
+      await gate.close('requests');
+      await quigs.tap('[data-action="reactions"]');
+      await quigs.tap('[data-react="clap"]');
+      await quigs.waitForSelector('.seat-reaction[data-reaction="clap"]');
+      await gate.holding();
+      assert.equal(await stu.locator('.seat-reaction').count(), 0, 'another page shows what the server has not heard');
+      await assertMarkOn(quigs, 'clap', 0, 'Quigs is clapping');
+      await gate.open();
+
+      await stu.waitForSelector('.seat-reaction[data-reaction="clap"]');
+      await assertMarkOn(stu, 'clap', 0, 'Quigs is clapping');
+
+      // Two from the table at once, one of them thrown across it, seen on both pages
+      table.act('Pam', { type: 'react', kind: 'laugh' });
+      table.act('Al', { type: 'react', kind: 'chicken', to: table.auth('Dot').id });
+
+      for (const [page, screen] of [
+        [quigs, 'smallPhone'],
+        [stu, 'desktop'],
+      ] as const) {
+        await page.waitForSelector('.seat-reaction[data-reaction="chicken"]');
+        await assertMarkOn(page, 'laugh', 2, 'Pam is laughing');
+        await assertMarkOn(page, 'chicken', 6, 'Al threw a chicken at Dot');
+        assert.equal(await page.locator('.stand-in').count(), 0, 'something flew with motion off');
+        assertOnScreen(await boxes(page, '.seat-reaction'), screen, 'a reaction');
+        await shot(page, `reactions-nine-seats-${screen}`);
+      }
+
+      // Each goes by itself after its few seconds, on the page's own timer
+      await quigs.waitForSelector('.seat-reaction', { state: 'detached' });
+
+      // As many as the table takes, all on one seat by the table's edge: three thrown at Dot and Dot's own, side by side
+      const pileOn = async (glyph: string) => {
+        await quigs.waitForSelector('.seat-reaction', { state: 'detached' });
+        rig.advance(REACTION_LIFE_MS);
+        table.act('Pam', { type: 'react', kind: 'tomato', to: table.auth('Dot').id });
+        table.act('Lu', { type: 'react', kind: 'rose', to: table.auth('Dot').id });
+        table.act('Bo', { type: 'react', kind: 'beer', to: table.auth('Dot').id });
+        table.act('Dot', { type: 'react', kind: 'fume' });
+        await quigs.waitForSelector('.seat-reaction[data-reaction="fume"]');
+
+        const onDot = await boxes(quigs, '.seat-reaction[data-seat="6"]');
+        const [stage] = await boxes(quigs, '.stage');
+        assert.equal(onDot.length, 4, glyph);
+        onDot.forEach((mark, index) => assertApart([mark], onDot.slice(index + 1), `two things on one seat (${glyph})`));
+        for (const mark of onDot) {
+          assert.ok(mark.left >= stage!.left && mark.right <= stage!.right, `a thing on a seat by the edge is cut off (${glyph}): ${JSON.stringify(mark)} in ${JSON.stringify(stage)}`);
+        }
+        assertOnScreen(onDot, 'smallPhone', `four things on one seat (${glyph})`);
+        await shot(quigs, `reactions-four-on-a-seat-${glyph}-smallPhone`);
+      };
+
+      await pileOn('own-emoji');
+
+      // The same with every emoji drawn far wider than this machine draws them, as some phones' are: nothing is laid out by a width it assumed
+      await quigs.addStyleTag({ content: WIDE_EMOJI });
+      await pileOn('wide-emoji');
+
+      await quigs.tap('[data-action="reactions"]');
+      assert.deepEqual(await squeezed(quigs, '.react-choice, .react-toggle'), [], 'a wide emoji does not fit its button in the picker');
+      within(await boxes(quigs, '.react-panel'), await boxes(quigs, '.stage'), 'the picker with wide emoji');
+    },
+  ],
+  [
+    'with motion on a throw flies from the thrower’s seat to the target’s and lands there, and one thrown as a hand is dealt leaves the deal as it is',
+    async (rig) => {
+      const table = rig.table(NINE_REACTING);
+      table.deal({ button: 0 });
+
+      const page = await table.open('Quigs', 'smallPhone', MOTION, { moving: true });
+      await dealt(page);
+
+      // Thrown as this machine draws its emoji, and again with them drawn far wider: it leaves and lands on the same seats
+      for (const glyph of ['own-emoji', 'wide-emoji']) {
+        if (glyph === 'wide-emoji') {
+          await page.waitForSelector('.seat-reaction', { state: 'detached' });
+          await page.addStyleTag({ content: WIDE_EMOJI });
+          rig.advance(REACTION_LIFE_MS);
+        }
+
+        const before = table.version;
+        table.act('Sam', { type: 'react', kind: 'tomato', to: table.auth('Pam').id });
+        await page.waitForSelector('.seat-reaction[data-reaction="tomato"]');
+        const [flight, ...others] = await flown(page, before);
+
+        assert.deepEqual(others, [], `more moved than the throw (${glyph})`);
+        assert.ok(flight && flight.name === 'throw' && flight.what === 'mark' && flight.standIn && flight.text === '🍅', JSON.stringify(flight));
+        assertInside(flight.from, (await boxes(page, '.seat[data-seat="4"] .plate'))[0]!, `the throw leaves from Sam (${glyph})`);
+        assertInside(flight.to, (await boxes(page, '.seat[data-seat="2"] .plate'))[0]!, `the throw lands on Pam (${glyph})`);
+        await assertMarkOn(page, 'tomato', 2, 'Sam threw a tomato at Pam');
+        await page.waitForSelector('.thrown.stand-in', { state: 'detached' });
+        await shot(page, `reactions-throw-landed-${glyph}-smallPhone`);
+      }
+
+      // A hand dealt on a quiet table, then one dealt with a throw in the same moment: every card goes out just as it did
+      const deal = async (throwing: boolean) => {
+        playOut(table);
+        await table.heardBy(page);
+        await page.waitForSelector('.seat-reaction', { state: 'detached' });
+        await dealt(page);
+
+        rig.advance(REACTION_GAP_MS);
+        const before = table.version;
+        table.dealNext();
+        if (throwing) {
+          table.act('Lu', { type: 'react', kind: 'beer', to: table.auth('Quigs').id });
+          await page.waitForSelector('.seat-reaction[data-reaction="beer"]');
+        }
+
+        await page.waitForFunction(`${flightsSince(before)}.filter((flight) => flight.name === 'deal').length === ${2 * NINE_REACTING.length}`);
+        const flights = await flown(page, before);
+
+        return { deal: flights.filter((flight) => flight.name === 'deal').map(({ delay, duration }) => [delay, duration]), throws: flights.filter((flight) => flight.name === 'throw').length };
+      };
+
+      const quiet = await deal(false);
+      const busy = await deal(true);
+      assert.deepEqual(busy, { deal: quiet.deal, throws: 1 }, 'the deal went out otherwise with a throw beside it');
+      await assertMarkOn(page, 'beer', 0, 'Lu threw a beer at Quigs');
+    },
+  ],
+  [
+    'with motion off a throw is simply there on its target’s seat, and with others’ reactions switched off only the player’s own show',
+    async (rig) => {
+      const table = rig.table(NINE_REACTING);
+      table.deal({ button: 0 });
+
+      const page = await table.open('Quigs', 'phone', MOTION);
+      table.act('Sam', { type: 'react', kind: 'fish', to: table.auth('Quigs').id });
+      await page.waitForSelector('.seat-reaction[data-reaction="fish"]');
+      assert.equal(await page.evaluate(`${flightsSince()}.length`), 0, 'something moved with motion off');
+      await assertMarkOn(page, 'fish', 0, 'Sam threw a fish at Quigs');
+
+      await page.tap('[data-action="menu"]');
+      await page.tap('.menu [data-action="preferences"]');
+      await page.tap('[data-pref="reactions"]');
+      assert.equal(await page.getAttribute('[data-pref="reactions"]', 'aria-checked'), 'false');
+      await shot(page, 'reactions-preference-phone');
+      await page.tap('.dialog [data-action="close"]');
+
+      // Everyone else's are hidden, at the tap and from the table alike
+      rig.advance(REACTION_GAP_MS);
+      table.act('Pam', { type: 'react', kind: 'laugh' });
+      table.act('Al', { type: 'react', kind: 'poop', to: table.auth('Quigs').id });
+      await table.heardBy(page);
+      assert.equal(await page.locator('.seat-reaction:not([data-reaction="fish"])').count(), 0, 'another player’s reaction shows with them switched off');
+
+      // A tap anywhere else puts the picker away
+      await page.tap('[data-action="reactions"]');
+      await page.tap('.seat.me .plate');
+      await page.waitForSelector('.react-panel', { state: 'detached' });
+
+      // The table has it before the clock goes on, so the wait is counted from where the page counts it
+      await page.tap('[data-action="reactions"]');
+      await answeredTo(page, 'react', () => page.tap('[data-react="cry"]'));
+      await assertMarkOn(page, 'cry', 0, 'Quigs is crying');
+
+      // The wait after it stills the very buttons on screen, and lets them go as it ends: a tap then lands on what it was aimed at
+      await page.tap('[data-action="reactions"]');
+      await page.waitForSelector('[data-react="clap"]:disabled');
+      assert.equal(await text(page, '.react-note'), 'One at a time: give it a few seconds');
+      await page.evaluate(`window.aimedAt = document.querySelector('[data-react="clap"]')`);
+
+      rig.advance(REACTION_GAP_MS);
+      await page.waitForSelector('[data-react="clap"]:enabled');
+      assert.ok(await page.evaluate(`window.aimedAt === document.querySelector('[data-react="clap"]')`), 'the buttons were drawn again as the wait ended, which loses a tap that lands then');
+      assert.equal(await page.locator('.react-note').isVisible(), false);
+      await page.tap('[data-react="clap"]');
+      await assertMarkOn(page, 'clap', 0, 'Quigs is clapping');
+    },
+  ],
+  [
+    'throws in the air hold up nothing of the game: with two stopped mid-flight, the river held face down turns, the result comes and the table comes to rest as on a quiet table',
+    async (rig) => {
+      const table = rig.table(['Quigs', 'Stu', 'Pam', 'Al'].map((name) => ({ name, stack: 10_000 })), { maxRuns: 1 });
+      table.deal({ button: 0, holes: { 0: 'Ah Ad', 1: 'Kh Kd', 2: '8c 3d', 3: '9c 4d' }, board: '2c 7d 9h Jc Ks' });
+      table.play((view, name) => (name === 'Pam' || name === 'Al' ? { type: 'fold' } : allIn(view)), (view) => view.hand!.stage !== 'betting');
+      table.play(() => null, (view) => view.hand!.boards[0]!.length === 4);
+
+      const page = await table.open('Quigs', 'smallPhone', MOTION, { moving: true });
+      await dealt(page);
+
+      // Two throws back to back as the river comes face down, in the one view so that none can reach the page after the river has turned,
+      // and each stopped halfway for as long as the check looks, while the page turns the river in its own time
+      await page.evaluate(`window.holdAt = 0.5; window.holdOnly = 'throw'`);
+      const before = table.version;
+      rig.advance(table.view('Quigs').hand!.deadline! - rig.now());
+      table.act('Pam', { type: 'react', kind: 'tomato', to: table.auth('Quigs').id });
+      table.act('Al', { type: 'react', kind: 'fish', to: table.auth('Stu').id });
+
+      await page.waitForSelector('.message.result');
+      await dealt(page);
+
+      const began = (await page.evaluate(`${flightsSince(before)}.map((flight) => flight.name)`)) as string[];
+      assert.ok(began.includes('facedown') && began.lastIndexOf('throw') < began.indexOf('chips'), `the throws were not in the air while the river lay face down: ${began.join(', ')}`);
+      assert.equal(await page.locator('.board-card.stand-in').count(), 0, 'the river is still face down');
+      // Still in the air, or taken off with the table they flew over when it was drawn again: never landed, which would end the check's hold
+      const thrown = (await page.evaluate('window.held.map((animation) => animation.playState)')) as string[];
+      assert.deepEqual([thrown.length, thrown.filter((state) => state === 'finished')], [2, []], `the two throws the check held: ${thrown.join(', ')}`);
+      await page.evaluate('window.land()');
+    },
+  ],
+  [
+    'ten players and the largest stacks fit a small phone',
+    async (rig) => {
+      const table = rig.table(tenPlayers());
+      table.deal({ button: 0 });
+      table.play(passive, (view) => view.hand!.toAct === 0);
+
+      const page = await table.open('Quigs', 'smallPhone');
+      assertOnScreen(await boxes(page, '.seat .plate'), 'smallPhone', 'a seat');
+      assertOnScreen(await boxes(page, '.dealer-button'), 'smallPhone', 'the dealer button');
+      assert.deepEqual(await squeezed(page, '.plate .stack'), [], 'a stack is cut off, so the amount reads wrong');
+      assert.equal(await text(page, '.seat[data-seat="1"] .stack'), '999.99M');
+      await shot(page, 'ten-players-small-phone');
+    },
+  ],
+  [
+    'the biggest all-in fits its button and its box',
+    async (rig) => {
+      // The raises are a five-figure one, the everyday case, and two that are shortened: what a move costs is rounded up, so the button never says less than it takes
+      const kinds = [
+        { config: {}, name: 'biggest-all-in-phone', allIn: 'All in 1B', box: '1000000000', raises: { '12345': 'Raise to 12,345', '12340001': 'Raise to 12.35M', '999999999': 'Raise to 1B' } },
+        { config: CENTS, name: 'cents-biggest-all-in-phone', allIn: 'All in 10M', box: '10000000.00', raises: { '12,345.67': 'Raise to 12,345.67', '123400.01': 'Raise to 123.41K', '9999999.99': 'Raise to 10M' } },
+      ];
+
+      for (const { config, name, allIn, box, raises } of kinds) {
+        const table = rig.table(
+          [
+            { name: 'Quigs', stack: 1_000_000_000 },
+            { name: 'Stu', stack: 1_000_000_000 },
+            { name: 'Pam', stack: 5000 },
+          ],
+          config,
+        );
+        table.deal({ button: 0 });
+
+        const page = await table.open('Quigs', 'phone');
+        await page.tap('.presets button:has-text("All in")');
+
+        assert.equal(await text(page, '.turn [data-action="raise"]'), allIn);
+        assert.deepEqual(await squeezed(page, '.turn .btn, #raise-amount'), [], 'a move button or the amount box is cut off');
+        assert.equal(await page.inputValue('#raise-amount'), box);
+        await shot(page, name);
+
+        for (const [typed, button] of Object.entries(raises)) {
+          await page.fill('#raise-amount', typed);
+          assert.equal(await text(page, '.turn [data-action="raise"]'), button);
+          assert.deepEqual(await squeezed(page, '.turn .btn'), []);
+        }
+      }
+    },
+  ],
+  [
+    'the result of a hand run twice with side pots can be read on a phone',
+    async (rig) => {
+      const stacks = [1000, 5000, 20_000, 300, 1_000_000, 777];
+      const table = rig.table(
+        LONG_NAMES.slice(0, 6).map((name, index) => ({ name, stack: stacks[index]! })),
+        { maxRuns: 2 },
+      );
+      table.deal({
+        button: 0,
+        holes: { 0: 'As Ah', 1: 'Ks Kh', 2: 'Qs Qh', 3: 'Js Jh', 4: 'Ts Th', 5: '9s 9h' },
+        board: '2c 7d 8c 3s 4d',
+        secondBoard: 'Kd Kc 5h 6h 2d',
+      });
+
+      const page = await table.open('Quigs', 'phone');
+      table.play(allIn, (view) => view.hand!.stage === 'runout');
+
+      // While the first board is still coming, the second already has its place
+      await page.waitForSelector('.board.later');
+      assert.equal(await page.locator('.board').count(), 2);
+
+      table.play(allIn, (view) => view.hand!.stage === 'done');
+      await page.waitForSelector('.message.result');
+
+      const lines = await page.locator('.message.result > div').allInnerTexts();
+      assert.ok(lines.length <= 3, `the felt carries ${lines.length} result lines: ${lines.join(' / ')}`);
+      assert.equal(await page.locator('.board .card[data-card]').count(), 10);
+      assert.equal(await page.locator('.pot').count(), 0, 'the pot stays up with the result, which already says who won what');
+
+      const seats = await boxes(page, '.seat .plate, .seat .hole .card');
+      assertApart(await boxes(page, '.board .card'), seats, 'a board card and a seat');
+      assertApart(await boxes(page, '.message.result > div'), seats, 'a result line and a seat');
+      await shot(page, 'run-twice-result-phone');
+    },
+  ],
+  [
+    'the seat on the clock shows the seconds left',
+    async (rig) => {
+      const table = rig.table(
+        [
+          { name: 'Quigs', stack: 1000 },
+          { name: 'Stu', stack: 1000 },
+          { name: 'Pam', stack: 1000 },
+        ],
+        { actionSeconds: 30 },
+      );
+      table.deal({ button: 0 });
+
+      const page = await table.open('Stu', 'phone');
+      await page.waitForFunction(`Number(document.querySelector('.seat.acting .status.clock')?.textContent) > 0`);
+
+      const seconds = Number(await text(page, '.seat.acting .status.clock'));
+      assert.ok(seconds >= 20 && seconds <= 33, `the clock shows ${seconds}`);
+      await shot(page, 'clock-phone');
+    },
+  ],
+  [
+    'a player who is leaving is told so, and offered nothing that would not count',
+    async (rig) => {
+      const table = rig.table([
+        { name: 'Quigs', stack: 1000 },
+        { name: 'Stu', stack: 1000 },
+        { name: 'Pam', stack: 1000 },
+      ]);
+      // Pam loses at the showdown, so her cards stay face down unless she turns them over
+      table.deal({ button: 0, holes: { 0: 'As Ah', 1: 'Ks Kh', 2: '7c 2d' }, board: '3s 4d 9h Jc Qd' });
+
+      const page = await table.open('Pam', 'phone');
+      table.act('Pam', { type: 'standUp' });
+
+      await page.waitForSelector('.controls .waiting:has-text("You leave your seat when this hand ends")');
+      assert.equal(await page.locator('.controls [data-action="rebuy"], .controls [data-action="sit-out"], .controls [data-action="sit-in"]').count(), 0);
+
+      // Showing the hand they are leaving on is the one thing still theirs to do
+      table.play(passive, (view) => view.hand!.stage === 'done');
+      await page.tap('.controls [data-action="show"]');
+      await page.waitForSelector('.controls [data-action="show"]', { state: 'detached' });
+      await page.waitForSelector('.seat.me .hole .card[data-card]');
+      assert.deepEqual(table.view('Quigs').seats.find((seat) => seat?.name === 'Pam')!.shown, [true, true]);
+    },
+  ],
+  [
+    'losing the race for a seat puts a player back to choosing one',
+    async (rig) => {
+      const table = rig.table([{ name: 'Quigs', stack: 1000 }]);
+      table.join('Ann');
+      table.join('Bob');
+
+      const page = await table.open('Bob', 'phone');
+      table.act('Ann', { type: 'requestSeat', seat: 4, buyIn: 500 });
+      table.act('Bob', { type: 'requestSeat', seat: 4, buyIn: 500 });
+      await page.waitForSelector('.controls .waiting:has-text("Asked the host for seat 5")');
+
+      table.act('Quigs', { type: 'approve', playerId: table.auth('Ann').id });
+      await page.waitForSelector('.controls .waiting:has-text("You are watching")');
+      assert.ok((await page.locator('[data-sit]').count()) > 0, 'Bob is offered the open seats again');
+      assert.match(await text(page, '.feed-toggle .latest'), /Seat 5 is taken, so Bob needs to pick another/);
+    },
+  ],
+  [
+    'a dialog keeps the keyboard, and a refused save keeps what was typed',
+    async (rig) => {
+      const table = rig.table([
+        { name: 'Quigs', stack: 1000 },
+        { name: 'Stu', stack: 1000 },
+      ]);
+      const page = await table.open('Quigs', 'desktop');
+      const focusInDialog = `!!document.activeElement.closest('.dialog')`;
+
+      await page.focus('[data-action="menu"]');
+      await page.keyboard.press('Enter');
+      await page.waitForSelector('.dialog');
+      assert.equal(await page.evaluate(focusInDialog), true, 'opening the menu leaves the keyboard on the page behind it');
+      assert.equal(await page.evaluate(`[...document.querySelectorAll('.app > *:not(.overlay)')].every((element) => element.inert)`), true, 'the page behind the menu can still be reached');
+
+      await page.focus('.menu [data-action="settings"]');
+      await page.keyboard.press('Enter');
+      await page.waitForSelector('#table-small-blind');
+      assert.equal(await page.evaluate(focusInDialog), true, 'the keyboard was lost when one dialog replaced another');
+
+      // Between the dialog's last control and its first, Tab passes through the browser's own controls, where the page has no focus
+      let landedInDialog = 0;
+      for (let press = 0; press < 30; press++) {
+        await page.keyboard.press('Tab');
+        assert.equal(await page.evaluate(`document.activeElement === document.body || ${focusInDialog}`), true, `Tab number ${press + 1} reached the page behind the dialog`);
+        landedInDialog += (await page.evaluate(focusInDialog)) ? 1 : 0;
+      }
+      assert.ok(landedInDialog >= 20, `only ${landedInDialog} of 30 Tabs landed on something in the dialog`);
+
+      await page.fill('#table-small-blind', '50');
+      await page.fill('#table-big-blind', '10');
+      await page.click('[data-action="save-settings"]');
+      await toastTold(page, 'big blind');
+      assert.equal(await page.inputValue('#table-small-blind'), '50', 'a refused save threw away what was typed');
+      await shot(page, 'refused-save-desktop');
+
+      await page.fill('#table-big-blind', '100');
+      await page.click('[data-action="save-settings"]');
+      await page.waitForSelector('.dialog', { state: 'detached' });
+      assert.equal(table.view('Quigs').config.bigBlind, 100);
+
+      await page.click('[data-action="menu"]');
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('.dialog', { state: 'detached' });
+      assert.equal(await page.evaluate(`document.activeElement.dataset.action`), 'menu', 'closing a dialog loses the keyboard');
+      assert.equal(await page.evaluate(`[...document.querySelectorAll('.app > *')].some((element) => element.inert)`), false, 'the page stays out of reach after the dialog is gone');
+    },
+  ],
+  [
+    'the Preferences dialog fits a phone and a desktop, keeps the keyboard, and its sound switch and volume are kept and obeyed',
+    async (rig) => {
+      for (const screen of ['phone', 'desktop'] as const) {
+        const table = rig.table([
+          { name: 'Quigs', stack: 1000 },
+          { name: 'Stu', stack: 1000 },
+        ]);
+        const page = await table.open('Quigs', screen, LISTEN);
+        const press = pressOn(page, screen);
+        const chimes = async () => (await playedNames(page)).filter((sound) => sound === 'turn').length;
+        const myTurnOn = (street: string) => (view: TableView) => view.hand!.street === street && view.hand!.toAct === 0;
+
+        // Heads-up the button acts first, so the deal puts the action on this page
+        table.deal({ button: 0 });
+        await page.waitForSelector('.turn [data-action="fold"]:enabled');
+        await page.waitForFunction('window.played.length === 2');
+        assert.deepEqual(await played(page), [{ sound: 'deal', gain: 0.25 }, { sound: 'turn', gain: 0.25 }], 'the deal and the chime, at the volume a player starts with');
+
+        table.act('Stu', { type: 'chat', text: 'your go' });
+        await page.waitForSelector('.entries li:has-text("your go")', { state: 'attached' });
+        assert.equal(await chimes(), 1, 'a view that leaves the action where it was chimes again');
+
+        await press('[data-action="menu"]');
+        assert.equal(await page.locator('.menu [data-action="sound"]').count(), 0, 'the menu still has its own sound entry');
+
+        if (screen === 'desktop') {
+          await page.focus('.menu [data-action="preferences"]');
+          await page.keyboard.press('Enter');
+        } else {
+          await press('.menu [data-action="preferences"]');
+        }
+
+        await page.waitForSelector('#pref-sound[aria-checked="true"]');
+        assert.equal(await page.evaluate(`!!document.activeElement.closest('.dialog')`), true, 'opening Preferences leaves the keyboard on the page behind it');
+        assertOnScreen(await boxes(page, '.dialog, #pref-sound, #pref-volume'), screen, 'the Preferences dialog');
+        assert.deepEqual(await squeezed(page, '.dialog h2, #pref-sound, label[for="pref-volume"] > *'), [], 'a preference is cut off');
+        assert.match(await text(page, '#pref-sound'), /^Sound/);
+        assert.match(await text(page, 'label[for="pref-volume"]'), /^Volume/);
+        assertApart(await boxes(page, '#pref-volume'), await textBoxes(page, 'label[for="pref-volume"] > span, label[for="pref-volume"] > small, #pref-sound'), 'the volume slider and the words around it');
+        await shot(page, `preferences-${screen}`);
+
+        if (screen === 'desktop') {
+          await page.focus('#pref-sound');
+          await page.keyboard.press('Space');
+          assert.equal(await page.evaluate('document.activeElement.id'), 'pref-sound', 'flipping the switch loses the keyboard');
+
+          for (let tab = 0; tab < 6; tab++) {
+            await page.keyboard.press('Tab');
+            assert.equal(await page.evaluate(`document.activeElement === document.body || !!document.activeElement.closest('.dialog')`), true, `Tab number ${tab + 1} reached the page behind the dialog`);
+          }
+        } else {
+          await press('#pref-sound');
+        }
+
+        await page.waitForSelector('#pref-sound[aria-checked="false"]');
+        assert.equal(await page.evaluate(`localStorage.getItem('cnd.sound')`), 'off');
+        await press('[data-action="close"]');
+
+        table.play(passive, myTurnOn('flop'));
+        await page.waitForSelector('.board .card[data-card]');
+        await page.waitForSelector('.turn [data-action="check"]:enabled');
+        assert.equal(await chimes(), 1, 'the chime plays with the sound switched off');
+
+        // A reload is no touch, so the page is touched before the action comes round to it again
+        await page.reload();
+        await page.waitForSelector('.turn [data-action="check"]:enabled');
+        await press('.pot');
+        table.play(passive, myTurnOn('turn'));
+        await page.waitForSelector('.board .card[data-card]:nth-child(4)');
+        await page.waitForSelector('.turn [data-action="check"]:enabled');
+        assert.deepEqual(await played(page), [], 'the sound came back on with a reload');
+
+        await press('[data-action="menu"]');
+        await press('.menu [data-action="preferences"]');
+        assert.equal(await page.getAttribute('#pref-sound', 'aria-checked'), 'false', 'the switch forgot it was off');
+        await press('#pref-sound');
+        await page.waitForSelector('#pref-sound[aria-checked="true"]');
+        await press('[data-action="close"]');
+
+        table.play(passive, myTurnOn('river'));
+        await page.waitForSelector('.board .card[data-card]:nth-child(5)');
+        await page.waitForSelector('.turn [data-action="check"]:enabled');
+        assert.equal(await chimes(), 1, 'switched back on, the chime stays silent');
+
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'a bet, a check, a fold, a street and a win each sound on another player’s page, and nothing plays for what was missed or before a touch',
+    async (rig) => {
+      const table = rig.table([
+        { name: 'Quigs', stack: 1000 },
+        { name: 'Stu', stack: 1000 },
+        { name: 'Pam', stack: 1000 },
+      ]);
+
+      // Three-handed the button acts first before the flop, and Pam, in the big blind, acts first after it
+      table.deal({ button: 0, holes: { 0: 'Ah Kd', 1: 'Qs Qh', 2: '7c 2d' }, board: '3s 4c Jd 9h Qd' });
+      table.act('Quigs', { type: 'raise', to: 60 });
+
+      const page = await table.open('Pam', 'phone', LISTEN);
+      const press = pressOn(page, 'phone');
+      const warnings = complaints(page);
+      let heard = 0;
+
+      /** Waits for the page to play as many sounds as are expected, gives it a moment to play more, and says what it played. */
+      const next = async (count: number, settled: string) => {
+        await page.waitForFunction(`window.played.length >= ${heard + count}`);
+        await page.waitForSelector(settled, { state: 'attached' });
+        await page.waitForTimeout(300);
+
+        const sounds = await playedNames(page, heard);
+        heard += sounds.length;
+
+        return sounds;
+      };
+
+      await page.waitForSelector('.bet');
+      await page.waitForTimeout(500);
+      assert.deepEqual(await playedNames(page), [], 'opening the table mid-hand plays what had already happened');
+
+      table.act('Stu', { type: 'fold' });
+      assert.deepEqual(await next(2, '.turn [data-action="fold"]:enabled'), ['fold', 'turn'], 'a fold, then the chime');
+
+      table.act('Pam', { type: 'call' });
+      assert.deepEqual(await next(2, '.board .card[data-card]:nth-child(3)'), ['street', 'turn'], 'the flop, with no sound for the call the viewer made');
+
+      table.act('Pam', { type: 'check' });
+      table.act('Quigs', { type: 'check' });
+      assert.deepEqual(await next(3, '.board .card[data-card]:nth-child(4)'), ['knock', 'street', 'turn'], 'a check, then the turn');
+
+      // The chime rings for the action coming back to the page, so the page sees it leave first
+      table.act('Pam', { type: 'check' });
+      await page.waitForSelector('.turn [data-action="check"]', { state: 'detached' });
+      table.act('Quigs', { type: 'raise', to: 100 });
+      assert.deepEqual(await next(2, '.turn [data-action="call"]:enabled'), ['chips', 'turn'], 'a bet');
+
+      table.act('Pam', { type: 'fold' });
+      assert.deepEqual(await next(1, '.feed li:has-text("wins")'), ['win'], 'someone else’s win');
+
+      // A reload is not a touch: until one, the next hand makes no sound
+      await page.reload();
+      await page.waitForSelector('.stage .table');
+      table.play(() => null, (view) => view.hand?.number === 2);
+      await page.waitForSelector('.seat.me .card[data-card]');
+      await page.waitForTimeout(500);
+      assert.deepEqual(await playedNames(page), [], 'a sound played before the page was touched');
+
+      heard = 0;
+      await press('.pot');
+      table.play(passive, (view) => view.hand!.toAct === 2);
+      assert.deepEqual(await next(2, '.turn [data-action="fold"]:enabled'), ['chips', 'turn'], 'after a touch the sounds are back');
+      assert.deepEqual(await page.evaluate('window.contexts.map((context) => context.inGesture)'), [true], 'the audio was set up outside a touch');
+
+      // A phone that slept comes back with its audio suspended: until a touch wakes it, sounds are dropped, not saved up
+      await page.evaluate('window.contexts[0].audio.suspend()');
+      table.act('Pam', { type: 'call' });
+      table.act('Quigs', { type: 'check' });
+      await page.waitForSelector('.board .card[data-card]:nth-child(3)');
+      await page.waitForSelector('.turn [data-action="check"]:enabled');
+      await press('.pot');
+      await page.waitForFunction(`window.contexts[0].audio.state === 'running'`);
+      await page.waitForTimeout(500);
+      assert.deepEqual(await playedNames(page, heard), [], 'the sounds of a suspended page played when it woke');
+
+      table.act('Pam', { type: 'check' });
+      table.act('Quigs', { type: 'raise', to: 40 });
+      assert.deepEqual(await next(1, '.bet'), ['chips'], 'a touch wakes the sound');
+
+      assert.deepEqual(warnings, [], 'the page complained in its console');
+      await page.context().close();
+    },
+  ],
+  [
+    'a bomb pot, dealt straight to the flop, plays the deal and then the flop on another player’s page, the one clear of the other',
+    async (rig) => {
+      const table = rig.table([
+        { name: 'Quigs', stack: 1000 },
+        { name: 'Stu', stack: 1000 },
+        { name: 'Pam', stack: 1000 },
+      ]);
+      const page = await table.open('Pam', 'phone', LISTEN);
+
+      table.act('Quigs', { type: 'setBombPot', on: true });
+      table.deal({ button: 0, board: '3s 4c Jd 9h Qd' });
+      await page.waitForSelector('.board .card[data-card]:nth-child(3)');
+      await page.waitForFunction('window.played.length >= 2');
+      await page.waitForTimeout(300);
+
+      assert.deepEqual(await playedNames(page), ['deal', 'street'], 'the deal and the flop, and nothing for the posts');
+
+      const [deal, flop] = await playedAt(page);
+      const dealLasts = Math.max(...RECIPES.deal.map((voice) => voice.at + voice.length));
+      assert.ok(flop! - deal! >= dealLasts - CLOCK_ROUNDING, `the flop starts ${(flop! - deal!).toFixed(3)} s after the deal, which lasts ${dealLasts} s`);
+
+      await page.context().close();
+    },
+  ],
+  [
+    'the volume sets how loud the sounds play, with a sample as it is set, and the sound switch silences them all',
+    async (rig) => {
+      for (const screen of PHONE_AND_DESKTOP) {
+        const table = rig.table([
+          { name: 'Quigs', stack: 1000 },
+          { name: 'Stu', stack: 1000 },
+        ]);
+        const page = await table.open('Stu', screen, LISTEN);
+        const press = pressOn(page, screen);
+        const gains = async (from: number) => (await played(page, from)).map((sound) => sound.gain);
+
+        await press('[data-action="menu"]');
+        await press('.menu [data-action="preferences"]');
+        await page.waitForSelector('#pref-volume');
+        assert.equal(await page.inputValue('#pref-volume'), '50');
+
+        // Set as a player would: arrow keys at a computer, a tap partway along on a phone
+        if (screen === 'desktop') {
+          await page.focus('#pref-volume');
+          for (let step = 0; step < 3; step++) {
+            await page.keyboard.press('ArrowRight');
+          }
+        } else {
+          const [slider] = await boxes(page, '#pref-volume');
+          await page.touchscreen.tap(slider!.left + (slider!.right - slider!.left) * 0.8, (slider!.top + slider!.bottom) / 2);
+        }
+
+        const volume = Number(await page.inputValue('#pref-volume')) / 100;
+        assert.ok(volume > 0.5, `the slider did not move: ${volume}`);
+
+        await page.waitForFunction('window.played.length > 0');
+        await page.waitForTimeout(500);
+        const loudness = Math.round(volume * volume * 1000) / 1000;
+        assert.deepEqual(await played(page), [{ sound: 'chips', gain: loudness }], 'setting the volume plays one sample, at the new volume');
+        await press('[data-action="close"]');
+
+        table.deal({ button: 0 });
+        table.act('Quigs', { type: 'call' });
+        await page.waitForSelector('.turn [data-action="check"]:enabled');
+        await page.waitForFunction('window.played.length >= 4');
+        assert.deepEqual(await playedNames(page, 1), ['deal', 'chips', 'turn']);
+        assert.deepEqual(await gains(1), [loudness, loudness, loudness], 'the table’s sounds play at the volume set');
+
+        await press('[data-action="menu"]');
+        await press('.menu [data-action="preferences"]');
+        await press('#pref-sound');
+        await page.waitForSelector('#pref-sound[aria-checked="false"]');
+        await press('[data-action="close"]');
+
+        const before = (await played(page)).length;
+        table.act('Stu', { type: 'check' });
+        table.act('Stu', { type: 'check' });
+        table.act('Quigs', { type: 'raise', to: 40 });
+        await page.waitForSelector('.turn [data-action="call"]:enabled');
+        await page.waitForTimeout(500);
+        assert.deepEqual(await playedNames(page, before), [], 'a sound played with the sound switched off');
+
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'the deck and the back a player picks are drawn on every card, shown before they are picked, and kept',
+    async (rig) => {
+      for (const screen of ['phone', 'desktop'] as const) {
+        const table = rig.table([
+          { name: 'Quigs', stack: 1000 },
+          { name: 'Stu', stack: 1000 },
+          { name: 'Pam', stack: 1000 },
+        ]);
+        // A card of each suit in sight on the flop: hearts and diamonds in hand, spades, clubs and diamonds on the board
+        table.deal({ button: 0, holes: { 0: 'Ah Kd', 1: 'Qs Qh', 2: '7c 2d' }, board: '3s 4c Jd 9h Qd' });
+        table.play(passive, (view) => view.hand!.street === 'flop');
+
+        const page = await table.open('Quigs', screen);
+        const press = (selector: string) => (screen === 'phone' ? page.tap(selector) : page.click(selector));
+        const pick = (key: string, value: string) => press(`#pref-${key} .tile:has(input[value="${value}"])`);
+
+        await page.waitForSelector('.board .card[data-card]:nth-child(3)');
+        await page.waitForSelector('.entries li:has-text("Flop")', { state: 'attached' });
+
+        const theme = await suitColors(page);
+        const themeBack = await style(page, FACE_DOWN, 'backgroundImage');
+        assert.equal(theme.d, theme.h, 'Card Room draws diamonds as it did');
+        assert.equal(await page.locator('.entries .card-text').count(), 0, 'a card in the play-by-play is marked out with nothing chosen');
+
+        await press('[data-action="menu"]');
+        await press('.menu [data-action="preferences"]');
+        await page.waitForSelector('#pref-deck');
+
+        assertOnScreen(await boxes(page, '.dialog, .samples .tile'), screen, 'the Preferences dialog with its cards');
+        assert.deepEqual(await squeezed(page, '.dialog h3, .samples > span, .tile > span:last-child'), [], 'a choice of cards is cut off');
+        assert.equal(await page.evaluate(`document.querySelector('.dialog-body').scrollWidth <= document.querySelector('.dialog-body').clientWidth`), true, 'the dialog scrolls sideways');
+        const tiles = await boxes(page, '.samples .tile');
+        tiles.forEach((tile, index) => assertApart([tile], tiles.slice(index + 1), 'two choices of cards'));
+
+        // Each sample is drawn as its choice would draw the table, whatever the table is drawn with now
+        assert.equal(await style(page, '#pref-deck [data-deck="four"] .card.suit-d', 'color'), await tokenColor(page, '--suit-four-d'));
+        assert.equal(await style(page, '#pref-deck [data-deck="theme"] .card.suit-d', 'color'), theme.d);
+        await shot(page, `preferences-cards-${screen}`);
+
+        await pick('deck', 'four');
+        assert.equal(await page.evaluate(`localStorage.getItem('cnd.deck')`), 'four');
+
+        const backs = new Set<string>();
+        for (const back of ['lattice', 'dots', 'gingham', 'felt', 'theme']) {
+          const sample = `#pref-cardBack [data-card-back="${back}"] .card.back`;
+          assert.notEqual(await style(page, sample, 'backgroundImage'), await style(page, FACE_DOWN, 'backgroundImage'), `the ${back} sample is drawn with the back the table has now`);
+
+          await pick('cardBack', back);
+          const drawn = await style(page, FACE_DOWN, 'backgroundImage');
+
+          assert.equal(drawn, await style(page, sample, 'backgroundImage'), `the ${back} back on the table is not the one Preferences showed`);
+          backs.add(drawn);
+        }
+
+        assert.equal(backs.size, 5, 'two backs look the same on the table');
+        assert.equal(await style(page, FACE_DOWN, 'backgroundImage'), themeBack, 'the theme back is not the one there was before');
+
+        await pick('cardBack', 'gingham');
+        const gingham = await style(page, FACE_DOWN, 'backgroundImage');
+        await press('[data-action="close"]');
+
+        const four = await suitColors(page);
+        for (const suit of ['s', 'h', 'd', 'c']) {
+          assert.equal(four[suit], await tokenColor(page, `--suit-four-${suit}`), `the ${suit} cards are not drawn in the four-color deck`);
+        }
+
+        assert.equal(new Set(Object.values(four)).size, 4, `two suits share a color: ${JSON.stringify(four)}`);
+        assert.equal(await style(page, '.entries .card-text.suit-c', 'color'), four.c, 'a club in the play-by-play is not drawn as a club');
+        assert.equal(await style(page, '.entries .card-text.suit-c', 'backgroundColor'), await tokenColor(page, '--card'), 'a card in the play-by-play is not set on a card');
+        await shot(page, `four-color-${screen}`);
+
+        await page.reload();
+        await page.waitForSelector('.board .card[data-card]:nth-child(3)');
+        assert.deepEqual(await suitColors(page), four, 'the deck changed with a reload');
+        assert.equal(await style(page, FACE_DOWN, 'backgroundImage'), gingham, 'the back changed with a reload');
+
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'keyboard shortcuts play the moves a tap would, never while typing, in a dialog, switched off or just after the buttons change',
+    async (rig) => {
+      const table = rig.table([
+        { name: 'Quigs', stack: 1000 },
+        { name: 'Stu', stack: 1000 },
+      ]);
+
+      // Heads-up the button acts first, so the deal puts the action on this page, facing the big blind
+      table.deal({ button: 0 });
+      const page = await table.open('Quigs', 'desktop');
+      const sent = movesSent(page);
+      const quigs = () => table.view('Stu').seats[0]!;
+      const nothingSent = async (what: string) => {
+        await page.waitForTimeout(300);
+        assert.deepEqual(sent, [], `${what} sent a move`);
+        assert.equal(table.view('Quigs').hand!.toAct, 0, `${what} moved the hand on`);
+      };
+
+      await page.waitForSelector('.turn [data-action="call"]:enabled');
+      await settle(page);
+
+      for (const selector of ['[data-action="fold"]', '[data-action="call"]', '[data-action="raise"]', '.presets button:nth-child(3)']) {
+        assert.equal(await hintShown(page, `.turn ${selector}`), true, `no key is shown on ${selector}`);
+      }
+      assert.equal(await page.getByRole('button', { name: 'Fold', exact: true }).count(), 1, 'the key is read out as part of the button\'s name');
+      assert.equal(await page.getByRole('button', { name: 'Call 10', exact: true }).count(), 1);
+      assert.equal(await page.getAttribute('.turn [data-action="call"]', 'data-hotkey'), 'C');
+      await shot(page, 'hotkeys-turn-desktop');
+
+      await page.focus('#chat-input');
+      await page.keyboard.type('fcr12345');
+      assert.equal(await page.inputValue('#chat-input'), 'fcr12345', 'the keys were not typed into the chat box');
+      assert.equal(await page.inputValue('#raise-amount'), '40', 'typing in the chat box changed the bet size');
+      await nothingSent('typing in the chat box');
+      await page.fill('#chat-input', '');
+
+      await page.click('[data-action="menu"]');
+      for (const key of ['f', 'c', '3']) {
+        await page.keyboard.press(key);
+      }
+
+      // The buttons were behind the menu, so a key the moment it closes was not pressed looking at them
+      await pressAsSoonAs(page, 'c', 'body:not(:has(.dialog))');
+      await page.keyboard.press('Escape');
+      await page.waitForFunction('window.pressedEarly');
+      await nothingSent('a key with the menu open, or just after it closed');
+      assert.equal(await page.inputValue('#raise-amount'), '40', 'a key with the menu open changed the bet size');
+
+      await page.click('[data-action="menu"]');
+      await page.click('.menu [data-action="preferences"]');
+      assert.match(await text(page, '[data-glossary="hotkeys"]'), /F\s*Fold/);
+      // The dialog scrolls once its preferences outgrow the screen, as they do in a wider font
+      await page.locator('[data-glossary="hotkeys"]').scrollIntoViewIfNeeded();
+      assertOnScreen(await boxes(page, '[data-glossary="hotkeys"] div'), 'desktop', 'the list of keys');
+      await shot(page, 'hotkeys-preferences-desktop');
+      await page.click('#pref-hotkeys');
+      await page.waitForSelector('#pref-hotkeys[aria-checked="false"]');
+      await page.click('[data-action="close"]');
+      assert.equal(await hintShown(page, '.turn [data-action="fold"]'), false, 'a key is still shown with the shortcuts off');
+      for (const key of ['f', 'c', 'r', '3']) {
+        await page.keyboard.press(key);
+      }
+      await nothingSent('a key with the shortcuts off');
+      assert.equal(await page.evaluate(`localStorage.getItem('cnd.hotkeys')`), 'off');
+
+      await page.click('[data-action="menu"]');
+      await page.click('.menu [data-action="preferences"]');
+      await page.click('#pref-hotkeys');
+      await page.click('[data-action="close"]');
+      await page.evaluate('document.activeElement.blur()');
+      await settle(page);
+
+      // 3 picks the third size, three quarters of the pot with the call counted: to 20 + ¾ × (30 + 10)
+      await page.keyboard.press('3');
+      assert.equal(await page.inputValue('#raise-amount'), '50');
+      assert.equal(await text(page, '.turn [data-action="raise"]'), 'Raise to 50');
+      await page.keyboard.press('4');
+      assert.equal(await text(page, '.turn [data-action="raise"]'), 'Raise to 60', 'the fourth size, the pot');
+      await page.keyboard.press('5');
+      assert.equal(await text(page, '.turn [data-action="raise"]'), 'All in 1,000');
+
+      await answeredAfter(page, () => page.keyboard.press('c'));
+      assert.deepEqual(sent, ['call']);
+      assert.equal(quigs().bet, 20, 'C did not call the big blind');
+
+      // The big blind checks, and checks again on the flop, which puts the action back here with a check to make
+      table.act('Stu', { type: 'check' });
+      table.act('Stu', { type: 'check' });
+      await page.waitForSelector('.turn [data-action="check"]:enabled');
+      await settle(page);
+      await answeredAfter(page, () => page.keyboard.press('c'));
+      assert.deepEqual(sent, ['call', 'check']);
+      assert.equal(table.view('Quigs').hand!.street, 'turn', 'C did not check the flop through');
+
+      // On the turn a bet arrives: the C meant for the check that is no longer there is not taken as a call
+      await pressAsSoonAs(page, 'c', '.turn [data-action="call"]:enabled');
+      table.act('Stu', { type: 'raise', to: 60 });
+      await page.waitForFunction('window.pressedEarly');
+      await page.waitForTimeout(150);
+      assert.deepEqual(sent, ['call', 'check'], 'a key pressed as the buttons changed was taken');
+      await settle(page);
+      await answeredAfter(page, () => page.keyboard.press('c'));
+      assert.deepEqual(sent, ['call', 'check', 'call']);
+      assert.equal(table.view('Quigs').hand!.street, 'river');
+
+      // R goes to the amount, what is typed replaces it, Escape gives the keys back and Enter makes the bet
+      table.act('Stu', { type: 'check' });
+      await page.waitForSelector('.turn [data-action="check"]:enabled');
+      await settle(page);
+      await page.keyboard.press('r');
+      assert.equal(await page.evaluate('document.activeElement.id'), 'raise-amount');
+      assert.equal(await page.inputValue('#raise-amount'), '20', 'R was typed into the amount');
+      await page.keyboard.press('Escape');
+      assert.equal(await page.evaluate('document.activeElement === document.body'), true, 'Escape kept the keyboard in the amount');
+      await page.keyboard.press('r');
+      await page.keyboard.type('120');
+      assert.equal(await text(page, '.turn [data-action="raise"]'), 'Bet 120');
+      await answeredAfter(page, () => page.keyboard.press('Enter'));
+      assert.deepEqual(sent, ['call', 'check', 'call', 'raise']);
+      assert.equal(quigs().bet, 120, 'Enter did not bet what was typed');
+
+      // F held down folds once
+      table.act('Stu', { type: 'raise', to: 400 });
+      await page.waitForSelector('.turn [data-action="fold"]:enabled');
+      await settle(page);
+      await answeredAfter(page, async () => {
+        for (let press = 0; press < 5; press++) {
+          await page.keyboard.down('f');
+        }
+        await page.keyboard.up('f');
+      });
+      await page.waitForTimeout(300);
+      assert.deepEqual(sent, ['call', 'check', 'call', 'raise', 'fold']);
+      assert.equal(quigs().folded, true, 'F did not fold');
+      await page.context().close();
+    },
+  ],
+  [
+    'on a cents table the keys size, type and play a bet in dollars and cents, and a box that cannot be read plays nothing',
+    async (rig) => {
+      const table = rig.table(
+        [
+          { name: 'Quigs', stack: 10_000 },
+          { name: 'Stu', stack: 10_000 },
+        ],
+        CENTS,
+      );
+      table.deal({ button: 0 });
+
+      const page = await table.open('Quigs', 'desktop');
+      const sent = movesSent(page);
+
+      await page.waitForSelector('.turn [data-action="call"]:enabled');
+      await settle(page);
+
+      // Three quarters of the pot with the call counted: to 0.50 + ¾ × (0.75 + 0.25)
+      await page.keyboard.press('3');
+      assert.equal(await text(page, '.turn [data-action="raise"]'), 'Raise to 1.25');
+      assert.equal(await page.inputValue('#raise-amount'), '1.25');
+
+      await page.keyboard.press('r');
+      await page.keyboard.type('1.505');
+      await page.keyboard.press('Enter');
+      await page.waitForTimeout(300);
+      assert.deepEqual(sent, [], 'a box that cannot be read played a move by key');
+      assert.equal(await complaintOf(page, '#raise-amount'), TO_THE_CENT);
+
+      await page.fill('#raise-amount', '1.50');
+      await answeredAfter(page, () => page.keyboard.press('Enter'));
+      assert.deepEqual(sent, ['raise']);
+      assert.equal(table.view('Stu').seats[0]!.bet, 150, 'Enter did not raise to 1.50');
+      await page.context().close();
+    },
+  ],
+  [
+    'O, T and 3 answer how many times to run it',
+    async (rig) => {
+      const table = rig.table([
+        { name: 'Quigs', stack: 1000 },
+        { name: 'Stu', stack: 1000 },
+        { name: 'Pam', stack: 1000 },
+      ]);
+      table.deal({ button: 0 });
+      table.act('Quigs', { type: 'raise', to: 1000 });
+      table.act('Stu', { type: 'call' });
+      table.act('Pam', { type: 'call' });
+
+      const pages = [await table.open('Quigs', 'desktop'), await table.open('Stu', 'desktop'), await table.open('Pam', 'desktop')];
+      const sent = pages.map(movesSent);
+
+      for (const page of pages) {
+        await page.waitForSelector('.turn [data-action="rit-3"]:enabled');
+        await settle(page);
+        for (const runs of [1, 2, 3]) {
+          assert.equal(await hintShown(page, `.turn [data-action="rit-${runs}"]`), true, `the key for ${runs}`);
+        }
+      }
+      await shot(pages[0]!, 'hotkeys-run-it-desktop');
+
+      // A pick of once ends the picking, so it comes last
+      const picks: [number, string, number][] = [[1, '3', 3], [2, 't', 2], [0, 'o', 1]];
+      for (const [seat, key, runs] of picks) {
+        await answeredAfter(pages[seat]!, () => pages[seat]!.keyboard.press(key));
+        assert.equal(table.view('Quigs').seats[seat]!.ritVote, runs, `${key} did not pick ${runs}`);
+      }
+
+      assert.deepEqual(sent, [['ritVote 1'], ['ritVote 3'], ['ritVote 2']]);
+
+      for (const page of pages) {
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'on a phone no key is shown and none does anything',
+    async (rig) => {
+      const table = rig.table([
+        { name: 'Quigs', stack: 1000 },
+        { name: 'Stu', stack: 1000 },
+      ]);
+      table.deal({ button: 0 });
+
+      const page = await table.open('Quigs', 'phone');
+      const sent = movesSent(page);
+
+      await page.waitForSelector('.turn [data-action="call"]:enabled');
+      await settle(page);
+      assert.equal(await page.locator('.turn [data-hotkey]').count(), 8);
+      for (const key of ['F', 'C', 'R', '1', '2', '3', '4', '5']) {
+        assert.equal(await hintShown(page, `.turn [data-hotkey="${key}"]`), false, `${key} is shown on a phone`);
+      }
+
+      await page.keyboard.press('c');
+      await page.waitForTimeout(300);
+      assert.deepEqual(sent, []);
+      assert.equal(table.view('Quigs').hand!.toAct, 0);
+      await page.context().close();
+    },
+  ],
+  [
+    'the host can take someone who never played off the table',
+    async (rig) => {
+      const table = rig.table([
+        { name: 'Quigs', stack: 1000 },
+        { name: 'Stu', stack: 1000 },
+      ]);
+      table.join('Lurker');
+
+      const lurker = await table.open('Lurker', 'phone');
+      const host = await table.open('Quigs', 'desktop');
+
+      await host.click('[data-action="menu"]');
+      await host.click('.menu [data-action="players"]');
+      await host.click('li:has-text("Lurker") button:has-text("Remove")');
+      await host.click('[data-action="confirm"]');
+
+      await lurker.waitForSelector('#join-name');
+      assert.deepEqual(
+        table.view('Quigs').members.map((member) => member.name),
+        ['Quigs', 'Stu'],
+      );
+    },
+  ],
+  [
+    'the host makes a co-host from the Players dialog and ends it again, on a phone and a desktop',
+    async (rig) => {
+      for (const screen of ['phone', 'desktop'] as const) {
+        const table = rig.table([
+          { name: 'Quigs', stack: 1000 },
+          { name: 'Marge Simpson-Jr', stack: 1000 },
+        ]);
+        table.join('Lurker');
+
+        const page = await table.open('Quigs', screen);
+        const press = pressOn(page, screen);
+        const row = (name: string) => `.dialog li:has-text("${name}")`;
+
+        await press('[data-action="menu"]');
+        await press('.menu [data-action="players"]');
+
+        for (const name of ['Marge Simpson-Jr', 'Lurker']) {
+          assert.deepEqual(await page.locator(`${row(name)} button`).allInnerTexts(), name === 'Lurker' ? ['Make co-host', 'Make host', 'Remove'] : ['Set stack', 'Move', 'Make co-host', 'Make host', 'Remove']);
+        }
+        assert.deepEqual(await page.locator(`${row('Quigs')} button`).allInnerTexts(), ['Set stack', 'Move', 'Remove'], 'the host is offered a say over their own role');
+        assertOnScreen(await boxes(page, '.dialog .row-actions .btn'), screen, 'a button in the Players dialog');
+        assert.deepEqual(await squeezed(page, '.dialog .row-actions .btn'), [], 'a button in the Players dialog is cut off');
+        await shot(page, `players-host-${screen}`);
+
+        await press(`${row('Marge Simpson-Jr')} [data-action="make-cohost"]`);
+        assert.equal(await text(page, '.dialog h2'), 'Make Marge Simpson-Jr a co-host?');
+        await press('[data-action="confirm"]');
+
+        await press('[data-action="menu"]');
+        await press('.menu [data-action="players"]');
+        await page.waitForSelector(`${row('Marge Simpson-Jr')} .cohost`);
+        assert.deepEqual(table.view('Quigs').cohostIds, [table.auth('Marge Simpson-Jr').id]);
+        assert.equal(await page.locator('.seat[data-seat="1"] .plate .cohost').count(), 1, 'the seat does not show the co-host mark');
+        await shot(page, `players-cohost-named-${screen}`);
+
+        // Ending it is undone in one tap, so it asks nothing
+        await press(`${row('Marge Simpson-Jr')} [data-action="end-cohost"]`);
+        await page.waitForSelector(`${row('Marge Simpson-Jr')} [data-action="make-cohost"]`);
+        assert.deepEqual(table.view('Quigs').cohostIds, []);
+        assert.match(await text(page, '.feed-toggle .latest'), /Marge Simpson-Jr is no longer a co-host/);
+
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'a co-host gets the host\'s tools but not the host\'s own, and a plain member gets neither',
+    async (rig) => {
+      for (const screen of ['phone', 'desktop'] as const) {
+        const table = rig.table([
+          { name: 'Quigs', stack: 1000 },
+          { name: 'Stu', stack: 1000 },
+          { name: 'Pam', stack: 1000 },
+        ]);
+        table.join('Lurker');
+        table.act('Quigs', { type: 'setCohost', playerId: table.auth('Stu').id, on: true });
+
+        const cohost = await table.open('Stu', screen);
+        const press = pressOn(cohost, screen);
+        assert.equal(await cohost.locator('.table.movable').count(), 1, 'a co-host cannot drag players to other seats');
+
+        await press('[data-action="menu"]');
+        const menu = await cohost.locator('.menu .menu-item').evaluateAll((items) => items.map((item) => item.getAttribute('data-action')));
+        for (const tool of ['players', 'shuffle', 'settings', 'start']) {
+          assert.ok(menu.includes(tool), `the co-host's menu has no ${tool}: ${menu.join(', ')}`);
+        }
+
+        await press('.menu [data-action="players"]');
+        assert.deepEqual(await cohost.locator('.dialog li:has-text("Quigs") button').allInnerTexts(), ['Set stack', 'Move'], 'a co-host is offered to remove the host');
+        assert.deepEqual(await cohost.locator('.dialog li:has-text("Pam") button').allInnerTexts(), ['Set stack', 'Move', 'Remove']);
+        assert.deepEqual(await cohost.locator('.dialog li:has-text("Lurker") button').allInnerTexts(), ['Remove']);
+        assert.equal(await cohost.locator('.dialog [data-action="transfer"]').count(), 1, 'a co-host is not offered to transfer chips');
+        assert.equal(await cohost.locator('[data-action="make-host"], [data-action="make-cohost"], [data-action="end-cohost"]').count(), 0, 'a co-host is offered what only the host may do');
+        assertOnScreen(await boxes(cohost, '.dialog .row-actions .btn'), screen, 'a button in the co-host\'s Players dialog');
+        await shot(cohost, `players-as-cohost-${screen}`);
+
+        // No longer a co-host, they are left holding none of the host's tools
+        table.act('Quigs', { type: 'setCohost', playerId: table.auth('Stu').id, on: false });
+        await cohost.waitForSelector('.dialog', { state: 'detached' });
+        await cohost.context().close();
+
+        if (screen === 'phone') {
+          const member = await table.open('Pam', screen);
+          await member.tap('[data-action="menu"]');
+          await member.waitForSelector('.menu');
+          assert.equal(
+            await member.locator('.menu [data-action="players"], .menu [data-action="shuffle"], .menu [data-action^="bomb-pot"], .menu [data-action="settings"], .menu [data-action="start"]').count(),
+            0,
+            'a plain member is offered the host\'s tools',
+          );
+          assert.equal(await member.locator('.table.movable').count(), 0, 'a plain member can drag players to other seats');
+          assert.equal(await member.locator('.message [data-action="start"]').count(), 0);
+          await member.context().close();
+        }
+      }
+    },
+  ],
+  [
+    'the co-host mark sits beside the host\'s star, whole, however long the names',
+    async (rig) => {
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        // The host's name is a long one too
+        const players = tenPlayers();
+        [players[0]!.name, players[3]!.name] = [players[3]!.name, players[0]!.name];
+
+        const table = rig.table(players);
+        for (const name of ['WWWWWWWWWWWWWWWW', '你好你好你好你好', 'Stu']) {
+          table.act('Marge Simpson-Jr', { type: 'setCohost', playerId: table.auth(name).id, on: true });
+        }
+
+        const page = await table.open('Big Al', screen);
+        await page.waitForSelector('.plate .cohost');
+        assert.equal(await page.locator('.plate .host').count(), 1);
+        assert.equal(await page.locator('.plate .cohost').count(), 3);
+
+        // The name gives way to its mark: the mark is drawn whole, inside its plate
+        const cut = await page.evaluate(`[...document.querySelectorAll('.plate .host, .plate .cohost')].filter((mark) => {
+          const box = mark.getBoundingClientRect();
+          const name = mark.parentElement.getBoundingClientRect();
+          return box.width < 4 || box.left < name.left - 1 || box.right > name.right + 1;
+        }).length`);
+        assert.equal(cut, 0, 'a host or co-host mark is cut off by a long name');
+        assert.deepEqual(await squeezed(page, '.plate .stack'), [], 'a stack is cut off');
+        assertOnScreen(await boxes(page, '.seat .plate'), screen, 'a seat');
+        await shot(page, `cohost-marks-${screen}`);
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'a co-host approves a seat request from the banner',
+    async (rig) => {
+      const table = rig.table([
+        { name: 'Quigs', stack: 1000 },
+        { name: 'Stu', stack: 1000 },
+      ]);
+      table.join('Ann');
+      table.act('Quigs', { type: 'setCohost', playerId: table.auth('Stu').id, on: true });
+
+      const page = await table.open('Stu', 'phone');
+      table.act('Ann', { type: 'requestSeat', seat: 4, buyIn: 500 });
+
+      await page.waitForSelector('.banner:has-text("Ann wants seat 5") [data-action="approve"]');
+      assert.equal(await text(page, '.menu-button .dot'), '1');
+      assertOnScreen(await boxes(page, '.banner .btn'), 'phone', 'the banner\'s buttons');
+      await shot(page, 'cohost-approves-phone');
+
+      await page.tap('.banner [data-action="approve"]');
+      await page.waitForSelector('.banner', { state: 'detached' });
+      assert.equal(table.view('Ann').you.seat, 4);
+      assert.match(await text(page, '.feed-toggle .latest'), /Ann sits down with 500/);
+      await page.context().close();
+    },
+  ],
+  [
+    'the voice chat button fits the top bar beside everything already there, and leaves it as it was when taken away',
+    async (rig) => {
+      const link = 'https://meet.google.com.a-very-long-subdomain.example/abc-defg-hij';
+      const shown = '…-long-subdomain.example';
+
+      for (const screen of ['smallPhone', 'phone', 'phoneSideways', 'desktop'] as const) {
+        const table = rig.table(
+          [
+            { name: 'Quigs', stack: 1000 },
+            { name: 'Stu', stack: 1000 },
+          ],
+          { name: 'Friday night at the Quigleys, every week' },
+        );
+        table.join('Lurker');
+        table.deal({ button: 0 });
+
+        const page = await table.open('Lurker', screen);
+        const bar = '.topbar > *';
+        const before = await boxes(page, bar);
+        assert.equal(await page.locator('.voice-link').count(), 0, 'a button with no call to go to');
+
+        table.act('Quigs', { type: 'updateConfig', config: { voiceLink: link } });
+        await page.waitForSelector('.voice-link');
+
+        const button = page.locator('.voice-link');
+        assert.equal(await button.getAttribute('href'), link);
+        assert.equal(await button.getAttribute('target'), '_blank');
+        assert.equal(await button.getAttribute('rel'), 'noopener noreferrer');
+        assert.equal(await text(page, '.voice-link'), `Voice · ${shown}`, 'the button names where it leads, keeping the end of the host');
+
+        const [voice] = await boxes(page, '.voice-link');
+        assertOnScreen([voice!], screen, 'the voice chat button');
+        for (const other of ['.menu-button', '.topbar .title', '.topbar .pill', '[data-action="invite"]']) {
+          assertApart(await boxes(page, other), [voice!], `the voice chat button and ${other}`);
+        }
+
+        const [title] = await boxes(page, '.topbar .title b');
+        assert.ok(title!.right - title!.left >= 120, `the table's name is squeezed to ${title!.right - title!.left}px`);
+        assert.deepEqual(await squeezed(page, '.voice-link, .topbar .pill, [data-action="invite"]'), [], 'a part of the top bar is cut off');
+        assertOnScreen(await boxes(page, bar), screen, 'the top bar');
+
+        const [stage] = await boxes(page, '.stage');
+        assertOnScreen(await boxes(page, '.seat .plate'), screen, 'a seat');
+        for (const seat of await boxes(page, '.seat .plate')) {
+          assert.ok(seat.top >= stage!.top - 1, `a seat is drawn under the top bar: ${JSON.stringify(seat)}`);
+        }
+        await shot(page, `voice-link-${screen}`);
+
+        table.act('Quigs', { type: 'updateConfig', config: { voiceLink: '' } });
+        await page.waitForSelector('.voice-link', { state: 'detached' });
+        assert.deepEqual(await boxes(page, bar), before, 'the top bar is not as it was before the call was set');
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'a co-host sets the voice chat link in the settings, a bad address is refused with the reason, and a plain member cannot change it',
+    async (rig) => {
+      const table = rig.table([
+        { name: 'Quigs', stack: 1000 },
+        { name: 'Stu', stack: 1000 },
+        { name: 'Pam', stack: 1000 },
+      ]);
+      table.act('Quigs', { type: 'setCohost', playerId: table.auth('Stu').id, on: true });
+
+      // The host has the settings open from before the link was set, and saves something else after
+      const host = await table.open('Quigs', 'desktop');
+      await host.click('[data-action="menu"]');
+      await host.click('.menu [data-action="settings"]');
+      await host.waitForSelector('#table-voice-link');
+
+      const cohost = await table.open('Stu', 'phone');
+      await cohost.tap('[data-action="menu"]');
+      await cohost.tap('.menu [data-action="settings"]');
+
+      const typed = 'http://meet.google.com/abc-defg-hij';
+      await cohost.fill('#table-voice-link', typed);
+      await cohost.tap('[data-action="save-settings"]');
+      await toastTold(cohost, 'The voice chat link must start with https://');
+      assert.equal(await cohost.inputValue('#table-voice-link'), typed, 'a refused save threw away what was typed');
+      await cohost.locator('#table-voice-link').scrollIntoViewIfNeeded();
+      assertOnScreen(await boxes(cohost, '#table-voice-link'), 'phone', 'the voice chat link field');
+      await shot(cohost, 'voice-link-refused-phone');
+
+      await cohost.fill('#table-voice-link', ' https://meet.google.com/abc-defg-hij ');
+      await cohost.tap('[data-action="save-settings"]');
+      await cohost.waitForSelector('.dialog', { state: 'detached' });
+      await cohost.waitForSelector('.voice-link');
+      assert.equal(await cohost.getAttribute('.voice-link', 'href'), 'https://meet.google.com/abc-defg-hij');
+      assert.equal(await text(cohost, '.voice-link'), 'Voice · meet.google.com');
+      assert.match(await text(cohost, '.feed-toggle .latest'), /Co-host Stu set the voice chat link/);
+      await cohost.context().close();
+
+      await host.fill('#table-big-blind', '40');
+      await host.click('[data-action="save-settings"]');
+      await host.waitForSelector('.dialog', { state: 'detached' });
+      assert.equal(table.view('Quigs').config.bigBlind, 40);
+      assert.equal(table.view('Quigs').config.voiceLink, 'https://meet.google.com/abc-defg-hij', 'a settings form opened earlier undid the co-host\'s link');
+      await host.context().close();
+
+      const member = await table.open('Pam', 'phone');
+      assert.equal(await member.getAttribute('.voice-link', 'href'), 'https://meet.google.com/abc-defg-hij', 'a player at the table has the button too');
+      await member.tap('[data-action="menu"]');
+      await member.waitForSelector('.menu');
+      assert.equal(await member.locator('.menu [data-action="settings"]').count(), 0, 'a plain member is offered the settings');
+      await member.context().close();
+
+      const answer = table.tryAct('Pam', { type: 'updateConfig', config: { voiceLink: 'https://evil.example' } });
+      assert.equal(answer.ok, false, 'a plain member changed the voice chat link');
+      assert.equal(table.view('Quigs').config.voiceLink, 'https://meet.google.com/abc-defg-hij');
+    },
+  ],
+  [
+    'a table that plays dollars and cents shows its stacks, bets and pot in dollars',
+    async (rig) => {
+      const table = rig.table(
+        [
+          { name: 'Quigs', stack: 10_000 },
+          { name: 'Stu', stack: 25_000 },
+          { name: 'Pocket Pam', stack: 30_000 },
+          { name: 'Big Al', stack: 25_000 },
+          { name: 'Marge Simpson-Jr', stack: 20_000 },
+          { name: 'Zed', stack: 50_000 },
+        ],
+        CENTS,
+      );
+      table.deal({ button: 0 });
+      table.act('Big Al', { type: 'raise', to: 150 });
+      table.act('Marge Simpson-Jr', { type: 'call' });
+      table.act('Zed', { type: 'raise', to: 1250 });
+      table.act('Quigs', { type: 'call' });
+      table.act('Stu', { type: 'call' });
+      table.act('Pocket Pam', { type: 'raise', to: 4500 });
+
+      for (const screen of PHONE_AND_DESKTOP) {
+        const page = await table.open('Quigs', screen);
+
+        assert.equal(await text(page, '.topbar .title span'), '0.25/0.50 hold’em');
+        assert.deepEqual(
+          await stacksBySeat(page, 6),
+          ['87.50', '237.50', '255.00', '248.50', '198.50', '487.50'],
+        );
+        assert.deepEqual((await texts(page, '.bet')).sort(), ['1.50', '1.50', '12.50', '12.50', '12.50', '45.00']);
+        assert.equal(await text(page, '.pot'), 'Pot85.50');
+        assert.match(await text(page, '.feed-toggle .latest'), /Pocket Pam raises to 45\.00$/);
+        await shot(page, `cents-table-${screen}`);
+
+        assert.deepEqual(await squeezed(page, '.plate .stack, .bet, .pot, .topbar .title span'), [], 'an amount is cut off, so it reads wrong');
+        assertOnScreen(await boxes(page, '.seat .plate, .bet, .pot'), screen, 'a seat, a bet or the pot');
+        await assertBetsApart(page);
+
+        await page.context().close();
+      }
+
+      // A table only just taller than it is wide stands up with the least height it will ever have, which is
+      // where the bets beside the middle come nearest the board and the pot.
+      const page = await table.open('Quigs', 'phone');
+      await setStageHeight(page, JUST_STANDING);
+      await page.waitForSelector('.table.tall').catch(() => assert.fail(`a phone's table ${JUST_STANDING} tall is not standing up: has WIDE_ASPECT changed?`));
+      await shot(page, 'cents-table-phone-just-standing');
+
+      const [stage] = await boxes(page, '.stage');
+      for (const bet of await boxes(page, '.bet')) {
+        assert.ok(bet.top >= stage!.top && bet.bottom <= stage!.bottom, `a bet runs off the table: ${JSON.stringify(bet)}`);
+      }
+
+      await assertBetsApart(page);
+      await page.context().close();
+    },
+  ],
+  [
+    'the longest amounts a cents table can show are whole on a small phone and on the desktop',
+    async (rig) => {
+      // 99,999.99 is the longest amount written out; from there up a seat and a bet shorten it, and the pot never does
+      const table = rig.table(
+        [
+          { name: 'Quigs', stack: 10_000 },
+          { name: 'Stu', stack: 9_999_999 },
+          { name: 'Pocket Pam', stack: 1_000_000_000 },
+          { name: 'Big Al', stack: 1_000_000_000 },
+          { name: 'Marge Simpson-Jr', stack: 2000 },
+          { name: 'Zed', stack: 123_456 },
+        ],
+        CENTS,
+      );
+      table.deal({ button: 0 });
+      table.act('Big Al', { type: 'raise', to: 150 });
+      table.act('Marge Simpson-Jr', { type: 'call' });
+      table.act('Zed', { type: 'raise', to: 123_456 });
+      table.act('Quigs', { type: 'call' });
+      table.act('Stu', { type: 'raise', to: 9_999_999 });
+      table.act('Pocket Pam', { type: 'raise', to: 987_654_321 });
+
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        const page = await table.open('Quigs', screen);
+
+        assert.deepEqual(
+          await stacksBySeat(page, 6),
+          ['0.00', '0.00', '123.45K', '9.99M', '18.50', '0.00'],
+        );
+        assert.deepEqual((await texts(page, '.bet')).sort(), ['1,234.56', '1.50', '1.50', '100.00', '9.87M', '99,999.99']);
+        assert.equal(await text(page, '.pot'), 'Pot9,977,880.76');
+        await shot(page, `cents-longest-${screen}`);
+
+        assert.deepEqual(await squeezed(page, '.plate .stack, .bet, .pot'), [], 'an amount is cut off, so it reads wrong');
+        assertOnScreen(await boxes(page, '.seat .plate, .bet, .pot'), screen, 'a seat, a bet or the pot');
+        assertApart(await boxes(page, '.bet'), await boxes(page, '.board .card, .pot'), 'a bet and the middle of the table');
+        assertApart(await boxes(page, '.pot'), await boxes(page, '.seat .plate'), 'the pot and a seat');
+
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'on a cents table the bet box reads dollars, the size buttons land on a cent, and an amount that cannot be read is not played',
+    async (rig) => {
+      for (const screen of PHONE_AND_DESKTOP) {
+        const table = rig.table(
+          [
+            { name: 'Quigs', stack: 10_000 },
+            { name: 'Stu', stack: 10_000 },
+            { name: 'Pam', stack: 10_000 },
+          ],
+          CENTS,
+        );
+        table.deal({ button: 0 });
+
+        const page = await table.open('Quigs', screen);
+        const press = pressOn(page, screen);
+        const raiseButton = '.turn [data-action="raise"]';
+        const typeAmount = (typed: string) => page.fill('#raise-amount', typed);
+
+        assert.equal(await text(page, '.turn [data-action="call"]'), 'Call 0.50');
+        assert.equal(await text(page, raiseButton), 'Raise to 1.00');
+        assert.equal(await page.inputValue('#raise-amount'), '1.00');
+        assert.equal(await page.getAttribute('#raise-amount', 'inputmode'), 'decimal', 'a phone would not offer a decimal point');
+
+        await typeAmount('1.50');
+        assert.equal(await text(page, raiseButton), 'Raise to 1.50');
+        await typeAmount('.5');
+        assert.equal(await text(page, raiseButton), 'Raise to 1.00', 'less than the smallest raise is the smallest raise');
+        await typeAmount('');
+        assert.equal(await text(page, raiseButton), 'Raise to 1.00');
+
+        // 0.75 in the pot and 0.50 to call: no share of that is a round number of cents
+        for (const [preset, expected] of [['½ pot', '1.13'], ['¾ pot', '1.44'], ['Pot', '1.75'], ['Min', '1.00']] as const) {
+          await press(`.presets button:text-is("${preset}")`);
+          assert.equal(await page.inputValue('#raise-amount'), expected, preset);
+          assert.equal(await text(page, raiseButton), `Raise to ${expected}`, preset);
+        }
+
+        await page.locator('#raise-slider').fill('4321');
+        assert.equal(await page.inputValue('#raise-amount'), '43.21');
+        assert.equal(await text(page, raiseButton), 'Raise to 43.21');
+
+        // A third decimal is neither rounded nor swapped for the last amount that could be read
+        await typeAmount('1.555');
+        assert.equal(await text(page, raiseButton), 'Raise');
+        assert.equal(await page.getAttribute(raiseButton, 'aria-disabled'), 'true');
+        assert.equal(await complaintOf(page, '#raise-amount'), TO_THE_CENT);
+
+        // The button takes no part in the browser's own disabling, so a press still lands on it, and gets the reason
+        await page.locator(raiseButton).dispatchEvent('click');
+        await shot(page, `cents-third-decimal-${screen}`);
+
+        // Halfway to an amount, as "1," is to "1,000", nothing is played either
+        await typeAmount('1,');
+        assert.equal(await page.getAttribute(raiseButton, 'aria-disabled'), 'true');
+        await page.locator(raiseButton).dispatchEvent('click');
+
+        await typeAmount('1.50');
+        assert.equal(await page.getAttribute(raiseButton, 'aria-disabled'), null);
+        assert.deepEqual(await squeezed(page, '.turn .btn, #raise-amount'), [], 'a move button or the amount box is cut off');
+        assertOnScreen(await boxes(page, '.turn .btn, #raise-amount, .presets button'), screen, 'the bet controls');
+        await shot(page, `cents-my-turn-${screen}`);
+
+        // The buttons go at the tap, so it is the server's answer that says the table has the raise
+        await answeredAfter(page, () => press(raiseButton));
+
+        const quigs = table.view('Quigs');
+        assert.equal(quigs.seats[0]!.bet, 150);
+        assert.deepEqual(
+          quigs.feed.filter((entry) => entry.text.startsWith('Quigs ')).map((entry) => entry.text),
+          ['Quigs opened the table', 'Quigs sits down with 100.00', 'Quigs raises to 1.50'],
+          'the press on a box that could not be read played something',
+        );
+
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'on a cents table a size button never asks for more than the stack',
+    async (rig) => {
+      const table = rig.table(
+        [
+          { name: 'Quigs', stack: 120 },
+          { name: 'Stu', stack: 10_000 },
+          { name: 'Pam', stack: 10_000 },
+        ],
+        CENTS,
+      );
+      table.deal({ button: 0 });
+
+      const page = await table.open('Quigs', 'phone');
+      await page.tap('.presets button:text-is("Pot")');
+      assert.equal(await page.inputValue('#raise-amount'), '1.20');
+      assert.equal(await text(page, '.turn [data-action="raise"]'), 'All in 1.20');
+      await page.fill('#raise-amount', '1,000,000.00');
+      assert.equal(await text(page, '.turn [data-action="raise"]'), 'All in 1.20', 'more than the stack is the stack');
+    },
+  ],
+  [
+    'the ledger, who pays whom and the hand history of a cents table read in dollars',
+    async (rig) => {
+      const table = rig.table(
+        [
+          { name: 'Quigs', stack: 10_000 },
+          { name: 'Stu', stack: 5000 },
+          { name: 'Pocket Pam', stack: 30_000 },
+        ],
+        CENTS,
+      );
+      table.deal({ button: 0, holes: { 0: 'As Ah', 1: '7c 2d', 2: 'Ks Kh' }, board: '3s 4d 9h Jc Qd' });
+      table.act('Quigs', { type: 'pause' });
+      table.act('Quigs', { type: 'raise', to: 150 });
+      table.act('Stu', { type: 'fold' });
+      table.play(passive, (view) => view.hand === null);
+
+      for (const screen of PHONE_AND_DESKTOP) {
+        const page = await table.open('Quigs', screen);
+        const press = pressOn(page, screen);
+        await openLedger(page, screen);
+
+        assert.deepEqual(await ledgerRows(page), [
+          ['Quigs', '100.00', '0.00', '101.75', '+1.75'],
+          ['Stu', '50.00', '0.00', '49.75', '-0.25'],
+          ['Pocket Pam', '300.00', '0.00', '298.50', '-1.50'],
+        ]);
+        assert.deepEqual(await texts(page, '.settle li'), ['Pocket Pam pays Quigs 1.50', 'Stu pays Quigs 0.25']);
+
+        assert.deepEqual(await squeezed(page, '.ledger th, .ledger td, .settle li, .dialog h2'), [], 'an amount in the ledger is cut off');
+        assertOnScreen(await boxes(page, '.dialog, .ledger th, .ledger td, .settle li'), screen, 'the ledger');
+        await shot(page, `cents-ledger-${screen}`);
+
+        await press('[data-action="close"]');
+        await press('[data-action="menu"]');
+        await press('.menu [data-action="history"]');
+        await page.waitForSelector('.history summary');
+        assert.equal(await text(page, '.history summary small'), 'Quigs +3.25');
+        await press('.history summary');
+        assert.match(await text(page, '.history pre'), /^Hand #1 · blinds 0\.25\/0\.50 · Quigs has the button\n[^]*\nPocket Pam calls 1\.00\n[^]*\nQuigs wins 3\.25 with [^\n]+$/);
+
+        await page.context().close();
+      }
+
+      // Four columns of a million to the cent are wider than a phone: the table scrolls sideways inside the dialog, and nothing else gives
+      const rich = rig.table([{ name: 'Quigs', stack: 100_000_000 }, { name: 'Stu', stack: 100_000_000 }], CENTS);
+      const page = await rich.open('Quigs', 'phone');
+      await openLedger(page, 'phone');
+
+      assert.deepEqual((await ledgerRows(page))[0], ['Quigs', '1,000,000.00', '0.00', '1,000,000.00', '0.00']);
+      assert.deepEqual(await squeezed(page, '.ledger th, .ledger td'), [], 'an amount in the ledger is cut off');
+      assertOnScreen(await boxes(page, '.dialog'), 'phone', 'the ledger');
+      await assertNoSidewaysScroll(page);
+
+      await page.evaluate(`document.querySelector('.ledger td:last-child').scrollIntoView({ inline: 'end' })`);
+      assertOnScreen(await boxes(page, '.ledger tbody tr:first-child td:last-child'), 'phone', 'the last column, scrolled to');
+    },
+  ],
+  [
+    'the host transfers chips between two players, a refused amount keeps what was typed, and the ledger and the settle-up show it',
+    async (rig) => {
+      const LONG = 'WWWWWWWWWWWWWWWW';
+      const kinds = [
+        {
+          name: 'chips',
+          config: {},
+          stack: 1000,
+          fraction: '2.5',
+          tooMuch: '5000',
+          refusal: 'The amount must be a whole number from 1 to 1,000',
+          amount: '300',
+          moved: `The host moved 300 from ${LONG} to Stu`,
+          rows: [
+            ['Stu', '1,000', '0', '+300', '1,300', '+300'],
+            ['Quigs', '1,000', '0', '0', '1,000', '0'],
+            [LONG, '1,000', '0', '-300', '700', '-300'],
+          ],
+          settle: [`${LONG} pays Stu 300`],
+        },
+        {
+          name: 'cents',
+          config: CENTS,
+          stack: 10_000,
+          fraction: '1.234',
+          tooMuch: '150.00',
+          refusal: 'The amount must be an amount to the cent from 0.01 to 100.00',
+          amount: '12.34',
+          moved: `The host moved 12.34 from ${LONG} to Stu`,
+          rows: [
+            ['Stu', '100.00', '0.00', '+12.34', '112.34', '+12.34'],
+            ['Quigs', '100.00', '0.00', '0.00', '100.00', '0.00'],
+            [LONG, '100.00', '0.00', '-12.34', '87.66', '-12.34'],
+          ],
+          settle: [`${LONG} pays Stu 12.34`],
+        },
+      ];
+
+      for (const kind of kinds) {
+        for (const screen of PHONE_AND_DESKTOP) {
+          const table = rig.table(
+            ['Quigs', LONG, 'Stu'].map((name) => ({ name, stack: kind.stack })),
+            kind.config,
+          );
+          const page = await table.open('Quigs', screen);
+          const press = pressOn(page, screen);
+
+          await press('[data-action="menu"]');
+          await press('.menu [data-action="players"]');
+          assertOnScreen(await boxes(page, '.dialog [data-action="transfer"]'), screen, 'the button that starts a transfer');
+          await shot(page, `transfer-players-${kind.name}-${screen}`);
+          await press('.dialog [data-action="transfer"]');
+          assert.equal(await text(page, '.dialog h2'), 'Transfer chips');
+
+          await page.selectOption('#transfer-from', { label: LONG });
+          await page.selectOption('#transfer-to', { label: 'Stu' });
+          await page.fill('#transfer-amount', kind.fraction);
+          assert.notEqual(await complaintOf(page, '#transfer-amount'), '', 'a fraction of the smallest unit can be sent');
+
+          await page.fill('#transfer-amount', kind.tooMuch);
+          await press('[data-action="confirm-transfer"]');
+          await toastTold(page, kind.refusal);
+          assert.equal(await page.inputValue('#transfer-amount'), kind.tooMuch, 'the refused amount was thrown away');
+          assert.deepEqual([await page.inputValue('#transfer-from'), await page.inputValue('#transfer-to')], [table.auth(LONG).id, table.auth('Stu').id], 'the players picked were thrown away');
+
+          await page.fill('#transfer-amount', kind.amount);
+          assert.deepEqual(await squeezed(page, '.dialog .field, .dialog .field select, .dialog .field input, .dialog .btn, .dialog h2'), [], 'part of the transfer form is cut off');
+          assertOnScreen(await boxes(page, '.dialog .field, .dialog [data-action="confirm-transfer"]'), screen, 'the transfer form');
+          await shot(page, `transfer-${kind.name}-${screen}`);
+
+          await press('[data-action="confirm-transfer"]');
+          await page.waitForSelector('.dialog [data-action="transfer"]');
+          assert.equal(await text(page, '.feed-toggle .latest'), kind.moved);
+
+          await press('[data-action="close"]');
+          await openLedger(page, screen);
+
+          assert.deepEqual(await texts(page, '.ledger th'), ['Player', 'Bought', 'Cashed out', 'Transferred', 'On table', 'Net']);
+          assert.deepEqual(await ledgerRows(page), kind.rows);
+          assert.deepEqual(await texts(page, '.settle li'), kind.settle);
+          assert.match(await text(page, '.dialog-body > .note'), /^Transferred is chips/);
+
+          assert.deepEqual(await squeezed(page, '.ledger th, .ledger td, .settle li, .dialog .note, .dialog h2'), [], 'part of the ledger is cut off');
+          assertOnScreen(await boxes(page, '.dialog, .settle li, .dialog-body > .note'), screen, 'the ledger');
+          await assertNoSidewaysScroll(page);
+          await shot(page, `transfer-ledger-${kind.name}-${screen}`);
+          await page.evaluate(`document.querySelector('.ledger td:last-child').scrollIntoView({ inline: 'end' })`);
+          assertOnScreen(await boxes(page, '.ledger tbody tr:last-child td:last-child'), screen, 'the last column of the ledger, scrolled to');
+
+          await page.context().close();
+        }
+      }
+    },
+  ],
+  [
+    'the form for a new table switches between whole chips and dollars and cents, and the table it makes plays what was picked',
+    async (rig) => {
+      for (const screen of PHONE_AND_DESKTOP) {
+        const page = await rig.lobby(screen);
+        const press = pressOn(page, screen);
+        const stakes = () => Promise.all(['small-blind', 'big-blind', 'min-buy-in', 'max-buy-in'].map((field) => page.inputValue(`#new-table-${field}`)));
+        const pick = (label: string) => press(`#new-table-unit label:has-text("${label}")`);
+
+        assert.equal(await page.isChecked('#new-table-unit input[value="chips"]'), true, 'whole chips is what a table plays unless its host says otherwise');
+        assert.deepEqual(await stakes(), ['10', '20', '400', '2000']);
+        assert.equal(await text(page, '#new-table-unit small'), "Can't be changed once the table is created");
+
+        await page.fill('#host-name', `Quigs ${screen}`);
+        await page.fill('#new-table-name', 'Friday nickels');
+        await pick('Dollars and cents');
+        assert.deepEqual(await stakes(), ['0.25', '0.50', '20.00', '100.00']);
+        assert.equal(await page.inputValue('#new-table-name'), 'Friday nickels', 'picking what to play with threw away the name that was typed');
+        assert.equal(await page.getAttribute('#new-table-small-blind', 'inputmode'), 'decimal');
+
+        // The front page scrolls, so what matters is that the form keeps to the width of the screen
+        await page.locator('#new-table-max-buy-in').scrollIntoViewIfNeeded();
+        await shot(page, `cents-new-table-${screen}`);
+        assert.deepEqual(await squeezed(page, '#new-table-unit .check span, #new-table-unit > span, #new-table-unit small, .card-panel .field input'), [], 'part of the form is cut off');
+        assertOnScreen(await boxes(page, '#new-table-max-buy-in'), screen, 'the end of the form for a new table');
+        await page.locator('#new-table-unit').scrollIntoViewIfNeeded();
+        assertOnScreen(await boxes(page, '#new-table-unit, #new-table-unit .check, #new-table-small-blind'), screen, 'the form for a new table');
+        await assertNoSidewaysScroll(page);
+        const [chips, cents] = await boxes(page, '#new-table-unit .check');
+        assert.ok(chips && cents && !overlap(chips, cents), 'the two choices are drawn over each other');
+
+        await pick('Whole chips');
+        assert.deepEqual(await stakes(), ['10', '20', '400', '2000']);
+        assert.equal(await page.getAttribute('#new-table-small-blind', 'inputmode'), 'numeric');
+        await page.fill('#new-table-small-blind', '0.25');
+        assert.equal(await complaintOf(page, '#new-table-small-blind'), 'This table plays whole chips, so an amount has no decimals');
+
+        await pick('Dollars and cents');
+        assert.deepEqual(await stakes(), ['0.25', '0.50', '20.00', '100.00'], 'the stakes start over with the choice');
+
+        // The browser keeps a form with a field it has a complaint about from being sent
+        await page.fill('#new-table-small-blind', '0.255');
+        assert.equal(await complaintOf(page, '#new-table-small-blind'), TO_THE_CENT);
+        await press('[data-action="create-table"]');
+        assert.equal(await page.locator('#table-link').count(), 0, 'a table was made from a blind that could not be read');
+
+        await page.fill('#new-table-small-blind', '.10');
+        await page.fill('#new-table-big-blind', '0,25');
+        await page.fill('#new-table-max-buy-in', '1,000.00');
+        await press('[data-action="create-table"]');
+        await page.waitForSelector('#table-link');
+
+        const link = await page.inputValue('#table-link');
+        const tableId = new URL(link).searchParams.get('table')!;
+        const { unit, name, smallBlind, bigBlind, minBuyIn, maxBuyIn } = rig.store.read(tableId)!.config;
+        assert.deepEqual({ unit, name, smallBlind, bigBlind, minBuyIn, maxBuyIn }, { unit: 'cents', name: 'Friday nickels', smallBlind: 10, bigBlind: 25, minBuyIn: 2000, maxBuyIn: 100_000 });
+
+        await press('[data-action="close"]');
+        assert.equal(await text(page, '.topbar .title span'), '0.10/0.25 hold’em');
+
+        // Sitting down: the buy-in is offered, bounded and read in dollars
+        await press('[data-sit="0"]');
+        assert.equal(await page.inputValue('#buy-in'), '25.00');
+        assert.equal(await text(page, '.dialog .field small'), 'From 20.00 to 1,000.00');
+        await page.fill('#buy-in', '19.99');
+        assert.equal(await complaintOf(page, '#buy-in'), "This can't be less than 20.00");
+        await page.fill('#buy-in', '1,000.01');
+        assert.equal(await complaintOf(page, '#buy-in'), "This can't be more than 1,000.00");
+        await page.fill('#buy-in', '40.5');
+        assert.equal(await complaintOf(page, '#buy-in'), '');
+        await press('[data-action="confirm-sit"]');
+        await page.waitForSelector('.seat.me');
+        assert.equal(await text(page, '.seat.me .stack'), '40.50');
+        assert.equal(rig.store.read(tableId)!.seats[0]!.stack, 4050);
+
+        // Someone following the link is told the stakes the same way
+        const visitor = await rig.page(screen, 'a visitor');
+        await visitor.goto(link);
+        await visitor.waitForSelector('[data-action="join-table"]:enabled');
+        assert.deepEqual(await texts(visitor, '.about p:not(.note)'), ['Blinds 0.10/0.25']);
+
+        await visitor.context().close();
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'the table settings show what the table plays with as chosen for good, and take their amounts the way the table writes them',
+    async (rig) => {
+      for (const screen of PHONE_AND_DESKTOP) {
+        const table = rig.table(
+          [
+            { name: 'Quigs', stack: 5000 },
+            { name: 'Stu', stack: 10_000 },
+          ],
+          { ...CENTS, minBuyIn: 2000, maxBuyIn: 10_000 },
+        );
+        const page = await table.open('Quigs', screen);
+        const press = pressOn(page, screen);
+
+        await press('[data-action="menu"]');
+        assert.equal(await text(page, '.menu [data-action="settings"] small'), 'Blinds 0.25/0.50');
+        await press('.menu [data-action="settings"]');
+        await page.waitForSelector('#table-unit');
+
+        assert.equal(await page.isChecked('#table-unit input[value="cents"]'), true);
+        assert.deepEqual(await page.evaluate(`[...document.querySelectorAll('#table-unit input')].map((input) => input.disabled)`), [true, true], 'what the table plays with can still be picked');
+        assert.equal(await text(page, '#table-unit small'), "Can't be changed once the table is created");
+        assert.deepEqual(
+          await Promise.all(['small-blind', 'big-blind', 'min-buy-in', 'max-buy-in'].map((field) => page.inputValue(`#table-${field}`))),
+          ['0.25', '0.50', '20.00', '100.00'],
+        );
+        assert.deepEqual(await squeezed(page, '#table-unit .check span, #table-unit small, .dialog .field input'), [], 'part of the settings is cut off');
+        assertOnScreen(await boxes(page, '.dialog, #table-unit, #table-unit .check'), screen, 'the settings');
+        await shot(page, `cents-settings-${screen}`);
+
+        await press('[data-action="add-bounty"]');
+        await page.fill('#table-bounties-hand-0', '72');
+        await page.fill('#table-bounties-amount-0', '2.5');
+        await page.fill('#table-small-blind', '.5');
+        await page.fill('#table-big-blind', '1');
+        await press('[data-action="save-settings"]');
+        await page.waitForSelector('.dialog', { state: 'detached' });
+
+        const { unit, smallBlind, bigBlind, bounties } = table.view('Quigs').config;
+        assert.deepEqual({ unit, smallBlind, bigBlind, bounties }, { unit: 'cents', smallBlind: 50, bigBlind: 100, bounties: [['72', 250]] });
+        assert.equal(await text(page, '.topbar .title span'), '0.50/1.00 hold’em');
+
+        // Adding chips and setting a stack are typed in dollars too
+        await press('.controls [data-action="rebuy"]');
+        assert.equal(await page.inputValue('#rebuy-amount'), '50.00');
+        assert.equal(await text(page, '.dialog .field small'), 'Up to 50.00, which brings you to the table maximum');
+        await page.fill('#rebuy-amount', '12.34');
+        await press('[data-action="confirm-rebuy"]');
+        await page.waitForSelector('.dialog', { state: 'detached' });
+        assert.equal(await text(page, '.seat.me .stack'), '62.34');
+
+        await press('[data-action="menu"]');
+        await press('.menu [data-action="players"]');
+        assert.match(await text(page, '.rows li:has-text("Stu") > span'), /^Stu · seat 2 · 100\.00$/);
+        await press('.rows li:has-text("Stu") button:has-text("Set stack")');
+        assert.equal(await page.inputValue('#new-stack'), '100.00');
+        await page.fill('#new-stack', '1,000.5');
+        await press('.dialog button[type="submit"]');
+        await page.waitForSelector('.rows li:has-text("1,000.50")');
+        assert.equal(table.view('Quigs').seats[1]!.stack, 100_050);
+
+        await page.context().close();
+      }
+
+      // A table that plays whole chips says so in the same place
+      const chips = rig.table([{ name: 'Quigs', stack: 1000 }]);
+      const page = await chips.open('Quigs', 'desktop');
+      await page.click('[data-action="menu"]');
+      await page.click('.menu [data-action="settings"]');
+      assert.equal(await page.isChecked('#table-unit input[value="chips"]'), true);
+      assert.equal(await page.isDisabled('#table-unit input[value="cents"]'), true);
+      assert.equal(await page.inputValue('#table-small-blind'), '10');
+    },
+  ],
+  [
+    'the host moves a player by picking an open seat, on a phone and a desktop, and everyone sees them there',
+    async (rig) => {
+      for (const screen of PHONE_AND_DESKTOP) {
+        const table = rig.table(['Quigs', 'Stu', 'Pam', 'Big Al', 'Zed', 'WWWWWWWWWWWWWWWW'].map((name) => ({ name, stack: 1000 })));
+
+        const host = await table.open('Quigs', screen);
+        const watcher = await table.open('Pam', 'phone');
+        const press = pressOn(host, screen);
+        await standOrLie(host, screen);
+
+        await press('[data-action="menu"]');
+        await press('.menu [data-action="players"]');
+        await press('.dialog li:has-text("Stu") [data-action="move"]');
+
+        await host.waitForSelector('.dialog', { state: 'detached' });
+        assert.equal(await text(host, '.banner.move-prompt span'), 'Pick an open seat for Stu');
+        assertOnScreen(await boxes(host, '.banner.move-prompt, [data-action="cancel-move"]'), screen, 'the prompt to pick a seat');
+        assertOnScreen(await boxes(host, '[data-move-to]'), screen, 'an open seat to move to');
+        assert.equal(await host.locator('[data-move-to]').count(), 4, 'every open seat is offered');
+        assertApart(await boxes(host, '[data-move-to]'), await boxes(host, '.seat[data-seat] .plate, .seat[data-seat] .card'), 'an open seat to move to and a seated player');
+        assert.equal(await host.locator('[data-sit]').count(), 0);
+        assert.equal(await host.locator('.seat.moving[data-seat="1"]').count(), 1, 'the player being moved is not picked out');
+        assert.deepEqual(await squeezed(host, '[data-move-to]'), []);
+        await shot(host, `move-pick-${screen}`);
+
+        await press('[data-move-to="6"]');
+        await host.waitForSelector('.seat[data-seat="6"] .name:has-text("Stu")');
+        assert.equal(await host.locator('.banner.move-prompt, [data-move-to]').count(), 0, 'picking goes on after the move');
+        assert.equal(table.view('Quigs').seats[6]?.name, 'Stu');
+        assert.equal(table.view('Quigs').seats[1], null);
+
+        await watcher.waitForSelector('.seat[data-seat="6"] .name:has-text("Stu")');
+        assert.equal(await watcher.locator('.seat[data-seat="1"]').count(), 0);
+        assert.match(await text(watcher, '.feed-toggle .latest'), /The host moved Stu to seat 7/);
+        await shot(watcher, `moved-seen-by-another-${screen}`);
+
+        await host.context().close();
+        await watcher.context().close();
+      }
+    },
+  ],
+  [
+    'cancelling a pick leaves the table as it was, from its button or the Escape key',
+    async (rig) => {
+      const table = rig.table([
+        { name: 'Quigs', stack: 1000 },
+        { name: 'Stu', stack: 1000 },
+      ]);
+      table.join('Lurker');
+      const before = JSON.stringify(table.view('Quigs').seats);
+
+      for (const screen of ['phone', 'desktop'] as const) {
+        const page = await table.open('Quigs', screen);
+        const press = pressOn(page, screen);
+        const drawn = await page.innerHTML('.stage');
+        const shape = (await page.getAttribute('.stage .table', 'class'))!.includes('tall') ? 'tall' : 'wide';
+
+        for (const way of ['button', 'Escape'] as const) {
+          if (way === 'Escape' && screen === 'phone') {
+            continue;
+          }
+
+          await press('[data-action="menu"]');
+          await press('.menu [data-action="players"]');
+          await press('.dialog li:has-text("Stu") [data-action="move"]');
+          await page.waitForSelector('[data-move-to]');
+
+          if (way === 'button') {
+            await press('[data-action="cancel-move"]');
+          } else {
+            await page.keyboard.press('Escape');
+          }
+
+          // The prompt took height from the table, which may have lain down for it and stands up again once it goes
+          await page.waitForSelector('.banner.move-prompt', { state: 'detached' });
+          await page.waitForSelector(`.stage .table.${shape}`);
+          assert.equal(await page.innerHTML('.stage'), drawn, `the table is not drawn as it was after cancelling with the ${way}`);
+          assert.equal(JSON.stringify(table.view('Quigs').seats), before);
+        }
+
+        await page.context().close();
+      }
+
+      // Someone watching is still offered the open seats once the host has cancelled
+      const lurker = await table.open('Lurker', 'phone');
+      assert.equal(await lurker.locator('[data-sit]').count(), 8);
+      await lurker.context().close();
+    },
+  ],
+  [
+    'a move that waits for the hand shows on the seat, whole, beside a long name, and happens when the hand ends',
+    async (rig) => {
+      for (const screen of PHONE_AND_DESKTOP) {
+        const table = rig.table([
+          { name: 'Quigs', stack: 1000 },
+          { name: 'Marge Simpson-Jr', stack: 1000 },
+          { name: 'WWWWWWWWWWWWWWWW', stack: 1000 },
+          { name: 'Stu', stack: 1000 },
+          { name: 'Pam', stack: 1000 },
+          { name: 'Big Al', stack: 1000 },
+        ]);
+        table.deal({ button: 0 });
+
+        const host = await table.open('Quigs', screen);
+        const watcher = await table.open('Stu', screen);
+        const press = pressOn(host, screen);
+        await standOrLie(host, screen);
+        await standOrLie(watcher, screen);
+
+        await press('[data-action="menu"]');
+        await press('.menu [data-action="players"]');
+        await press('.dialog li:has-text("WWWWWWWWWWWWWWWW") [data-action="move"]');
+        assert.equal(await text(host, '.banner.move-prompt span'), 'Pick an open seat for WWWWWWWWWWWWWWWW. They move when this hand ends.');
+        await press('[data-move-to="7"]');
+        await host.waitForSelector('.seat[data-seat="2"] .move-note');
+        await shot(host, `move-waiting-${screen}`);
+
+        for (const page of [host, watcher]) {
+          const note = '.seat[data-seat="2"] .move-note';
+          await page.waitForSelector(note);
+          assert.equal(await text(page, note), '→ Seat 8');
+          assert.equal(await page.getAttribute(note, 'aria-label'), 'Moves to seat 8 after this hand');
+          assertOnScreen(await boxes(page, note), screen, 'the note of a move that waits');
+          assert.deepEqual(await squeezed(page, `${note}, .seat[data-seat="2"] .plate .stack`), [], 'the note or the stack beside it is cut off');
+          // Inside its own plate, it takes no room the plate does not already have, down the side of a crowded table as anywhere
+          const [box] = await boxes(page, note);
+          const [plate] = await boxes(page, '.seat[data-seat="2"] .plate');
+          assert.ok(box!.left >= plate!.left && box!.right <= plate!.right && box!.top >= plate!.top && box!.bottom <= plate!.bottom, 'the note of a move sticks out of its seat');
+          assertApart(await boxes(page, '.seat[data-seat="2"] .plate'), await boxes(page, '.seat:not([data-seat="2"]) .plate, .board .card, .bet, .pot'), 'the seat with a move waiting and the table around it');
+        }
+
+        assert.equal(table.view('Quigs').seats[2]?.moveTo, 7);
+
+        await press('[data-action="menu"]');
+        await press('.menu [data-action="players"]');
+        assert.equal(await text(host, '.dialog li:has-text("WWWWWWWWWWWWWWWW") .move-note'), 'Moves to seat 8 after this hand');
+        assert.deepEqual(await host.locator('.dialog li:has-text("WWWWWWWWWWWWWWWW") button').allInnerTexts(), ['Set stack', 'Stay put', 'Make co-host', 'Make host', 'Remove'], 'a move that waits cannot be taken back');
+        await press('[data-action="close"]');
+
+        table.play(() => ({ type: 'fold' }), (view) => view.hand === null || view.hand.number > 1);
+        await watcher.waitForSelector('.seat[data-seat="7"] .name:has-text("WWWWWWWWWWWWWWWW")');
+        assert.equal(await watcher.locator('.seat .move-note').count(), 0);
+        assert.equal(table.view('Quigs').seats[7]?.name, 'WWWWWWWWWWWWWWWW');
+
+        await host.context().close();
+        await watcher.context().close();
+      }
+    },
+  ],
+  [
+    'the host shuffles the seats after saying yes, at once between hands and at the end of a hand during one',
+    async (rig) => {
+      const players = ['Quigs', 'Stu', 'Pam', 'Big Al'];
+      const table = rig.table(players.map((name) => ({ name, stack: 1000 })));
+      const seatsOf = () => table.view('Quigs').seats.map((seat) => seat?.name ?? null);
+      const before = seatsOf();
+
+      const page = await table.open('Quigs', 'phone');
+      await page.tap('[data-action="menu"]');
+      assert.equal(await text(page, '.menu [data-action="shuffle"] small'), 'Everyone gets a random seat');
+      await page.tap('.menu [data-action="shuffle"]');
+      assert.equal(await text(page, '.dialog h2'), 'Shuffle the seats?');
+      assertOnScreen(await boxes(page, '.dialog [data-action="confirm"]'), 'phone', 'the button that shuffles');
+      await shot(page, 'shuffle-confirm-phone');
+      await page.tap('[data-action="confirm"]');
+
+      await page.waitForSelector('.feed-toggle .latest:has-text("The host shuffled the seats")');
+      const after = seatsOf();
+      assert.deepEqual(after.map((name) => name !== null), before.map((name) => name !== null), 'a shuffle opened or filled a seat');
+      assert.deepEqual([...after].sort(), [...before].sort());
+      await page.context().close();
+
+      table.deal({ button: 0 });
+      const desktop = await table.open('Quigs', 'desktop');
+      await desktop.click('[data-action="menu"]');
+      assert.equal(await text(desktop, '.menu [data-action="shuffle"] small'), 'Everyone gets a random seat when this hand ends');
+      await desktop.click('.menu [data-action="shuffle"]');
+      await desktop.click('[data-action="confirm"]');
+      await desktop.waitForSelector('.feed-toggle .latest:has-text("The host shuffles the seats after this hand")', { state: 'attached' });
+      assert.deepEqual(seatsOf(), after, 'the seats were shuffled in the middle of a hand');
+
+      await desktop.click('[data-action="menu"]');
+      assert.equal(await text(desktop, '.menu [data-action="shuffle"] small'), 'Set for when this hand ends');
+      await desktop.click('[data-action="close"]');
+
+      table.play(() => ({ type: 'fold' }), (view) => view.hand === null || view.hand.number > 1);
+      assert.equal(table.view('Quigs').shuffleAfterHand, false);
+      assert.deepEqual([...seatsOf()].sort(), [...before].sort());
+      await desktop.context().close();
+    },
+  ],
+  [
+    'on the desktop the host drags a player onto an open seat, lying down and standing up, even while the table is redrawn under the mouse',
+    async (rig) => {
+      for (const shape of ['wide', 'tall'] as const) {
+        const table = rig.table(['Quigs', 'Stu', 'Pam', 'Big Al', 'Zed', 'Pocket Pam'].map((name) => ({ name, stack: 1000 })));
+
+        const page = await table.open('Quigs', 'desktop');
+        if (shape === 'tall') {
+          // A desktop window taller than it is wide, which stands the table up
+          await setStageHeight(page, 900);
+        }
+        await page.waitForSelector(`.table.${shape}`);
+
+        const center = async (selector: string) => {
+          const [box] = await boxes(page, selector);
+          assert.ok(box, `${selector} is not on the screen`);
+
+          return { x: (box.left + box.right) / 2, y: (box.top + box.bottom) / 2 };
+        };
+
+        // Let go over the felt, and nothing moves
+        const from = await center('.seat[data-seat="1"] .plate');
+        const felt = await center('.felt');
+        await page.mouse.move(from.x, from.y);
+        await page.mouse.down();
+        await page.mouse.move(felt.x, felt.y, { steps: 8 });
+        await page.mouse.up();
+        assert.equal(table.view('Quigs').seats[1]?.name, 'Stu');
+        assert.equal(await page.locator('.seat.dragging, .seat.drop').count(), 0);
+
+        const to = await center('[data-open-seat="7"] .plate');
+        await page.mouse.move(from.x, from.y);
+        await page.mouse.down();
+        await page.mouse.move((from.x + to.x) / 2, (from.y + to.y) / 2, { steps: 8 });
+        assert.equal(await page.locator('.seat.dragging[data-seat="1"]').count(), 1, 'the seat does not follow the mouse');
+
+        // A change at the table draws it again while the seat is in the air
+        table.act('Pam', { type: 'sitOut' });
+        await page.waitForSelector('.seat[data-seat="2"] .status:has-text("Sitting out")');
+        assert.equal(await page.locator('.seat.dragging[data-seat="1"]').count(), 1, 'the drag was lost when the table was drawn again');
+
+        await page.mouse.move(to.x, to.y, { steps: 8 });
+        assert.equal(await page.locator('.seat.drop[data-open-seat="7"]').count(), 1, 'the open seat under the mouse is not picked out');
+        await shot(page, `move-drag-desktop-${shape}`);
+        await page.mouse.up();
+
+        await page.waitForSelector('.seat[data-seat="7"] .name:has-text("Stu")');
+        assert.equal(table.view('Quigs').seats[7]?.name, 'Stu');
+        assert.equal(table.view('Quigs').seats[1], null);
+        assert.equal(await page.locator('.seat.dragging, .seat.drop').count(), 0);
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'the keys of a turn do nothing while the host picks a seat, and Escape backs out of the pick and nothing else',
+    async (rig) => {
+      const table = rig.table([
+        { name: 'Quigs', stack: 1000 },
+        { name: 'Stu', stack: 1000 },
+        { name: 'Pam', stack: 1000 },
+      ]);
+
+      // Three-handed the button acts first, so the deal puts the action on the host's own page
+      table.deal({ button: 0 });
+      const page = await table.open('Quigs', 'desktop');
+      const sent = movesSent(page);
+
+      await page.waitForSelector('.turn [data-action="call"]:enabled');
+      await page.click('[data-action="menu"]');
+      await page.click('.menu [data-action="players"]');
+      await page.click('.dialog li:has-text("Stu") [data-action="move"]');
+      await page.waitForSelector('[data-move-to]');
+      await settle(page);
+
+      const amount = await page.inputValue('#raise-amount');
+      await page.evaluate('document.activeElement.blur()');
+      for (const key of ['f', 'c', 'r', '1', '2', '3', '4']) {
+        await page.keyboard.press(key);
+      }
+
+      // In the bet box Enter is the raise key
+      await page.focus('#raise-amount');
+      await page.keyboard.press('Enter');
+      await page.waitForTimeout(300);
+
+      assert.deepEqual(sent, [], 'a key played a move while the host was picking a seat');
+      assert.equal(table.view('Quigs').hand!.toAct, 0);
+      assert.equal(await page.inputValue('#raise-amount'), amount, 'a key changed the bet size while the host was picking a seat');
+      assert.equal(await page.locator('[data-move-to]').count(), 7, 'a key ended the pick');
+
+      // With the bet box in use, Escape backs out of the pick and leaves the box as it was
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('.banner.move-prompt', { state: 'detached' });
+      assert.equal(await page.evaluate('document.activeElement?.id'), 'raise-amount', 'Escape also left the bet box');
+      assert.equal(table.view('Quigs').seats[1]?.name, 'Stu');
+
+      // Back from the pick, the keys are the turn's again
+      await page.evaluate('document.activeElement.blur()');
+      await settle(page);
+      await answeredAfter(page, () => page.keyboard.press('f'));
+      assert.deepEqual(sent, ['fold']);
+      await page.context().close();
+    },
+  ],
+  [
+    'the hand hint names your two cards, then your hand on every street, and lifts the cards that make it',
+    async (rig) => {
+      for (const screen of ['phone', 'smallPhone', 'desktop'] as const) {
+        const table = rig.table([
+          { name: 'Quigs', stack: 1000 },
+          { name: 'Stu', stack: 1000 },
+        ]);
+        table.deal({ button: 0, holes: { 0: 'Ks 7d', 1: 'Qc Qd' }, board: 'Kh 7s 2c 9d Ah' });
+
+        const page = await table.open('Quigs', screen);
+        await hintSays(page, 'King-seven offsuit');
+        assert.deepEqual(await marking(page), { plays: [], idle: [] }, 'cards are picked out before there is a hand to make');
+        await shot(page, `hint-preflop-${screen}`);
+        await assertHintFits(page);
+
+        table.play(passive, (view) => view.hand!.street === 'flop');
+        await hintSays(page, 'Two pair, kings and sevens');
+        assert.deepEqual(await marking(page), { plays: sortedCards('Ks 7d Kh 7s 2c'), idle: [] });
+        await shot(page, `hint-flop-${screen}`);
+
+        table.play(passive, (view) => view.hand!.street === 'river');
+        await page.waitForSelector('.board .card[data-card="Ah"]');
+        await hintSays(page, 'Two pair, kings and sevens');
+        assert.deepEqual(await marking(page), { plays: sortedCards('Ks 7d Kh 7s Ah'), idle: sortedCards('2c 9d') });
+        await assertMarked(page);
+        await shot(page, `hint-river-${screen}`);
+        await assertHintFits(page);
+
+        if (screen !== 'desktop') {
+          await inEveryShape(page, async (shape) => {
+            await shot(page, `hint-river-${screen}-${shape}`);
+            await assertMarked(page);
+            await assertHintFits(page);
+          });
+        }
+
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'the hand hint says when the board plays, points out a bounty hand, reads both boards run twice, and keeps a long name clear of the seats',
+    async (rig) => {
+      const heads = () =>
+        rig.table(
+          [
+            { name: 'Quigs', stack: 1000 },
+            { name: 'Stu', stack: 1000 },
+          ],
+          { maxRuns: 2, bounties: [['72', 50]] },
+        );
+
+      const boardPlays = heads();
+      boardPlays.deal({ button: 0, holes: { 0: '2c 3d', 1: '4c 5d' }, board: 'As Ks Qs Js Ts' });
+      boardPlays.play(passive, (view) => view.hand!.street === 'river');
+      let page = await boardPlays.open('Quigs', 'phone');
+      await hintSays(page, 'Playing the board');
+      assert.deepEqual(await marking(page), { plays: sortedCards('As Ks Qs Js Ts'), idle: ['2c', '3d'] });
+      await assertMarked(page);
+      await shot(page, 'hint-board-plays-phone');
+      await inEveryShape(page, async () => {
+        await assertMarked(page);
+        await assertHintFits(page);
+      });
+      await page.context().close();
+
+      const bounty = heads();
+      bounty.deal({ button: 0, holes: { 0: '7h 2c' } });
+      page = await bounty.open('Quigs', 'smallPhone');
+      await hintSays(page, 'Seven-deuce offsuit');
+      assert.equal(await text(page, `${HINT} .bounty`), 'Bounty 50');
+      await shot(page, 'hint-bounty-small-phone');
+      await inEveryShape(page, () => assertHintFits(page));
+      await page.context().close();
+
+      const twice = heads();
+      twice.deal({ button: 0, holes: { 0: 'Ks Kh', 1: 'As Ah' }, board: '2c 7d 9h Jc 3s', secondBoard: 'Kd 4c 5h 8s Td' });
+      page = await twice.open('Quigs', 'phone');
+
+      // The second board's turn is out: each board read as far as it goes
+      twice.play(allIn, (view) => view.hand!.boards[1]?.length === 4);
+      await hintSays(page, 'Pair of kings', 'Three kings');
+      assert.deepEqual(await texts(page, `${HINT} .run`), ['1', '2']);
+      assert.equal(await page.locator('.board[data-run="0"] .card.plays').count(), 3, 'the first board\'s jack, nine and seven play');
+      assert.equal(await page.locator('.board[data-run="1"] .card.plays').count(), 3, 'the second board\'s king, eight and five play');
+      await shot(page, 'hint-run-twice-phone');
+      await inEveryShape(page, async (shape) => {
+        await shot(page, `hint-run-twice-phone-${shape}`);
+        await assertMarked(page);
+        await assertHintFits(page);
+      }, { buttonsUp: false });
+
+      // Over, the result in the middle names each board's hands, and the hint gives it the room
+      twice.play(allIn, (view) => view.hand!.stage === 'done');
+      await page.waitForSelector('.message.result');
+      assert.equal(await page.locator(HINT).count(), 0);
+      assert.equal(await page.locator('.board[data-run="1"] .card.plays').count(), 3, 'the cards that play stay picked out');
+      await inEveryShape(page, async () => {
+        assertApart(await boxes(page, '.message.result > div'), await boxes(page, '.seat .plate, .seat .hole .card'), 'a result line and a seat');
+      }, { buttonsUp: false });
+      await page.context().close();
+
+      // Two boards that disagree on a card in hand leave it unmarked: lifted under one line, it would say it plays under the other
+      const split = heads();
+      split.deal({ button: 0, holes: { 0: 'Ah 3c', 1: 'Kd Kh' }, board: 'Ad Kc Qs Jd 9h', secondBoard: '3d 3s' });
+      split.play(passive, (view) => view.hand!.street === 'flop');
+      page = await split.open('Quigs', 'phone');
+      split.play(allIn, (view) => view.hand!.boards[1]?.length === 4);
+      await hintSays(page, 'Pair of aces', 'Two pair, aces and threes');
+      assert.deepEqual(await page.evaluate(`[...document.querySelectorAll('.seat.me .hole .card')].map((card) => card.className.match(/plays|idle/)?.[0] ?? 'unmarked')`), ['plays', 'unmarked']);
+      await page.context().close();
+
+      // The longest kind of name, at a full table on the smallest phone
+      const full = rig.table(tenPlayers());
+      full.deal({ button: 0, holes: { 0: '7c 3d' }, board: '7h 7s 3c 2d 5h' });
+      full.play(passive, (view) => view.hand!.street === 'river');
+      page = await full.open('Quigs', 'smallPhone');
+      await hintSays(page, 'Full house, sevens over threes');
+      await shot(page, 'hint-long-small-phone');
+      await inEveryShape(page, async (shape) => {
+        await shot(page, `hint-long-small-phone-${shape}`);
+        await assertHintFits(page);
+      });
+      await page.context().close();
+    },
+  ],
+  [
+    'the cards the hand hint picks out are clear in every theme and with the four-color deck, and the hint can be switched off',
+    async (rig) => {
+      const table = rig.table([
+        { name: 'Quigs', stack: 1000 },
+        { name: 'Stu', stack: 1000 },
+      ]);
+      table.deal({ button: 0, holes: { 0: 'Ks 7d', 1: 'Qc Qd' }, board: 'Kh 7s 2c 9d Ah' });
+      table.play(passive, (view) => view.hand!.street === 'river');
+
+      const page = await table.open('Quigs', 'phone');
+      for (const theme of THEMES) {
+        await choose(page, { theme: theme.id });
+        await hintSays(page, 'Two pair, kings and sevens');
+        await assertMarked(page);
+        await shot(page, `hint-theme-${theme.id}-phone`);
+      }
+
+      await choose(page, { theme: 'cardroom', deck: 'four' });
+      await hintSays(page, 'Two pair, kings and sevens');
+      await assertMarked(page);
+      await shot(page, 'hint-four-color-phone');
+
+      await page.tap('[data-action="menu"]');
+      await page.tap('.menu [data-action="preferences"]');
+      await page.tap('#pref-handHint');
+      await page.waitForSelector('#pref-handHint[aria-checked="false"]');
+      await page.tap('.dialog [data-action="close"]');
+
+      assert.deepEqual(await boxes(page, HINT), [], 'the hint is still shown');
+      assert.equal(await page.evaluate(`[...document.querySelectorAll('.table .card')].every((card) => getComputedStyle(card).transform === 'none' && getComputedStyle(card).opacity === '1')`), true, 'a card is still lifted or faded');
+      await shot(page, 'hint-off-phone');
+
+      await page.reload();
+      await page.waitForSelector('.board .card[data-card="Ah"]');
+      assert.deepEqual(await boxes(page, HINT), [], 'the hint came back with a reload');
+      await page.context().close();
+    },
+  ],
+  [
+    'a move that waits for the hand sits whole beside the hand hint on the viewer\'s own seat, standing and lying, and that seat still moves by a pick or a drag',
+    async (rig) => {
+      const sixAtTheRiver = () => {
+        const table = rig.table(['Quigs', 'Stu', 'Pam', 'Big Al', 'Zed', 'Pocket Pam'].map((name) => ({ name, stack: 1000 })));
+        table.deal({ button: 0, holes: { 0: 'Ks 7d' }, board: 'Kh 7s 2c 9d Ah' });
+        table.play(passive, (view) => view.hand!.street === 'river');
+
+        return table;
+      };
+      const marked = { plays: sortedCards('Ks 7d Kh 7s Ah'), idle: sortedCards('2c 9d') };
+
+      // On a phone the host picks a seat for themselves, and the move waits for the hand
+      for (const screen of ['phone', 'smallPhone'] as const) {
+        const picked = sixAtTheRiver();
+        const page = await picked.open('Quigs', screen);
+        await hintSays(page, 'Two pair, kings and sevens');
+        await page.tap('[data-action="menu"]');
+        await page.tap('.menu [data-action="players"]');
+        await page.tap('.dialog li:has-text("Quigs") [data-action="move"]');
+        await page.waitForSelector('.dialog', { state: 'detached' });
+        assert.deepEqual(await marking(page), marked, 'picking a seat changed the marking');
+        await page.tap('[data-move-to="7"]');
+        await page.waitForSelector('.seat.me .move-note');
+        assert.equal(picked.view('Quigs').seats[0]?.moveTo, 7);
+
+        await inEveryShape(page, async (shape) => {
+          await shot(page, `hint-move-waiting-${screen}-${shape}`);
+          assert.deepEqual(await marking(page), marked);
+          await assertMarked(page);
+          await assertHintFits(page);
+
+          const [note] = await boxes(page, '.seat.me .move-note');
+          const [plate] = await boxes(page, '.seat.me .plate');
+          assert.ok(note!.left >= plate!.left && note!.right <= plate!.right && note!.top >= plate!.top && note!.bottom <= plate!.bottom, 'the note of a move sticks out of the seat');
+          assertApart(await textBoxes(page, `${HINT} .read`), [note!], 'the hand hint and the note of a move');
+          assert.deepEqual(await squeezed(page, '.seat.me .move-note'), [], 'the note of a move is cut off');
+        });
+        await page.context().close();
+      }
+
+      // On the desktop the host drags their own seat, marked cards and all, onto an open one
+      for (const shape of ['wide', 'tall'] as const) {
+        const dragged = sixAtTheRiver();
+        const page = await dragged.open('Quigs', 'desktop');
+        if (shape === 'tall') {
+          await setStageHeight(page, 900);
+        }
+        await page.waitForSelector(`.table.${shape}`);
+        await hintSays(page, 'Two pair, kings and sevens');
+
+        const middle = async (selector: string) => {
+          const [box] = await boxes(page, selector);
+          assert.ok(box, `${selector} is not on the screen`);
+
+          return { x: (box.left + box.right) / 2, y: (box.top + box.bottom) / 2 };
+        };
+        const from = await middle('.seat.me .plate');
+        const to = await middle('[data-open-seat="7"] .plate');
+
+        await page.mouse.move(from.x, from.y);
+        await page.mouse.down();
+        await page.mouse.move(to.x, to.y, { steps: 8 });
+        assert.equal(await page.locator('.seat.drop[data-open-seat="7"]').count(), 1, 'the open seat under the mouse is not picked out');
+        await page.mouse.up();
+
+        await page.waitForSelector('.seat.me .move-note');
+        assert.equal(dragged.view('Quigs').seats[0]?.moveTo, 7);
+        assert.deepEqual(await marking(page), marked, 'the marking was lost with the drag');
+        await shot(page, `hint-move-dragged-desktop-${shape}`);
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'the start of a hand with antes shows them in the pot and in the stakes, with nothing squeezed',
+    async (rig) => {
+      for (const kind of ANTE_TABLES) {
+        for (const screen of ['smallPhone', 'desktop'] as const) {
+          const table = rig.table(
+            LONG_NAMES.slice(0, 6).map((name) => ({ name, stack: kind.stack })),
+            kind.config,
+          );
+          // A hand number of three digits leaves the stakes the least room they will have
+          table.alter((state) => {
+            state.handCount = 122;
+          });
+          table.deal({ button: 0 });
+
+          const page = await table.open('Quigs', screen);
+
+          // Where the stakes don't fit one line, which depends on the machine's fonts, the ante moves to the next
+          // line whole: it is never broken, so the stakes never take a third line
+          assert.equal(await text(page, '.topbar .title > span'), kind.stakes);
+          const [stakes] = await textBoxes(page, '.topbar .title > span');
+          const [ante] = await textBoxes(page, '.topbar .title .ante');
+          assert.ok(stakes && ante);
+          assert.equal(await page.locator('.topbar .title .ante').evaluate((el) => el.getClientRects().length), 1, 'the ante is broken over two lines');
+          const lines = Math.round((stakes.bottom - stakes.top) / (ante.bottom - ante.top));
+          assert.ok(lines <= (screen === 'desktop' ? 1 : 2), `the stakes take ${lines} lines`);
+          assert.deepEqual(await squeezed(page, '.topbar .title > span, .topbar .pill'), [], 'the stakes or the hand number are cut off');
+          assertApart([stakes], await boxes(page, '.topbar .pill, .topbar .menu-button, .topbar [data-action="invite"]'), 'the stakes and the rest of the top bar');
+          assertOnScreen([stakes, ...(await boxes(page, '.topbar .pill, .topbar [data-action="invite"]'))], screen, 'the top bar');
+
+          // An ante is in the pot from the start, and no bet in front of its player
+          assert.equal(await text(page, '.pot'), `Pot${kind.pot}`);
+          assert.deepEqual(await texts(page, '.bet'), kind.bets);
+          assert.deepEqual(await stacksBySeat(page, 6), kind.stacks);
+          assert.deepEqual(await squeezed(page, '.pot, .bet, .plate .stack'), [], 'an amount on the table is cut off');
+          assertOnScreen(await boxes(page, '.seat .plate, .bet, .pot'), screen, 'a seat, a bet or the pot');
+          await assertBetsApart(page);
+          await shot(page, `antes-start-${kind.name}-${screen}`);
+
+          // The play-by-play says what the ante is and who posted what
+          if (screen !== 'desktop') {
+            await page.tap('.feed-toggle');
+          }
+          assert.deepEqual((await texts(page, '.entries li')).slice(-kind.lines.length), kind.lines);
+          assert.deepEqual(await squeezed(page, '.entries li'), [], 'a line of the play-by-play is cut off');
+          await assertNoSidewaysScroll(page);
+          await shot(page, `antes-play-by-play-${kind.name}-${screen}`);
+
+          await page.context().close();
+        }
+      }
+    },
+  ],
+  [
+    'the table settings take an ante and who pays it, and the table says so from then on',
+    async (rig) => {
+      for (const kind of ANTE_TABLES) {
+        for (const screen of PHONE_AND_DESKTOP) {
+          const { ante: _ante, anteFrom: _anteFrom, ...withoutAnte } = kind.config;
+          const table = rig.table(
+            [
+              { name: 'Quigs', stack: kind.stack },
+              { name: 'Stu', stack: kind.stack },
+            ],
+            withoutAnte,
+          );
+          const page = await table.open('Quigs', screen);
+          const press = pressOn(page, screen);
+          const fromBigBlind = kind.config.anteFrom === 'bigBlind';
+
+          await press('[data-action="menu"]');
+          assert.equal(await text(page, '.menu [data-action="settings"] small'), `Blinds ${kind.blinds}`);
+          await press('.menu [data-action="settings"]');
+          await page.waitForSelector('#table-ante');
+
+          assert.equal(await page.inputValue('#table-ante'), kind.noAnte);
+          assert.equal(await text(page, 'label[for="table-ante"] small'), 'Goes into the pot before any betting. 0 for no ante');
+          assert.equal(await page.isChecked('#table-ante-from input[value="everyone"]'), true, 'everyone antes unless the host says otherwise');
+          assert.deepEqual(await texts(page, '#table-ante-from .check'), ['Everyone dealt in', 'The big blind, once for the table']);
+          assert.deepEqual(await page.evaluate(`[...document.querySelectorAll('#table-ante-from input')].map((input) => input.disabled)`), [false, false]);
+
+          await page.locator('#table-ante-from').scrollIntoViewIfNeeded();
+          assert.deepEqual(await squeezed(page, '#table-ante-from .check span, #table-ante-from > span, label[for="table-ante"] small, .dialog .field input'), [], 'part of the settings is cut off');
+          assertOnScreen(await boxes(page, '.dialog, #table-ante, #table-ante-from, #table-ante-from .check'), screen, 'the ante settings');
+          const [everyone, bigBlind] = await boxes(page, '#table-ante-from .check');
+          assert.ok(everyone && bigBlind && !overlap(everyone, bigBlind), 'the two choices are drawn over each other');
+          await assertNoSidewaysScroll(page);
+
+          await page.fill('#table-ante', kind.typed);
+          if (fromBigBlind) {
+            await press('#table-ante-from label:has-text("The big blind")');
+          }
+          await shot(page, `antes-settings-${kind.name}-${screen}`);
+          await press('[data-action="save-settings"]');
+          await page.waitForSelector('.dialog', { state: 'detached' });
+
+          const { ante, anteFrom, smallBlind, bigBlind: blind } = table.view('Quigs').config;
+          assert.deepEqual({ ante, anteFrom, smallBlind, blind }, { ante: kind.config.ante, anteFrom: kind.config.anteFrom ?? 'everyone', smallBlind: kind.config.smallBlind ?? 10, blind: kind.config.bigBlind ?? 20 });
+          assert.equal(await text(page, '.topbar .title span'), kind.stakes);
+          assert.equal(table.view('Stu').feed.at(-1)!.text, kind.said);
+
+          await press('[data-action="menu"]');
+          assert.equal(await text(page, '.menu [data-action="settings"] small'), `Blinds ${kind.stakes}`);
+          await press('.menu [data-action="settings"]');
+          assert.equal(await page.inputValue('#table-ante'), kind.shown);
+          assert.equal(await page.isChecked(`#table-ante-from input[value="${kind.config.anteFrom ?? 'everyone'}"]`), true);
+
+          await page.context().close();
+        }
+      }
+    },
+  ],
+  [
+    'the form for a new table takes an ante and who pays it, and someone following the link is told',
+    async (rig) => {
+      for (const screen of PHONE_AND_DESKTOP) {
+        const page = await rig.lobby(screen);
+        const press = pressOn(page, screen);
+
+        assert.equal(await page.inputValue('#new-table-ante'), '0');
+        assert.equal(await page.isChecked('#new-table-ante-from input[value="everyone"]'), true);
+
+        await page.fill('#host-name', `Quigs ${screen}`);
+        await page.fill('#new-table-small-blind', '15');
+        await page.fill('#new-table-ante', '5');
+        await press('#new-table-ante-from label:has-text("The big blind")');
+        assert.deepEqual([await page.inputValue('#new-table-small-blind'), await page.inputValue('#new-table-ante')], ['15', '5'], 'picking who antes threw away the amounts that were typed');
+
+        // What the table plays with still starts the amounts over, the ante among them, and keeps who pays it
+        await press('#new-table-unit label:has-text("Dollars and cents")');
+        assert.deepEqual([await page.inputValue('#new-table-small-blind'), await page.inputValue('#new-table-ante')], ['0.25', '0.00']);
+        assert.equal(await page.isChecked('#new-table-ante-from input[value="bigBlind"]'), true);
+        assert.equal(await page.getAttribute('#new-table-ante', 'inputmode'), 'decimal');
+
+        await page.fill('#new-table-ante', '0.555');
+        assert.equal(await complaintOf(page, '#new-table-ante'), TO_THE_CENT);
+        await page.fill('#new-table-ante', '.5');
+
+        await page.locator('#new-table-ante-from').scrollIntoViewIfNeeded();
+        await shot(page, `antes-new-table-${screen}`);
+        assert.deepEqual(await squeezed(page, '#new-table-ante-from .check span, #new-table-ante-from > span, label[for="new-table-ante"] small, .card-panel .field input'), [], 'part of the form is cut off');
+        assertOnScreen(await boxes(page, '#new-table-ante, #new-table-ante-from, #new-table-ante-from .check'), screen, 'the ante in the form for a new table');
+        const [everyone, bigBlind] = await boxes(page, '#new-table-ante-from .check');
+        assert.ok(everyone && bigBlind && !overlap(everyone, bigBlind), 'the two choices are drawn over each other');
+        await assertNoSidewaysScroll(page);
+
+        await press('[data-action="create-table"]');
+        await page.waitForSelector('#table-link');
+
+        const link = await page.inputValue('#table-link');
+        const { unit, ante, anteFrom } = rig.store.read(new URL(link).searchParams.get('table')!)!.config;
+        assert.deepEqual({ unit, ante, anteFrom }, { unit: 'cents', ante: 50, anteFrom: 'bigBlind' });
+
+        await press('[data-action="close"]');
+        assert.equal(await text(page, '.topbar .title span'), '0.25/0.50 · BB ante 0.50');
+
+        const visitor = await rig.page(screen, 'a visitor');
+        await visitor.goto(link);
+        await visitor.waitForSelector('[data-action="join-table"]:enabled');
+        assert.deepEqual(await texts(visitor, '.about p:not(.note)'), ['Blinds 0.25/0.50 · BB ante 0.50']);
+        assert.deepEqual(await squeezed(visitor, '.about p'), []);
+        await shot(visitor, `antes-join-${screen}`);
+
+        await visitor.context().close();
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'a page from before an update says so over the table, keeps the keyboard and the taps, and a reload comes back to the seat',
+    async (rig) => {
+      for (const screen of ['phone', 'phoneSideways', 'desktop'] as const) {
+        const build = `updated-${screen}`;
+
+        // A clock, to see it stopped, and an ante, which makes the top bar the notice has to cover a line taller on a phone
+        const table = rig.table(
+          [
+            { name: 'Quigs', stack: 1000 },
+            { name: 'Stu', stack: 1000 },
+          ],
+          { actionSeconds: 30, ante: 5 },
+        );
+
+        // On the river with the big blind's check in: the page is on the clock, with every button of a turn to
+        // press, and its hand hint has lifted the cards that play and let the others sink and fade
+        table.deal({ button: 0, holes: { 0: 'Ks 7d', 1: 'Qc Qd' }, board: 'Kh 7s 2c 9d Ah' });
+        table.play(passive, (view) => view.hand!.street === 'river');
+        table.act('Stu', { type: 'check' });
+
+        const page = await table.open('Quigs', screen);
+        const press = pressOn(page, screen);
+        const sent = movesSent(page);
+        const inNotice = `!!document.activeElement.closest('.outdated')`;
+
+        await page.waitForSelector('.turn [data-action="fold"]:enabled');
+        await hintSays(page, 'Two pair, kings and sevens');
+        await press('[data-action="menu"]');
+        await page.waitForSelector('.app .dialog');
+
+        // The game is updated, and the page hears of it with the table's next news
+        rig.deploy(build);
+        table.act('Stu', { type: 'chat', text: 'still there?' });
+        await page.waitForSelector('.outdated');
+
+        assert.equal(await text(page, '.outdated h2'), 'The game was updated');
+        assert.equal(await text(page, '.outdated p'), 'Reload to keep playing. Your place at the table is kept.');
+        assert.equal(await page.locator('.app .dialog').count(), 0, 'the menu that was open is still up under the notice');
+        assert.equal(await page.locator('.feed li:has-text("still there?")').count(), 0, 'what the newer build sent was drawn');
+
+        const [notice] = await boxes(page, '.outdated .dialog');
+        const [cover] = await boxes(page, '.outdated');
+        const parts = await boxes(page, '.outdated h2, .outdated p, .outdated [data-action="reload"]');
+        const [button] = await boxes(page, '.outdated [data-action="reload"]');
+        const { width, height } = SCREENS[screen];
+
+        assertOnScreen([notice!], screen, 'the notice');
+        assert.equal(parts.length, 3);
+        assert.ok(cover!.left <= 0 && cover!.top <= 0 && cover!.right >= width && cover!.bottom >= height, `the notice leaves some of the page uncovered: ${JSON.stringify(cover)}`);
+        for (const part of parts) {
+          assert.ok(part.left >= notice!.left && part.right <= notice!.right && part.top >= notice!.top && part.bottom <= notice!.bottom, `part of the notice is outside its box: ${JSON.stringify(part)}`);
+        }
+        parts.forEach((part, index) => assertApart([part], parts.slice(index + 1), 'two parts of the notice'));
+        assert.deepEqual(await squeezed(page, '.outdated h2, .outdated p, .outdated [data-action="reload"]'), []);
+        assert.ok(button!.bottom - button!.top >= 44 && button!.right - button!.left >= 120, `the reload button is too small to tap: ${JSON.stringify(button)}`);
+
+        // Nothing of the table shows through on top: not a lifted card, the hint, a bet or a toast
+        const onTop = (await page.evaluate(`(() => {
+          const found = [];
+
+          for (let x = 4; x < innerWidth; x += innerWidth / 12) {
+            for (let y = 4; y < innerHeight; y += innerHeight / 16) {
+              const top = document.elementFromPoint(x, y);
+
+              if (!top || !top.closest('.outdated')) {
+                found.push((top ? top.className || top.tagName : 'nothing') + ' at ' + Math.round(x) + ',' + Math.round(y));
+              }
+            }
+          }
+
+          return found;
+        })()`)) as string[];
+        assert.deepEqual(onTop, [], 'part of the page behind the notice is drawn over it');
+        assert.equal((await marking(page)).plays.length, 5, 'the table behind the notice no longer shows the hand as it was');
+        await shot(page, `outdated-${screen}`);
+
+        // The keyboard is in the notice and stays there
+        assert.equal(await page.evaluate(inNotice), true, 'the notice came up with the keyboard left on the page behind it');
+        assert.equal(await page.evaluate(`[...document.querySelectorAll('.cnd > *:not(.outdated)')].every((element) => element.inert)`), true, 'the page behind the notice can still be reached');
+
+        let landedInNotice = 0;
+        for (let tab = 0; tab < 10; tab++) {
+          await page.keyboard.press('Tab');
+          assert.equal(await page.evaluate(`document.activeElement === document.body || ${inNotice}`), true, `Tab number ${tab + 1} reached the page behind the notice`);
+          landedInNotice += (await page.evaluate(inNotice)) ? 1 : 0;
+        }
+        assert.ok(landedInNotice >= 4, `only ${landedInNotice} of 10 Tabs landed on the reload button`);
+
+        // No key of the turn plays, Escape puts nothing away, and a tap where a button of the turn is lands on the notice
+        await page.evaluate('document.activeElement.blur()');
+        await settle(page);
+        for (const key of ['f', 'c', '1', 'Escape']) {
+          await page.keyboard.press(key);
+        }
+
+        const [fold] = await boxes(page, '.turn [data-action="fold"]');
+        if (fold && !overlap(fold, notice!)) {
+          await page.mouse.click((fold.left + fold.right) / 2, (fold.top + fold.bottom) / 2);
+        }
+
+        // A button that had been pressed would be held while its move is on its way
+        assert.equal(await page.locator('.turn [data-action="fold"]:enabled').count(), 1, 'a key or a tap pressed a button behind the notice');
+
+        // The clock on the table behind stops with the page: running on, it would say the table is being followed.
+        // Two seconds pass for the page, which is the rig's clock moved, and then several of the countdown's ticks
+        const clock = await text(page, '.seat.me [data-countdown]');
+        rig.advance(2000);
+        await page.waitForFunction(`Date.now() === ${rig.now()}`);
+        await page.waitForTimeout(1300);
+        assert.equal(await text(page, '.seat.me [data-countdown]'), clock, 'the clock behind the notice is still counting down');
+
+        const animations = (await page.evaluate(`document.querySelector('.app').getAnimations({ subtree: true }).map((animation) => animation.playState)`)) as string[];
+        assert.ok(animations.length > 0 && animations.every((state) => state === 'paused'), `the bar that drains with the clock is still draining: ${animations.join(', ')}`);
+
+        assert.equal(await page.locator('.outdated').count(), 1);
+        assert.deepEqual(sent, [], 'a move was sent from behind the notice');
+        assert.equal(table.view('Stu').hand!.toAct, 0, 'the hand moved on');
+
+        // On its own site the page reloads itself, and its browser remembers the seat
+        assert.equal(await page.locator('.outdated [data-action="reload"]').evaluate((element) => element.tagName), 'BUTTON');
+        await press('.outdated [data-action="reload"]');
+        await page.waitForSelector('.seat.me');
+        await page.waitForSelector('.feed li:has-text("still there?")', { state: 'attached' });
+
+        assert.equal(await page.evaluate('window.CND_BUILD'), build, 'the page that came back is not the updated one');
+        assert.equal(await page.locator('.outdated').count(), 0);
+        assert.equal(await page.locator('.turn [data-action="fold"]:enabled').count(), 1, 'back at the table, it is not this player’s turn anymore');
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'a bomb pot the host calls from the menu is told to everyone under the table, and can be called off again',
+    async (rig) => {
+      for (const kind of BOMB_POT_TABLES) {
+        for (const screen of ['smallPhone', 'desktop'] as const) {
+          const table = rig.table(
+            LONG_NAMES.slice(0, 6).map((name) => ({ name, stack: kind.stack })),
+            kind.config,
+          );
+          table.join('Zed');
+
+          const host = await table.open('Quigs', screen);
+          const player = await table.open('Stu', screen);
+          const watcher = await table.open('Zed', screen);
+          const everyone = { host, player, watcher };
+          const press = pressOn(host, screen);
+          const [roomBefore] = await boxes(player, '.stage');
+
+          await press('[data-action="menu"]');
+          assert.equal(await text(host, '.menu [data-action="bomb-pot"]'), `Bomb pot next hand${kind.amount} each, no blinds, starts on the flop`);
+          assert.equal(await host.locator('.menu [data-action="bomb-pot-off"]').count(), 0, 'a bomb pot nobody called can be called off');
+          await host.locator('.menu [data-action="bomb-pot"]').scrollIntoViewIfNeeded();
+          assert.deepEqual(await squeezed(host, '.menu-item, .menu-item small'), [], 'a line of the menu is cut off');
+          assertOnScreen(await boxes(host, '.menu [data-action="bomb-pot"]'), screen, 'the bomb pot in the menu');
+          await assertNoSidewaysScroll(host);
+          await shot(host, `bomb-pot-menu-${kind.name}-${screen}`);
+
+          await press('.menu [data-action="bomb-pot"]');
+          await host.waitForSelector('.dialog', { state: 'detached' });
+
+          // A seated player's bar keeps its height, so the word costs their table nothing
+          await player.waitForSelector('.controls .next-hand');
+          assert.equal(table.view('Stu').feed.at(-1)!.text, 'The host called a bomb pot for the next hand');
+          assert.deepEqual(await boxes(player, '.stage'), [roomBefore], 'word of the bomb pot took room from a seated player\'s table');
+
+          for (const [who, page] of Object.entries(everyone)) {
+            await page.waitForSelector('.controls .next-hand');
+            assert.equal(await text(page, '.controls .next-hand'), nextIsBombPot(kind.amount), who);
+
+            await inShapesOf(
+              page,
+              screen,
+              async (shape) => {
+                assert.deepEqual(await squeezed(page, '.controls .waiting, .controls .next-hand'), [], `what the ${who} is told about the next hand is cut off`);
+                assertOnScreen(await boxes(page, '.controls .next-hand, .seat .plate'), screen, `the ${who}'s table and what is said under it`);
+                assertApart(await boxes(page, '.controls .next-hand'), await boxes(page, '.stage, .controls .extras'), 'word of the bomb pot and what is around it');
+                await shot(page, `bomb-pot-next-${who}-${kind.name}-${screen}-${shape}`);
+              },
+              { buttonsUp: false },
+            );
+          }
+
+          await press('[data-action="menu"]');
+          assert.equal(await text(host, '.menu [data-action="bomb-pot-off"]'), 'Call off the bomb potThe next hand is an ordinary one');
+          assert.equal(await host.locator('.menu [data-action="bomb-pot"]').count(), 0, 'a bomb pot that is called already is offered again');
+          await press('.menu [data-action="bomb-pot-off"]');
+          await host.waitForSelector('.dialog', { state: 'detached' });
+          await host.waitForSelector('.controls .next-hand', { state: 'detached' });
+          assert.equal(table.view('Stu').feed.at(-1)!.text, 'The host called off the bomb pot');
+
+          for (const page of Object.values(everyone)) {
+            await page.waitForSelector('.controls .next-hand', { state: 'detached' });
+            await page.context().close();
+          }
+        }
+      }
+    },
+  ],
+  [
+    'a bomb pot starts on the flop with what everyone posted in the pot, and the felt, the play-by-play and the hand history say what it is',
+    async (rig) => {
+      for (const kind of BOMB_POT_TABLES) {
+        for (const screen of ['smallPhone', 'desktop'] as const) {
+          const names = LONG_NAMES.slice(0, 6);
+          const firstToAct = names[1]!;
+          const table = rig.table(
+            names.map((name, seat) => ({ name, stack: seat === 3 ? kind.short : kind.stack })),
+            kind.config,
+          );
+          // A hand number of three digits, as in the checks of the antes
+          table.alter((state) => {
+            state.handCount = 122;
+          });
+          table.act('Quigs', { type: 'setBombPot', on: true });
+          table.deal({ button: 0, holes: { 1: 'As Ah', 3: 'Ks Kh' }, board: '2c 7d 9h Jc 3s' });
+
+          const page = await table.open(firstToAct, screen);
+          const press = pressOn(page, screen);
+
+          const lookInShapes = (name: string, buttonsUp: boolean) =>
+            inShapesOf(
+              page,
+              screen,
+              async (shape) => {
+                assert.deepEqual(await squeezed(page, '.pot, .bet, .plate .stack'), [], 'an amount on the table is cut off');
+                assertOnScreen(await boxes(page, '.seat .plate, .bet, .pot, .board .card'), screen, 'a seat, a bet, the pot or the board');
+                assertApart(await boxes(page, '.pot'), await boxes(page, '.board .card'), 'the pot and the board');
+                await assertBetsApart(page);
+                await shot(page, `bomb-pot-${name}-${shape}-${kind.name}-${screen}`);
+              },
+              { buttonsUp },
+            );
+
+          // The flop is out, everything posted is in the pot, and the player left of the button is asked first
+          assert.deepEqual((await texts(page, '.board .card:not(.slot)')).map((card) => card.replace(/\s/g, '')), ['2♣', '7♦', '9♥']);
+          assert.equal(await text(page, '.pot'), `Bomb pot${kind.pot}`);
+          assert.equal(await page.locator('.bet').count(), 0, 'what is posted for a bomb pot is in front of a player');
+          assert.deepEqual(await stacksBySeat(page, 6), kind.stacks);
+          assert.equal(await page.locator('.seat.acting').getAttribute('data-seat'), '1');
+          assert.equal(await text(page, '.turn [data-action="check"]'), 'Check');
+          assert.equal(await page.locator('.next-hand').count(), 0, 'the hand on the table is still called the next one');
+          await lookInShapes('start', true);
+
+          // Bets on the flop sit around a pot that is labeled as a bomb pot, with another called for the hand after
+          table.act(firstToAct, { type: 'raise', to: table.view(firstToAct).hand!.options!.minRaiseTo });
+          for (const caller of [names[2]!, names[4]!, names[5]!]) {
+            table.act(caller, { type: 'call' });
+          }
+          table.act('Quigs', { type: 'setBombPot', on: true });
+
+          await page.waitForSelector('.controls .next-hand');
+          assert.deepEqual(await texts(page, '.bet'), Array(4).fill(kind.bet));
+          assert.equal(await text(page, '.controls .waiting'), `Waiting for Quigs${nextIsBombPot(kind.amount)}`);
+          await lookInShapes('bets', false);
+
+          const feedToggle = async () => {
+            if (screen !== 'desktop') {
+              await page.tap('.feed-toggle');
+            }
+          };
+
+          await feedToggle();
+          const said = await texts(page, '.entries li');
+          const from = said.indexOf(kind.lines[0]!);
+          assert.deepEqual(said.slice(from, from + kind.lines.length), kind.lines);
+          assert.deepEqual(await squeezed(page, '.entries li'), [], 'a line of the play-by-play is cut off');
+          await assertNoSidewaysScroll(page);
+          await shot(page, `bomb-pot-play-by-play-${kind.name}-${screen}`);
+          await feedToggle();
+
+          table.act('Quigs', { type: 'pause' });
+          table.play(passive, (view) => view.hand === null);
+
+          await press('[data-action="menu"]');
+          await press('.menu [data-action="history"]');
+          await page.waitForSelector('.history summary');
+          assert.match(await text(page, '.history summary'), /^Hand #123 · bomb pot/);
+          await press('.history summary');
+          assert.deepEqual((await text(page, '.history pre')).split('\n').slice(0, 3), kind.lines.slice(0, 3));
+          assert.deepEqual(await squeezed(page, '.history summary'), [], 'the hand\'s line in the history is cut off');
+          await shot(page, `bomb-pot-history-${kind.name}-${screen}`);
+
+          await page.context().close();
+        }
+      }
+    },
+  ],
+  [
+    'the table settings take what a bomb pot costs and how often one comes, and the table says so from then on',
+    async (rig) => {
+      for (const kind of BOMB_POT_TABLES) {
+        for (const screen of PHONE_AND_DESKTOP) {
+          const table = rig.table(
+            [
+              { name: 'Quigs', stack: kind.stack },
+              { name: 'Stu', stack: kind.stack },
+            ],
+            kind.config,
+          );
+          const page = await table.open('Quigs', screen);
+          const press = pressOn(page, screen);
+          const values = async () => [await page.inputValue('#table-bomb-pot-amount'), await page.inputValue('#table-bomb-pot-every')];
+          const openSettings = async () => {
+            await press('[data-action="menu"]');
+            await press('.menu [data-action="settings"]');
+            await page.waitForSelector('#table-bomb-pot-amount');
+          };
+
+          await openSettings();
+          assert.deepEqual(await values(), [kind.amount, '0'], 'bomb pots come only when called unless the host says otherwise');
+          assert.equal(await text(page, 'label[for="table-bomb-pot-amount"] small'), 'What everyone puts in for a bomb pot: no blinds, and the hand starts on the flop');
+          assert.equal(await text(page, 'label[for="table-bomb-pot-every"] small'), '0 for only when the host calls one from the menu');
+
+          await page.locator('label[for="table-bomb-pot-every"]').scrollIntoViewIfNeeded();
+          assert.deepEqual(await squeezed(page, 'label[for^="table-bomb-pot"] span, label[for^="table-bomb-pot"] small, .dialog .field input'), [], 'part of the settings is cut off');
+          assertOnScreen(await boxes(page, '.dialog, #table-bomb-pot-amount, #table-bomb-pot-every, label[for="table-bomb-pot-every"]'), screen, 'the bomb pot settings');
+          await assertNoSidewaysScroll(page);
+
+          await page.fill('#table-bomb-pot-amount', kind.typed);
+          await page.fill('#table-bomb-pot-every', '3');
+          await shot(page, `bomb-pot-settings-${kind.name}-${screen}`);
+          await press('[data-action="save-settings"]');
+          await page.waitForSelector('.dialog', { state: 'detached' });
+
+          assert.equal(table.view('Stu').feed.at(-1)!.text, `A bomb pot of ${kind.shown} comes every 3 hands`);
+          assert.equal(await page.locator('.next-hand').count(), 0, 'the count has two hands to go');
+
+          // With one every hand, the next hand is one without being called, so there is nothing to call or call off
+          await openSettings();
+          assert.deepEqual(await values(), [kind.shown, '3']);
+          await page.fill('#table-bomb-pot-every', '1');
+          await press('[data-action="save-settings"]');
+          await page.waitForSelector('.controls .next-hand');
+          assert.equal(await text(page, '.controls .next-hand'), nextIsBombPot(kind.shown));
+
+          await press('[data-action="menu"]');
+          await page.waitForSelector('.menu [data-action="settings"]');
+          assert.equal(await page.locator('.menu [data-action^="bomb-pot"]').count(), 0, 'the menu offers a bomb pot that comes anyway, or to call off one nobody called');
+
+          await page.context().close();
+        }
+      }
+    },
+  ],
+  [
+    'the form for a new table takes the bomb pot settings, starts the amount over in dollars and keeps the rest',
+    async (rig) => {
+      for (const screen of PHONE_AND_DESKTOP) {
+        const page = await rig.lobby(screen);
+        const press = pressOn(page, screen);
+        const values = async () => [await page.inputValue('#new-table-bomb-pot-amount'), await page.inputValue('#new-table-bomb-pot-every'), await page.locator('#new-table-bomb-pot-boards input:checked').inputValue()];
+
+        assert.deepEqual(await values(), ['100', '0', 'one']);
+
+        await page.fill('#host-name', `Quigs ${screen}`);
+        await page.fill('#new-table-bomb-pot-amount', '300');
+        await page.fill('#new-table-bomb-pot-every', '4');
+        await press('#new-table-bomb-pot-boards label:has-text("Two boards")');
+
+        // What the table plays with starts the amounts over, the bomb pot among them, and keeps how often one comes and on how many boards
+        await press('#new-table-unit label:has-text("Dollars and cents")');
+        assert.deepEqual(await values(), ['2.50', '4', 'two']);
+        await page.fill('#new-table-bomb-pot-amount', '5');
+
+        await page.locator('#new-table-bomb-pot-boards').scrollIntoViewIfNeeded();
+        await shot(page, `bomb-pot-new-table-${screen}`);
+        assert.deepEqual(await squeezed(page, 'label[for^="new-table-bomb-pot"] span, label[for^="new-table-bomb-pot"] small, #new-table-bomb-pot-boards span, #new-table-bomb-pot-boards small, .card-panel .field input'), [], 'part of the form is cut off');
+        assertOnScreen(await boxes(page, '#new-table-bomb-pot-amount, #new-table-bomb-pot-every, label[for="new-table-bomb-pot-every"], #new-table-bomb-pot-boards'), screen, 'the bomb pot in the form for a new table');
+        await assertNoSidewaysScroll(page);
+
+        await press('[data-action="create-table"]');
+        await page.waitForSelector('#table-link');
+
+        const link = await page.inputValue('#table-link');
+        const { unit, bombPotAmount, bombPotEvery, bombPotBoards } = rig.store.read(new URL(link).searchParams.get('table')!)!.config;
+        assert.deepEqual({ unit, bombPotAmount, bombPotEvery, bombPotBoards }, { unit: 'cents', bombPotAmount: 500, bombPotEvery: 4, bombPotBoards: 'two' });
+
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'a host saves the table settings as a preset, replaces one only after saying yes, and deletes one; a co-host can save, and a plain member is not offered it',
+    async (rig) => {
+      try {
+        for (const screen of PHONE_AND_DESKTOP) {
+          const table = rig.table(
+            [
+              { name: 'Quigs', stack: 1000 },
+              { name: 'Stu', stack: 1000 },
+              { name: 'Pam', stack: 1000 },
+            ],
+            { smallBlind: 25, bigBlind: 50, voiceLink: 'https://meet.google.com/abc-defg-hij' },
+          );
+          table.act('Quigs', { type: 'setCohost', playerId: table.auth('Stu').id, on: true });
+
+          const page = await table.open('Quigs', screen);
+          const press = pressOn(page, screen);
+          const listed = () => texts(page, '.preset-list .preset-name');
+
+          await press('[data-action="menu"]');
+          await press('.menu [data-action="settings"]');
+          await page.waitForSelector('.preset-list li.note:has-text("None yet")');
+          assert.equal(await page.locator('.preset-panel p.note:has-text("plays the preset"):visible').count(), 0);
+
+          await page.fill('#preset-name', 'Friday 25/50');
+          await press('[data-action="save-preset"]');
+          await page.waitForSelector('.preset-list .preset-name:has-text("Friday 25/50")');
+          assert.deepEqual(rig.presets.list(), [{ name: 'Friday 25/50', settings: presetSettings({ ...table.view('Quigs').config }) }]);
+          assert.equal('voiceLink' in rig.presets.list()[0]!.settings, false, 'the call went into a preset anyone can read');
+          assert.equal(await text(page, '.preset-panel p.note[aria-live]'), 'Saved Friday 25/50.');
+          assert.equal(await text(page, '.preset-panel p.note:not([hidden]):not([aria-live])'), 'This table plays the preset Friday 25/50.');
+
+          await page.locator('.preset-panel').scrollIntoViewIfNeeded();
+          assertOnScreen(await boxes(page, '.preset-panel, #preset-name, [data-action="save-preset"], .preset-list [data-action="delete-preset"]'), screen, 'the presets in the table settings');
+          assert.deepEqual(await squeezed(page, '.preset-panel .field span, .preset-panel button, .preset-list .preset-name'), [], 'part of the presets is cut off');
+          assertApart(await boxes(page, '#preset-name'), await boxes(page, '[data-action="save-preset"]'), 'the name of a preset and its Save');
+          await assertNoSidewaysScroll(page);
+          await shot(page, `presets-saved-${screen}`);
+
+          // What the form holds is what is saved, before the table itself is
+          // Read the way the server reads a name, so a stray space still finds the preset it would replace
+          await page.fill('#table-small-blind', '30');
+          await page.fill('#preset-name', ' friday  25/50');
+          await press('[data-action="save-preset"]');
+          await page.waitForSelector('.preset-question:not([hidden])');
+          assert.equal(await text(page, '.preset-question p'), 'There is already a preset called Friday 25/50. Replace it with these settings?');
+          assert.equal(rig.presets.list()[0]!.settings.smallBlind, 25, 'it was replaced before anyone said yes');
+          await page.locator('.preset-question').scrollIntoViewIfNeeded();
+          assertOnScreen(await boxes(page, '.preset-question, [data-action="replace-preset"], .preset-question [data-action="keep-preset"]'), screen, 'the question before a preset is replaced');
+          await shot(page, `presets-replace-${screen}`);
+
+          await press('.preset-question [data-action="keep-preset"]');
+          await page.waitForSelector('.preset-question', { state: 'hidden' });
+          assert.equal(rig.presets.list()[0]!.settings.smallBlind, 25);
+
+          await press('[data-action="save-preset"]');
+          await press('[data-action="replace-preset"]');
+          await page.waitForSelector('.preset-panel p.note[aria-live]:has-text("Saved Friday 25/50.")');
+          assert.deepEqual(await listed(), ['Friday 25/50'], 'the preset kept its name as it was first written');
+          assert.equal(rig.presets.list()[0]!.settings.smallBlind, 30);
+          assert.equal(table.view('Quigs').config.smallBlind, 25, 'saving a preset changed the table');
+          assert.equal(await page.locator('.preset-panel p.note:has-text("plays the preset"):visible').count(), 0, 'the table no longer plays it');
+
+          await page.fill('#preset-name', 'Tuesday');
+          await press('[data-action="save-preset"]');
+          await page.waitForSelector('.preset-list .preset-name:has-text("Tuesday")');
+
+          await press('[aria-label="Delete Tuesday"]');
+          assert.equal(await text(page, '.preset-list li.asking .preset-name'), 'Delete Tuesday for everyone?');
+          assert.deepEqual(await listed(), ['Friday 25/50', 'Delete Tuesday for everyone?']);
+          assertOnScreen(await boxes(page, '.preset-list li.asking button'), screen, 'the question before a preset is deleted');
+          await shot(page, `presets-delete-${screen}`);
+          await press('[data-action="confirm-delete-preset"]');
+          await page.waitForSelector('.preset-panel p.note[aria-live]:has-text("Deleted Tuesday.")');
+          assert.deepEqual(await listed(), ['Friday 25/50']);
+          assert.deepEqual(rig.presets.list().map((preset) => preset.name), ['Friday 25/50']);
+          await page.context().close();
+
+          // A co-host keeps a preset as the host would
+          const cohost = await table.open('Stu', screen);
+          await pressOn(cohost, screen)('[data-action="menu"]');
+          await pressOn(cohost, screen)('.menu [data-action="settings"]');
+          await cohost.waitForSelector('.preset-list .preset-name:has-text("Friday 25/50")');
+          await cohost.fill('#preset-name', 'Stu night');
+          await pressOn(cohost, screen)('[data-action="save-preset"]');
+          await cohost.waitForSelector('.preset-list .preset-name:has-text("Stu night")');
+          await cohost.context().close();
+
+          const member = await table.open('Pam', screen);
+          await pressOn(member, screen)('[data-action="menu"]');
+          await member.waitForSelector('.menu');
+          assert.equal(await member.locator('.menu [data-action="settings"], .preset-panel').count(), 0, 'a plain member is offered the presets');
+          await member.context().close();
+          forgetPresets(rig);
+        }
+      } finally {
+        forgetPresets(rig);
+      }
+    },
+  ],
+  [
+    'the form for a new table offers the presets there are, picking one fills the form and says what changed, and the table made from it plays its stakes',
+    async (rig) => {
+      try {
+        const keep = (name: string, config: Partial<TableConfig>, extra: Record<string, unknown> = {}) =>
+          rig.presets.save({ name, settings: { ...presetSettings({ ...DEFAULT_CONFIG, ...config }), ...extra }, savedAt: 0, savedBy: 'Quigs' }, false);
+        const stakes = (page: Page) => Promise.all(['unit input:checked', 'small-blind', 'big-blind', 'min-buy-in', 'max-buy-in'].map((field) => page.inputValue(`#new-table-${field}`)));
+
+        for (const screen of ['smallPhone', 'phone', 'desktop'] as const) {
+          const none = await rig.lobby(screen);
+          await none.waitForLoadState('networkidle');
+          assert.equal(await none.locator('#new-table-preset, .preset-pick:visible').count(), 0, 'a picker with nothing to pick');
+          await none.context().close();
+
+          keep('Friday 25/50', { smallBlind: 25, bigBlind: 50, minBuyIn: 1000, maxBuyIn: 5000 });
+          const one = await rig.lobby(screen);
+          await one.waitForSelector('#new-table-preset');
+          assert.deepEqual(await texts(one, '#new-table-preset option'), ['The usual settings', 'Friday 25/50']);
+          assert.equal(await one.inputValue('#new-table-preset'), '', 'a preset was picked for the host');
+          assert.deepEqual(await stakes(one), ['chips', '10', '20', '400', '2000']);
+          assert.equal(await one.locator('.preset-notes p, .changed').count(), 0, 'the form says something changed before anything was picked');
+          await one.context().close();
+
+          for (let index = 0; index < 13; index++) {
+            keep(`${'Wednesday Wild WWWWWWW'.slice(0, 22)} ${String(index).padStart(7, 'W')}`, { smallBlind: 5 + index, bigBlind: 10 + index });
+          }
+
+          // Saved when a table's bounty was one amount, for seven-deuce
+          const { bounties: _list, ...tuesday } = presetSettings({ ...DEFAULT_CONFIG, unit: 'cents', smallBlind: 25, bigBlind: 50, ante: 10, minBuyIn: 2000, maxBuyIn: 10_000, actionSeconds: 20, allowStraddle: false });
+          rig.presets.save({ name: 'Tuesday cents', settings: { ...tuesday, sevenDeuceBounty: 100 }, savedAt: 0, savedBy: 'Quigs' }, false);
+
+          // Saved when the clock could be set higher, with a setting the game has since dropped, and before a bomb pot could have two boards
+          const { bombPotBoards: _boards, ...fromBefore } = { ...presetSettings({ ...DEFAULT_CONFIG, smallBlind: 5, bigBlind: 10 }), actionSeconds: 900, dealersChoice: true };
+          rig.presets.save({ name: 'From before', settings: fromBefore, savedAt: 0, savedBy: 'Quigs' }, false);
+
+          keep('Bombs in chips', { bombPotAmount: 300, bombPotEvery: 5, bombPotBoards: 'two' });
+          keep('Bombs in cents', { unit: 'cents', smallBlind: 25, bigBlind: 50, minBuyIn: 2000, maxBuyIn: 10_000, bombPotAmount: 500 });
+
+          const page = await rig.lobby(screen);
+          const press = pressOn(page, screen);
+          await page.waitForSelector('#new-table-preset');
+          assert.equal(await page.locator('#new-table-preset option').count(), 19);
+
+          await page.fill('#host-name', `Quigs ${screen}`);
+          await page.fill('#new-table-name', 'Friday nickels');
+          await page.fill('#new-table-voice-link', 'https://discord.gg/abc');
+          await page.selectOption('#new-table-preset', { label: 'Tuesday cents' });
+
+          assert.deepEqual(await stakes(page), ['cents', '0.25', '0.50', '20.00', '100.00']);
+          assert.equal(await page.inputValue('#new-table-ante'), '0.10');
+          assert.equal(await page.inputValue('#new-table-name'), "Chips n' Dipshits", 'the preset names the table');
+          assert.equal(await page.inputValue('#new-table-voice-link'), 'https://discord.gg/abc', 'the call typed in was thrown away');
+          assert.deepEqual(await texts(page, '.preset-notes p'), [
+            'Changed here: Table name, Play with, Small blind, Big blind, Ante, Minimum buy-in, Maximum buy-in, Bounty hands.',
+            'Also set, in the table settings: Seconds to act 20, Straddle under the gun off.',
+          ]);
+          assert.deepEqual([await page.inputValue('#new-table-bounties .bounty-hand'), await page.inputValue('#new-table-bounties .bounty-row input:not(.bounty-hand)')], ['72', '1.00'], 'the seven-deuce bounty of a preset saved before bounties were a list');
+          assert.equal(await page.locator('.changed').count(), 8);
+          assert.equal(await page.locator('#new-table-unit.changed, label[for="new-table-small-blind"].changed').count(), 2);
+          assert.equal(await page.locator('label[for="new-table-voice-link"].changed, label[for="new-table-host-name"].changed').count(), 0);
+
+          await page.locator('#new-table-preset').scrollIntoViewIfNeeded();
+          assertOnScreen(await boxes(page, '#new-table-preset, .preset-notes p'), screen, 'the presets in the form for a new table');
+          assert.deepEqual(await squeezed(page, '.preset-pick .field span, .preset-notes p'), [], 'part of what the picker says is cut off');
+          await assertNoSidewaysScroll(page);
+          await shot(page, `presets-picked-${screen}`);
+
+          await page.selectOption('#new-table-preset', { label: 'From before' });
+          assert.deepEqual(await stakes(page), ['chips', '5', '10', '400', '2000']);
+          assert.deepEqual(await texts(page, '.preset-notes p.warn'), ['Seconds to act is back to 30: the preset’s is no longer allowed.']);
+          await shot(page, `presets-outdated-${screen}`);
+
+          await page.selectOption('#new-table-preset', { label: 'The usual settings' });
+          assert.deepEqual(await stakes(page), ['chips', '10', '20', '400', '2000']);
+          assert.equal(await page.inputValue('#new-table-name'), 'Chips n’ Dipshits');
+
+          // The bounty the form doesn't show is an amount too, and starts over with the others when what the table plays with changes
+          await page.selectOption('#new-table-preset', { label: 'Tuesday cents' });
+          await press('#new-table-unit label:has-text("Whole chips")');
+          assert.deepEqual(await stakes(page), ['chips', '10', '20', '400', '2000']);
+          assert.deepEqual(await texts(page, '.preset-notes p'), ['Also set, in the table settings: Seconds to act 20, Straddle under the gun off.']);
+          await press('#new-table-unit label:has-text("Dollars and cents")');
+
+          // Every amount starts over with what the table plays with, the bomb pot's as much as the blinds
+          await page.selectOption('#new-table-preset', { label: 'Bombs in chips' });
+          assert.equal(await page.inputValue('#new-table-bomb-pot-amount'), '300');
+          await press('#new-table-unit label:has-text("Dollars and cents")');
+          assert.equal(await page.inputValue('#new-table-bomb-pot-amount'), '2.50');
+          assert.equal(await page.inputValue('#new-table-bomb-pot-every'), '5', 'a count is no amount, and stays');
+
+          await page.selectOption('#new-table-preset', { label: 'Bombs in cents' });
+          assert.equal(await page.inputValue('#new-table-bomb-pot-amount'), '5.00');
+          await press('#new-table-unit label:has-text("Whole chips")');
+          assert.equal(await page.inputValue('#new-table-bomb-pot-amount'), '100');
+
+          // One board or two is marked like any field a preset changes, and a preset from before there were two says one
+          const boardsMarked = () => page.locator('#new-table-bomb-pot-boards.changed input:checked').inputValue();
+
+          await page.selectOption('#new-table-preset', { label: 'Bombs in chips' });
+          assert.equal(await boardsMarked(), 'two');
+          assert.match(await text(page, '.preset-notes p'), /^Changed here: .*A bomb pot is played on\.$/);
+
+          await page.locator('#new-table-bomb-pot-boards').scrollIntoViewIfNeeded();
+          assertOnScreen(await boxes(page, '#new-table-bomb-pot-boards'), screen, 'the boards of a bomb pot, marked as changed');
+          await shot(page, `presets-boards-${screen}`);
+
+          await page.selectOption('#new-table-preset', { label: 'From before' });
+          assert.equal(await boardsMarked(), 'one');
+
+          // Edited after picking, before the table is made
+          await page.selectOption('#new-table-preset', { label: 'Tuesday cents' });
+          await page.fill('#new-table-small-blind', '0.10');
+          await page.fill('#new-table-name', 'Tuesday at Stu’s');
+          await press('[data-action="create-table"]');
+          await page.waitForSelector('#table-link');
+
+          const tableId = new URL(await page.inputValue('#table-link')).searchParams.get('table')!;
+          const config = rig.store.read(tableId)!.config;
+          assert.deepEqual(config, { ...DEFAULT_CONFIG, name: 'Tuesday at Stu’s', voiceLink: 'https://discord.gg/abc', unit: 'cents', smallBlind: 10, bigBlind: 50, ante: 10, minBuyIn: 2000, maxBuyIn: 10_000, actionSeconds: 20, allowStraddle: false, bounties: [['72', 100]] });
+
+          await press('[data-action="close"]');
+          assert.equal(await text(page, '.topbar .title span'), '0.10/0.50 · ante 0.10');
+
+          await press('[data-sit="0"]');
+          assert.equal(await text(page, '.dialog .field small'), 'From 20.00 to 100.00');
+          await page.context().close();
+          forgetPresets(rig);
+        }
+      } finally {
+        forgetPresets(rig);
+      }
+    },
+  ],
+  [
+    'the flash when it becomes your turn lights the space around the table, under every card, bet and button, in a light and a dark theme, and a half-typed bet survives it',
+    async (rig) => {
+      for (const screen of PHONE_AND_DESKTOP) {
+        for (const theme of ['cardroom', 'daylight']) {
+          const table = rig.table([
+            { name: 'Quigs', stack: 1000 },
+            { name: 'Stu', stack: 1000 },
+          ]);
+          const page = await table.open('Quigs', screen);
+
+          await choose(page, { theme });
+          await standOrLie(page, screen);
+
+          // Heads-up the button acts first, so the deal puts the action on this page; the flash is caught at its brightest
+          table.deal({ button: 0, holes: { 0: 'As Kd', 1: '7h 2c' } });
+          await page.waitForFunction(PAUSE_FLASH);
+          await page.waitForSelector('.turn [data-action="fold"]:enabled');
+
+          const timing = (await page.evaluate(`(() => { const t = window.flash.effect.getComputedTiming(); return { duration: t.duration, iterations: t.iterations }; })()`)) as { duration: number; iterations: number };
+          assert.ok(timing.duration <= 1200 && timing.iterations === 1, `the flash lasts ${JSON.stringify(timing)}`);
+
+          const lit = await style(page, '.stage', 'background-color');
+          assert.notEqual(lit, TRANSPARENT, 'the space around the table is not lit');
+          await dealt(page);
+          await shot(page, `turn-flash-${screen}-${theme}`);
+
+          // A bet being typed while the flash plays is still there after it, in the same box
+          await page.fill('#raise-amount', '137');
+          await page.evaluate(`window.turnPanel = document.querySelector('.turn')`);
+          // What a tap reaches is asked once the turn's buttons take one (the tap guard)
+          await tapsLive(page);
+          const onTopLit = await page.evaluate(ON_TOP);
+          await page.evaluate('window.flash.play(); window.flash.finished');
+          table.act('Stu', { type: 'chat', text: 'take your time' });
+          await page.waitForSelector('.entries li:has-text("take your time")', { state: 'attached' });
+
+          assert.equal(await style(page, '.stage', 'background-color'), TRANSPARENT, 'the light stays on after the flash');
+          assert.deepEqual(await page.evaluate(ON_TOP), onTopLit, 'the flash is drawn over something on the table');
+          assert.equal(await page.inputValue('#raise-amount'), '137');
+          assert.equal(await page.evaluate(`window.turnPanel === document.querySelector('.turn')`), true, 'the turn panel was drawn again');
+
+          await page.context().close();
+        }
+      }
+    },
+  ],
+  [
+    'with motion turned down the flash is a steady light for the whole turn, in every shape of the table, and goes when the player acts',
+    async (rig) => {
+      for (const screen of PHONE_AND_DESKTOP) {
+        const table = rig.table([
+          { name: 'Quigs', stack: 1000 },
+          { name: 'Stu', stack: 1000 },
+        ]);
+        const page = await table.open('Quigs', screen);
+        const press = pressOn(page, screen);
+
+        await page.emulateMedia({ reducedMotion: 'reduce' });
+        await page.evaluate(`window.lightOn = 0; document.addEventListener('animationstart', (event) => event.animationName === 'attention-flash' && (window.lightOn += 1))`);
+        table.deal({ button: 0, holes: { 0: 'As Kd', 1: '7h 2c' } });
+        await page.waitForSelector('.turn [data-action="fold"]:enabled');
+        await page.waitForTimeout(1500);
+
+        assert.equal(await page.evaluate('window.lightOn'), 0, 'the flash moved');
+        const lit = await style(page, '.stage', 'background-color');
+        assert.notEqual(lit, TRANSPARENT, 'no steady light a second and a half into the turn');
+
+        await inShapesOf(page, screen, async (shape) => {
+          assert.equal(await style(page, '.stage', 'background-color'), lit);
+          await shot(page, `turn-flash-steady-${screen}-${shape}`);
+        });
+
+        await press('.turn [data-action="call"]');
+        await page.waitForSelector('.turn [data-action="fold"]', { state: 'detached' });
+        assert.equal(await style(page, '.stage', 'background-color'), TRANSPARENT, 'the light outlasted the turn');
+
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'the flash reads in every theme: its line stands out from the page behind the table',
+    async (rig) => {
+      const page = await rig.lobby('desktop');
+
+      for (const theme of THEMES) {
+        const [accent, bg] = (await page.evaluate(`(() => {
+          document.documentElement.dataset.theme = ${JSON.stringify(theme.id)};
+          const tokens = getComputedStyle(document.documentElement);
+          return [tokens.getPropertyValue('--accent'), tokens.getPropertyValue('--bg')];
+        })()`)) as [string, string];
+
+        assert.ok(contrast(accent, bg) >= 3, `${theme.name}: the flash's ${accent} on ${bg} is ${contrast(accent, bg).toFixed(2)} to 1`);
+      }
+
+      await page.context().close();
+    },
+  ],
+  [
+    'a phone buzzes when it becomes your turn, once the page has been touched',
+    async (rig) => {
+      const table = rig.table([
+        { name: 'Quigs', stack: 1000 },
+        { name: 'Stu', stack: 1000 },
+      ]);
+      const page = await table.open('Quigs', 'phone', BUZZ);
+      const warnings = complaints(page);
+
+      // Opening the table took a tap; a reload is none
+      await page.reload();
+      await page.waitForSelector('.stage .table');
+      table.deal({ button: 0 });
+      await page.waitForSelector('.turn [data-action="fold"]:enabled');
+      await page.waitForTimeout(300);
+      assert.deepEqual(await page.evaluate('window.buzzes'), [], 'a buzz before the page was touched');
+
+      await page.tap('.pot');
+      table.act('Quigs', { type: 'call' });
+      await page.waitForSelector('.turn [data-action="fold"]', { state: 'detached' });
+      table.act('Stu', { type: 'check' });
+      table.act('Stu', { type: 'check' });
+      await page.waitForSelector('.turn [data-action="check"]:enabled');
+      await page.waitForFunction('window.buzzes.length > 0');
+
+      assert.deepEqual(await page.evaluate('window.buzzes'), [{ pattern: BUZZ_PATTERN, touched: true }]);
+      assert.deepEqual(warnings, [], 'the page complained in its console');
+
+      await page.context().close();
+    },
+  ],
+  [
+    'from another tab a notification and the tab’s title say it is your turn at the table, with no card or amount, and go when the turn does or the player comes back',
+    async (rig) => {
+      const table = rig.table(
+        [
+          { name: 'Quigs', stack: 1000 },
+          { name: 'Stu', stack: 1000 },
+        ],
+        { name: 'Friday Night' },
+      );
+      const page = await table.open('Quigs', 'desktop', [SIGHT, NOTICES('granted'), TITLES].join(';'));
+      const own = await page.title();
+      const notices = () => page.evaluate('window.notices.map(({ title, options, open }) => ({ title, options, open }))') as Promise<{ title: string; options: Record<string, unknown>; open: boolean }[]>;
+      const words = 'Your turn at Friday Night';
+
+      // In sight, the page itself is enough
+      table.deal({ button: 0, holes: { 0: 'As Kd', 1: '7h 2c' } });
+      await page.waitForSelector('.turn [data-action="fold"]:enabled');
+      await page.waitForTimeout(300);
+      assert.deepEqual(await notices(), [], 'a notification with the page in sight');
+      assert.deepEqual(await page.evaluate('window.titles'), []);
+
+      table.act('Quigs', { type: 'call' });
+      await page.waitForSelector('.turn [data-action="fold"]', { state: 'detached' });
+      await page.evaluate('window.outOfSight(true)');
+      table.act('Stu', { type: 'check' });
+      table.act('Stu', { type: 'check' });
+      await page.waitForFunction('window.notices.length > 0');
+
+      assert.deepEqual(await notices(), [{ title: words, options: { tag: `cnd-${table.id}` }, open: true }]);
+      assert.doesNotMatch(words, /\d|[♠♥♦♣]|\b[AKQJT2-9][shdc]\b/, 'a card or an amount on the lock screen');
+
+      // It goes on changing for as long as the turn waits
+      await page.waitForFunction('window.titles.length >= 3');
+      const titles = (await page.evaluate('window.titles')) as string[];
+      assert.deepEqual([...new Set(titles)].sort(), [`● ${words}`, `○ ${words}`].sort(), 'a title that does not say it is the player’s turn');
+
+      // Acting from another device, or the clock acting for the player, ends the turn the same way
+      table.act('Quigs', { type: 'check' });
+      await page.waitForFunction('!window.notices[0].open');
+      assert.equal(await page.title(), own, 'the title was not put back');
+
+      const settled = ((await page.evaluate('window.titles')) as string[]).length;
+      // Longer than the title takes to change once, which is TITLE_SWAP_MS, a second
+      await page.waitForTimeout(1500);
+      assert.equal(((await page.evaluate('window.titles')) as string[]).length, settled, 'the title kept changing after the turn');
+
+      // Out of sight on the turn card, then back
+      table.act('Stu', { type: 'check' });
+      await page.waitForFunction('window.notices.length === 2');
+      await page.evaluate('window.outOfSight(false)');
+      await page.waitForFunction('!window.notices[1].open');
+      assert.equal(await page.title(), own);
+      assert.deepEqual(await page.evaluate('window.asks'), [], 'the page asked for notifications');
+
+      await page.context().close();
+    },
+  ],
+  [
+    'the Preferences dialog offers the ways a device can get your attention, on the page served here and in Apps Script’s frame, and only a tap asks the browser',
+    async (rig) => {
+      const offered: Record<string, string[]> = {
+        'here-phone': ['buzz', 'flash', 'tabTitle'],
+        'here-desktop': ['flash', 'notify', 'tabTitle'],
+        'frame-phone': ['buzz', 'flash'],
+        'frame-desktop': ['flash'],
+      };
+
+      for (const where of ['here', 'frame'] as const) {
+        for (const screen of PHONE_AND_DESKTOP) {
+          const table = rig.table([
+            { name: 'Quigs', stack: 1000 },
+            { name: 'Stu', stack: 1000 },
+          ]);
+          const page = await table.open('Quigs', screen, [NOTICES('default', 'granted'), ...(where === 'frame' ? [STAND_IN_HOST] : [])].join(';'));
+          const press = pressOn(page, screen);
+
+          await press('[data-action="menu"]');
+          await press('.menu [data-action="preferences"]');
+          await page.waitForSelector('.switches');
+          await page.locator('.switches').scrollIntoViewIfNeeded();
+
+          assert.deepEqual(await page.locator('.switches [data-pref]').evaluateAll((found) => found.map((element) => element.getAttribute('data-pref'))), offered[`${where}-${screen}`]);
+          assertOnScreen(await boxes(page, '.switches [data-pref]'), screen, 'the switches for your turn');
+          assert.deepEqual(await squeezed(page, '.switches [data-pref], .switches [data-pref] span'), [], 'a switch is cut off');
+          const switches = await boxes(page, '.switches [data-pref]');
+          switches.forEach((one, index) => assertApart([one], switches.slice(index + 1), 'two switches'));
+          assert.deepEqual(await page.evaluate('window.asks'), [], 'the page asked for notifications on its own');
+          await shot(page, `preferences-attention-${where}-${screen}`);
+
+          if (where === 'here' && screen === 'desktop') {
+            assert.equal(await page.getAttribute('#pref-notify', 'aria-checked'), 'false', 'on before the browser said yes');
+            await press('#pref-notify');
+            await page.waitForSelector('#pref-notify[aria-checked="true"]');
+            assert.deepEqual(await page.evaluate('window.asks'), [true], 'asked once, from inside the tap');
+          }
+
+          await page.context().close();
+        }
+      }
+
+      // A player who said no in the browser is told so, and a tap asks nothing more
+      const table = rig.table([
+        { name: 'Quigs', stack: 1000 },
+        { name: 'Stu', stack: 1000 },
+      ]);
+      const page = await table.open('Quigs', 'desktop', NOTICES('denied'));
+
+      await page.click('[data-action="menu"]');
+      await page.click('.menu [data-action="preferences"]');
+      await page.waitForSelector('#pref-notify[aria-disabled="true"][aria-checked="false"]');
+      await page.click('#pref-notify', { force: true });
+      assert.match(await text(page, '#pref-notify'), /Blocked in this browser’s settings/);
+      assert.deepEqual(await page.evaluate('window.asks'), []);
+      await page.locator('.switches').scrollIntoViewIfNeeded();
+      assert.deepEqual(await squeezed(page, '.switches [data-pref], .switches [data-pref] span'), [], 'the blocked switch is cut off');
+      assertOnScreen(await boxes(page, '.switches [data-pref]'), 'desktop', 'the blocked switch');
+      await shot(page, 'preferences-attention-blocked-desktop');
+      await page.context().close();
+    },
+  ],
+  [
+    'a double-board bomb pot has two flops out from the start with the bets clear of both, names the viewer\'s hand on each board, and says who won each',
+    async (rig) => {
+      for (const kind of BOMB_POT_TABLES) {
+        for (const screen of ['smallPhone', 'desktop'] as const) {
+          const names = LONG_NAMES.slice(0, 6);
+          const firstToAct = names[1]!;
+          const results = DOUBLE_BOARD_RESULTS[kind.name]!;
+          const table = rig.table(
+            names.map((name, seat) => ({ name, stack: seat === 3 ? kind.short : kind.stack })),
+            { ...kind.config, bombPotBoards: 'two' },
+          );
+          table.alter((state) => {
+            state.handCount = 122;
+          });
+
+          const deal = (hand: keyof typeof DOUBLE_BOARD_HANDS) => {
+            table.act('Quigs', { type: 'setBombPot', on: true });
+            table.deal({ button: 0, ...DOUBLE_BOARD_HANDS[hand] });
+          };
+
+          deal('sidePot');
+          const page = await table.open('Quigs', screen);
+          const press = pressOn(page, screen);
+          const cardsOn = async (board: number) => (await texts(page, `.board[data-run="${board}"] .card:not(.slot)`)).map((card) => card.replace(/\s/g, ''));
+          // Where a line under the seat has no room for more, a hand is named by its kind alone
+          const namedInShort = (shape: string) => screen === 'smallPhone' && shape.startsWith('wide');
+
+          const lookInShapes = (name: string, buttonsUp: boolean, also: (shape: string) => Promise<void> = async () => undefined) =>
+            inShapesOf(
+              page,
+              screen,
+              async (shape) => {
+                await dealt(page);
+                const under = '.pot, .message.result > div';
+                const middle = await boxes(page, `.board .card, ${under}`);
+
+                assert.deepEqual(await squeezed(page, '.pot, .bet, .plate .stack'), [], 'an amount on the table is cut off');
+                assertOnScreen([...middle, ...(await boxes(page, '.seat .plate, .bet'))], screen, 'a seat, a bet or the middle of the table');
+                assertApart(middle, await boxes(page, '.seat .plate, .seat .hole .card'), 'the middle of the table and a seat');
+                assertApart(await boxes(page, '.board[data-run="0"] .card'), await boxes(page, `.board[data-run="1"] .card, ${under}`), 'the first board and what is under it');
+                assertApart(await boxes(page, '.board[data-run="1"] .card'), await boxes(page, under), 'the second board and what is under it');
+                await also(shape);
+                await shot(page, `double-board-${name}-${shape}-${kind.name}-${screen}`);
+              },
+              { buttonsUp },
+            );
+
+          const lookAtHint = async () => {
+            await assertHintFits(page);
+            assert.equal(new Set((await textBoxes(page, `${HINT} .read`)).map((line) => line.top)).size, 2, 'each board has one line of the hint');
+          };
+
+          const lookAtTwoPair = async (shape: string) => {
+            await lookAtHint();
+            assert.equal(await page.locator(`${HINT} .detail`).isVisible(), !namedInShort(shape), `the ranks of the two pair in the hint on a ${shape} table`);
+          };
+
+          // Both flops are out before anyone acts, over the one pot of what everyone posted
+          assert.deepEqual([await cardsOn(0), await cardsOn(1)], [['K♥', '7♠', '2♣'], ['K♦', '9♣', '8♥']]);
+          assert.equal(await page.locator('.board .card.slot').count(), 4, 'each board has room for its turn and river');
+          assert.equal(await text(page, '.pot'), `Bomb pot${kind.pot}`);
+          assert.deepEqual(await stacksBySeat(page, 6), kind.stacks);
+          assert.equal(await page.locator('.seat.acting').getAttribute('data-seat'), '1');
+
+          // One round of betting on the two flops: the bets sit around both boards, and the viewer, asked last, has a hand on each
+          table.act(firstToAct, { type: 'raise', to: table.view(firstToAct).hand!.options!.minRaiseTo });
+          for (const caller of [names[2]!, names[4]!, names[5]!]) {
+            table.act(caller, { type: 'call' });
+          }
+
+          await page.waitForSelector('.turn [data-action="call"]');
+          assert.deepEqual(await texts(page, '.bet'), Array(4).fill(kind.bet));
+          await hintSays(page, 'Two pair, kings and sevens', 'Pair of kings');
+          assert.deepEqual(await texts(page, `${HINT} .run`), ['1', '2']);
+          await lookInShapes('bets', true, lookAtTwoPair);
+
+          const feedToggle = async () => {
+            if (screen !== 'desktop') {
+              await page.tap('.feed-toggle');
+            }
+          };
+
+          await feedToggle();
+          const said = await texts(page, '.entries li');
+          const start = said.indexOf(kind.lines[0]!.replace('bomb pot', 'double-board bomb pot'));
+          assert.deepEqual(said.slice(start + 1, start + 5), [...kind.lines.slice(1, 3), 'First board, Flop: K♥ 7♠ 2♣', 'Second board, Flop: K♦ 9♣ 8♥']);
+          assert.deepEqual(await squeezed(page, '.entries li'), [], 'a line of the play-by-play is cut off');
+          await assertNoSidewaysScroll(page);
+          await shot(page, `double-board-play-by-play-${kind.name}-${screen}`);
+          await feedToggle();
+
+          // On the river each board has its own cards picked out, and a card in hand only where both boards agree on it
+          table.act('Quigs', { type: 'call' });
+          table.play(passive, (view) => view.hand!.street === 'river' && view.hand!.toAct === 0);
+          await page.waitForSelector('.board[data-run="1"] .card[data-card="3s"]');
+          await page.waitForSelector('.turn [data-action="check"]');
+          await hintSays(page, 'Two pair, kings and sevens', 'Pair of kings');
+          assert.deepEqual(await marking(page), { plays: sortedCards('Kh 7s 9d Kd 9c 8h Ts Ks'), idle: sortedCards('2c 4h 3s') });
+          await lookInShapes('river', true, async (shape) => {
+            await assertMarked(page);
+            await lookAtTwoPair(shape);
+          });
+
+          // Each pot is split between the boards: the short stack takes the first board's half of the one she is in for
+          const lookAtResult = async (hand: keyof typeof DOUBLE_BOARD_HANDS) => {
+            table.play(passive, (view) => view.hand!.stage === 'done');
+            await page.waitForFunction(`document.querySelector('.message.result > div')?.textContent === ${JSON.stringify(results[hand][0])}`);
+            assert.deepEqual(await texts(page, '.message.result > div'), results[hand]);
+            assert.equal(await page.locator(`${HINT}, .pot`).count(), 0, 'the result names the hands and says who won what, so the hint and the pot make room for it');
+            await lookInShapes(`result-${hand}`, false);
+          };
+
+          await lookAtResult('sidePot');
+
+          const nextHand = () => {
+            table.act('Quigs', { type: 'pause' });
+            table.play(passive, (view) => view.hand === null);
+          };
+
+          for (const hand of ['oneEach', 'both'] as const) {
+            nextHand();
+            deal(hand);
+            await lookAtResult(hand);
+          }
+
+          // A hand everyone else folds is won whole, on neither board, and the hint stays since nothing in the middle names a hand
+          nextHand();
+          deal('both');
+          table.play(
+            (view, name) => {
+              const { canCheck, minRaiseTo } = view.hand!.options!;
+
+              return name === 'Quigs' ? { type: 'raise', to: minRaiseTo } : { type: canCheck ? 'check' : 'fold' };
+            },
+            (view) => view.hand!.stage === 'done',
+          );
+          await page.waitForFunction(`document.querySelector('.message.result > div')?.textContent?.startsWith('Quigs wins')`);
+          assert.deepEqual(await texts(page, '.message.result > div'), [`Quigs wins ${kind.name === 'cents' ? '12.50' : '500'}`]);
+          await hintSays(page, 'Pair of deuces', 'Ace high');
+          await lookInShapes('result-folded', false, lookAtHint);
+
+          nextHand();
+
+          await press('[data-action="menu"]');
+          await press('.menu [data-action="history"]');
+          await page.waitForSelector('.history summary');
+          assert.deepEqual((await texts(page, '.history summary')).map((line) => line.split('\n')[0]), [126, 125, 124, 123].map((hand) => `Hand #${hand} · double-board bomb pot`));
+          await page.locator('.history details').nth(1).locator('summary').scrollIntoViewIfNeeded();
+          await page.locator('.history details').nth(1).locator('summary').click();
+
+          const told = (await text(page, '.history details[open] pre')).split('\n');
+          const half = kind.name === 'cents' ? '6.25' : '250';
+          assert.deepEqual(told.filter((line) => line.includes('River')), ['First board, River: A♥ 7♠ 2♣ 9♦ 4♥', 'Second board, River: A♣ 9♣ 8♥ 10♠ 3♠']);
+          assert.deepEqual(told.slice(-2), ['first', 'second'].map((board) => `WWWWWWWWWWWWWWWW wins ${half} on the ${board} board with three aces`));
+          assert.deepEqual(await squeezed(page, '.history summary'), [], 'the hand\'s line in the history is cut off');
+          await assertNoSidewaysScroll(page);
+          await shot(page, `double-board-history-${kind.name}-${screen}`);
+
+          await page.context().close();
+        }
+      }
+    },
+  ],
+  [
+    'a double-board bomb pot plays the deal and one flop for the two on another player’s page, and one street for the turn of both',
+    async (rig) => {
+      const table = rig.table(
+        [
+          { name: 'Quigs', stack: 1000 },
+          { name: 'Stu', stack: 1000 },
+          { name: 'Pam', stack: 1000 },
+        ],
+        { bombPotBoards: 'two' },
+      );
+      const page = await table.open('Pam', 'phone', LISTEN);
+
+      table.act('Quigs', { type: 'setBombPot', on: true });
+      table.deal({ button: 0, board: '3s 4c Jd 9h Qd', secondBoard: 'Kd 5c 8h Ts 2s' });
+      await page.waitForSelector('.board[data-run="1"] .card[data-card]:nth-child(3)');
+      await page.waitForFunction('window.played.length >= 2');
+      await page.waitForTimeout(300);
+
+      assert.deepEqual(await playedNames(page), ['deal', 'street'], 'the deal and one flop for the two boards');
+
+      const [deal, flop] = await playedAt(page);
+      const dealLasts = Math.max(...RECIPES.deal.map((voice) => voice.at + voice.length));
+      assert.ok(flop! - deal! >= dealLasts - CLOCK_ROUNDING, `the flops start ${(flop! - deal!).toFixed(3)} s after the deal, which lasts ${dealLasts} s`);
+
+      // Stu, left of the button, checks to Pam, whose own check is silent to her; the button's check brings the turn
+      table.act('Stu', { type: 'check' });
+      await page.waitForSelector('.turn [data-action="check"]:enabled');
+      await page.waitForFunction('window.played.length >= 4');
+      await page.waitForTimeout(300);
+      assert.deepEqual(await playedNames(page, 2), ['knock', 'turn']);
+
+      table.act('Pam', { type: 'check' });
+      table.act('Quigs', { type: 'check' });
+      await page.waitForSelector('.board[data-run="1"] .card[data-card]:nth-child(4)');
+      await page.waitForFunction('window.played.length >= 6');
+      await page.waitForTimeout(300);
+
+      assert.deepEqual(await playedNames(page, 4), ['knock', 'street'], 'the button’s check, and one street for the turn of both boards');
+
+      await page.context().close();
+    },
+  ],
+  [
+    'the table settings take one board or two for a bomb pot, and the menu and the bar under the table say which is coming',
+    async (rig) => {
+      for (const kind of BOMB_POT_TABLES) {
+        // The settings are a long list now, and the narrowest phone is where a row of it runs out of room first
+        for (const screen of ['smallPhone', 'desktop'] as const) {
+          const table = rig.table(
+            [
+              { name: 'Quigs', stack: kind.stack },
+              { name: 'Stu', stack: kind.stack },
+            ],
+            kind.config,
+          );
+          const page = await table.open('Quigs', screen);
+          const press = pressOn(page, screen);
+          const picked = (boards: string) => page.isChecked(`#table-bomb-pot-boards input[value="${boards}"]`);
+          const openSettings = async () => {
+            await press('[data-action="menu"]');
+            await press('.menu [data-action="settings"]');
+            await page.waitForSelector('#table-bomb-pot-boards');
+          };
+
+          await openSettings();
+          assert.equal(await picked('one'), true, 'a bomb pot is on one board unless the host says otherwise');
+          assert.equal(await text(page, '#table-bomb-pot-boards > span'), 'A bomb pot is played on');
+          assert.deepEqual(await texts(page, '#table-bomb-pot-boards .check'), ['One board', 'Two boards']);
+          assert.equal(await text(page, '#table-bomb-pot-boards small'), 'With two, each board wins half of every pot');
+
+          await page.locator('#table-bomb-pot-boards').scrollIntoViewIfNeeded();
+          assert.deepEqual(await squeezed(page, '#table-bomb-pot-boards .check span, #table-bomb-pot-boards > span, #table-bomb-pot-boards small'), [], 'part of the settings is cut off');
+          assertOnScreen(await boxes(page, '.dialog, #table-bomb-pot-boards, #table-bomb-pot-boards .check'), screen, 'the boards of a bomb pot in the settings');
+          const [one, two] = await boxes(page, '#table-bomb-pot-boards .check');
+          assert.ok(one && two && !overlap(one, two), 'the two choices are drawn over each other');
+          await assertNoSidewaysScroll(page);
+
+          await press('#table-bomb-pot-boards label:has-text("Two boards")');
+          await shot(page, `double-board-settings-${kind.name}-${screen}`);
+          await press('[data-action="save-settings"]');
+          await page.waitForSelector('.dialog', { state: 'detached' });
+          assert.equal(table.view('Stu').feed.at(-1)!.text, `A double-board bomb pot is ${kind.amount} and comes only when called`);
+
+          // Called from the menu, which says what it starts on, it is told under the table by its name
+          await press('[data-action="menu"]');
+          assert.equal(await text(page, '.menu [data-action="bomb-pot"]'), `Bomb pot next hand${kind.amount} each, no blinds, starts on two flops`);
+          assert.deepEqual(await squeezed(page, '.menu-item, .menu-item small'), [], 'a line of the menu is cut off');
+          await press('.menu [data-action="bomb-pot"]');
+          await page.waitForSelector('.controls .next-hand');
+          assert.equal(await text(page, '.controls .next-hand'), `Next hand is a double-board bomb pot: ${kind.amount} each`);
+
+          await inShapesOf(
+            page,
+            screen,
+            async (shape) => {
+              assert.deepEqual(await squeezed(page, '.controls .waiting, .controls .next-hand'), [], 'what is said about the next hand is cut off');
+              assertOnScreen(await boxes(page, '.controls .next-hand, .seat .plate'), screen, 'the table and what is said under it');
+              assertApart(await boxes(page, '.controls .next-hand'), await boxes(page, '.stage, .controls .extras'), 'word of the bomb pot and what is around it');
+              await shot(page, `double-board-next-${kind.name}-${screen}-${shape}`);
+            },
+            { buttonsUp: false },
+          );
+
+          await openSettings();
+          assert.equal(await picked('two'), true);
+
+          await page.context().close();
+        }
+      }
+    },
+  ],
+  [
+    'the last hands the host calls are told under the table to everyone, beside word of a bomb pot, and changing them leaves a bet being typed alone',
+    async (rig) => {
+      for (const kind of BOMB_POT_TABLES) {
+        for (const screen of PHONE_AND_DESKTOP) {
+          const table = rig.table(
+            LONG_NAMES.slice(0, 6).map((name) => ({ name, stack: kind.stack })),
+            kind.config,
+          );
+          table.join('Zed');
+          table.deal({ button: 0, holes: { 0: 'As Ah', 3: 'Ks Kh' }, board: '2c 7d 9h Jc 3s' });
+
+          const host = await table.open('Quigs', screen);
+          const deciding = await table.open('Marge Simpson-Jr', screen);
+          const watcher = await table.open('Zed', screen);
+          const everyone = { host, watcher };
+          const press = pressOn(host, screen);
+          const [roomBefore] = await boxes(host, '.stage');
+
+          const lookInShapes = async (state: string, said: string[]) => {
+            for (const [who, page] of Object.entries(everyone)) {
+              await page.waitForFunction(`JSON.stringify([...document.querySelectorAll('.controls .next-hand span')].map((part) => part.textContent)) === ${JSON.stringify(JSON.stringify(said))}`);
+
+              await inShapesOf(
+                page,
+                screen,
+                async (shape) => {
+                  await assertNextHandsFit(page, screen, who);
+                  await shot(page, `last-hands-${state}-${who}-${kind.name}-${screen}-${shape}`);
+                },
+                { buttonsUp: false },
+              );
+            }
+          };
+
+          // Called during a hand, from the menu, the count is of the hands after it
+          await press('[data-action="menu"]');
+          assert.equal(await text(host, '.menu [data-action="lastHands"]'), 'Last handsCall how many hands are left, or end the night');
+          await press('.menu [data-action="lastHands"]');
+          await host.waitForSelector('.hand-counts');
+          assert.deepEqual(await texts(host, '.this-hand button, .hand-counts button'), ['This hand is the last', ...Array.from({ length: 10 }, (_, index) => String(index + 1))]);
+          assert.equal(await host.locator('.dialog [data-action="end-night"], .dialog [data-action="call-off-last-hands"]').count(), 0, 'the night can be ended outright during a hand, or a count nobody called called off');
+          assertOnScreen(await boxes(host, '.dialog, .dialog button'), screen, 'the last hands dialog');
+          assert.deepEqual(await squeezed(host, '.dialog button, .dialog p'), [], 'part of the last hands dialog is cut off');
+          await assertNoSidewaysScroll(host);
+          await shot(host, `last-hands-dialog-${kind.name}-${screen}`);
+
+          await press('.hand-counts [data-hands="3"]');
+          await host.waitForSelector('.dialog', { state: 'detached' });
+
+          // A seated player's bar keeps its height, so the count costs their table nothing
+          await host.waitForSelector('.controls .next-hand');
+          assert.equal(table.view('Zed').feed.at(-1)!.text, 'The host calls it a night after this hand and 3 more');
+          assert.deepEqual(await boxes(host, '.stage'), [roomBefore], 'the count took room from a seated player\'s table');
+          await lookInShapes('3', ['3 more hands after this one']);
+
+          table.act('Quigs', { type: 'setBombPot', on: true });
+          await lookInShapes('and-bomb-pot', ['3 more hands after this one', nextIsBombPot(kind.amount)]);
+
+          // The player on the clock is typing a bet when the count changes, and the bet is left as it was typed
+          await deciding.fill('#raise-amount', kind.typed);
+          await deciding.evaluate(`document.querySelector('#raise-amount').dataset.typed = 'yes'`);
+          table.act('Quigs', { type: 'setLastHands', hands: 1 });
+          await deciding.waitForSelector('.feed li:has-text("now calls it a night after this hand and 1 more")', { state: 'attached' });
+          assert.equal(await deciding.inputValue('#raise-amount'), kind.typed);
+          assert.equal(await deciding.locator('#raise-amount[data-typed="yes"]').count(), 1, 'the bet being typed was drawn again');
+          assert.equal(await deciding.locator('.next-hand').count(), 0, 'word of the hands to come takes room from a decision');
+          await shot(deciding, `last-hands-deciding-${kind.name}-${screen}`);
+
+          // Once their move is made, they see the count too
+          await answeredAfter(deciding, () => pressOn(deciding, screen)('.turn [data-action="call"]'));
+          await deciding.waitForFunction(`document.querySelector('.controls .next-hand')?.textContent === ${JSON.stringify(`1 more hand after this one${nextIsBombPot(kind.amount)}`)}`);
+
+          // Made the last hand, nothing is said of a bomb pot that will never be dealt
+          await table.heardBy(host);
+          await press('[data-action="menu"]');
+          assert.equal(await text(host, '.menu [data-action="lastHands"] small'), '1 more hand after this one');
+          await press('.menu [data-action="lastHands"]');
+          await host.waitForSelector('.hand-counts');
+          assert.deepEqual(await texts(host, '.dialog [aria-pressed="true"]'), ['1']);
+          assert.equal(await host.locator('.dialog [data-action="call-off-last-hands"]').count(), 1);
+          await shot(host, `last-hands-dialog-called-${kind.name}-${screen}`);
+          await press('.this-hand [data-hands="0"]');
+          await host.waitForSelector('.dialog', { state: 'detached' });
+          await lookInShapes('last', ['Last hand of the night']);
+          assert.equal(table.view('Zed').feed.at(-1)!.text, 'The host now calls it a night after this hand');
+          await press('[data-action="menu"]');
+          await host.waitForSelector('.menu [data-action="lastHands"]');
+          assert.equal(await host.locator('.menu [data-action="bomb-pot"]').count(), 0, 'a bomb pot is offered for a hand that never comes');
+          await press('[data-action="close"]');
+
+          for (const page of [host, deciding, watcher]) {
+            await page.context().close();
+          }
+        }
+      }
+    },
+  ],
+  [
+    'the longest count of hands left and the longest word of a bomb pot on two boards share the bar whole on the smallest phone',
+    async (rig) => {
+      const table = rig.table(
+        LONG_NAMES.slice(0, 6).map((name) => ({ name, stack: 10_000_000 })),
+        { ...CENTS, bombPotAmount: 999_999, bombPotBoards: 'two' },
+      );
+      table.deal({ button: 0, holes: { 0: 'As Ah' } });
+      table.act('Quigs', { type: 'setLastHands', hands: LIMITS.lastHands, from: 1 });
+      table.act('Quigs', { type: 'setBombPot', on: true });
+
+      const page = await table.open('Stu', 'smallPhone');
+      const said = [`${LIMITS.lastHands} more hands after this one`, 'Next hand is a double-board bomb pot: 9,999.99 each'];
+      await page.waitForFunction(`JSON.stringify([...document.querySelectorAll('.controls .next-hand span')].map((part) => part.textContent)) === ${JSON.stringify(JSON.stringify(said))}`);
+      await inShapesOf(
+        page,
+        'smallPhone',
+        async (shape) => {
+          await assertNextHandsFit(page, 'smallPhone', 'player');
+          await shot(page, `last-hands-longest-double-board-smallPhone-${shape}`);
+        },
+        { buttonsUp: false },
+      );
+    },
+  ],
+  [
+    'the host or a co-host can end the night outright between hands or after a last hand, everyone is told it is over, and either can play on while a member cannot',
+    async (rig) => {
+      for (const kind of BOMB_POT_TABLES) {
+        for (const screen of PHONE_AND_DESKTOP) {
+          const table = rig.table(
+            LONG_NAMES.slice(0, 6).map((name) => ({ name, stack: kind.stack })),
+            kind.config,
+          );
+          table.join('Zed');
+          table.act('Quigs', { type: 'setCohost', playerId: table.auth('Stu').id, on: true });
+
+          const pages = { host: await table.open('Quigs', screen), cohost: await table.open('Stu', screen), member: await table.open('Big Al', screen), watcher: await table.open('Zed', screen) };
+          const runs = (who: string) => who === 'host' || who === 'cohost';
+          const host = pages.host;
+          const press = pressOn(host, screen);
+
+          // Between hands, ended outright from the menu once the host has said so twice
+          await press('[data-action="menu"]');
+          await press('.menu [data-action="lastHands"]');
+          await host.waitForSelector('.dialog [data-action="end-night"]');
+          assert.equal(await host.locator('.this-hand, .dialog [data-action="call-off-last-hands"]').count(), 0, 'with no hand on the table it is offered as the last, or a count nobody called is offered to be called off');
+          assert.deepEqual(await squeezed(host, '.dialog button, .dialog p'), [], 'part of the last hands dialog is cut off');
+          await shot(host, `last-hands-dialog-between-hands-${kind.name}-${screen}`);
+          await press('.dialog [data-action="end-night"]');
+          await host.waitForSelector('.dialog [data-action="confirm"]');
+          assert.equal(await text(host, '.dialog h2'), 'End the night?');
+          await press('.dialog [data-action="confirm"]');
+          await host.waitForSelector('.message.night-over');
+          assert.equal(table.view('Zed').feed.at(-1)!.text, 'The host ended the night');
+
+          for (const page of Object.values(pages)) {
+            await closeRecap(page);
+          }
+
+          // A co-host plays on from the felt, and the next hand is the last
+          await pages.cohost.waitForSelector('.message.night-over [data-action="play-on"]');
+          await pressOn(pages.cohost, screen)('.message.night-over [data-action="play-on"]');
+          await pages.cohost.waitForSelector('.message.night-over', { state: 'detached' });
+          table.deal({ button: 0, holes: { 0: 'As Ah', 3: 'Ks Kh' }, board: '2c 7d 9h Jc 3s' });
+          assert.equal(table.view('Zed').feed.find((entry) => entry.text.startsWith('Co-host'))?.text, 'Co-host Stu started play again');
+          table.act('Quigs', { type: 'setLastHands', hands: 0 });
+
+          // The last hand's result is up, and the bar says it was the last
+          const done = table.play(passive, (view) => view.hand?.stage === 'done');
+          await pages.member.waitForSelector('.controls .waiting:has-text("That was the last hand")');
+          assert.equal(await pages.member.locator('.controls .next-hand').count(), 0);
+
+          rig.advance(done.hand!.deadline! - rig.now());
+          assert.notEqual(table.view('Quigs').nightEndedAt, null);
+          assert.equal(table.view('Zed').feed.at(-1)!.text, 'That was the last hand. The night is over');
+
+          for (const [who, page] of Object.entries(pages)) {
+            await page.waitForSelector('.message.night-over');
+            await closeRecap(page);
+            assert.equal(await text(page, '.message.night-over > div'), 'The night is over', who);
+            assert.equal(await page.locator('.message.night-over [data-action="play-on"]').count(), runs(who) ? 1 : 0, `${who} is offered to play on`);
+            assert.equal(await text(page, '.topbar .pill'), 'Night over', who);
+            assert.equal(await text(page, '.controls .waiting'), 'The night is over', who);
+            assert.equal(await page.locator('.controls .extras, [data-sit]').count(), 0, `${who} is offered to sit down, sit out or add chips with no hands to come`);
+
+            await inShapesOf(
+              page,
+              screen,
+              async (shape) => {
+                assert.deepEqual(await squeezed(page, '.message.night-over > *, .controls .waiting, .topbar .pill'), [], `what the ${who} is told is cut off`);
+                assertOnScreen(await boxes(page, '.message.night-over > *, .seat .plate'), screen, `the ${who}'s table`);
+                assertApart(await boxes(page, '.message.night-over > *'), await boxes(page, '.seat .plate, .seat .hole .card, .board .card'), 'the end of the night and the seats');
+                await shot(page, `night-over-${who}-${kind.name}-${screen}-${shape}`);
+              },
+              { buttonsUp: false },
+            );
+          }
+
+          // However long the table waits, nothing is dealt
+          rig.advance(60_000);
+          assert.equal(table.view('Quigs').hand, null);
+
+          for (const [who, page] of Object.entries(pages)) {
+            const pressHere = pressOn(page, screen);
+
+            await pressHere('[data-action="menu"]');
+            await page.waitForSelector('.menu [data-action="ledger"]');
+            assert.equal(await page.locator('.menu [data-action="keep-playing"]').count(), runs(who) ? 1 : 0, `${who} is offered to play on`);
+            assert.equal(await page.locator('.menu :is([data-action="lastHands"], [data-action="bomb-pot"], [data-action="start"])').count(), 0, `${who} is offered something that waits for hands to be dealt`);
+            await pressHere('.menu [data-action="ledger"]');
+            await page.waitForSelector('.ledger');
+            await pressHere('[data-action="close"]');
+          }
+
+          // The host plays on from the menu
+          await press('[data-action="menu"]');
+          await press('.menu [data-action="keep-playing"]');
+          for (const page of Object.values(pages)) {
+            await page.waitForSelector('.message.night-over', { state: 'detached' });
+          }
+          assert.equal(table.view('Zed').feed.at(-1)!.text, 'The host started play again');
+
+          for (const page of Object.values(pages)) {
+            await page.context().close();
+          }
+        }
+      }
+    },
+  ],
+  // A check for each layout: together they are the longest of the list by far, and a stalled run waits out its stall after every step of each
+  ...MOTION_LAYOUTS.map((layout): Check => [
+    `with animations on, each move starts where it should and the table lands exactly as a still one stands, on one board and on two and at the end of the night: ${layout.name}`,
+    async (rig) => {
+      const table = rig.table(MOTION_PLAYERS, layout.config);
+      const { config } = table.view('Quigs');
+      const big = config.bigBlind;
+      const says = (amount: number) => shortAmount(amount, config);
+      const { moving, still, step } = await watch(table, 'Quigs', layout);
+      const where = (what: string) => `${layout.name}, ${what}`;
+
+      // A hand's last move, with the game paused first: a table that is running deals the next hand itself, with cards nobody chose
+      const last = (move: () => unknown) => {
+        table.act('Quigs', { type: 'pause' });
+        move();
+      };
+
+      // The button is on Al, so Quigs and Stu post the blinds and the cards go around from Quigs
+      let seen = await step('the deal', () => table.deal({ button: 3, holes: { 0: 'Ah Kd', 1: 'Qc Qd', 2: '7h 7s', 3: '9c 4d' }, board: 'Kh 7c 2c 9d 3s' }));
+      let bets = flightsOf(seen, 'chips', false);
+      let cards = flightsOf(seen, 'card', false);
+
+      assert.equal(seen.flights.length, 10, where('two blinds and eight cards move'));
+      assert.deepEqual(bets.map((bet) => [bet.seat, bet.text, bet.delay]), [[0, says(big / 2), 0], [1, says(big), 0]], where('the blinds'));
+      bets.forEach((bet) => assertOver(bet.from, seen.after.plates[bet.seat!], where(`the blind of seat ${bet.seat} leaves its seat`)));
+      assert.deepEqual(cards.map((card) => card.seat), [0, 0, 1, 1, 2, 2, 3, 3], where('the cards go around from the left of the button'));
+      cards.forEach((card) => assertOver(card.from, seen.after.felt, where(`a card of seat ${card.seat} leaves the middle of the table`)));
+      assert.equal(cards[0]!.delay, 0, where('the first cards wait'));
+      cards.slice(2).forEach((card, nth) => assert.ok(card.delay >= cards[nth]!.delay && card.delay > 0, where('a seat is dealt before the one to its right')));
+
+      seen = await step('a raise', () => table.act('Pam', { type: 'raise', to: 3 * big }));
+      assert.deepEqual(seen.flights.map((flight) => [flight.what, flight.standIn, flight.seat, flight.text, flight.delay]), [['chips', false, 2, says(3 * big), 0]], where('a raise'));
+      assertOver(seen.flights[0]!.from, seen.after.plates[2], where('the raise leaves its seat'));
+
+      seen = await step('a fold', () => table.act('Al', { type: 'fold' }));
+      assert.deepEqual(seen.flights.map((flight) => [flight.what, flight.standIn, flight.delay]), [['cards', true, 0]], where('a fold'));
+      assertLeavesSeat(seen.flights[0]!, seen, 3, where('a fold'));
+
+      seen = await step('the viewer’s own call', () => table.act('Quigs', { type: 'call' }));
+      assert.deepEqual(seen.flights.map((flight) => [flight.what, flight.standIn, flight.seat, flight.text]), [['chips', false, 0, says(3 * big)]], where('the viewer’s own call'));
+      assertOver(seen.flights[0]!.from, seen.after.plates[0], where('the viewer’s call leaves their seat'));
+
+      // The last call ends the street: it is seen going to the pot with the other bets, and the flop comes a beat later
+      seen = await step('the end of a street', () => table.act('Stu', { type: 'call' }));
+      bets = flightsOf(seen, 'chips', true);
+      cards = flightsOf(seen, 'card', false);
+
+      assert.equal(seen.flights.length, 6, where('three bets and three cards move'));
+      assert.deepEqual(bets.map((bet) => [bet.text, bet.delay]), [0, 1, 2].map(() => [says(3 * big), 0]), where('the bets going to the pot'));
+      bets.forEach((bet, seat) => {
+        assertOver(bet.from, seen.before.bets[seat], where(`the bet of seat ${seat} leaves where it lay`));
+        assertOver(bet.to, seen.after.pot, where(`the bet of seat ${seat} goes to the pot`));
+      });
+      assert.deepEqual(cards.map((card) => [card.board, card.delay]), [0, 1, 2].map((nth) => [0, STEP_GAP_MS + nth * 60]), where('the flop'));
+      cards.forEach((card) => assertDrops(card, where('a card of the flop')));
+
+      seen = await step('a check', () => table.act('Quigs', { type: 'check' }));
+      assert.deepEqual(seen.flights, [], where('a check moves nothing'));
+
+      seen = await step('a bet', () => table.act('Stu', { type: 'raise', to: 5 * big }));
+      assert.deepEqual(seen.flights.map((flight) => [flight.what, flight.standIn, flight.seat, flight.text]), [['chips', false, 1, says(5 * big)]], where('a bet'));
+      assertOver(seen.flights[0]!.from, seen.after.plates[1], where('the bet leaves its seat'));
+
+      seen = await step('another fold', () => table.act('Pam', { type: 'fold' }));
+      assert.equal(seen.flights.length, 1, where('another fold'));
+      assertLeavesSeat(seen.flights[0]!, seen, 2, where('another fold'));
+
+      // The viewer's own fold leaves their cards where they are and is silent to them, so the pot won is heard at once:
+      // the bet nobody called goes back and the pot leaves with it
+      seen = await step('a win', () => last(() => table.act('Quigs', { type: 'fold' })));
+      bets = flightsOf(seen, 'chips', true);
+
+      assert.equal(seen.flights.length, 2, where('the bet going back and the pot move'));
+      assert.deepEqual(bets.map((bet) => [bet.text, bet.delay]), [[says(5 * big), 0], [says(9 * big), 0]], where('the bet going back and the pot'));
+      assertOver(bets[0]!.from, seen.before.bets[1], where('the bet going back leaves where it lay'));
+      assertOver(bets[1]!.from, seen.after.pot, where('the pot leaves the middle'));
+      bets.forEach((bet) => assertOver(bet.to, seen.after.plates[1], where('the winner’s chips go to their seat')));
+
+      // The board plays for everyone, so the pot is split four ways: the other hands turn up, then each winner gets a pile
+      await step('the next deal', () => {
+        table.play(() => null, (view) => !view.hand);
+        table.deal({ button: 3, board: 'As Ks Qs Js Ts' });
+      });
+      await step('to the river', () => table.play(passive, (view) => view.hand!.street === 'river' && view.hand!.toAct === 3));
+
+      seen = await step('a split pot', () => last(() => table.act('Al', { type: 'check' })));
+      bets = flightsOf(seen, 'chips', true);
+      cards = flightsOf(seen, 'card', false);
+
+      assert.equal(seen.flights.length, 10, where('six cards turn up and four piles move'));
+      assert.deepEqual(cards.map((card) => [card.seat, card.delay]), [1, 1, 2, 2, 3, 3].map((seat) => [seat, 0]), where('the other three hands turn up'));
+      cards.forEach((card) => assertOver(card.from, card.to, where('a card turns up where it lies')));
+      assert.deepEqual(bets.map((bet) => [bet.text, bet.delay]), [0, 1, 2, 3].map(() => [says(big), STEP_GAP_MS]), where('a pile for each winner'));
+      assert.deepEqual(bets.map((bet) => Object.keys(seen.after.plates).find((seat) => over(bet.to, seen.after.plates[Number(seat)]!))).sort(), ['0', '1', '2', '3'], where('each pile goes to a winner of its own'));
+      bets.forEach((bet) => assertOver(bet.from, seen.after.pot, where('a winner’s pile leaves the middle')));
+
+      // A bomb pot: a bare chip from every seat as the cards go out, then the flop
+      seen = await step('a bomb pot', () => {
+        table.play(() => null, (view) => !view.hand);
+        table.act('Quigs', { type: 'setBombPot', on: true });
+        table.deal({ button: 3, board: '2c 7d 9h Jc 3s' });
+      });
+      bets = flightsOf(seen, 'chips', true);
+      cards = flightsOf(seen, 'card', false);
+
+      assert.equal(seen.flights.length, 15, where('four chips, eight cards and the flop move'));
+      assert.deepEqual(bets.map((bet) => [bet.text, bet.delay]), [0, 1, 2, 3].map(() => ['', 0]), where('a bare chip from every seat'));
+      bets.forEach((bet, seat) => {
+        assertOver(bet.from, seen.after.plates[seat], where(`the chip of seat ${seat} leaves its seat`));
+        assertOver(bet.to, seen.after.pot, where(`the chip of seat ${seat} goes to the pot`));
+      });
+      assert.deepEqual(cards.map((card) => card.seat ?? `board ${card.board}`), [0, 0, 1, 1, 2, 2, 3, 3, 'board 0', 'board 0', 'board 0'], where('the cards, then the flop'));
+      assert.deepEqual(cards.slice(8).map((card) => card.delay), [0, 1, 2].map((nth) => STEP_GAP_MS + nth * 60), where('the flop comes a beat after the deal'));
+
+      // The same on two boards: both flops land together, each card on its own place
+      seen = await step('a double-board bomb pot', () => {
+        last(() => table.play(passive, (view) => view.hand?.stage === 'done'));
+        table.play(() => null, (view) => !view.hand);
+        table.act('Quigs', { type: 'updateConfig', config: { bombPotBoards: 'two' } });
+        table.act('Quigs', { type: 'setBombPot', on: true });
+        table.deal({ button: 3, board: '2c 7d 9h Jc 3s', secondBoard: 'Kd 5c 8h Ts 2h' });
+      });
+      bets = flightsOf(seen, 'chips', true);
+      cards = flightsOf(seen, 'card', false);
+
+      assert.equal(seen.flights.length, 18, where('four chips, eight cards and two flops move'));
+      bets.forEach((bet, seat) => {
+        assertOver(bet.from, seen.after.plates[seat], where(`the chip of seat ${seat} leaves its seat for two boards`));
+        assertOver(bet.to, seen.after.pot, where(`the chip of seat ${seat} goes to the pot under two boards`));
+      });
+      assert.deepEqual(cards.slice(8).map((card) => [card.board, card.delay]), [0, 1].flatMap((board) => [0, 1, 2].map((nth) => [board, STEP_GAP_MS + nth * 60])), where('both flops come together, a beat after the deal'));
+      cards.slice(8).forEach((card) => assertDrops(card, where(`a card of the flop of board ${card.board}`)));
+      await shot(moving, `motion-landed-two-flops-${layout.name}`);
+
+      // Bets lie clear of both boards, a row further out on a standing phone, and that is where each slides to and leaves from
+      for (const name of ['Quigs', 'Stu', 'Pam']) {
+        seen = await step(`${name}’s bet beside two boards`, () => table.act(name, name === 'Quigs' ? { type: 'raise', to: 2 * big } : { type: 'call' }));
+        assert.deepEqual(seen.flights.map((flight) => [flight.what, flight.standIn, flight.text]), [['chips', false, says(2 * big)]], where(`${name}’s bet beside two boards`));
+        assertOver(seen.flights[0]!.from, seen.after.plates[seen.flights[0]!.seat!], where(`${name}’s bet beside two boards leaves its seat`));
+      }
+
+      // The button's call ends the street: the bets go to the pot as it is heard, and the turn of both boards a beat later, as the one sound of the two
+      seen = await step('the turn of two boards', () => table.act('Al', { type: 'call' }));
+      bets = flightsOf(seen, 'chips', true);
+      cards = flightsOf(seen, 'card', false);
+
+      assert.equal(seen.flights.length, 6, where('four bets and the turn of two boards move'));
+      assert.deepEqual(bets.map((bet) => [bet.text, bet.delay]), [0, 1, 2, 3].map(() => [says(2 * big), 0]), where('the bets going to the pot under two boards'));
+      bets.forEach((bet, seat) => {
+        if (seen.before.bets[seat]) {
+          assertOver(bet.from, seen.before.bets[seat], where(`beside two boards, the bet of seat ${seat} leaves where it lay`));
+        }
+        assertOver(bet.to, seen.after.pot, where(`the bet of seat ${seat} goes to the pot under two boards`));
+      });
+      assert.deepEqual(Object.keys(seen.before.bets), ['0', '1', '2'], where('the bets that lay beside two boards'));
+      assert.deepEqual(cards.map((card) => [card.board, card.delay]), [0, 1].map((board) => [board, STEP_GAP_MS]), where('the turn of both boards comes together'));
+      cards.forEach((card) => assertDrops(card, where(`the turn of board ${card.board}`)));
+      await shot(moving, `motion-landed-two-turns-${layout.name}`);
+
+      // The last hand of the night, played out in one view: each winner gets one pile, all at once
+      table.act('Quigs', { type: 'setLastHands', hands: 0 });
+      seen = await step('the last hand of the night', () => table.play(passive, (view) => view.hand?.stage === 'done'));
+      bets = flightsOf(seen, 'chips', true);
+
+      assert.ok(bets.length > 0 && bets.every((bet) => bet.delay === bets[0]!.delay), where('the last pot goes to its winners at once'));
+      bets.forEach((bet) => assertOver(bet.from, seen.after.pot, where('a pile of the last pot leaves the middle')));
+      assert.equal(new Set(bets.map((bet) => Object.keys(seen.after.plates).find((seat) => over(bet.to, seen.after.plates[Number(seat)]!)))).size, bets.length, where('each pile of the last pot goes to a winner of its own'));
+
+      // And when the felt comes to say the night is over, nothing moves and nothing is left on it
+      seen = await step('the end of the night', () => rig.advance(table.view('Quigs').hand!.deadline! - rig.now()));
+      assert.notEqual(table.view('Quigs').nightEndedAt, null);
+      assert.deepEqual(seen.flights, [], where('the end of the night moves nothing'));
+      assert.equal(await text(moving, '.message.night-over > div'), 'The night is over', where('the felt'));
+      assert.equal(await moving.locator('.stand-in').count(), 0, where('something is left on the felt when the night is over'));
+      await closeRecap(moving);
+      await shot(moving, `motion-night-over-${layout.name}`);
+
+      await shot(moving, `motion-landed-${layout.name}`);
+      await moving.context().close();
+      await still.context().close();
+    },
+  ]),
+  [
+    'with animations on, a tap, a key and a half-typed bet work while cards are in the air, and a new view, a squeezed table, a turned phone or the end of the night leaves nothing behind',
+    async (rig) => {
+      const still = { moving: false, animations: 0, animated: [], standIns: 0, inTheWay: 0 };
+      const air = (animations: number, standIns: number) => ({ moving: true, animations, animated: ['opacity', 'transform'], standIns, inTheWay: 0 });
+
+      for (const layout of MOTION_LAYOUTS.filter((layout) => ['phone-standing', 'desktop'].includes(layout.name))) {
+        const table = rig.table(MOTION_PLAYERS);
+        const { moving, still: unmoved } = await watch(table, 'Quigs', layout, 0.5);
+        const press = pressOn(moving, layout.screen);
+        const where = (what: string) => `${layout.name}, ${what}`;
+        const shown = () => Promise.all([moving, unmoved].map((page) => caughtUp(page, table.view('Quigs'))));
+
+        // The button is on Stu, so the deal puts the action on Quigs with every card still in the air
+        table.deal({ button: 1 });
+        await shown();
+        assert.deepEqual(await inTheAir(moving), air(10, 0), where('the deal'));
+        await shot(moving, `motion-held-deal-${layout.name}`);
+
+        // A bet half typed stays through a view that brings no news of the hand, which leaves the cards in the air too
+        await moving.fill('#raise-amount', '55');
+        table.act('Stu', { type: 'chat', text: 'any day now' });
+        await moving.getByText('any day now').first().waitFor({ state: 'attached' });
+        assert.equal(await moving.inputValue('#raise-amount'), '55', where('the half-typed bet was lost to a line of chat'));
+        assert.deepEqual(await inTheAir(moving), air(10, 0), where('a line of chat'));
+
+        // A tap on a phone and a key on the desktop play the move with the cards still in the air
+        if (layout.screen === 'desktop') {
+          await moving.locator('#raise-amount').blur();
+          await settle(moving);
+          await moving.keyboard.press('c');
+        } else {
+          await press('.turn [data-action="raise"]');
+        }
+        await moving.waitForSelector('.seat.acting[data-seat="1"]');
+        // The bet is on the page from the tap. Its line in the play-by-play comes with the server's answer, which draws nothing over the slide
+        await toldOf(moving, 'Quigs');
+        assert.equal(table.view('Quigs').seats[0]!.bet, layout.screen === 'desktop' ? 20 : 55, where('the move did not reach the table'));
+        await shown();
+        assert.deepEqual(await inTheAir(moving), air(1, 0), where('the viewer’s bet slides alone, and nothing of the deal is left'));
+
+        // Each fold takes the place of the one in the air before it
+        for (const name of ['Stu', 'Pam']) {
+          table.act(name, { type: 'fold' });
+          await shown();
+          assert.deepEqual(await inTheAir(moving), air(1, 1), where(`${name}’s fold`));
+        }
+
+        // A stand-in is drawn from the theme as what it stands in for is: here two cards face down, on their way to the middle
+        if (layout.screen === 'desktop') {
+          for (const theme of THEMES) {
+            await moving.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme.id)}`);
+            await shot(moving, `motion-held-fold-theme-${theme.id}`);
+          }
+          await moving.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(THEMES[0]!.id)}`);
+        }
+
+        // The bets on their way to the pot as the flop comes: Pam's blind with them, though she folded
+        table.act('Al', passive(table.view('Al')));
+        await shown();
+        assert.deepEqual(await inTheAir(moving), air(6, 3), where('the end of the street'));
+        await shot(moving, `motion-held-flop-${layout.name}`);
+
+        if (!layout.height) {
+          // A page put out of sight, as by another tab, would hold what is in the air until it came back
+          await moving.evaluate(SIGHT);
+          await moving.evaluate('window.outOfSight(true)');
+          assert.deepEqual(await inTheAir(moving), still, where('the page out of sight'));
+          await moving.evaluate('window.outOfSight(false)');
+          await assertAsStill(moving, unmoved, where('the page out of sight'));
+        } else {
+          // A keyboard opening squeezes the table and a turned phone lays it down: either way what was in the air is gone at once
+          for (const page of [moving, unmoved]) {
+            await page.addStyleTag({ content: `.stage { height: ${layout.height - 40}px !important; }` });
+          }
+          await dealt(moving);
+          assert.deepEqual(await inTheAir(moving), still, where('the table squeezed'));
+          await assertAsStill(moving, unmoved, where('the table squeezed'));
+
+          // And the next thing to happen moves as ever
+          table.act('Al', { type: 'raise', to: 40 });
+          await shown();
+          assert.deepEqual(await inTheAir(moving), air(1, 0), where('a bet after the squeeze'));
+
+          for (const page of [moving, unmoved]) {
+            await page.setViewportSize({ width: SCREENS.phoneSideways.width, height: layout.height + 600 });
+            await page.waitForSelector('.table.wide');
+          }
+          await dealt(moving);
+          assert.deepEqual(await inTheAir(moving), still, where('the phone turned'));
+          await assertAsStill(moving, unmoved, where('the phone turned'));
+        }
+
+        await flown(moving);
+        await assertAsStill(moving, unmoved, where('landed'));
+
+        // The last hand of the night is won, and the felt comes to say the night is over with the pot still on its way
+        table.act('Quigs', { type: 'setLastHands', hands: 0 });
+        const done = table.play(passive, (view) => view.hand?.stage === 'done');
+        await shown();
+        assert.ok((await inTheAir(moving)).standIns > 0, where('the last pot is not in the air'));
+
+        rig.advance(done.hand!.deadline! - rig.now());
+        for (const page of [moving, unmoved]) {
+          await page.waitForSelector('.message.night-over');
+          await closeRecap(page);
+        }
+        assert.deepEqual(await inTheAir(moving), still, where('the night over'));
+        await assertAsStill(moving, unmoved, where('the night over'));
+        await shot(moving, `motion-held-night-over-${layout.name}`);
+
+        await moving.context().close();
+        await unmoved.context().close();
+      }
+    },
+  ],
+  [
+    'animations are on for a new player, off for one who switched them off and for a device that asks for less motion, and the switch says which',
+    async (rig) => {
+      const table = rig.table(MOTION_PLAYERS);
+      const page = await table.open('Quigs', 'phone', MOTION, { moving: true });
+      const kept = await table.open('Stu', 'phone', MOTION);
+      const press = pressOn(page, 'phone');
+      const shown = (on: Page = page) => caughtUp(on, table.view('Quigs'));
+      const moved = async (on: Page = page) => (await flown(on)).length;
+
+      const preferences = async () => {
+        await press('[data-action="menu"]');
+        await press('.menu [data-action="preferences"]');
+        await page.waitForSelector('#pref-motion');
+        await page.locator('#pref-motion').scrollIntoViewIfNeeded();
+      };
+
+      table.deal({ button: 3 });
+      await shown();
+      await shown(kept);
+      assert.equal(await moved(), 10, 'a new player sees the blinds slide in and the cards dealt');
+      assert.equal(await moved(kept), 0, 'a page the rig keeps still moved');
+      assert.equal(await kept.evaluate(`localStorage.getItem('cnd.motion')`), 'off');
+      await kept.context().close();
+
+      await preferences();
+      assert.equal(await page.getAttribute('#pref-motion', 'aria-checked'), 'true');
+      assert.match(await text(page, '#pref-motion'), /^Animations\s*Cards are dealt around the table and chips slide to the pot$/);
+      assertOnScreen(await boxes(page, '#pref-motion'), 'phone', 'the switch for animations');
+      assert.deepEqual(await squeezed(page, '#pref-motion, #pref-motion span'), [], 'the switch for animations is cut off');
+      await shot(page, 'preferences-motion-phone');
+
+      await press('#pref-motion');
+      await page.waitForSelector('#pref-motion[aria-checked="false"]');
+      assert.equal(await page.evaluate(`localStorage.getItem('cnd.motion')`), 'off');
+      await press('[data-action="close"]');
+
+      table.act('Pam', { type: 'raise', to: 60 });
+      await shown();
+      assert.equal(await moved(), 0, 'a bet moved with animations switched off');
+
+      await preferences();
+      await press('#pref-motion');
+      await page.waitForSelector('#pref-motion[aria-checked="true"]');
+      await press('[data-action="close"]');
+
+      table.act('Al', { type: 'fold' });
+      await shown();
+      assert.equal(await moved(), 1, 'a fold did not move with animations switched back on');
+
+      // The device's own setting wins, and leaves the player's choice as it was for when the device stops asking
+      await page.emulateMedia({ reducedMotion: 'reduce' });
+      table.act('Quigs', { type: 'call' });
+      await shown();
+      assert.equal(await moved(), 0, 'a call moved on a device that asks for less motion');
+
+      await preferences();
+      await page.waitForSelector('#pref-motion[aria-disabled="true"][aria-checked="false"]');
+      assert.match(await text(page, '#pref-motion'), /Off while this device asks for less motion/);
+      await page.tap('#pref-motion', { force: true });
+      assert.equal(await page.getAttribute('#pref-motion', 'aria-checked'), 'false', 'the switch turned on against the device');
+      assert.equal(await page.evaluate(`localStorage.getItem('cnd.motion')`), 'on', 'the player’s own choice was lost');
+      assert.deepEqual(await squeezed(page, '#pref-motion, #pref-motion span'), [], 'the switch that cannot be turned on is cut off');
+      await shot(page, 'preferences-motion-reduced-phone');
+      await press('[data-action="close"]');
+
+      await page.emulateMedia({ reducedMotion: 'no-preference' });
+      table.act('Stu', { type: 'call' });
+      await shown();
+      assert.equal(await moved(), 6, 'the bets did not go to the pot, or the flop did not come, once the device stopped asking');
+      await page.context().close();
+    },
+  ],
+  [
+    'animations start in the frame their sound does: the deal at once, a street a beat after what is heard before it, and a street on two boards with the one sound of the two',
+    async (rig) => {
+      /**
+       * What a view set moving on Stu's page and what it played, since the last look. Whatever is heard
+       * and seen was set off in one frame, and the first card of each board starts when its sound does.
+       */
+      const watcher = async (table: RigTable) => {
+        const page = await table.open('Stu', 'desktop', [LISTEN, MOTION].join(';'), { moving: true });
+        let listened = 0;
+
+        return {
+          page,
+          look: async (what: string) => {
+            await caughtUp(page, table.view('Stu'));
+
+            const flights = await flown(page);
+            const names = await playedNames(page, listened);
+            const starts = (await playedAt(page)).slice(listened);
+            const frames = ((await page.evaluate('window.played')) as { frame: number }[]).slice(listened).map((sound) => sound.frame);
+            const heard = names.map((sound, nth) => ({ sound, frame: frames[nth]!, after: Math.round((starts[nth]! - starts[0]!) * 1000) }));
+            const boards = [...new Set(flights.flatMap((flight) => (flight.board === null ? [] : [flight.board])))].sort();
+            const firstOf = (these: Flight[]) => these.reduce((first, flight) => (flight.delay < first.delay ? flight : first));
+            const streets = boards.map((board) => firstOf(flights.filter((flight) => flight.board === board)));
+            const street = heard.find(({ sound }) => sound === 'street');
+
+            listened += names.length;
+
+            for (const card of streets) {
+              assert.equal(card.frame, street?.frame, `${what}: board ${card.board} was not set off in the frame its sound was`);
+              // Sounds keep their gap by the clock and moves by the frame they start in, so the two agree to within a frame
+              assert.ok(Math.abs(card.delay - street!.after) < 17, `${what}: board ${card.board} is seen ${card.delay} ms after the view and heard ${street!.after} ms after it`);
+            }
+
+            return { flights, heard: heard.map(({ sound, after }) => [sound, Math.round(after / STEP_GAP_MS)]), streets: streets.map((card) => [card.board, card.delay]), firstOf };
+          },
+        };
+      };
+
+      // A bomb pot on one board: the deal at once, and the flop a beat later
+      let table = rig.table(MOTION_PLAYERS);
+      let { page, look } = await watcher(table);
+
+      table.act('Quigs', { type: 'setBombPot', on: true });
+      table.deal({ button: 3, board: '2c 7d 9h Jc 3s' });
+
+      let seen = await look('a bomb pot');
+      const deal = seen.firstOf(seen.flights.filter((flight) => flight.what === 'card' && flight.seat !== null));
+
+      assert.deepEqual(seen.heard, [['deal', 0], ['street', 1]]);
+      assert.equal(deal.delay, 0, 'the deal waits');
+      assert.equal(deal.frame, seen.flights.find((flight) => flight.board !== null)!.frame, 'the deal and the flop were not set off together');
+      assert.deepEqual(seen.streets, [[0, STEP_GAP_MS]]);
+      await page.context().close();
+
+      // On two boards the flops are one sound and land together
+      table = rig.table(MOTION_PLAYERS, { bombPotBoards: 'two' });
+      ({ page, look } = await watcher(table));
+
+      table.act('Quigs', { type: 'setBombPot', on: true });
+      table.deal({ button: 3, board: '2c 7d 9h Jc 3s', secondBoard: 'Kd 5c 8h Ts 2h' });
+      seen = await look('a double-board bomb pot');
+      assert.deepEqual(seen.heard, [['deal', 0], ['street', 1]]);
+      assert.deepEqual(seen.streets, [[0, STEP_GAP_MS], [1, STEP_GAP_MS]]);
+
+      // Checked around to the button, whose check Stu hears as a knock: the turn of both boards comes with the street's sound, a beat after it
+      for (const name of ['Quigs', 'Stu', 'Pam']) {
+        table.act(name, { type: 'check' });
+      }
+      await look('checks');
+      table.act('Al', { type: 'check' });
+      seen = await look('the turn of two boards');
+      assert.deepEqual(seen.heard.slice(0, 2), [['knock', 0], ['street', 1]]);
+      assert.deepEqual(seen.streets, [[0, STEP_GAP_MS], [1, STEP_GAP_MS]]);
+
+      // Stu's own call is silent to him, so when it ends the street the river of both comes at once, with the bets going to the pot
+      table.act('Quigs', { type: 'check' });
+      table.act('Stu', { type: 'check' });
+      table.act('Pam', { type: 'raise', to: 40 });
+      table.act('Al', { type: 'fold' });
+      table.act('Quigs', { type: 'fold' });
+      await look('a bet and two folds');
+      table.act('Stu', { type: 'call' });
+      seen = await look('the river of two boards');
+      assert.deepEqual(seen.heard[0], ['street', 0]);
+      assert.deepEqual(seen.streets, [[0, 0], [1, 0]]);
+      assert.equal(seen.flights.filter((flight) => flight.what === 'chips' && flight.delay === 0).length, 2, 'the two bets go to the pot as the river comes');
+      await page.context().close();
+
+      // A hand run twice is dealt a street at a time, a board after the other: each card lands as its own street is heard
+      table = rig.table(MOTION_PLAYERS.slice(0, 2), { maxRuns: 2 });
+      ({ page, look } = await watcher(table));
+
+      table.deal({ button: 0, holes: { 0: 'As Ah', 1: 'Kd Kc' }, board: '3c 8d Jh Qs 4d', secondBoard: '2c 5h 9s Td 6c' });
+      table.play(allIn, (view) => view.hand?.stage === 'runout');
+      // With every chip in before the flop, the table has no more on it than before the deal but the cards
+      await page.waitForSelector('.seat[data-seat="0"] .hole .card[data-card]');
+      await look('all in');
+
+      const streets: unknown[] = [];
+      for (let street = 0; street < 7 && table.view('Stu').hand!.stage === 'runout'; street++) {
+        rig.advance(table.view('Stu').hand!.deadline! - rig.now());
+        seen = await look(`street ${street} of a hand run twice`);
+        assert.equal(seen.heard[0]![0], 'street');
+        streets.push(...seen.streets);
+      }
+
+      assert.deepEqual(streets, [[0, 0], [0, 0], [0, 0], [1, 0], [1, 0], [1, 0]], 'each street of a hand run twice, on its own board');
+      await page.context().close();
+    },
+  ],
+  [
+    'a player who owes blinds is offered to post them or to wait for the big blind, the bar says what happens next, and every seat shows who is waiting',
+    async (rig) => {
+      for (const kind of MISSED_BLIND_TABLES) {
+        for (const screen of ['smallPhone', 'desktop'] as const) {
+          const table = blindsOwed(rig, kind);
+          const page = await table.open(MARGE, screen);
+          const other = await table.open('Stu', screen);
+          const press = pressOn(page, screen);
+          const statuses = async () => [await text(page, '.seat[data-seat="3"] .status'), await text(other, '.seat[data-seat="3"] .status')];
+          const said = (words: string) => page.waitForSelector(`.controls .owed-note:has-text("${words}")`);
+
+          const lookInShapes = (name: string) =>
+            inShapesOf(
+              page,
+              screen,
+              async (shape) => {
+                await assertOwedBarFits(page, screen);
+
+                const buttons = await boxes(page, '.controls .extras button');
+                buttons.forEach((button, index) => assertApart([button], buttons.slice(index + 1), 'two buttons under the table'));
+                await assertNoSidewaysScroll(page);
+                await shot(page, `missed-blinds-${name}-${kind.name}-${screen}-${shape}`);
+              },
+              { buttonsUp: false },
+            );
+
+          // Sitting out and owing: the one button that brings a player back is two, one for each way to settle
+          assert.equal(await text(page, '.controls .waiting'), `The game is pausedYou owe ${kind.both} for the blinds you missed`);
+          assert.deepEqual(await texts(page, '.controls .extras [data-action="wait-for-blind"], .controls .extras [data-action="post-blinds"]'), ['Wait for big blind', `Post ${kind.both} and play`]);
+          assert.equal(await page.locator('.controls [data-action="sit-in"], .controls [data-action="sit-out"]').count(), 0);
+          assert.deepEqual(await statuses(), ['Sitting out', 'Sitting out']);
+          await lookInShapes('choice');
+
+          // Between the button and the big blind of the next hand, so posting waits for the button to pass
+          await press('.controls [data-action="post-blinds"]');
+          await said('once the button has passed you');
+          assert.equal(await text(page, '.controls .owed-note'), `You post ${kind.both} and are dealt in once the button has passed you`);
+          assert.deepEqual(await texts(page, '.controls .extras [data-action="wait-for-blind"]'), ['Wait for big blind']);
+          assert.equal(await page.locator('.controls [data-action="post-blinds"], .controls [data-action="sit-in"]').count(), 0);
+          assert.equal(await page.locator('.controls [data-action="sit-out"]').count(), 1, 'a player back in the game is not offered to sit out again');
+          await other.waitForSelector('.seat[data-seat="3"] .status:has-text("Waiting to post")');
+          assert.deepEqual(await statuses(), ['Waiting to post', 'Waiting to post']);
+          await lookInShapes('after-the-button');
+
+          // That hand is dealt without her, and the one after is hers to post in
+          table.dealNext();
+          await said('next hand');
+          assert.equal(await text(page, '.controls .waiting'), `Waiting for Quigs\nYou post ${kind.both} and are dealt in next hand`.replace('\n', ''));
+          assert.equal(await page.locator('.seat.me .hole .card').count(), 0);
+          await lookInShapes('posting-next');
+
+          // Waiting instead, which is what coming back does unless she says otherwise
+          await press('.controls [data-action="wait-for-blind"]');
+          await said('reaches you');
+          assert.equal(await text(page, '.controls .owed-note'), 'You are dealt in when the big blind reaches you');
+          assert.deepEqual(await texts(page, '.controls .extras [data-action="post-blinds"]'), [`Post ${kind.both} instead`]);
+          await other.waitForSelector('.seat[data-seat="3"] .status:has-text("Waiting for BB")');
+          assert.deepEqual(await statuses(), ['Waiting for BB', 'Waiting for BB']);
+          assert.equal(table.view('Quigs').seats[3]!.comesIn, 'big blind');
+          await lookInShapes('waiting');
+
+          assert.deepEqual(await squeezed(other, '.seat .plate .status'), [], 'what a seat says is cut off for another player');
+          await shot(other, `missed-blinds-waiting-seen-${kind.name}-${screen}`);
+
+          await page.context().close();
+          await other.context().close();
+        }
+      }
+    },
+  ],
+  [
+    'what a player owes shares the bar with the count of the last hands and word of a bomb pot, each at its longest and whole, on the smallest phone',
+    async (rig) => {
+      const longest = {
+        ...MISSED_BLIND_TABLES[1]!,
+        config: { ...CENTS, smallBlind: 50_000, bigBlind: 100_000, bombPotAmount: 999_999, bombPotBoards: 'two' } as Partial<TableConfig>,
+        stack: 10_000_000,
+      };
+      const owed = '1,500.00';
+      const bombPot = 'Next hand is a double-board bomb pot: 9,999.99 each';
+      const screen = 'smallPhone';
+
+      const table = blindsOwed(rig, longest);
+      table.act('Quigs', { type: 'setLastHands', hands: LIMITS.lastHands });
+      table.act('Quigs', { type: 'setBombPot', on: true });
+
+      const page = await table.open(MARGE, screen);
+      const press = pressOn(page, screen);
+
+      const look = async (name: string, says: { hands: string; note: string; buttons: string[] }) => {
+        await page.waitForSelector(`.controls .owed-note:has-text("${says.note}")`);
+        assert.deepEqual(await texts(page, '.controls .next-hand span'), [says.hands, bombPot]);
+        assert.equal(await text(page, '.controls .owed-note'), says.note);
+        assert.deepEqual(await texts(page, '.controls .extras button'), says.buttons);
+
+        await inShapesOf(
+          page,
+          screen,
+          async (shape) => {
+            await assertNextHandsFit(page, screen, 'player who owes');
+            await assertOwedBarFits(page, screen);
+            assertApart(await boxes(page, '.controls .owed-note'), await boxes(page, '.controls .next-hand span'), 'what is owed and word of the hands to come');
+
+            const buttons = await boxes(page, '.controls .extras button');
+            buttons.forEach((button, index) => assertApart([button], buttons.slice(index + 1), 'two buttons under the table'));
+            await assertNoSidewaysScroll(page);
+            await shot(page, `missed-blinds-with-last-hands-${name}-${shape}`);
+          },
+          { buttonsUp: false },
+        );
+      };
+
+      // Back from sitting out, with the choice to make
+      await look('choice', { hands: `${LIMITS.lastHands} more hands to play`, note: `You owe ${owed} for the blinds you missed`, buttons: ['Wait for big blind', `Post ${owed} and play`, 'Straddle', 'Add chips'] });
+
+      // Set to post from where the button has yet to pass: the longest thing the bar says about blinds
+      await press('.controls [data-action="post-blinds"]');
+      await look('after-the-button', { hands: `${LIMITS.lastHands} more hands to play`, note: `You post ${owed} and are dealt in once the button has passed you`, buttons: ['Sit out next hand', 'Wait for big blind', 'Straddle', 'Add chips'] });
+
+      // A hand is on without her, and the one after it is the bomb pot, which has no blinds for her to post
+      table.act('Quigs', { type: 'setBombPot', on: false });
+      table.dealNext();
+      table.act('Quigs', { type: 'setLastHands', hands: LIMITS.lastHands });
+      table.act('Quigs', { type: 'setBombPot', on: true });
+      await page.waitForSelector('.controls .waiting:has-text("Waiting for ")');
+      await look('during-a-hand', { hands: `${LIMITS.lastHands} more hands after this one`, note: `You post ${owed} in the hand after the bomb pot`, buttons: ['Sit out next hand', 'Wait for big blind', 'Straddle', 'Add chips'] });
+
+      // The night ends with her still owing. Nothing is charged or forgiven: the bar has no hand to speak of, and her seat still says she is waiting
+      playOut(table);
+      table.act('Quigs', { type: 'endNight' });
+      await page.waitForSelector('.message.night-over');
+      await closeRecap(page);
+      await page.waitForSelector('.controls .owed-note', { state: 'detached' });
+      assert.equal(await text(page, '.controls .waiting'), 'The night is over');
+      assert.equal(await page.locator('.controls .extras button').count(), 0);
+      assert.equal(await text(page, '.seat.me .status'), 'Waiting to post');
+      assert.deepEqual([table.view(MARGE).seats[3]!.owesBigBlind, table.view(MARGE).seats[3]!.owesSmallBlind], [true, true]);
+      await shot(page, 'missed-blinds-night-over');
+
+      // Play starts again where it stopped, for her too
+      table.act('Quigs', { type: 'playOn' });
+      await page.waitForSelector(`.controls .owed-note:has-text("You post ${owed} and are dealt in next hand")`);
+      assert.deepEqual(await texts(page, '.controls .extras button'), ['Sit out next hand', 'Wait for big blind', 'Straddle', 'Add chips']);
+      assert.equal(await text(page, '.seat.me .status'), 'Waiting to post');
+      await assertOwedBarFits(page, screen);
+
+      await page.context().close();
+    },
+  ],
+  [
+    'a hand with a missed big blind and a dead small blind shows both on the felt, in the play-by-play and in the hand history, and gives their player the option',
+    async (rig) => {
+      for (const kind of MISSED_BLIND_TABLES) {
+        for (const screen of ['smallPhone', 'desktop'] as const) {
+          const table = blindsOwed(rig, kind);
+          const [bigBlind, firstToAct, second] = LONG_NAMES;
+
+          // The button passes Marge in the first of these, and she posts in the second: the button on seat 4, the blinds on seats 5 and 0
+          table.act(MARGE, { type: 'comeIn', post: true });
+          table.dealNext();
+          playOut(table);
+          table.dealNext({ holes: { 0: 'Ks Kh', 3: 'As Ah' }, board: '2c 7d 9h Jc 3s' });
+
+          const lines = [
+            `Hand #123 · blinds ${kind.blinds} · Stu has the button`,
+            `${MARGE} posts missed big blind ${kind.big}`,
+            `${MARGE} posts dead small blind ${kind.small}`,
+            `Big Al posts small blind ${kind.small}`,
+            `${bigBlind} posts big blind ${kind.big}`,
+          ];
+
+          const page = await table.open(firstToAct!, screen);
+          const press = pressOn(page, screen);
+
+          // Her big blind is in front of her like the real one, her small blind is in the pot with no bet to show for it, and the action starts left of the real big blind
+          assert.deepEqual(await texts(page, '.bet'), [kind.big, kind.big, kind.small]);
+          assert.equal(await text(page, '.pot'), `Pot${kind.pot}`);
+          assert.equal(await text(page, '.seat[data-seat="3"] .status'), 'Missed BB');
+          assert.equal(await page.locator('.seat[data-seat="4"] .dealer-button').count(), 1);
+          assert.equal(await page.locator('.seat.acting').getAttribute('data-seat'), '1');
+          assert.equal(await text(page, '.turn [data-action="call"]'), `Call ${kind.big}`);
+
+          await inShapesOf(page, screen, async (shape) => {
+            assert.deepEqual(await squeezed(page, '.pot, .bet, .plate .stack, .plate .status'), [], 'an amount or a status on the table is cut off');
+            assertOnScreen(await boxes(page, '.seat .plate, .bet, .pot'), screen, 'a seat, a bet or the pot');
+            await assertBetsApart(page);
+            await shot(page, `missed-blinds-hand-${kind.name}-${screen}-${shape}`);
+          });
+
+          await toggleFeed(page, screen);
+          const said = await texts(page, '.entries li');
+          const from = said.indexOf(lines[0]!);
+          assert.deepEqual(said.slice(from, from + lines.length), lines);
+          assert.deepEqual(await squeezed(page, '.entries li'), [], 'a line of the play-by-play is cut off');
+          await assertNoSidewaysScroll(page);
+          await shot(page, `missed-blinds-play-by-play-${kind.name}-${screen}`);
+          await toggleFeed(page, screen);
+
+          // With nothing to call she may still raise: the big blind in front of her is a bet she has not acted on
+          table.act(firstToAct!, { type: 'fold' });
+          table.act(second!, { type: 'fold' });
+          const hers = await table.open(MARGE, screen);
+          assert.equal(await text(hers, '.turn [data-action="check"]'), 'Check');
+          assert.equal(await text(hers, '.turn [data-action="raise"]'), `Raise to ${kind.raiseTo}`);
+          assert.equal(await text(hers, '.pot'), `Pot${kind.pot}`);
+          await shot(hers, `missed-blinds-option-${kind.name}-${screen}`);
+          await hers.context().close();
+
+          playOut(table);
+          await press('[data-action="menu"]');
+          await press('.menu [data-action="history"]');
+          await page.waitForSelector('.history summary');
+          assert.match(await text(page, '.history summary'), new RegExp(`^Hand #123${MARGE} \\+`));
+          await press('.history summary');
+          assert.deepEqual((await text(page, '.history pre')).split('\n').slice(0, lines.length), lines);
+          assert.deepEqual(await squeezed(page, '.history summary'), [], 'the hand\'s line in the history is cut off');
+          await shot(page, `missed-blinds-history-${kind.name}-${screen}`);
+
+          await page.context().close();
+        }
+      }
+    },
+  ],
+  [
+    'a player who sits down while a game is going waits for the big blind or posts one, and their seat says which',
+    async (rig) => {
+      for (const kind of MISSED_BLIND_TABLES) {
+        for (const screen of PHONE_AND_DESKTOP) {
+          const table = rig.table(
+            ['Quigs', 'Stu', 'Pocket Pam', 'Big Al'].map((name) => ({ name, stack: kind.stack })),
+            kind.config,
+          );
+          table.deal({ button: 0 });
+          table.join(MARGE);
+
+          const page = await table.open(MARGE, screen);
+          const other = await table.open('Stu', 'phone');
+          const press = pressOn(page, screen);
+          table.seat(MARGE, 6, kind.stack);
+
+          const look = async (name: string) => {
+            await assertOwedBarFits(page, screen);
+            await shot(page, `missed-blinds-newcomer-${name}-${kind.name}-${screen}`);
+          };
+
+          // Sat down between hands of a game, she owes a big blind and waits for it unless she says otherwise
+          await page.waitForSelector('.controls .owed-note');
+          assert.equal(await text(page, '.controls .owed-note'), 'You are dealt in when the big blind reaches you');
+          assert.deepEqual(await texts(page, '.controls .extras [data-action="post-blinds"]'), [`Post ${kind.big} instead`]);
+          assert.equal(await text(page, '.seat.me .status'), 'Waiting for BB');
+          await other.waitForSelector('.seat[data-seat="6"] .status:has-text("Waiting for BB")');
+          await look('waiting');
+
+          await press('.controls [data-action="post-blinds"]');
+          await page.waitForSelector('.controls .owed-note:has-text("next hand")');
+          assert.equal(await text(page, '.controls .owed-note'), `You post ${kind.big} and are dealt in next hand`);
+          await other.waitForSelector('.seat[data-seat="6"] .status:has-text("Waiting to post")');
+          await look('posting');
+
+          // In for a big blind that plays, and no small blind: she never had the big blind before it
+          playOut(table);
+          table.dealNext();
+          await page.waitForSelector('.seat.me .hole .card');
+          assert.deepEqual(await texts(page, '.bet'), [kind.small, kind.big, kind.big]);
+          assert.equal(await page.locator('.controls .owed-note').count(), 0);
+          assert.ok(table.view('Quigs').feed.some((entry) => entry.text === `${MARGE} posts missed big blind ${kind.big}`));
+          assert.ok(!table.view('Quigs').feed.some((entry) => entry.text.includes('dead small blind')));
+          await assertBetsApart(page);
+          await look('dealt-in');
+
+          await page.context().close();
+          await other.context().close();
+        }
+      }
+    },
+  ],
+  [
+    'the host forgives a player the blinds they missed from the Players dialog, and the player is simply back',
+    async (rig) => {
+      for (const kind of MISSED_BLIND_TABLES) {
+        for (const screen of PHONE_AND_DESKTOP) {
+          const table = blindsOwed(rig, kind);
+          const page = await table.open('Quigs', screen);
+          const hers = await table.open(MARGE, 'phone');
+          const press = pressOn(page, screen);
+          // Hers is the one line that says anything is owed
+          const row = '.rows li:has(.owes-note)';
+
+          await press('[data-action="menu"]');
+          await press('.menu [data-action="players"]');
+          await page.waitForSelector(row);
+
+          // Only the player who owes has anything to forgive
+          assert.match(await text(page, `${row} > span`), new RegExp(`^${MARGE} · seat 4 · `));
+          assert.equal(await text(page, `${row} .owes-note`), 'Owes the big blind and the small blind');
+          assert.deepEqual(await texts(page, '.dialog [data-action="forgive-blinds"]'), ['Forgive blinds']);
+          assert.equal(await page.locator(`${row} [data-action="forgive-blinds"]`).count(), 1);
+          await page.locator(row).scrollIntoViewIfNeeded();
+          assert.deepEqual(await squeezed(page, `${row} > span, ${row} .owes-note, ${row} button`), [], 'part of her line in the list is cut off');
+          assertOnScreen(await boxes(page, `.dialog, ${row}, ${row} button`), screen, 'her line in the list of players');
+          await assertNoSidewaysScroll(page);
+          await shot(page, `missed-blinds-forgive-${kind.name}-${screen}`);
+
+          await press(`${row} [data-action="forgive-blinds"]`);
+          await page.waitForSelector('.dialog [data-action="forgive-blinds"]', { state: 'detached' });
+          assert.equal(await page.locator('.dialog .owes-note').count(), 0);
+          assert.equal(table.view('Stu').feed.at(-1)!.text, `The host forgave ${MARGE} the blinds they missed`);
+
+          // Owing nothing, she is offered the one way back that anyone sitting out is
+          await hers.waitForSelector('.controls [data-action="sit-in"]');
+          assert.equal(await hers.locator('.controls .owed-note, .controls [data-action="post-blinds"], .controls [data-action="wait-for-blind"]').count(), 0);
+
+          await page.context().close();
+          await hers.context().close();
+        }
+      }
+    },
+  ],
+  [
+    'the table settings and the form for a new table take whether missed blinds are owed or forgiven, and forgiving them clears what is owed',
+    async (rig) => {
+      for (const kind of MISSED_BLIND_TABLES) {
+        for (const screen of ['smallPhone', 'desktop'] as const) {
+          const table = blindsOwed(rig, kind);
+          const page = await table.open('Quigs', screen);
+          const press = pressOn(page, screen);
+          const picked = (value: string) => page.isChecked(`#table-missed-blinds input[value="${value}"]`);
+          const openSettings = async () => {
+            await press('[data-action="menu"]');
+            await press('.menu [data-action="settings"]');
+            await page.waitForSelector('#table-missed-blinds');
+          };
+
+          await openSettings();
+          assert.equal(await picked('owed'), true, 'missed blinds are owed unless the host says otherwise');
+          assert.equal(await text(page, '#table-missed-blinds > span'), 'Missed blinds');
+          assert.deepEqual(await texts(page, '#table-missed-blinds .check'), ['Owed', 'Forgiven']);
+          assert.equal(await text(page, '#table-missed-blinds small'), 'Owed: a player the blinds pass while sitting out posts them to come back, or waits for the big blind');
+
+          await page.locator('#table-missed-blinds').scrollIntoViewIfNeeded();
+          assert.deepEqual(await squeezed(page, '#table-missed-blinds .check span, #table-missed-blinds > span, #table-missed-blinds small'), [], 'part of the settings is cut off');
+          assertOnScreen(await boxes(page, '.dialog, #table-missed-blinds, #table-missed-blinds .check'), screen, 'missed blinds in the settings');
+          const [owed, forgiven] = await boxes(page, '#table-missed-blinds .check');
+          assert.ok(owed && forgiven && !overlap(owed, forgiven), 'the two choices are drawn over each other');
+          await assertNoSidewaysScroll(page);
+
+          await press('#table-missed-blinds label:has-text("Forgiven")');
+          await shot(page, `missed-blinds-settings-${kind.name}-${screen}`);
+          await press('[data-action="save-settings"]');
+          await page.waitForSelector('.dialog', { state: 'detached' });
+
+          const seen = table.view('Stu');
+          assert.equal(seen.feed.at(-1)!.text, 'Missed blinds are forgiven: nobody owes any');
+          assert.deepEqual([seen.config.missedBlinds, seen.seats[3]!.owesBigBlind, seen.seats[3]!.owesSmallBlind], ['forgiven', false, false]);
+
+          await openSettings();
+          assert.equal(await picked('forgiven'), true);
+          await page.context().close();
+        }
+      }
+
+      for (const screen of PHONE_AND_DESKTOP) {
+        const page = await rig.lobby(screen);
+        const press = pressOn(page, screen);
+
+        assert.equal(await page.isChecked('#new-table-missed-blinds input[value="owed"]'), true);
+        await page.fill('#host-name', `Quigs ${screen}`);
+        await press('#new-table-missed-blinds label:has-text("Forgiven")');
+
+        await page.locator('#new-table-missed-blinds').scrollIntoViewIfNeeded();
+        assert.deepEqual(await squeezed(page, '#new-table-missed-blinds .check span, #new-table-missed-blinds > span, #new-table-missed-blinds small'), [], 'part of the form is cut off');
+        assertOnScreen(await boxes(page, '#new-table-missed-blinds, #new-table-missed-blinds .check'), screen, 'missed blinds in the form for a new table');
+        await assertNoSidewaysScroll(page);
+        await shot(page, `missed-blinds-new-table-${screen}`);
+
+        await press('[data-action="create-table"]');
+        await page.waitForSelector('#table-link');
+        assert.equal(rig.store.read(new URL(await page.inputValue('#table-link')).searchParams.get('table')!)!.config.missedBlinds, 'forgiven');
+
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'a dead button sits on the seat it is due on though nobody is in it, and a hand with no small blind says so in the play-by-play',
+    async (rig) => {
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        const table = rig.table(['Quigs', 'Stu', 'Pocket Pam', 'Big Al'].map((name) => ({ name, stack: 1000 })));
+        table.alter((state) => {
+          state.handCount = 121;
+        });
+        table.deal({ button: 0 });
+        playOut(table);
+
+        // Pam had the big blind and leaves: the small blind is due on her seat next, and the button the hand after
+        table.act('Pocket Pam', { type: 'standUp' });
+        table.dealNext();
+
+        const page = await table.open('Quigs', screen);
+        const saidFrom = async (first: string, count: number) => {
+          await toggleFeed(page, screen);
+          const said = await texts(page, '.entries li');
+          await toggleFeed(page, screen);
+
+          return said.slice(said.indexOf(first), said.indexOf(first) + count);
+        };
+
+        const noSmallBlind = ['Hand #123 · blinds 10/20 · Stu has the button', 'No small blind this hand', 'Big Al posts big blind 20'];
+        assert.deepEqual(await saidFrom(noSmallBlind[0]!, 3), noSmallBlind);
+        assert.deepEqual(await texts(page, '.bet'), ['20']);
+        assert.equal(await page.locator('.seat[data-seat="1"] .dealer-button').count(), 1);
+        await shot(page, `missed-blinds-no-small-blind-${screen}`);
+
+        // Folded to, the big blind was the only chips in the hand, so the felt says how it ended and not what was won
+        table.act('Quigs', { type: 'pause' });
+        table.play(folding, (view) => view.hand!.stage === 'done');
+        await page.waitForSelector('.message.result > div');
+        assert.deepEqual(await texts(page, '.message.result > div'), ['Everyone folded to Big Al']);
+        assert.deepEqual((await saidFrom('Uncalled bet of 20 returned to Big Al', 2)), ['Uncalled bet of 20 returned to Big Al', 'Everyone folded to Big Al']);
+        await shot(page, `missed-blinds-folded-to-the-big-blind-${screen}`);
+
+        table.play(folding, (view) => view.hand === null);
+        table.dealNext();
+        await page.waitForSelector('[data-open-seat="2"] .dealer-button');
+
+        const deadButton = ['Hand #124 · blinds 10/20 · dead button on seat 3', 'Big Al posts small blind 10', 'Quigs posts big blind 20'];
+        assert.deepEqual(await saidFrom(deadButton[0]!, 3), deadButton);
+        assert.equal(await page.locator('.dealer-button').count(), 1);
+
+        await inShapesOf(
+          page,
+          screen,
+          async (shape) => {
+            const button = await boxes(page, '.dealer-button');
+
+            assertOnScreen(button, screen, 'the dead button');
+            assertApart(button, await boxes(page, '.bet, .board .card, .pot, .seat[data-seat] .plate'), 'the dead button and what is on the table');
+            await assertBetsApart(page);
+            await shot(page, `missed-blinds-dead-button-${screen}-${shape}`);
+          },
+          { buttonsUp: false },
+        );
+
+        // The hand that was folded to the big blind had no winner, and its line in the history names none
+        const press = pressOn(page, screen);
+        await press('[data-action="menu"]');
+        await press('.menu [data-action="history"]');
+        await page.waitForSelector('.history summary');
+        assert.equal((await texts(page, '.history summary'))[0], 'Hand #123');
+
+        await page.context().close();
+      }
+
+      // With a bounty on, seven-deuce folded to as that big blind collects it, and its seat shows what it took though the hand itself won nothing
+      const table = rig.table(['Quigs', 'Stu', 'Pocket Pam', 'Big Al'].map((name) => ({ name, stack: 1000 })), { bounties: [['72', 50]] });
+      table.deal({ button: 0 });
+      playOut(table);
+      table.act('Pocket Pam', { type: 'standUp' });
+      table.dealNext({ holes: { 3: '7s 2h' } });
+
+      const page = await table.open('Quigs', 'phone');
+      table.act('Quigs', { type: 'pause' });
+      table.play(folding, (view) => view.hand!.stage === 'done');
+      await page.waitForSelector('.message.result > div');
+      assert.deepEqual(await texts(page, '.message.result > div'), ['Everyone folded to Big Al', 'Big Al collects 100 for the 72 bounty']);
+      assert.equal(await text(page, '.seat[data-seat="3"] .status.won'), '+100');
+      assert.deepEqual(await squeezed(page, '.message.result > div, .seat .plate .status'), [], 'the result or what a seat took is cut off');
+      await shot(page, 'missed-blinds-bounty-on-a-lone-big-blind');
+      await page.context().close();
+    },
+  ],
+  [
+    'with animations on, a missed big blind slides in front of its own seat while the small blind posted dead with it goes from the seat straight to the pot, a hand with no small blind slides none, a big blind folded to alone goes back with no pot behind it, and each lands exactly as a still table stands',
+    async (rig) => {
+      const layout = MOTION_LAYOUTS.find((each) => each.name === 'phone-standing')!;
+      const where = (what: string) => `${layout.name}, ${what}`;
+
+      {
+        const kind = MISSED_BLIND_TABLES[0]!;
+        const table = blindsOwed(rig, kind);
+
+        // Marge posts what she owes in the hand after the button has passed her: the button on seat 4, the blinds on seats 5 and 0
+        table.act(MARGE, { type: 'comeIn', post: true });
+        table.dealNext();
+        playOut(table);
+
+        const { moving, still, step } = await watch(table, 'Quigs', layout, 0.5);
+
+        // The deal is held halfway for the picture, before the step lets it land and measures it
+        table.dealNext({ holes: { 0: 'Ks Kh', 3: 'As Ah' }, board: '2c 7d 9h Jc 3s' });
+        await Promise.all([moving, still].map((page) => caughtUp(page, table.view('Quigs'))));
+        await shot(moving, 'motion-held-missed-blinds');
+
+        const seen = await step('the hand a player posts what they owe in', () => undefined);
+        const slid = flightsOf(seen, 'chips', false);
+        const dropped = flightsOf(seen, 'chips', true);
+        const cards = flightsOf(seen, 'card', false);
+
+        assert.equal(seen.flights.length, 16, where('three bets, a chip and twelve cards move'));
+        assert.deepEqual(slid.map((bet) => [bet.seat, bet.text, bet.delay]), [[3, kind.big, 0], [5, kind.small, 0], [0, kind.big, 0]], where('her missed big blind and the two blinds of the hand'));
+        slid.forEach((bet) => {
+          assertOver(bet.from, seen.after.plates[bet.seat!], where(`the bet of seat ${bet.seat} leaves its seat`));
+          assertOver(bet.to, seen.after.bets[bet.seat!], where(`the bet of seat ${bet.seat} lands in front of that seat`));
+        });
+
+        // Her small blind is dead money: a bare chip from her seat to the pot, and only the big blind in front of her
+        assert.deepEqual(dropped.map((chip) => [chip.text, chip.delay]), [['', 0]], where('the dead small blind'));
+        assertOver(dropped[0]!.from, seen.after.plates[3], where('the dead small blind leaves her seat'));
+        assertOver(dropped[0]!.to, seen.after.pot, where('the dead small blind goes to the pot'));
+        assert.deepEqual(await texts(moving, '.bet'), [kind.big, kind.big, kind.small], where('the bets on the table'));
+        assert.equal(await text(moving, '.pot'), `Pot${kind.pot}`, where('the pot'));
+        assert.deepEqual(cards.map((card) => card.seat), [5, 0, 1, 2, 3, 4].flatMap((seat) => [seat, seat]), where('the cards go around from the left of the button'));
+        await shot(moving, 'motion-landed-missed-blinds');
+
+        await moving.context().close();
+        await still.context().close();
+      }
+
+      const table = rig.table(['Quigs', 'Stu', 'Pocket Pam', 'Big Al'].map((name) => ({ name, stack: 1000 })));
+
+      // Pam had the big blind and leaves: her seat is due the small blind next, and the button the hand after
+      table.deal({ button: 0 });
+      playOut(table);
+      table.act('Pocket Pam', { type: 'standUp' });
+
+      const { moving, still, step } = await watch(table, 'Quigs', layout);
+      const chips = (seen: Seen) => seen.flights.filter((flight) => flight.what === 'chips').map((flight) => [flight.standIn, flight.seat, flight.text, flight.delay]);
+      const dealtTo = (seen: Seen) => flightsOf(seen, 'card', false).map((card) => card.seat);
+
+      let seen = await step('a hand with no small blind', () => table.dealNext());
+      assert.deepEqual(chips(seen), [[false, 3, '20', 0]], where('the big blind is the only bet, and nothing leaves the seat nobody is in'));
+      assertOver(seen.flights[0]!.from, seen.after.plates[3], where('the big blind leaves its seat'));
+      assert.deepEqual(dealtTo(seen), [3, 3, 0, 0, 1, 1], where('the cards of a hand with no small blind'));
+
+      seen = await step('the viewer’s own fold', () => table.act('Quigs', { type: 'fold' }));
+      assert.deepEqual(seen.flights, [], where('the viewer’s own fold moves nothing'));
+
+      // Folded to, the big blind goes back from in front of its seat, and no pile follows it from a pot with nothing in it.
+      // The game is paused first: a table that is running deals the next hand itself, with cards nobody chose
+      seen = await step('a big blind folded to alone', () => {
+        table.act('Quigs', { type: 'pause' });
+        table.act('Stu', { type: 'fold' });
+      });
+      assert.deepEqual(seen.flights.map((flight) => [flight.what, flight.standIn]), [['cards', true], ['chips', true]], where('the last fold and the blind going back'));
+      assert.deepEqual([seen.flights[1]!.text, seen.flights[1]!.delay], ['20', 0], where('the blind going back'));
+      assertOver(seen.flights[1]!.from, seen.before.bets[3], where('the blind going back leaves where it lay'));
+      assertOver(seen.flights[1]!.to, seen.after.plates[3], where('the blind goes back to its seat'));
+      assert.deepEqual(await texts(moving, '.message.result > div'), ['Everyone folded to Big Al'], where('the felt'));
+      await shot(moving, 'motion-landed-folded-to-the-big-blind');
+
+      // The button is dead on the seat Pam left: both blinds slide in, and the cards go around from its left
+      seen = await step('a hand under a dead button', () => {
+        table.play(folding, (view) => view.hand === null);
+        table.dealNext();
+      });
+      assert.deepEqual(chips(seen), [[false, 3, '10', 0], [false, 0, '20', 0]], where('the blinds under a dead button'));
+      assert.deepEqual(dealtTo(seen), [3, 3, 0, 0, 1, 1], where('the cards under a dead button'));
+      assert.equal(await moving.locator('[data-open-seat="2"] .dealer-button').count(), 1, where('the dead button'));
+      await shot(moving, 'motion-landed-dead-button');
+
+      await moving.context().close();
+      await still.context().close();
+    },
+  ],
+  ...MOTION_LAYOUTS.map((layout): Check => [
+    `an all-in hand’s last card lies face down and is turned over before anything names the winner, for a player and for a watcher; a big pot throws confetti from the winner’s seat that takes no tap, a small one none, and a new view ends the wait: ${layout.name}`,
+    async (rig) => {
+      const where = (what: string) => `${layout.name}, ${what}`;
+      const held = !layout.slower;
+      const table = rig.table([{ name: 'Quigs', stack: 10_000 }, { name: 'Stu', stack: 10_000 }, { name: 'Pam', stack: 400 }], { ...layout.config, maxRuns: 1 });
+
+      table.join('Kibitz');
+
+      const pages = { Stu: await watch(table, 'Stu', layout), Kibitz: await watch(table, 'Kibitz', layout) };
+      const watched = Object.entries(pages);
+
+      // What each page has set moving in the hand so far
+      const flights: Record<string, Flight[]> = {};
+
+      // Each page shows the table as the server has it, and whatever moved has landed as the still page stands
+      const shown = async (what: string) => {
+        for (const [name, { moving, still }] of watched) {
+          const view = table.view(name);
+
+          await Promise.all([caughtUp(moving, view), caughtUp(still, view)]);
+          (flights[name] ??= []).push(...(await flown(moving)));
+          await assertAsStill(moving, still, where(`${what}, as ${name}`));
+        }
+      };
+
+      // Everyone all in, and the runout dealt up to the river, a street at a time
+      const toTheRiver = async (allIn: () => void) => {
+        Object.keys(flights).forEach((name) => delete flights[name]);
+        allIn();
+        await shown('all in');
+
+        for (const street of ['the flop', 'the turn']) {
+          rig.advance(table.view('Quigs').hand!.deadline! - rig.now());
+          await shown(street);
+        }
+
+        for (const [, { moving }] of watched) {
+          await moving.evaluate(SWEAT);
+        }
+      };
+
+      // A small pot: Pam is all in for her last chips, Stu covers her, and she makes a set on the river. With
+      // the river face down, the host pauses and the hand ends: the table is drawn as it is, and nothing waits
+      table.deal({ button: 0, holes: { 0: '9c 4d', 1: 'Qh Qd', 2: '6c 6h' }, board: '2c 7d 9h Jc 6s' });
+      await toTheRiver(() => {
+        table.act('Quigs', { type: 'fold' });
+        table.act('Stu', { type: 'raise', to: 10_000 });
+        table.act('Pam', { type: 'call' });
+      });
+
+      rig.advance(table.view('Quigs').hand!.deadline! - rig.now());
+      const small = table.view('Quigs');
+
+      if (held) {
+        for (const [name, { moving }] of watched) {
+          await sweating(moving, where(`a small pot, as ${name}`), '6s');
+        }
+      } else {
+        await shown('a small pot');
+
+        for (const [name, { moving }] of watched) {
+          await assertCardsFirst(moving, 1, where(`a small pot, as ${name}`));
+        }
+      }
+
+      table.act('Quigs', { type: 'pause' });
+      rig.advance(small.hand!.deadline! - rig.now());
+      await shown('the hand ended');
+
+      for (const [name, { moving }] of watched) {
+        assert.ok(flights[name]!.length > 0 && flights[name]!.every((flight) => flight.what !== 'confetti'), where(`confetti for a small pot, as ${name}`));
+
+        if (held) {
+          const { up, said } = (await moving.evaluate('window.sweat')) as { up: number[]; said: Record<string, number> };
+          assert.deepEqual([up, said['the result on the felt']], [[], undefined], where(`the river was turned or the result shown after the hand ended under it, as ${name}`));
+        }
+      }
+
+      // A big pot: Quigs and Stu are all in for everything, and Stu catches a king on the river
+      table.deal({ button: 2, holes: { 0: 'Ah Ad', 1: 'Kh Kd', 2: '8c 3d' }, board: '2c 7d 9h Jc Ks' });
+      await toTheRiver(() => {
+        table.act('Pam', { type: 'fold' });
+        table.act('Quigs', { type: 'raise', to: table.view('Quigs').seats[0]!.stack + table.view('Quigs').seats[0]!.bet });
+        table.act('Stu', { type: 'call' });
+      });
+
+      rig.advance(table.view('Quigs').hand!.deadline! - rig.now());
+
+      if (held) {
+        for (const [name, { moving, still }] of watched) {
+          await sweating(moving, where(`a big pot, as ${name}`), 'Ks');
+          if (name === 'Stu') {
+            await shot(moving, `celebrations-sweat-${layout.name}`);
+          }
+
+          // With animations off the card and the result are there at once
+          await still.waitForSelector('.message.result');
+          assert.equal(await style(still, '.board .card[data-card="Ks"]', 'opacity'), '1', where(`the river is not face up at once on a still page, as ${name}`));
+
+          // The burst is held halfway, to look at in the air
+          await moving.evaluate('window.holdAt = 0.5; window.land()');
+          await moving.waitForSelector('.message.result');
+          await moving.waitForSelector('.confetti');
+        }
+
+        for (const [name, { moving }] of watched) {
+          const winner = ((await moving.evaluate(SPOTS)) as Spots).plates[1]!;
+          const thrown = ((await moving.evaluate(flightsSince())) as Flight[]).filter((flight) => flight.what === 'confetti');
+          const air = await inTheAir(moving);
+
+          assert.equal(thrown.length, CONFETTI_PIECES, where(`the burst, as ${name}`));
+          thrown.forEach((piece) => assertOver(piece.from, winner, where(`a piece of confetti is thrown from the winner’s seat, as ${name}`)));
+          assert.deepEqual([air.animated, air.standIns, air.inTheWay], [['opacity', 'transform'], CONFETTI_PIECES + 1, 0], where(`the confetti and the pot in the air, as ${name}`));
+          assert.equal(await moving.evaluate(UNDER_CONFETTI), 0, where(`a piece of confetti is what a tap lands on, as ${name}`));
+        }
+
+        await shot(pages.Stu.moving, `celebrations-confetti-${layout.name}`);
+
+        // A watcher may sit down while it flies
+        const kibitz = pages.Kibitz.moving;
+        await pressOn(kibitz, layout.screen)('[data-sit]');
+        await kibitz.waitForSelector('[data-action="confirm-sit"]');
+        await pressOn(kibitz, layout.screen)('[data-action="close"]');
+      }
+
+      await shown('the big pot');
+
+      for (const [name, { moving }] of watched) {
+        await assertCardsFirst(moving, 1, where(`a big pot, as ${name}`));
+      }
+
+      for (const [, { moving, still }] of watched) {
+        await moving.context().close();
+        await still.context().close();
+      }
+    },
+  ]),
+  [
+    'the table settings have a switch for each kind of straddle, a change to them is told to the table, and a preset carries them to the form for a new table',
+    async (rig) => {
+      const ids = ['#table-allow-straddle', '#table-allow-double-straddle', '#table-allow-button-straddle', '#table-allow-mississippi-straddle'];
+      const switches = ids.map((id) => `label[for="${id.slice(1)}"]`).join(', ');
+      const ticked = (page: Page) => Promise.all(ids.map((id) => page.isChecked(id)));
+
+      for (const screen of PHONE_AND_DESKTOP) {
+        const table = sixFor(rig, STRADDLE_TABLES[0]!);
+        table.act('Stu', { type: 'setStraddle', kind: 'straddle', on: true });
+
+        const page = await table.open('Quigs', screen);
+        const press = pressOn(page, screen);
+
+        await press('[data-action="menu"]');
+        await press('.menu [data-action="settings"]');
+        await page.waitForSelector(ids[0]!);
+
+        // As a table always was: under the gun and nothing else
+        assert.deepEqual(await ticked(page), [true, false, false, false]);
+        assert.deepEqual(await texts(page, switches), STRADDLE_LABELS);
+
+        await page.locator(ids[3]!).scrollIntoViewIfNeeded();
+        assertOnScreen(await boxes(page, switches), screen, 'the switches for the kinds of straddle');
+        assert.deepEqual(await squeezed(page, `:is(${switches}) span`), [], 'the name of a switch is cut off');
+        await assertNoSidewaysScroll(page);
+        await shot(page, `straddles-settings-${screen}`);
+
+        await press(`label[for="${ids[0]!.slice(1)}"]`);
+        await press(`label[for="${ids[2]!.slice(1)}"]`);
+        await press(`label[for="${ids[3]!.slice(1)}"]`);
+        await press('[data-action="save-settings"]');
+        await page.waitForSelector('.dialog', { state: 'detached' });
+
+        const { config } = table.view('Quigs');
+        assert.deepEqual([config.allowStraddle, config.allowDoubleStraddle, config.allowButtonStraddle, config.allowMississippiStraddle], [false, false, true, true]);
+        assert.deepEqual(table.view('Stu').seats[4]!.straddles, [], 'a kind switched off is still asked for');
+
+        await toggleFeed(page, screen);
+        await page.waitForSelector('.entries li:has-text("Straddles allowed")');
+        assert.equal((await texts(page, '.entries li')).at(-1), 'Straddles allowed: Button straddle, Mississippi straddle');
+        assert.deepEqual(await squeezed(page, '.entries li'), [], 'a line of the play-by-play is cut off');
+        await shot(page, `straddles-settings-told-${screen}`);
+        await page.context().close();
+
+        // Kept in a preset, the kinds go to a new table, though the form for one has no field for them
+        const kept = presetSettings({ ...DEFAULT_CONFIG, allowStraddle: config.allowStraddle, allowButtonStraddle: config.allowButtonStraddle, allowMississippiStraddle: config.allowMississippiStraddle });
+        rig.presets.save({ name: 'Button and Mississippi', settings: kept, savedAt: 0, savedBy: 'Quigs' }, true);
+
+        const { allowDoubleStraddle: _double, allowButtonStraddle: _button, allowMississippiStraddle: _mississippi, ...before } = presetSettings({ ...DEFAULT_CONFIG, allowStraddle: false });
+        rig.presets.save({ name: 'From before the kinds', settings: before, savedAt: 0, savedBy: 'Quigs' }, true);
+
+        const lobby = await rig.lobby(screen);
+        await lobby.waitForSelector('#new-table-preset');
+        assert.equal(await lobby.locator('[id^="new-table-allow-"]').count(), 0, 'the form for a new table asks about straddles');
+
+        await lobby.selectOption('#new-table-preset', { label: 'Button and Mississippi' });
+        assert.equal((await texts(lobby, '.preset-notes p')).at(-1), 'Also set, in the table settings: Straddle under the gun off, Button straddle on, Mississippi straddle on.');
+        await lobby.locator('.preset-notes').scrollIntoViewIfNeeded();
+        assert.deepEqual(await squeezed(lobby, '.preset-notes p'), [], 'part of what the picker says is cut off');
+        await assertNoSidewaysScroll(lobby);
+        await shot(lobby, `straddles-preset-${screen}`);
+
+        // One saved when there was a single kind says what it always said, and nothing of the others
+        await lobby.selectOption('#new-table-preset', { label: 'From before the kinds' });
+        assert.equal((await texts(lobby, '.preset-notes p')).at(-1), 'Also set, in the table settings: Straddle under the gun off.');
+        await lobby.context().close();
+
+        forgetPresets(rig);
+      }
+    },
+  ],
+  [
+    'a player turns a straddle on with one switch where the table allows one kind and in a dialog where it allows several, and is told under the table why a hand passed them over',
+    async (rig) => {
+      for (const kind of STRADDLE_TABLES) {
+        for (const screen of ['smallPhone', 'desktop'] as const) {
+          const table = sixFor(rig, kind);
+          const page = await table.open('Stu', screen);
+          const press = pressOn(page, screen);
+
+          // One kind: the switch there always was
+          assert.deepEqual(await texts(page, '.controls .extras button'), ['Sit out next hand', 'Straddle', 'Add chips']);
+          await press('.controls [data-action="straddle"]');
+          await page.waitForSelector('.controls [data-action="straddle"][aria-checked="true"]');
+          assert.deepEqual(table.view('Stu').seats[4]!.straddles, ['straddle']);
+
+          // Several: a button that says how many are on, and a switch for each with what it costs
+          table.act('Quigs', { type: 'updateConfig', config: EVERY_STRADDLE });
+          await page.waitForSelector('.controls [data-action="straddles"]');
+          assert.deepEqual(await texts(page, '.controls .extras button'), ['Sit out next hand', 'Straddles: 1 on', 'Add chips']);
+          await assertOwedBarFits(page, screen);
+          await shot(page, `straddles-bar-${kind.name}-${screen}`);
+
+          await press('.controls [data-action="straddles"]');
+          await page.waitForSelector('.dialog [data-straddle]');
+          assert.deepEqual((await texts(page, '.dialog [data-straddle]')).map((label) => label.split('\n')[0]), STRADDLE_LABELS);
+          assert.deepEqual(await page.locator('.dialog [data-straddle]').evaluateAll((switches) => switches.map((one) => one.getAttribute('aria-checked'))), ['true', 'false', 'false', 'false']);
+
+          await press('.dialog [data-straddle="button straddle"]');
+          await page.waitForSelector('.dialog [data-straddle="button straddle"][aria-checked="true"]');
+          assert.deepEqual(table.view('Stu').seats[4]!.straddles, ['straddle', 'button straddle']);
+
+          assert.deepEqual(await squeezed(page, '.dialog [data-straddle] span, .dialog .note'), [], 'what a switch says is cut off');
+          assertOnScreen(await boxes(page, '.dialog [data-straddle], .dialog [data-action="close"]'), screen, 'the switches of the dialog');
+          const switches = await boxes(page, '.dialog [data-straddle]');
+          switches.forEach((one, index) => assertApart([one], switches.slice(index + 1), 'two switches of the dialog'));
+          await assertNoSidewaysScroll(page);
+          await shot(page, `straddles-dialog-${kind.name}-${screen}`);
+
+          await press('.dialog [data-action="close"]');
+          await page.waitForSelector('.dialog', { state: 'detached' });
+          assert.deepEqual(await texts(page, '.controls .extras button'), ['Sit out next hand', 'Straddles: 2 on', 'Add chips']);
+
+          // The button is on the widest name there is, whose player straddles from it: Stu, under the gun, is passed over
+          table.act(WIDEST, { type: 'setStraddle', kind: 'button straddle', on: true });
+          table.deal({ button: 1 });
+          await page.waitForSelector('.controls .straddle-note');
+          assert.equal(await text(page, '.controls .straddle-note'), `No straddle this hand: ${WIDEST} had the right before you`);
+          assert.equal(await text(page, '.seat[data-seat="1"] .status'), 'Straddle');
+          assert.equal(await page.locator('.seat.me .status').count(), 0, 'the seat of a player who did not straddle says they did');
+
+          await inShapesOf(
+            page,
+            screen,
+            async (shape) => {
+              await assertOwedBarFits(page, screen);
+              await assertNoSidewaysScroll(page);
+              await shot(page, `straddles-passed-over-${kind.name}-${screen}-${shape}`);
+            },
+            { buttonsUp: false },
+          );
+
+          // The next time round the button cannot cover it, so Stu straddles, and it is the button who is told
+          playOut(table);
+          table.act('Quigs', { type: 'setStack', playerId: table.auth(WIDEST).id, stack: 2 * table.view('Quigs').config.bigBlind - 1 });
+          table.deal({ button: 1 });
+
+          const short = await table.open(WIDEST, screen);
+          await short.waitForSelector('.controls .straddle-note');
+          assert.equal(await text(short, '.controls .straddle-note'), `No straddle this hand: you could not cover the ${kind.straddle}`);
+          assert.equal(await text(short, '.seat[data-seat="4"] .status'), 'Straddle');
+          await assertNoSidewaysScroll(short);
+          await shot(short, `straddles-short-${kind.name}-${screen}`);
+          await short.context().close();
+
+          // Stu straddled, so the bar has nothing to tell him
+          await page.waitForSelector('.controls .straddle-note', { state: 'detached' });
+
+          // One kind again, and not the one every table starts with: the switch says which it is, and is on for him as he left it
+          table.act('Quigs', { type: 'updateConfig', config: { allowStraddle: false, allowDoubleStraddle: false, allowMississippiStraddle: false } });
+          await page.waitForSelector('.controls [data-action="straddle"][aria-checked="true"]');
+          assert.deepEqual(await texts(page, '.controls .extras button'), ['Sit out next hand', 'Button straddle', 'Add chips']);
+          assert.deepEqual(table.view('Stu').seats[4]!.straddles, ['button straddle']);
+          await assertOwedBarFits(page, screen);
+          await page.context().close();
+        }
+      }
+    },
+  ],
+  ...STRADDLED_HANDS.flatMap((hand) => STRADDLE_TABLES.map((kind) => straddledHandCheck(hand, kind))),
+  [
+    'the Tonight dialog has the night so far and, once it is over, its dipshit, for ten players with the longest names and the most chips, on the smallest phone and the desktop, in chips and in cents, and agrees with the ledger',
+    async (rig) => {
+      for (const kind of TONIGHT_TABLES) {
+        for (const screen of ['smallPhone', 'desktop'] as const) {
+          const table = tonightTable(rig, kind.config);
+          const host = await table.open('Quigs', screen);
+          const watcher = await table.open('Lurker', screen, NO_COPYING);
+          const press = pressOn(host, screen);
+
+          // The night so far, opened by hand
+          await openTonight(host, screen);
+          assert.equal(await host.locator('.tonight-crown, .tonight-missed').count(), 0, 'someone is crowned before the night is over, or a table that counted from its first hand says it missed some');
+          assert.equal(await text(host, '.tonight-standing'), 'So far tonight, after 2 hands. The dipshit of the night is crowned when the night ends.');
+          assert.deepEqual(await texts(host, '.tonight-leaders div'), [`Up the most\n${WIDEST} ${kind.up}`, `Most pots won\n${WIDEST} and Quigs 1 each`, `Biggest pot\n${WIDEST} ${kind.pot}`, `High hand\n${WIDEST} Three jacks J♣ J♦ J♠ 9♥ 7♦`]);
+          assert.deepEqual(await texts(host, '.tonight-players .who'), [WIDEST, 'Quigs (you)', 'Big Al', 'Pocket Pam', 'Stu left', 'iiiiiiiiiiiiiiii', '你好你好你好你好', 'Ünïcödé Ñandú Ø!', 'Marge Simpson-Jr', 'Zed'], 'the best night first and the worst last');
+          assert.equal(await text(host, '.tonight-players li[data-player="Zed"] .counts'), '2 hands · 0 pots won · 1 rebuy');
+          assert.equal(await text(host, '.tonight-players li.me .who'), 'Quigs (you)');
+          await assertTonightFits(host, screen);
+          await shot(host, `tonight-so-far-${kind.name}-${screen}`);
+
+          // What is folded away under a player, which stays unfolded when a change at the table draws the dialog again
+          await press(`.tonight-players li[data-player="${WIDEST}"] summary`);
+          // The two who went all in in the second hand: the winner took every chip of a pot that size, which earns two badges
+          assert.deepEqual(await texts(host, '.tonight-players details[open] dl div'), [`Biggest pot\n${kind.pot}`, 'Best hand shown\nThree jacks J♣ J♦ J♠ 9♥ 7♦', `Badges\n${['bigPot', 'felted'].map((id) => `${badgeOf(id)!.mark} ${badgeOf(id)!.name}\n${badgeOf(id)!.description}`).join('\n')}`]);
+          await press('.tonight-players li[data-player="Quigs"] summary');
+          assert.deepEqual(await texts(host, '.tonight-players li[data-player="Quigs"] dl div'), [`Biggest pot\n${kind.first}`, 'Best hand shown\nPair of aces A♠ A♥ J♣ 9♥ 7♦']);
+          await press('.tonight-players li[data-player="Big Al"] summary');
+          assert.deepEqual(await texts(host, '.tonight-players li[data-player="Big Al"] dl div'), ['Biggest pot\nNone yet', 'Best hand shown\nNone yet'], 'a player who won nothing and mucked what they had');
+
+          // Scrolled to the last player, as someone reading down the list would be
+          const scrolledTo = () => host.evaluate(`document.querySelector('.dialog-body').scrollTop`) as Promise<number>;
+          await host.evaluate(`document.querySelector('.tonight-players > li:last-child').scrollIntoView()`);
+          const scrolled = await scrolledTo();
+          assert.ok(scrolled > 0, 'ten players fit the dialog without scrolling, so this proves nothing');
+
+          table.act('Quigs', { type: 'transferChips', from: table.auth('Quigs').id, to: table.auth('Big Al').id, amount: 7 });
+          await host.waitForSelector(`.tonight-players li[data-player="Big Al"] .net:has-text("${kind.afterTransfer}")`);
+          assert.deepEqual(await texts(host, '.tonight-players details[open] .who'), [WIDEST, 'Quigs (you)', 'Big Al'], 'a line someone had unfolded folded shut when the dialog was drawn again');
+          assert.equal(await scrolledTo(), scrolled, 'the dialog jumped from where its reader had scrolled to when it was drawn again');
+          await host.evaluate(`document.querySelector('.dialog-body').scrollTop = 0`);
+          await assertTonightFits(host, screen);
+          await shot(host, `tonight-unfolded-${kind.name}-${screen}`);
+
+          // The money is the ledger's, line for line
+          const night = await tonightNets(host);
+          await press('.dialog [data-action="close"]');
+          await openLedger(host, screen);
+          assert.deepEqual(night, await ledgerNets(host), 'the night and the ledger disagree about what someone is up or down');
+          assert.deepEqual(night, table.view('Quigs').ledger.map((row) => [row.name, signedAmount(row.net, table.view('Quigs').config)]).sort(), 'the page and the table disagree');
+          await press('.dialog [data-action="close"]');
+
+          // The night ends, and the dialog comes up by itself for the player and for someone only watching, with the crown
+          table.act('Quigs', { type: 'endNight' });
+
+          for (const [who, page] of [['host', host], ['watcher', watcher]] as const) {
+            await page.waitForSelector(RECAP);
+            assert.deepEqual(await texts(page, '.tonight-crown > *'), ['DIPSHIT OF THE NIGHT', 'Zed', `Down ${kind.down}, more than anyone.`], who);
+            assert.equal(await text(page, '.tonight-standing'), 'The night is over, after 2 hands.', who);
+            assert.equal(await text(page, '.tonight-players li.dipshit:last-child .who'), 'Zed', who);
+            assert.equal(await page.locator('.tonight-players li.me').count(), who === 'host' ? 1 : 0, `the ${who}'s own line`);
+            assert.deepEqual(await tonightNets(page), night, `${who}: the night is not the same for everyone`);
+            await assertTonightFits(page, screen);
+            await shot(page, `tonight-over-${who}-${kind.name}-${screen}`);
+          }
+
+          // The night as text, for the group chat: copied where the browser lets the page copy
+          await host.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+          await press('[data-action="copy-tonight"]');
+          await host.waitForSelector('[data-action="copy-tonight"]:has-text("Copied")');
+          const copied = (await host.evaluate('navigator.clipboard.readText()')) as string;
+          assert.deepEqual(copied.split('\n').slice(0, 3), [`${DEFAULT_CONFIG.name}: the night is over, 2 hands`, `Dipshit of the night: Zed. Down ${kind.down}, more than anyone.`, `Up the most: ${WIDEST}, ${kind.up}`]);
+          assert.equal(await host.locator('#tonight-text:visible').count(), 0, 'the box to copy from is shown though the text was copied');
+
+          // And where it does not, put in a box with all of it selected, to copy by hand
+          await pressOn(watcher, screen)('[data-action="copy-tonight"]');
+          await watcher.waitForSelector('[data-action="copy-tonight"]:has-text("Copy it from the box")');
+          assert.deepEqual(await watcher.evaluate(`(() => { const box = document.querySelector('#tonight-text'); return [box.value, box.value.slice(box.selectionStart, box.selectionEnd), document.activeElement === box]; })()`), [copied, copied, true]);
+          assertOnScreen(await boxes(watcher, '#tonight-text, [data-action="copy-tonight"]'), screen, 'the box to copy the night from');
+          await assertTonightFits(watcher, screen);
+          await shot(watcher, `tonight-copy-from-the-box-${kind.name}-${screen}`);
+
+          await host.context().close();
+          await watcher.context().close();
+        }
+      }
+    },
+  ],
+  [
+    'players level for the worst night share the crown until rebuys or pots won part them, each ending of the night crowns again from the numbers as they stand, and two of the longest names fit the crown on the smallest phone',
+    async (rig) => {
+      const screen = 'smallPhone';
+      const table = rig.table([{ name: 'Quigs', stack: 1000 }, { name: WIDEST, stack: 1000 }, { name: 'Marge Simpson-Jr', stack: 1000 }], { maxRuns: 1 });
+      const id = (name: string) => table.auth(name).id;
+      const page = await table.open('Marge Simpson-Jr', screen);
+      const press = pressOn(page, screen);
+
+      const crowned = async (name: string, says: string[]) => {
+        // A night that ends a second time ends at another time, which is how the page knows it for news
+        rig.advance(1000);
+        table.act('Quigs', { type: 'endNight' });
+        await page.waitForSelector(RECAP);
+        assert.deepEqual(await texts(page, '.tonight-crown > *'), says);
+        assert.deepEqual(await squeezed(page, '.tonight-crown > *'), [], 'the crown is cut off');
+        await assertTonightFits(page, screen);
+        await shot(page, `tonight-crown-${name}`);
+
+        await press('.dialog [data-action="close"]');
+        table.act('Quigs', { type: 'playOn' });
+        table.act('Quigs', { type: 'pause' });
+        await page.waitForSelector('.message.night-over', { state: 'detached' });
+      };
+
+      // Both give the host a hundred, and nothing else has happened
+      table.act('Quigs', { type: 'transferChips', from: id(WIDEST), to: id('Quigs'), amount: 100 });
+      table.act('Quigs', { type: 'transferChips', from: id('Marge Simpson-Jr'), to: id('Quigs'), amount: 100 });
+      await crowned('shared', ['DIPSHITS OF THE NIGHT', `Marge Simpson-Jr and ${WIDEST}`, 'Each down 100, with the same rebuys and the same pots won.']);
+
+      // One of them buys more chips, which costs nothing and settles it
+      table.act(WIDEST, { type: 'requestRebuy', amount: 300 });
+      table.act('Quigs', { type: 'approve', playerId: id(WIDEST) });
+      await crowned('by-rebuys', ['DIPSHIT OF THE NIGHT', WIDEST, 'Down 100, tied for the worst night, and bought back in the most.']);
+
+      // The other buys too, then wins a pot from the host and hands it back: level on money and rebuys, and one pot ahead
+      table.act('Marge Simpson-Jr', { type: 'requestRebuy', amount: 300 });
+      table.act('Quigs', { type: 'approve', playerId: id('Marge Simpson-Jr') });
+      table.deal({ button: 1, holes: { 0: 'Ks Kh', 1: '2s 3h', 2: 'As Ah' }, board: '2c 7d 9h Jc 4s' });
+      table.act('Quigs', { type: 'pause' });
+      table.play((view, name) => (name === WIDEST ? { type: 'fold' } : passive(view)), (view) => view.hand === null);
+      table.act('Quigs', { type: 'transferChips', from: id('Marge Simpson-Jr'), to: id('Quigs'), amount: 20 });
+      await crowned('by-pots', ['DIPSHIT OF THE NIGHT', WIDEST, 'Down 100, tied for the worst night and on rebuys, and won the fewest pots.']);
+
+      await page.context().close();
+    },
+  ],
+  [
+    'when the night ends its recap opens once on every page at the table, waits for whoever is typing or has a dialog open rather than take either from them, and is not shown again by later news or to a page opened afterwards',
+    async (rig) => {
+      const table = nightOfOneHand(rig);
+      const idle = await table.open('Quigs', 'desktop');
+      const looking = await table.open('Zed', 'phone');
+      const typing = await table.open('Stu', 'desktop');
+      const reading = await table.open('Big Al', 'phone');
+
+      // One is halfway through a chat message, another is reading the ledger, and one who only watches has the night so far open already
+      await typing.click('#chat-input');
+      await typing.keyboard.type('gg every');
+      await reading.tap('[data-action="menu"]');
+      await reading.tap('.menu [data-action="ledger"]');
+      await reading.waitForSelector('.ledger');
+      await openTonight(looking, 'phone');
+
+      table.act('Quigs', { type: 'endNight' });
+
+      // Whoever is doing nothing gets it at once
+      await idle.waitForSelector(RECAP);
+      assert.equal(await text(idle, '.tonight-crown strong'), 'Big Al and Stu');
+      await shot(idle, 'tonight-opens-by-itself');
+
+      // Open already, it gains the crown where it is, and closing it does not bring it back
+      await looking.waitForSelector(RECAP);
+      await looking.tap('.dialog [data-action="close"]');
+      await assertNoDialogComes(looking, 'the recap came back when the viewer closed the one they had open');
+
+      // The one typing keeps the keyboard and every letter, and gets it when the message is sent
+      await typing.waitForSelector('.message.night-over');
+      await assertNoDialogComes(typing, 'the recap opened over someone who was typing');
+      assert.deepEqual(await typing.evaluate('[document.activeElement.id, document.activeElement.value]'), ['chat-input', 'gg every']);
+      await typing.keyboard.type('one');
+      await typing.keyboard.press('Enter');
+      await typing.waitForSelector(RECAP);
+      assert.equal(table.view('Quigs').feed.at(-1)!.text, 'gg everyone');
+
+      // The one reading keeps the ledger, and gets it on closing that
+      await reading.waitForSelector('.message.night-over', { state: 'attached' });
+      await assertNoDialogComes(reading, 'the recap took the place of a dialog someone had open', 'Ledger');
+      await reading.tap('.dialog [data-action="close"]');
+      await reading.waitForSelector(RECAP);
+
+      // Closed, it stays closed whatever the table says next
+      await idle.click('.dialog [data-action="close"]');
+      table.act('Zed', { type: 'chat', text: 'good game' });
+      await idle.waitForSelector('.feed li:has-text("good game")');
+      await looking.waitForSelector('.feed li:has-text("good game")', { state: 'attached' });
+      await assertNoDialogComes(idle, 'the recap came up a second time');
+      await assertNoDialogComes(looking, 'the recap came up a second time');
+
+      // A page opened after the end finds the night over and is shown nothing unasked; the recap is in the menu
+      const late = await table.open('Big Al', 'phone');
+      await late.waitForSelector('.message.night-over');
+      table.act('Zed', { type: 'chat', text: 'same time next week' });
+      await late.waitForSelector('.feed li:has-text("same time next week")', { state: 'attached' });
+      await assertNoDialogComes(late, 'a page opened after the night ended was shown the recap unasked');
+      await openTonight(late, 'phone');
+      assert.equal(await text(late, '.tonight-crown strong'), 'Big Al and Stu');
+
+      for (const page of [idle, looking, typing, reading, late]) {
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'a recap that had to wait keeps out of the way of what the viewer does next: it stays off a seat being picked, comes when a message is given up, and never comes once the night has been started again',
+    async (rig) => {
+      const table = nightOfOneHand(rig);
+      const host = await table.open('Quigs', 'desktop');
+      const typing = await table.open('Stu', 'desktop');
+
+      // The answer to starting play again takes its time, as it does from Apps Script
+      await host.route('**/api', async (route) => {
+        if ((JSON.parse(route.request().postData() ?? '{}') as { command?: Command }).command?.type === 'playOn') {
+          await new Promise((resolve) => setTimeout(resolve, 3 * OFFER_TICK_MS));
+        }
+
+        await route.continue();
+      });
+
+      // The host is in the Players dialog and a player is typing when the night ends
+      await host.click('[data-action="menu"]');
+      await host.click('.menu [data-action="players"]');
+      await host.waitForSelector('.dialog li:has-text("Stu") [data-action="move"]');
+      await typing.click('#chat-input');
+      await typing.keyboard.type('gg');
+      table.act('Quigs', { type: 'endNight' });
+      await host.waitForSelector('.message.night-over', { state: 'attached' });
+      await typing.waitForSelector('.message.night-over');
+
+      // Moving a player closes the dialog to pick a seat on the felt, which the recap leaves alone until the pick is over
+      await host.click('.dialog li:has-text("Stu") [data-action="move"]');
+      await host.waitForSelector('.banner.move-prompt');
+      await assertNoDialogComes(host, 'the recap opened over a seat being picked');
+      await host.click('[data-action="cancel-move"]');
+      await host.waitForSelector(RECAP);
+
+      // A message given up, with nothing sent and no news from the table, frees its player for it too
+      await assertNoDialogComes(typing, 'the recap opened over someone who was typing');
+      await typing.keyboard.press('Backspace');
+      await typing.keyboard.press('Backspace');
+      await typing.waitForSelector(RECAP);
+
+      await host.click('.dialog [data-action="close"]');
+      await typing.click('.dialog [data-action="close"]');
+      table.act('Quigs', { type: 'playOn' });
+      table.act('Quigs', { type: 'pause' });
+      await host.waitForSelector('.message.night-over', { state: 'detached' });
+      await typing.waitForSelector('.message.night-over', { state: 'detached' });
+
+      // The night ends again under the host's open menu and a half-typed message, and the host plays on from that menu
+      await host.click('[data-action="menu"]');
+      await host.waitForSelector('.menu');
+      await typing.click('#chat-input');
+      await typing.keyboard.type('one more');
+      rig.advance(1000);
+      table.act('Quigs', { type: 'endNight' });
+      await typing.waitForSelector('.message.night-over');
+      await host.click('.menu [data-action="keep-playing"]');
+      await assertNoDialogComes(host, 'the recap opened on the host while the table had yet to answer that play goes on');
+      await host.waitForSelector('.message.night-over', { state: 'detached' });
+      await assertNoDialogComes(host, 'the recap of a night that was started again came up after all');
+
+      await typing.waitForSelector('.message.night-over', { state: 'detached' });
+      await typing.keyboard.press('Enter');
+      await typing.waitForSelector('.feed li:has-text("one more")');
+      await assertNoDialogComes(typing, 'the recap of a night that was started again came up after all');
+
+      await host.context().close();
+      await typing.context().close();
+    },
+  ],
+  [
+    'a recap the page opened by itself goes by itself when the night is played on, so that nobody is on the clock behind a dialog they never opened: the player is told why once, in words and aloud, the keyboard is on the bar, and a bet half typed after it is kept through what the table says next; a recap the player opened from the menu stays',
+    async (rig) => {
+      const table = nightOfOneHand(rig);
+      const acting = await table.open('Stu', 'desktop', SPOKEN);
+      const reading = await table.open('Big Al', 'phone', SPOKEN);
+      const moves = movesSent(acting);
+
+      table.act('Quigs', { type: 'endNight' });
+      await acting.waitForSelector(RECAP);
+      await reading.waitForSelector(RECAP);
+
+      // One closes the recap that came by itself and opens the night's numbers again from the menu: that dialog is theirs
+      await reading.tap('.dialog [data-action="close"]');
+      await openTonight(reading, 'phone', '.tonight-crown');
+
+      // The host plays on, and the next hand is dealt with Stu on the button, first to act
+      const before = table.version;
+      table.act('Quigs', { type: 'playOn' });
+      table.dealNext();
+      assert.equal(table.view('Stu').hand!.toAct, table.view('Stu').you.seat);
+
+      await acting.waitForSelector('.turn [data-action="call"]', { state: 'attached' });
+      assert.deepEqual(await texts(acting, '.dialog h2'), [], 'the recap the page opened by itself is still up, over a player who is on the clock');
+      await acting.waitForSelector('.turn [data-action="call"]:enabled');
+
+      // Told why it went, where a toast is shown and where one is said
+      assert.equal((await toastTold(acting, 'The night goes on')).text, RECAP_GONE);
+      await heard(acting, `status: ${RECAP_GONE}`, before);
+      await shot(acting, 'recap-goes-when-the-night-is-played-on');
+
+      // The keyboard is where the turn is, not on the menu, which a dialog that is closed hands it to
+      assert.ok(await focusIn(acting, '.controls-slot'), `the keyboard is on ${await focused(acting)}, not on the bar`);
+
+      // A bet half typed now is kept through what the table says next, which closes nothing and says nothing a second time
+      await tapsLive(acting);
+      await acting.fill('#raise-amount', '4');
+      table.act('Zed', { type: 'chat', text: 'deal me in next week' });
+      await acting.waitForSelector('.feed li:has-text("deal me in next week")');
+      await reading.waitForSelector('.feed li:has-text("deal me in next week")', { state: 'attached' });
+      assert.equal(await acting.inputValue('#raise-amount'), '4', 'the bet being typed was lost');
+      assert.equal((await spoken(acting, before)).filter((line) => line.includes('The night goes on')).length, 1, 'why the recap went was said more than once');
+      assert.equal((await toasts(acting)).filter((toast) => toast.text.includes('The night goes on')).length, 1, 'why the recap went was shown more than once');
+      assert.deepEqual(moves, [], 'a move was made that the player never made');
+
+      // The one who opened it from the menu still has it, reading the night so far, and is told nothing: that the page
+      // opened a recap by itself earlier, which they closed, makes the one they opened no less theirs
+      assert.deepEqual(await texts(reading, '.dialog h2'), ['Tonight'], 'the recap a player opened from the menu was closed on them');
+      assert.match(await text(reading, '.tonight-standing'), /^So far tonight/);
+      assert.equal((await toasts(reading)).filter((toast) => toast.text.includes('The night goes on')).length, 0);
+      assert.deepEqual((await spoken(reading, before)).filter((line) => line.includes('The night goes on')), [], 'a player whose dialog stayed was told it went');
+
+      await acting.context().close();
+      await reading.context().close();
+    },
+  ],
+  [
+    'a recap taken away from under a hand being played back leaves the keyboard in the replay, which is what is in front of the viewer, and not on the bar it covers',
+    async (rig) => {
+      const table = nightOfOneHand(rig);
+      const page = await table.open('Big Al', 'desktop', SPOKEN);
+
+      // The hand asked for from the bar is still on its way when the night ends: the recap opens by itself, and the replay then opens over it
+      let fetched = (): void => undefined;
+      const onItsWay = new Promise<void>((resolve) => {
+        fetched = resolve;
+      });
+      await page.route('**/api', async (route) => {
+        if ((route.request().postData() ?? '').includes('"op":"history"')) {
+          await onItsWay;
+        }
+
+        return route.fallback();
+      });
+
+      await page.click('.controls [data-action="replay-last"]');
+      table.act('Quigs', { type: 'endNight' });
+      await page.waitForSelector(RECAP);
+      fetched();
+      await page.waitForSelector('.replay:not([hidden])');
+      assert.ok(await focusIn(page, '.replay'), `the replay opened with the keyboard on ${await focused(page)}`);
+      assert.equal(await page.locator(RECAP).count(), 1, 'the recap is not under the replay, so the check shows nothing');
+
+      // The night is played on with another player first to act, so the replay has no turn to make way for
+      table.act('Quigs', { type: 'playOn' });
+      table.dealNext();
+      assert.notEqual(table.view('Big Al').hand!.toAct, table.view('Big Al').you.seat);
+      await toastTold(page, RECAP_GONE);
+      await page.waitForSelector('.dialog', { state: 'detached' });
+
+      assert.equal(await page.locator('.replay:not([hidden])').count(), 1, 'the replay went with the recap');
+      assert.ok(await focusIn(page, '.replay'), `the keyboard is on ${await focused(page)}, behind the replay`);
+
+      await page.context().close();
+    },
+  ],
+  [
+    'while an all-in hand’s last card lies face down the Tonight dialog says nothing the cards have not, for a player and for a watcher, and has the result once the card is up; when that hand is the night’s last, the recap comes only once the hand is off the table, to a page that saw the card turned and to one still waiting on it',
+    async (rig) => {
+      const { screen } = MOTION_LAYOUTS[0]!;
+      const table = rig.table([{ name: 'Quigs', stack: 10_000 }, { name: 'Stu', stack: 10_000 }, { name: 'Pam', stack: 10_000 }], { maxRuns: 1 });
+
+      table.join('Kibitz');
+
+      // A first hand, so that the night has a leader for the next one to unseat: Pam is given the small blind
+      table.deal({ button: 0, holes: { 0: '9c 4d', 1: '7h 2d', 2: '8c 3d' }, board: '2c 7d 9h Jc 6s' });
+      playOut(table);
+
+      // The night's last: Quigs and Stu put everything in, and Stu catches a king on the river
+      table.dealNext({ holes: { 0: 'Ah Ad', 1: 'Kh Kd', 2: '8c 3d' }, board: '2c 7d 9h Jc Ks' });
+      table.act('Quigs', { type: 'setLastHands', hands: 0 });
+      table.play((view, name) => (name === 'Pam' ? { type: 'fold' } : allIn(view)), (view) => view.hand!.stage !== 'betting');
+      table.play(() => null, (view) => view.hand!.boards[0]!.length === 4);
+
+      // Every move is held where it starts until the check lets it go, so the river lies face down for as long as the check looks
+      const open = async (name: string) => {
+        const page = await table.open(name, screen, MOTION, { moving: true });
+        await page.evaluate('window.holdAt = 0');
+
+        return page;
+      };
+      const turnUp = (page: Page) => page.evaluate('window.holdAt = null; window.land()');
+      const [stu, kibitz, pam, quigs] = [await open('Stu'), await open('Kibitz'), await open('Pam'), await open('Quigs')];
+      const reading = [['a player', stu], ['a watcher', kibitz]] as const;
+      const read = async (page: Page) => ({ text: await text(page, '.dialog-body'), nets: await tonightNets(page), leaders: await texts(page, '.tonight-leaders div') });
+      const before = new Map<Page, Awaited<ReturnType<typeof read>>>();
+
+      for (const [who, page] of reading) {
+        await openTonight(page, screen);
+        before.set(page, await read(page));
+        assert.match(before.get(page)!.leaders[0]!, /^Up the most\s+Pam\b/, `${who}: the night’s leader before the river`);
+      }
+
+      rig.advance(table.view('Quigs').hand!.deadline! - rig.now());
+
+      const settled = table.view('Quigs');
+      const nets = settled.tonight.players.map((row) => [row.name, signedAmount(row.net, settled.config)]).sort();
+      assert.deepEqual([settled.hand!.stage, settled.nightEndedAt], ['done', null]);
+
+      for (const page of [stu, kibitz, pam, quigs]) {
+        await page.waitForSelector('.board-card.stand-in', { state: 'attached' });
+      }
+
+      for (const [who, page] of reading) {
+        assert.deepEqual(await read(page), before.get(page), `${who}: the Tonight dialog gives the result away while the river is face down`);
+      }
+
+      for (const [who, page] of reading) {
+        await turnUp(page);
+        await page.waitForFunction(`/^Up the most\\s+Stu\\b/.test(document.querySelector('.tonight-leaders div').innerText)`);
+        assert.deepEqual(await tonightNets(page), nets, `${who}: the Tonight dialog does not have the result once the river is up`);
+        await pressOn(page, screen)('.dialog [data-action="close"]');
+      }
+
+      // The result is not the end of the night: that comes when the hand is taken off the table
+      assert.equal(await pam.locator('.dialog').count(), 0, 'a recap came while the river was face down');
+      await turnUp(pam);
+      await pam.waitForSelector('.message.result');
+      await assertNoDialogComes(pam, 'the recap came with the result of the night’s last hand, before the hand was off the table');
+      assert.equal(await quigs.locator('.dialog, .message.result').count(), 0, 'a page whose river is still face down shows the result or a recap');
+
+      rig.advance(settled.hand!.deadline! - rig.now());
+      assert.notEqual(table.view('Quigs').nightEndedAt, null);
+
+      // To Quigs the night ends with the river still face down: the wait ends there, and the recap is of the night as it ended
+      for (const [who, page] of [...reading, ['a player with nothing open', pam], ['a page still waiting on the river', quigs]] as const) {
+        await page.waitForSelector(RECAP);
+        assert.deepEqual([await text(page, '.tonight-crown strong'), await tonightNets(page)], ['Quigs', nets], `${who}: the recap of a night that ended on an all-in hand`);
+        assert.equal(await page.locator('.board-card.stand-in').count(), 0, `${who}: a card lies face down on the table under the recap`);
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'a table that was going before the numbers were kept says how many hands they leave out, and with nobody bought in the dialog says so',
+    async (rig) => {
+      const screen = 'smallPhone';
+      const table = rig.table([{ name: 'Quigs', stack: 1000 }, { name: 'Stu', stack: 1000 }], CENTS);
+
+      // As a table saved by the game before this one: three hands dealt and none of them counted
+      table.alter((state) => {
+        state.handCount = 3;
+      });
+
+      const page = await table.open('Quigs', screen);
+      await openTonight(page, screen);
+      assert.equal(await text(page, '.tonight-missed'), 'These numbers start partway through the night: 3 hands were played before the count began. The money is all there.');
+      assert.equal(await text(page, '.tonight-standing'), 'So far tonight, after 0 hands. The dipshit of the night is crowned when the night ends.');
+      assert.equal(await page.locator('.tonight-leaders').count(), 0, 'someone leads a night in which nothing has happened');
+      await assertTonightFits(page, screen);
+      await shot(page, 'tonight-count-began-late');
+      await page.context().close();
+
+      // A table nobody has sat down at yet
+      const created = rig.ask({ op: 'create', name: 'Quigs', config: {} });
+      assert.ok(created.ok && created.kind === 'joined', JSON.stringify(created));
+
+      const alone = await new RigTable(rig, created.view.id, 'Quigs', created.auth).open('Quigs', screen);
+      await openTonight(alone, screen, '.note');
+      assert.deepEqual(await texts(alone, '.dialog-body > *'), ['Nobody has bought in yet.']);
+      await alone.context().close();
+    },
+  ],
+  ...TAP_FIRST_LAYOUTS.map((layout): Check => [
+    `a player’s own move shows the moment it is made, the server’s answer changes nothing, and a move refused or lost comes off again (${layout.name})`,
+    async (rig) => {
+      const where = (what: string) => `${layout.name}, ${what}`;
+      const table = rig.table(MOTION_PLAYERS, layout.config);
+
+      // The button is on Al, so Quigs has the small blind: last but one to act before the flop, and first after it
+      table.deal({ button: 3, holes: { 0: 'As Ah' }, board: '2c 7d 9h Jc 3s' });
+      table.act('Pam', { type: 'call' });
+      table.act('Al', { type: 'call' });
+
+      const quigs = layout.moving ? await table.open('Quigs', layout.screen, MOTION, { moving: true }) : await table.open('Quigs', layout.screen);
+      const stu = await table.open('Stu', layout.screen);
+      const press = pressOn(quigs, layout.screen);
+      const sent = movesSent(quigs);
+      const said = complaints(quigs);
+      const moves = await Gate.on(quigs, 'moves');
+      const polls = await Gate.on(quigs, 'polls');
+
+      await holdShape(quigs, layout);
+
+      if (layout.moving) {
+        await quigs.evaluate('window.holdAt = 0');
+      }
+
+      const count = (selector: string) => quigs.locator(selector).count();
+      // What the page has set moving since it was last asked, by what it was; nothing on a page that stands still
+      const moved = async () => (layout.moving ? (await flown(quigs)).map((flight) => [flight.name, flight.what, flight.seat, flight.standIn]) : []);
+      const slide = layout.moving ? [['bet', 'chips', 0, false]] : [];
+
+      // The page shows the table as the server has it, with Quigs to act, and nothing is in the air
+      const onQuigs = async (button: string) => {
+        await caughtUp(quigs, table.view('Quigs'));
+        await quigs.waitForSelector(`.turn [data-action="${button}"]:enabled`);
+        await moved();
+      };
+
+      // The move is on the table and off the bar, before a word from the server
+      const assertMade = async (what: string, status: string, slid: unknown[]) => {
+        assert.deepEqual(await moved(), slid, where(`${what}: what moved as it was made`));
+        assert.equal(await count('.turn'), 0, where(`${what}: the buttons of the turn are still up`));
+        assert.equal(await text(quigs, '.seat.me .status'), status, where(`${what}: what the seat says`));
+        assert.equal(await count('.seat.me.acting'), 0, where(`${what}: the action still shows on the player`));
+        assert.equal(await count('[data-attention]'), 0, where(`${what}: the turn still calls for attention`));
+      };
+
+      /**
+       * A move made with its request held at the gate: it shows at once, nobody else sees it until the
+       * server has it, and the page is then the very page the server's answer draws. `during` looks at
+       * the page while the server still knows nothing.
+       */
+      const played = async (what: string, button: string, make: () => Promise<unknown>, status: string, slid: unknown[], during?: (made: Shown) => Promise<void>) => {
+        await onQuigs(button);
+        await caughtUp(stu, table.view('Stu'));
+        const elsewhere = (await stu.evaluate(DRAWN)) as Drawn;
+
+        await moves.close('requests');
+        await make();
+        await moves.holding();
+        await assertMade(what, status, slid);
+
+        const made = await shownOn(quigs);
+        assert.equal(made.marked, false, where(`${what}: marked as unconfirmed within moments of being made`));
+        assert.deepEqual(await stu.evaluate(DRAWN), elsewhere, where(`${what}: another player’s page shows it before the server has it`));
+        await quigs.evaluate(`document.querySelector('.stage .table').keptSinceTheMove = true`);
+        await during?.(made);
+
+        // The server hears it, and everyone else sees it then, whether or not the answer has reached the player
+        await moves.close('answers');
+        await caughtUp(stu, table.view('Stu'));
+        await moves.open();
+        await toldOf(quigs, 'Quigs');
+
+        assertAsShown(await shownOn(quigs), made, where(`${what}, once the server confirmed it`));
+        assert.deepEqual(await moved(), [], where(`${what}: something moved again when it was confirmed`));
+        // Not even drawn anew with the same things on it, which would cut short a bet still sliding in
+        assert.equal(await quigs.evaluate(`document.querySelector('.stage .table').keptSinceTheMove === true`), true, where(`${what}: the table was drawn again when the move was confirmed`));
+      };
+
+      // ---- Each move ----
+
+      await played('a call', 'call', () => press('.turn [data-action="call"]'), 'Call', slide);
+      await shot(quigs, `optimistic-call-${layout.name}`);
+      table.act('Stu', { type: 'check' });
+
+      // A key presses the button a tap would, where there is a keyboard
+      await onQuigs('check');
+      if (layout.screen === 'desktop') {
+        await settle(quigs);
+      }
+      await played('a check', 'check', () => (layout.screen === 'desktop' ? quigs.keyboard.press('c') : press('.turn [data-action="check"]')), 'Check', []);
+
+      table.act('Stu', { type: 'raise', to: table.view('Stu').hand!.options!.minRaiseTo });
+      table.act('Pam', { type: 'call' });
+      table.act('Al', { type: 'fold' });
+
+      // A raise the server refuses comes off the table, and the buttons are back with the amount as it was typed
+      await onQuigs('raise');
+      const typed = typedAs(table.view('Quigs').hand!.options!.minRaiseTo + 17, table.view('Quigs'));
+      await quigs.fill('#raise-amount', typed);
+      await quigs.locator('#raise-amount').blur();
+
+      const sizing = await shownOn(quigs);
+      await moves.close('requests');
+      await press('.turn [data-action="raise"]');
+      await moves.holding();
+      await assertMade('a raise to be refused', 'Raise', slide);
+
+      await moves.refuse();
+      await toastTold(quigs, 'The table is busy, try again');
+      await quigs.waitForSelector('.turn [data-action="raise"]:enabled');
+      assert.equal(await quigs.inputValue('#raise-amount'), typed, where('the amount typed for a raise that was refused'));
+      assertAsShown(await shownOn(quigs), sizing, where('a raise the server refused'));
+      assert.deepEqual(await moved(), [], where('something moved as the refused raise came off'));
+      await shot(quigs, `optimistic-refused-${layout.name}`);
+      await moves.open();
+
+      await played('a raise', 'raise', () => press('.turn [data-action="raise"]'), 'Raise', slide);
+      table.act('Stu', { type: 'call' });
+      table.act('Pam', { type: 'call' });
+
+      // A bet, with a view from before it still on its way to the page: the poll is answered with a line of chat, and arrives after the tap
+      await onQuigs('raise');
+      await polls.close('answers');
+      table.act('Pam', { type: 'chat', text: 'any day now' });
+      await polls.holding();
+
+      await played('a bet', 'raise', () => press('.turn [data-action="raise"]'), 'Bet', slide, async (made) => {
+        await polls.open();
+        await quigs.getByText('any day now').first().waitFor({ state: 'attached' });
+
+        assertAsShown(await shownOn(quigs), made, where('a view from before the bet, arriving after it'));
+        assert.deepEqual(await moved(), [], where('something moved for a view from before the bet'));
+      });
+
+      table.act('Stu', { type: 'raise', to: table.view('Stu').hand!.options!.minRaiseTo });
+      table.act('Pam', { type: 'raise', to: table.view('Pam').hand!.options!.minRaiseTo });
+
+      // A fold: the player's own cards stay to look at, as after any fold of theirs
+      await played('a fold', 'fold', () => press('.turn [data-action="fold"]'), 'Fold', [], async () => {
+        assert.deepEqual([await count('.seat.me.folded'), await count('.seat.me .card[data-card]'), await count(HINT)], [1, 2, 0], where('a fold: the seat, its cards and the hint under them'));
+      });
+      await shot(quigs, `optimistic-fold-${layout.name}`);
+
+      playOut(table);
+      table.deal({ button: 3, holes: { 0: 'Ks Kh' } });
+      table.act('Pam', { type: 'raise', to: table.view('Pam').hand!.options!.minRaiseTo });
+      table.act('Al', { type: 'fold' });
+
+      await onQuigs('raise');
+      await press('.presets button:has-text("All in")');
+      await played('all in', 'raise', () => press('.turn [data-action="raise"]'), 'All in', slide);
+
+      // ---- A move that gets no answer ----
+
+      playOut(table);
+      table.deal({ button: 3 });
+      table.act('Pam', { type: 'call' });
+      table.act('Al', { type: 'call' });
+      await onQuigs('call');
+
+      const mine = await shownOn(quigs);
+      const lost = async (what: string, heard: boolean) => {
+        const told = await toastsTold(quigs);
+
+        // No poll gets through either, so the page knows only what it is shown here
+        await polls.close('requests');
+        await moves.close(heard ? 'answers' : 'requests');
+        await press('.turn [data-action="call"]');
+        await moves.holding();
+        await assertMade(what, 'Call', slide);
+
+        const made = await shownOn(quigs);
+        await moves.lose();
+        await quigs.waitForSelector('.stage[data-unconfirmed]');
+        await toastTold(quigs, 'Checking whether that was played', told);
+
+        // Marked, and otherwise the table it was: the label of the move and the chips go faint, and the bar says what is waited for
+        const marked = await shownOn(quigs);
+        assertAsShown(marked, made, where(`${what}, marked as unconfirmed`));
+        assert.equal(await text(quigs, '.controls .waiting'), 'Waiting for the table to confirm your call…', where(what));
+        assert.deepEqual([await style(quigs, '.seat.me .status', 'opacity'), await style(quigs, '.seat.me + .bet', 'opacity')], ['0.45', '0.45'], where(`${what}: the mark`));
+        assert.deepEqual([await style(quigs, '.seat:not(.me) .status', 'opacity'), await style(quigs, '.seat.me .stack', 'opacity')], ['1', '1'], where(`${what}: the mark is on more than the move`));
+        assert.equal(await count('.turn'), 0, where(`${what}: a move in doubt can be made again`));
+
+        return made;
+      };
+
+      // The request never reached the server: the lookup finds the turn still open, and the table is put back with a sentence
+      await lost('a call that never arrives', false);
+      await shot(quigs, `optimistic-unconfirmed-${layout.name}`);
+      await polls.open();
+      await toastTold(quigs, 'The table has no sign of your call, so it is still your turn.');
+      await quigs.waitForSelector('.turn [data-action="call"]:enabled');
+      assertAsShown(await shownOn(quigs), mine, where('a call that never arrived, put back'));
+      assert.deepEqual([await count('.stage[data-unconfirmed]'), await moved()], [0, []], where('a call that never arrived, put back'));
+      await shot(quigs, `optimistic-put-back-${layout.name}`);
+      await moves.open();
+
+      // The server played it and the answer was lost: the lookup confirms it, and nothing more is said
+      const toldBefore = await toastsTold(quigs);
+      const made = await lost('a call whose answer is lost', true);
+      await caughtUp(stu, table.view('Stu'));
+      await polls.open();
+      await quigs.waitForSelector('.stage:not([data-unconfirmed])');
+      await toldOf(quigs, 'Quigs');
+      assertAsShown(await shownOn(quigs), made, where('a call whose answer was lost, confirmed'));
+      assert.deepEqual(await moved(), [], where('something moved when the lost call was confirmed'));
+      assert.deepEqual((await toasts(quigs)).slice(toldBefore).filter((toast) => toast.text.includes('no sign of')), [], where('a call that was played is said not to have arrived'));
+      await moves.open();
+
+      // ---- A move that ends the street ----
+
+      // On the button Quigs acts last after the flop. What comes then is the server's to say: nobody is named, and no card comes early
+      playOut(table);
+      table.deal({ button: 0, board: '2c 7d 9h Jc 3s' });
+      for (const [name, type] of [['Al', 'call'], ['Quigs', 'call'], ['Stu', 'call'], ['Pam', 'check'], ['Stu', 'check'], ['Pam', 'check'], ['Al', 'check']] as const) {
+        table.act(name, { type });
+      }
+      await onQuigs('check');
+
+      await moves.close('requests');
+      await press('.turn [data-action="check"]');
+      await moves.holding();
+      await assertMade('a check that ends the street', 'Check', []);
+      assert.deepEqual(
+        [await text(quigs, '.controls .waiting'), await count('.seat.acting'), await count('.board .card[data-card]')],
+        ['Waiting for the dealer', 0, 3],
+        where('a check that ends the street: the bar, who is waited for, and the cards out'),
+      );
+
+      await moves.open();
+      await quigs.waitForFunction(`document.querySelectorAll('.board .card[data-card]').length === 4`);
+
+      // ---- The turn's clock ----
+
+      playOut(table);
+      table.act('Quigs', { type: 'updateConfig', config: { actionSeconds: 30 } });
+      table.deal({ button: 3 });
+      table.act('Pam', { type: 'call' });
+      table.act('Al', { type: 'call' });
+      await onQuigs('call');
+      await quigs.waitForSelector('.seat.me .status.clock');
+
+      // Their own clock stops at the tap. The next player's starts when the server hears the move, so it comes with the answer
+      await moves.close('requests');
+      await press('.turn [data-action="call"]');
+      await moves.holding();
+      await assertMade('a call on the clock', 'Call', slide);
+      assert.deepEqual([await count('.status.clock'), await count('.timer'), await quigs.getAttribute('.seat.acting', 'data-seat')], [0, 0, '1'], where('a call on the clock: the clocks shown, and who is waited for'));
+
+      await moves.open();
+      await quigs.waitForSelector('.seat[data-seat="1"] .status.clock');
+
+      // Each move was sent once: the refused raise and the lost call are the player's own second tries
+      assert.deepEqual(sent, ['call', 'check', 'raise', 'raise', 'raise', 'fold', 'raise', 'call', 'call', 'check', 'call'], where('the moves sent'));
+      // The browser's own line about a request that was lost on purpose
+      assert.deepEqual(ownComplaints(said), [], where('the console'));
+    },
+  ]),
+  ...[MOTION_LAYOUTS[0]!, MOTION_LAYOUTS[2]!].map((layout): Check => [
+    `a move shown early changes nothing in the Tonight and ledger dialogs, and a move the page cannot play out shows as sent with its buttons gone (${layout.name})`,
+    async (rig) => {
+      const where = (what: string) => `${layout.name}, ${what}`;
+      const table = rig.table(MOTION_PLAYERS, layout.config);
+
+      // A hand has been played, so the night has numbers, and in the next the action is on Quigs
+      table.deal({ button: 3 });
+      playOut(table);
+      table.deal({ button: 3, holes: { 0: 'As Ah' }, board: '2c 7d 9h Jc 3s' });
+      table.act('Pam', { type: 'call' });
+      table.act('Al', { type: 'call' });
+      // Badges are the server's too, so Tonight is checked with some to show
+      table.alter((state) => {
+        for (const numbers of Object.values(state.tonight.players)) {
+          numbers.badges = everyBadge(1);
+        }
+      });
+
+      const quigs = await table.open('Quigs', layout.screen);
+      const press = pressOn(quigs, layout.screen);
+      const sent = movesSent(quigs);
+      const said = complaints(quigs);
+      const moves = await Gate.on(quigs, 'moves');
+
+      await holdShape(quigs, layout);
+      await quigs.waitForSelector('.turn [data-action="call"]:enabled');
+
+      // ---- The night's numbers and the ledger are the server's: a move shown early is not in them ----
+
+      const DIALOGS = [
+        ['tonight', 'Tonight'],
+        ['ledger', 'Ledger'],
+      ] as const;
+      const dialog = (label: string) => `.dialog[aria-label="${label}"]`;
+      const drawn = (label: string) => quigs.evaluate(`document.querySelector(${JSON.stringify(dialog(label))}).outerHTML`) as Promise<string>;
+      const open = async (action: string, label: string) => {
+        await press('[data-action="menu"]');
+        await press(`.menu [data-action="${action}"]`);
+        await quigs.waitForSelector(dialog(label));
+      };
+      const close = async (label: string) => {
+        await press(`${dialog(label)} [data-action="close"]`);
+        await quigs.waitForSelector(dialog(label), { state: 'detached' });
+      };
+
+      const before: Record<string, string> = {};
+      for (const [action, label] of DIALOGS) {
+        await open(action, label);
+        before[label] = await drawn(label);
+        await close(label);
+      }
+
+      assert.ok(before.Tonight!.includes('class="badge"'), where('the Tonight dialog shows no badges'));
+
+      await moves.close('requests');
+      await press('.turn [data-action="call"]');
+      await moves.holding();
+      assert.equal(await text(quigs, '.seat.me .status'), 'Call', where('the call shows before the server has it'));
+
+      for (const [action, label] of DIALOGS) {
+        await open(action, label);
+        assert.equal(await drawn(label), before[label], where(`the ${label} dialog, with the player’s own call shown and the server yet to hear of it`));
+
+        if (label !== 'Ledger') {
+          await close(label);
+        }
+      }
+
+      // The answer comes with the ledger open: the chips of a call are still their owner's, so nothing in it changes and it is not drawn again
+      await quigs.evaluate(`document.querySelector('.dialog').keptSinceTheMove = true`);
+      await moves.open();
+      await toldOf(quigs, 'Quigs');
+      assert.equal(await quigs.evaluate(`document.querySelector('.dialog').keptSinceTheMove === true`), true, where('the ledger dialog was drawn again when the call was confirmed'));
+      assert.equal(await drawn('Ledger'), before.Ledger, where('the ledger dialog, once the call was confirmed'));
+      await close('Ledger');
+
+      // And with Tonight open: Stu checks, the flop comes, and Quigs bets under it
+      table.act('Stu', { type: 'check' });
+      await quigs.waitForSelector('.turn [data-action="raise"]:enabled');
+      await moves.close('requests');
+      await press('.turn [data-action="raise"]');
+      await moves.holding();
+      await open('tonight', 'Tonight');
+      assert.equal(await drawn('Tonight'), before.Tonight, where('the Tonight dialog, with the player’s own bet shown and the server yet to hear of it'));
+
+      await quigs.evaluate(`document.querySelector('.dialog').keptSinceTheMove = true`);
+      await moves.open();
+      await toldOf(quigs, 'Quigs');
+      assert.equal(await quigs.evaluate(`document.querySelector('.dialog').keptSinceTheMove === true`), true, where('the Tonight dialog was drawn again when the bet was confirmed'));
+      assert.equal(await drawn('Tonight'), before.Tonight, where('the Tonight dialog, once the bet was confirmed'));
+      await close('Tonight');
+
+      // ---- A move the page cannot play out: a pick of how many times to run it ----
+
+      playOut(table);
+      table.deal({ button: 3, holes: { 0: 'As Ah', 1: 'Ks Kh' }, board: '2c 7d 9h Jc 3s' });
+      table.act('Pam', { type: 'fold' });
+      table.act('Al', { type: 'fold' });
+      table.act('Quigs', { type: 'raise', to: table.view('Quigs').hand!.options!.maxRaiseTo });
+      table.act('Stu', { type: 'call' });
+      await quigs.waitForSelector('.turn [data-action="rit-3"]:enabled');
+
+      const voting = await shownOn(quigs);
+
+      // Sent, and that is all the page shows of it: the buttons are gone, and the table is as the server last told it
+      await moves.close('requests');
+      await press('.turn [data-action="rit-3"]');
+      await moves.holding();
+      assert.equal(await quigs.locator('.turn').count(), 0, where('the vote’s buttons are still up while it is on its way'));
+      assert.equal(await text(quigs, '.controls .waiting'), 'Waiting for everyone to pick how many times to run it', where('the bar with a vote sent'));
+      assertSameDrawn((await shownOn(quigs)).table, voting.table, where('the table with a vote sent'));
+      assert.equal(table.view('Quigs').seats[0]!.ritVote, null, where('the server has the vote already'));
+
+      // Refused, the buttons are back as they were
+      await moves.refuse();
+      await quigs.waitForSelector('.turn [data-action="rit-3"]:enabled');
+      assertAsShown(await shownOn(quigs), voting, where('a vote the server refused'));
+      await moves.open();
+
+      await answeredAfter(quigs, () => press('.turn [data-action="rit-3"]'));
+      assert.equal(table.view('Quigs').seats[0]!.ritVote, 3, where('the vote did not reach the server'));
+
+      assert.deepEqual(sent, ['call', 'raise', 'ritVote 3', 'ritVote 3'], where('the moves sent'));
+      assert.deepEqual(ownComplaints(said), [], where('the console'));
+    },
+  ]),
+  ...CHOP_TABLES.flatMap((kind) => [chopAgreedCheck(kind), chopTurnedDownCheck(kind)]),
+  ...[MOTION_LAYOUTS[0]!, MOTION_LAYOUTS[2]!].map((layout): Check => [
+    `an offer to chop and its answer show as sent at the tap and nothing more, a refused offer puts the turn back as it was, and a lost one is looked up and never sent twice (${layout.name})`,
+    async (rig) => {
+      const where = (what: string) => `${layout.name}, ${what}`;
+      const kind = CHOP_TABLES[layout.config ? 1 : 0]!;
+      // Without a clock, whose bar would shrink under the comparison of the table before and after
+      const table = foldedToTheBlinds(rig, kind, { actionSeconds: 0 });
+      const small = await table.open(WIDEST, layout.screen);
+      const press = pressOn(small, layout.screen);
+      const sent = movesSent(small);
+      const said = complaints(small);
+      const moves = await Gate.on(small, 'moves');
+      const polls = await Gate.on(small, 'polls');
+      const offers = () => table.view('Quigs').hand!.stage === 'chop';
+
+      await holdShape(small, layout);
+      await small.waitForSelector('.turn [data-action="offer-chop"]:enabled');
+      const offering = await shownOn(small);
+
+      // Held on its way: the buttons are gone, the bar names nobody, and the table is as the server last told it
+      await moves.close('requests');
+      await press('.turn [data-action="offer-chop"]');
+      await moves.holding();
+      assert.equal(await small.locator('.turn').count(), 0, where('the turn is still up with the offer on its way'));
+      assert.equal(await text(small, '.controls .waiting'), 'Waiting for the dealer', where('the bar with the offer sent'));
+      assertSameDrawn((await shownOn(small)).table, offering.table, where('the table with the offer sent'));
+      assert.equal(offers(), false, where('the server has the offer already'));
+      await shot(small, `chop-offer-sent-${layout.name}`);
+
+      // Refused, the turn is back as it was, Chop and all
+      await moves.refuse();
+      await small.waitForSelector('.turn [data-action="offer-chop"]:enabled');
+      assertAsShown(await shownOn(small), offering, where('an offer the server refused'));
+
+      // Heard, and its answer lost: the page looks it up with a fresh poll, finds it made, and sends nothing again
+      await polls.close('requests');
+      await moves.close('answers');
+      await press('.turn [data-action="offer-chop"]');
+      await moves.holding();
+      await moves.lose();
+      await toastTold(small, 'Checking whether that was played');
+      assert.equal(offers(), true, where('the server never heard the offer whose answer was lost'));
+      assert.equal(await small.locator('.turn').count(), 0, where('an offer in doubt can be made again'));
+      await polls.open();
+      await small.waitForSelector(`.controls .waiting:has-text("You offered to chop. Waiting for ${UNICODE}")`);
+      assert.deepEqual((await toasts(small)).filter((toast) => toast.text.includes('no sign of')), [], where('an offer that was made is said not to have arrived'));
+      await moves.open();
+      assert.deepEqual(sent, ['offerChop', 'offerChop'], where('the offers sent: one refused, one whose answer was lost'));
+      assert.equal(table.view('Quigs').hand!.events.filter((event) => event[0] === 'chopOffer').length, 1, where('the offer was made twice'));
+
+      // The big blind's answer, held once: the question goes and nothing else changes until the server has it
+      const big = await table.open(UNICODE, layout.screen);
+      const bigMoves = await Gate.on(big, 'moves');
+      await holdShape(big, layout);
+      await big.waitForSelector('.turn [data-action="chop-yes"]:enabled');
+      const asked = await shownOn(big);
+
+      await bigMoves.close('requests');
+      await pressOn(big, layout.screen)('.turn [data-action="chop-yes"]');
+      await bigMoves.holding();
+      assert.equal(await big.locator('.turn').count(), 0, where('the question is still up with the answer on its way'));
+      assert.equal(await text(big, '.controls .waiting'), 'Waiting for the dealer', where('the big blind\'s bar with the answer sent'));
+      assertSameDrawn((await shownOn(big)).table, asked.table, where('the table with the answer sent'));
+      assert.equal(offers(), true, where('the server has the answer already'));
+      await shot(big, `chop-answer-sent-${layout.name}`);
+
+      await bigMoves.open();
+      await small.waitForSelector(`.message.result:has-text("${WIDEST} and ${UNICODE} chop the blinds")`);
+      assert.deepEqual(ownComplaints(said), [], where('the console'));
+
+      await small.context().close();
+      await big.context().close();
+    },
+  ]),
+  [
+    'the table settings switch chops on and off, the table is told, and with them on a player switches Always chop under the table, which chops at once when both blinds have it',
+    async (rig) => {
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        const table = rig.table(LONG_NAMES.slice(0, 4).map((name) => ({ name, stack: 1000 })));
+        const host = await table.open('Quigs', screen);
+        const press = pressOn(host, screen);
+        const switchFor = 'label[for="table-allow-chop"]';
+
+        // Off as a table starts, and nobody has a switch for it under the table
+        assert.equal(await host.locator('.controls [data-action="always-chop"]').count(), 0);
+        await press('[data-action="menu"]');
+        await press('.menu [data-action="settings"]');
+        await host.waitForSelector('#table-allow-chop');
+        assert.equal(await host.isChecked('#table-allow-chop'), false);
+        assert.equal(await text(host, switchFor), 'Let the blinds chop when it folds to them');
+        await host.locator('#table-allow-chop').scrollIntoViewIfNeeded();
+        assertOnScreen(await boxes(host, switchFor), screen, 'the switch for chops');
+        assert.deepEqual(await squeezed(host, `${switchFor} span`), [], 'the name of the switch is cut off');
+        const [box] = await boxes(host, '#table-rabbit-hunting');
+        assert.ok(box!.right - box!.left >= 20, `the switch's box is squeezed by its long name: ${JSON.stringify(box)}`);
+        await assertNoSidewaysScroll(host);
+        await shot(host, `chop-settings-${screen}`);
+
+        await press(switchFor);
+        await press('[data-action="save-settings"]');
+        await host.waitForSelector('.dialog', { state: 'detached' });
+        assert.equal(table.view('Quigs').config.allowChop, true);
+
+        await toggleFeed(host, screen);
+        await host.waitForSelector('.entries li:has-text("The blinds may chop")');
+        assert.equal((await texts(host, '.entries li')).at(-1), 'The blinds may chop when it folds to them');
+        await toggleFeed(host, screen);
+
+        // The switch under the table, beside the others, for each player to set
+        const small = await table.open(WIDEST, screen);
+        await small.waitForSelector('.controls [data-action="always-chop"]');
+        assert.deepEqual(await texts(small, '.controls .extras button'), ['Sit out next hand', 'Straddle', 'Always chop', 'Add chips']);
+        await pressOn(small, screen)('.controls [data-action="always-chop"]');
+        await small.waitForSelector('.controls [data-action="always-chop"][aria-checked="true"]');
+        assert.equal(table.view(WIDEST).seats[1]!.alwaysChop, true);
+        await assertOwedBarFits(small, screen);
+        await assertNoSidewaysScroll(small);
+        await shot(small, `chop-always-${screen}`);
+
+        // Both blinds always chop: folded to them, the hand is chopped with nobody asked
+        table.act(UNICODE, { type: 'setAlwaysChop', on: true });
+        table.deal({ button: 0 });
+        table.act(MARGE, { type: 'fold' });
+        table.act('Quigs', { type: 'fold' });
+        await small.waitForSelector(`.message.result:has-text("${WIDEST} and ${UNICODE} chop the blinds")`);
+        assert.equal(await small.locator('.turn').count(), 0);
+        await shot(small, `chop-unasked-${screen}`);
+
+        // The night counts the chopped hand as a hand played by everyone dealt in, and as a pot won by nobody
+        playOut(table);
+        await table.heardBy(small);
+        await openTonight(small, screen);
+        assert.equal(await text(small, '.tonight-standing'), 'So far tonight, after 1 hand. The dipshit of the night is crowned when the night ends.');
+        assert.deepEqual(await texts(small, '.tonight-players .counts'), ['1 hand · 0 pots won', '1 hand · 0 pots won', '1 hand · 0 pots won', '1 hand · 0 pots won']);
+
+        await pressOn(small, screen)('[data-action="copy-tonight"]');
+        await small.waitForSelector('#tonight-text:visible');
+        const copied = (await small.evaluate(`document.querySelector('#tonight-text').value`)) as string;
+        assert.equal(copied.split('\n')[0], `${DEFAULT_CONFIG.name}: the night so far, 1 hand`);
+        assert.equal(copied.split('\n').filter((line) => line.endsWith('· 1 hand · 0 pots won')).length, 4, copied);
+        await assertTonightFits(small, screen);
+        await shot(small, `chop-tonight-${screen}`);
+        await closeRecap(small);
+
+        // Switched off again, everyone's Always chop goes with it
+        table.act('Quigs', { type: 'updateConfig', config: { allowChop: false } });
+        await small.waitForSelector('.controls [data-action="always-chop"]', { state: 'detached' });
+        assert.ok(table.view('Quigs').seats.every((seat) => !seat?.alwaysChop));
+
+        await host.context().close();
+        await small.context().close();
+      }
+    },
+  ],
+  [
+    'a badge earned is a line in the play-by-play for everyone and a toast for whoever earned it alone, once the hand is off the table',
+    async (rig) => {
+      const table = feltingHand(rig);
+      table.play(() => null, (view) => view.hand!.stage === 'done');
+
+      const quigs = await table.open('Quigs', 'smallPhone');
+      const stu = await table.open('Stu', 'phone');
+      const kibitz = await table.open('Kibitz', 'desktop');
+      const pages = [quigs, stu, kibitz];
+
+      for (const page of pages) {
+        assert.equal(await page.locator('.feed li:has-text("earned")').count(), 0, 'a badge is told before the hand is off the table');
+      }
+
+      rig.advance(table.view('Quigs').hand!.deadline! - rig.now());
+      assert.deepEqual(table.view('Quigs').feed.map((entry) => entry.text).filter((line) => line.includes(' earned ')), FELTED_LINES);
+
+      const toast = await toastTold(quigs);
+      assert.equal(toast.text, FELTED_TOAST);
+      assertOnScreen([toast.box], 'smallPhone', 'the toast');
+      await shot(quigs, 'badges-toast-smallPhone');
+
+      for (const page of pages) {
+        for (const line of FELTED_LINES) {
+          await page.waitForSelector(`.feed li:has-text(${JSON.stringify(line)})`, { state: 'attached' });
+        }
+      }
+
+      for (const [who, page] of [['the player who lost', stu], ['a watcher', kibitz]] as const) {
+        assert.equal(await toastsTold(page), 0, `${who} is shown a toast for someone else's badge`);
+      }
+
+      await shot(kibitz, 'badges-line-desktop');
+
+      // A page opened afterwards finds the badges and is told nothing
+      const late = await table.open('Quigs', 'phone');
+      await late.waitForSelector('.feed li:has-text("Felted")', { state: 'attached' });
+      table.act('Kibitz', { type: 'chat', text: 'brutal' });
+      await late.waitForSelector('.feed li:has-text("brutal")', { state: 'attached' });
+      assert.equal(await toastsTold(late), 0, 'a page opened after the badge was earned was told of it');
+
+      for (const page of [...pages, late]) {
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'every badge on ten players with the longest names fits beside each name in Tonight, unfolded and in its copied text, and in the Players dialog, on the smallest phone and the desktop',
+    async (rig) => {
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        const table = badgedTable(rig);
+        const host = await table.open('Quigs', screen);
+        const press = pressOn(host, screen);
+        const marks = BADGES.map((badge) => badge.mark);
+
+        await openTonight(host, screen);
+        assert.deepEqual(await host.locator('.tonight-players li[data-player="Quigs"] .badge').allInnerTexts(), marks, 'the badges, in the order of the list');
+        assert.deepEqual(await host.locator(`.tonight-players li[data-player="${WIDEST}"] .badge`).allInnerTexts(), marks.map((mark) => `${mark}×99`));
+        assert.equal(await host.locator('.tonight-players li[data-player="Stu"] .badge').count(), BADGES.length, 'a player who left keeps their badges');
+        await assertTonightFits(host, screen);
+        await assertBadgesFit(host, screen, '.tonight-players > li', ':is(.who, .net, .counts)', 'Tonight');
+        await shot(host, `badges-tonight-${screen}`);
+
+        await press(`.tonight-players li[data-player="${WIDEST}"] summary`);
+        const named = await host.locator(`.tonight-players li[data-player="${WIDEST}"] .badge-list li`).allInnerTexts();
+        assert.deepEqual(named, BADGES.map((badge) => `${badge.mark} ${badge.name} ×99\n${badge.description}`));
+        assert.deepEqual(await squeezed(host, '.badge-list :is(b, small)'), [], 'a badge named in an unfolded line is cut off');
+        await assertTonightFits(host, screen);
+        await shot(host, `badges-tonight-unfolded-${screen}`);
+
+        await host.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+        await press('[data-action="copy-tonight"]');
+        await host.waitForSelector('[data-action="copy-tonight"]:has-text("Copied")');
+        const copied = ((await host.evaluate('navigator.clipboard.readText()')) as string).split('\n');
+        assert.ok(copied.some((line) => line.startsWith(`${WIDEST} +`) && line.endsWith(` · ${BADGES.map((badge) => `${badge.mark} ${badge.name} ×99`).join(' · ')}`)), copied.join('\n'));
+        await press('.dialog [data-action="close"]');
+
+        await press('[data-action="menu"]');
+        await press('.menu [data-action="players"]');
+        await host.waitForSelector('.dialog .badges');
+        assert.deepEqual(await host.locator(`.dialog li:has-text("${WIDEST}") .badge`).allInnerTexts(), marks.map((mark) => `${mark}×99`));
+        assert.equal(await host.locator('.dialog li:has-text("Lurker") .badges').count(), 0, 'someone who only watched has badges');
+        await assertBadgesFit(host, screen, '.dialog .rows li', ':is(b, .row-actions .btn)', 'the Players dialog');
+        assert.deepEqual(await squeezed(host, '.dialog .row-actions .btn'), [], 'a button in the Players dialog is cut off');
+        await shot(host, `badges-players-${screen}`);
+
+        await host.context().close();
+      }
+    },
+  ],
+  [
+    'while an all-in hand’s last card lies face down no badge, toast or line is shown, to a player or a watcher, and the hand’s badges come once it is off the table, to a page that saw the card turned and to one still waiting on it',
+    async (rig) => {
+      const { screen } = MOTION_LAYOUTS[0]!;
+      const table = feltingHand(rig);
+      table.play(() => null, (view) => view.hand!.boards[0]!.length === 4);
+
+      const open = async (name: string) => {
+        const page = await table.open(name, screen, MOTION, { moving: true });
+        await page.evaluate('window.holdAt = 0');
+
+        return page;
+      };
+      const turnUp = (page: Page) => page.evaluate('window.holdAt = null; window.land()');
+      const [quigs, stu, kibitz] = [await open('Quigs'), await open('Stu'), await open('Kibitz')];
+      const reading = [['a player', stu], ['a watcher', kibitz]] as const;
+
+      for (const [, page] of reading) {
+        await openTonight(page, screen);
+      }
+
+      const nothingTold = async (when: string) => {
+        assert.equal(await toastsTold(quigs), 0, `${when}: the toast came`);
+
+        for (const [who, page] of [...reading, ['the earner', quigs]] as const) {
+          assert.equal(await page.locator('.feed li:has-text("earned")').count(), 0, `${who}, ${when}: the line came`);
+          assert.equal(await page.locator('.badges').count(), 0, `${who}, ${when}: a badge is drawn`);
+        }
+      };
+
+      rig.advance(table.view('Quigs').hand!.deadline! - rig.now());
+      assert.equal(table.view('Quigs').hand!.stage, 'done');
+
+      for (const page of [quigs, stu, kibitz]) {
+        await page.waitForSelector('.board-card.stand-in', { state: 'attached' });
+      }
+
+      await nothingTold('the river face down');
+
+      // The card comes up for the two reading, and the hand is still on the table
+      for (const [, page] of reading) {
+        await turnUp(page);
+        await page.waitForFunction(`/^Up the most\\s+Quigs\\b/.test(document.querySelector('.tonight-leaders div')?.innerText)`);
+      }
+
+      await nothingTold('the hand still on the table');
+
+      // Quigs's river is still face down when the hand is taken off the table: the wait ends there, and the toast comes with the card up
+      rig.advance(table.view('Quigs').hand!.deadline! - rig.now());
+
+      assert.equal((await toastTold(quigs)).text, FELTED_TOAST);
+      assert.equal(await quigs.locator('.board-card.stand-in').count(), 0, 'a card lies face down under the toast');
+
+      for (const [who, page] of reading) {
+        await page.waitForSelector('.tonight-players li[data-player="Quigs"] .badges');
+        assert.deepEqual(await page.locator('.tonight-players li[data-player="Quigs"] .badge').allInnerTexts(), ['💰', '💀'], who);
+        await page.waitForSelector(`.feed li:has-text(${JSON.stringify(FELTED_LINES[1])})`, { state: 'attached' });
+        assert.equal(await toastsTold(page), 0, `${who} is shown a toast for Quigs's badges`);
+      }
+
+      for (const page of [quigs, stu, kibitz]) {
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'two hands all in show each one’s chance to win in its seat, the same for both players and for a watcher, from whichever street they went all in on; every street changes it and the result takes its place',
+    async (rig) => {
+      // Quigs has the short stack and wins every hand, so nobody is ever out of chips
+      const table = rig.table([{ name: 'Quigs', stack: 1000 }, { name: 'Stu', stack: 10_000 }], { maxRuns: 1 });
+      table.join('Kibitz');
+
+      const pages: [name: string, page: Page][] = [
+        ['Quigs', await table.open('Quigs', 'smallPhone')],
+        ['Stu', await table.open('Stu', 'desktop')],
+        ['Kibitz', await table.open('Kibitz', 'smallPhone')],
+      ];
+
+      // Each hand with how many cards are out when the chips go in, and what the seats say from then on, a street at a time
+      const hands = [
+        // Before the flop the boards are too many to count: the chances are an estimate, and say so
+        { from: 'before-the-flop', out: 0, holes: { 0: 'As Ah', 1: 'Kd Kc' }, board: '3c 8d Jh Qs 4d', streets: [['~82%*', '~18%'], ['92%*', '8%'], ['95%*', '5%']] },
+        // A set against the nut flush draw
+        { from: 'on-the-flop', out: 3, holes: { 0: '9c 9d', 1: 'Ah Kh' }, board: '9h 4h 2c Js 3d', streets: [['74%*', '26%'], ['84%*', '16%']] },
+        // A flush draw with one card to come: nine of the 44 cards left, which is 20.45 in a hundred
+        { from: 'on-the-turn', out: 4, holes: { 0: 'As Ad', 1: '7h 6h' }, board: 'Kh 2h 9c Js 3d', streets: [['80%*', '20%']] },
+      ];
+
+      for (const hand of hands) {
+        table.deal({ button: 0, holes: hand.holes, board: hand.board });
+        table.play((view) => (view.hand!.boards[0]!.length >= hand.out ? allIn(view) : passive(view)), (view) => view.hand!.stage !== 'betting');
+        assert.equal(table.view('Quigs').hand!.boards[0]!.length, hand.out, `the chips went in with ${hand.out} cards out`);
+
+        for (const [street, [quigs, stu]] of hand.streets.entries()) {
+          if (street > 0) {
+            nextStreet(rig, table, 'Quigs');
+          }
+
+          for (const [name, page] of pages) {
+            assert.deepEqual(await chancesOn(page, table, name), { 0: quigs, 1: stu }, `all in ${hand.from}, with ${hand.out + street} cards out, as ${name}`);
+            await assertChancesFit(page, `all in ${hand.from}, as ${name}`);
+          }
+
+          if (street === 0) {
+            const [, page] = pages[0]!;
+            const said = quigs!.replace('*', '');
+
+            assert.equal(await page.locator('.seat[data-seat="0"] .status.chance').getAttribute('title'), `Chance to win: ${said}`, `all in ${hand.from}: the figure in words`);
+            await shot(page, `chances-all-in-${hand.from}-small-phone`);
+          }
+        }
+
+        // The last card, and with it the result: the seats say who won, and no chances
+        nextStreet(rig, table, 'Quigs');
+
+        for (const [name, page] of pages) {
+          await page.waitForSelector('.message.result');
+          assert.deepEqual(await chancesOn(page, table, name), {}, `the result of the hand all in ${hand.from}, as ${name}`);
+          assert.equal(await page.locator('.seat[data-seat="0"] .status.won').count(), 1, `the winner’s seat, as ${name}`);
+        }
+
+        // Paused, so that the table deals no hand of its own before the next of these
+        table.act('Quigs', { type: 'pause' });
+        table.play(() => null, (view) => !view.hand);
+      }
+
+      for (const [, page] of pages) {
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'three hands all in with a side pot: each seat shows its hand’s chance to be the best of the three, whatever it can win, the same for a player who folded, on a phone and on a desktop table that plays cents',
+    async (rig) => {
+      // Quigs is all in for less, so there is a side pot he is not in. His chance is of the best hand all the same
+      const table = rig.table(
+        [
+          { name: 'Quigs', stack: 300 },
+          { name: 'Stu', stack: 1000 },
+          { name: 'Pam', stack: 1000 },
+          { name: 'Al', stack: 1000 },
+        ],
+        { ...CENTS, maxRuns: 1 },
+      );
+      const pages: [name: string, page: Page, screen: ScreenName][] = [
+        ['Quigs', await table.open('Quigs', 'phone'), 'phone'],
+        ['Al', await table.open('Al', 'desktop'), 'desktop'],
+      ];
+
+      table.deal({ button: 0, holes: { 0: 'As Kd', 1: 'Qh Qc', 2: '7s 6s', 3: '9c 4d' }, board: '5s 8d 2s Jc 3h' });
+      table.play((view, name) => (name === 'Al' ? { type: 'fold' } : allIn(view)), (view) => view.hand!.stage !== 'betting');
+      assert.ok(table.view('Quigs').hand!.pots.length > 1, 'the hand has a side pot');
+
+      // Before the flop, on it, where the flush draw is ahead of the pair, and on the turn, which misses it
+      const streets = [
+        { 0: '~35%', 1: '~42%*', 2: '~23%' },
+        { 0: '16%', 1: '31%', 2: '53%*' },
+        { 0: '12%', 1: '55%*', 2: '33%' },
+      ];
+
+      for (const [street, chances] of streets.entries()) {
+        if (street > 0) {
+          nextStreet(rig, table, 'Quigs');
+        }
+
+        for (const [name, page, screen] of pages) {
+          assert.deepEqual(await chancesOn(page, table, name), chances, `three hands with ${[0, 3, 4][street]} cards out, as ${name}`);
+          assert.equal(await text(page, '.seat[data-seat="3"] .status'), 'Fold', `the seat that folded says so and nothing else, as ${name}`);
+
+          await inShapesOf(page, screen, async (shape) => {
+            await assertChancesFit(page, `three hands with ${[0, 3, 4][street]} cards out, as ${name}, ${shape}`);
+
+            if (street === 1) {
+              await shot(page, `chances-three-way-${screen}-${shape}`);
+            }
+          }, { buttonsUp: false });
+        }
+      }
+
+      for (const [, page] of pages) {
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'a double-board bomb pot with players all in shows each hand’s chance on each board, in the order the boards lie, with every card of one board out of the other’s deck; a hand with next to no chance says so rather than none',
+    async (rig) => {
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        // Two of the three have just the bomb, so the hands are up as the flops are dealt
+        const table = rig.table([{ name: 'Quigs', stack: 100 }, { name: 'Stu', stack: 100 }, { name: 'Pam', stack: 1000 }], { bombPotBoards: 'two' });
+        table.join('Kibitz');
+        table.act('Quigs', { type: 'setBombPot', on: true });
+        table.deal({ button: 0, holes: { 0: 'As Ah', 1: 'Ks Kh', 2: 'Qs Qh' }, board: '2c 7d 9h Jc 3s', secondBoard: 'Kd 4c 5h 8s Td' });
+        assert.equal(table.view('Quigs').hand!.stage, 'runout');
+
+        const pages: [name: string, page: Page][] = [
+          ['Pam', await table.open('Pam', screen)],
+          ['Kibitz', await table.open('Kibitz', screen)],
+        ];
+
+        // On the second board the kings have made three, and the queens need both of the queens left: 0.13 in a hundred.
+        // Its turn leaves them none
+        const streets = [
+          { 0: '86* 11', 1: '5 89*', 2: '9 <1' },
+          { 0: '92* 5', 1: '3 95*', 2: '5 0' },
+        ];
+
+        for (const [street, chances] of streets.entries()) {
+          if (street > 0) {
+            nextStreet(rig, table, 'Quigs');
+          }
+
+          for (const [name, page] of pages) {
+            assert.deepEqual(await chancesOn(page, table, name), chances, `${screen}, two boards with ${3 + street} cards each, as ${name}`);
+
+            await inShapesOf(page, screen, async (shape) => {
+              await assertChancesFit(page, `${screen}, two boards with ${3 + street} cards each, as ${name}, ${shape}`);
+
+              if (name === 'Pam' && street === 0) {
+                await shot(page, `chances-two-boards-${screen}-${shape}`);
+              }
+            }, { buttonsUp: false });
+          }
+        }
+
+        const [, pam] = pages[0]!;
+        assert.equal(await pam.locator('.seat[data-seat="2"] .status.chance').getAttribute('title'), 'Chance to win: board 1 5%, board 2 0%', `${screen}: the figures of two boards in words`);
+
+        nextStreet(rig, table, 'Quigs');
+
+        for (const [name, page] of pages) {
+          await page.waitForSelector('.message.result');
+          assert.deepEqual(await chancesOn(page, table, name), {}, `${screen}, the result on two boards, as ${name}`);
+          await page.context().close();
+        }
+      }
+    },
+  ],
+  [
+    'a hand run twice shows the chances while the vote is on and on the first board alone until the second is laid, then the first board as it ended beside the second as it stands',
+    async (rig) => {
+      const table = rig.table([{ name: 'Quigs', stack: 1000 }, { name: 'Stu', stack: 1000 }], { maxRuns: 2 });
+      table.join('Kibitz');
+
+      const pages: [name: string, page: Page][] = [
+        ['Quigs', await table.open('Quigs', 'phone')],
+        ['Kibitz', await table.open('Kibitz', 'desktop')],
+      ];
+      const [, quigs] = pages[0]!;
+      const shows = async (chances: Record<string, string>, what: string) => {
+        for (const [name, page] of pages) {
+          assert.deepEqual(await chancesOn(page, table, name), chances, `${what}, as ${name}`);
+          await assertChancesFit(page, `${what}, as ${name}`);
+        }
+      };
+
+      table.deal({ button: 0, holes: { 0: 'As Ah', 1: 'Kd Kc' }, board: '3c 8d Jh Qs 4d', secondBoard: '2c 5h Ks Td 6c' });
+      table.play(allIn, (view) => view.hand!.stage === 'ritVote');
+
+      // The hands are up and the players are asked: what they vote on is on the table
+      await quigs.waitForSelector('.turn [data-action="rit-2"]');
+      await shows({ 0: '~82%*', 1: '~18%' }, 'while the vote is on');
+      await inEveryShape(quigs, async (shape) => {
+        await assertChancesFit(quigs, `while the vote is on, ${shape}`);
+        await shot(quigs, `chances-run-twice-vote-phone-${shape}`);
+      });
+
+      table.play(allIn, (view) => view.hand!.stage === 'runout');
+      await shows({ 0: '~82%*', 1: '~18%' }, 'voted, with no card out');
+
+      nextStreet(rig, table, 'Quigs');
+      await shows({ 0: '92%*', 1: '8%' }, 'the first board’s flop');
+
+      nextStreet(rig, table, 'Quigs');
+      await shows({ 0: '95%*', 1: '5%' }, 'the first board’s turn');
+
+      // The first board is done and the second laid beside it with no card yet: every card of the first is out of its deck
+      nextStreet(rig, table, 'Quigs');
+      await shows({ 0: '100* ~81*', 1: '0 ~19' }, 'the first board run out');
+      assert.equal(await quigs.locator('.seat[data-seat="0"] .status.chance').getAttribute('title'), 'Chance to win: board 1 100%, board 2 ~81%');
+
+      // A king on the second board’s flop
+      nextStreet(rig, table, 'Quigs');
+      await shows({ 0: '100* 11', 1: '0 89*' }, 'the second board’s flop');
+      await inEveryShape(quigs, async (shape) => {
+        await assertChancesFit(quigs, `the second board’s flop, ${shape}`);
+        await shot(quigs, `chances-run-twice-phone-${shape}`);
+      }, { buttonsUp: false });
+
+      nextStreet(rig, table, 'Quigs');
+      await shows({ 0: '100* 5', 1: '0 95*' }, 'the second board’s turn');
+
+      nextStreet(rig, table, 'Quigs');
+
+      for (const [name, page] of pages) {
+        await page.waitForSelector('.message.result');
+        assert.deepEqual(await chancesOn(page, table, name), {}, `the result of both boards, as ${name}`);
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'nine hands all in show nine chances that add up to a hundred, whole and clear of everything on the smallest phone and the desktop, standing and lying, while they vote and on two boards',
+    async (rig) => {
+      const wholeOf = (figure: string) => Number(figure.replace(/[~%*]/g, ''));
+
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        const table = nineHandsDealt(rig, { maxRuns: 2 });
+        const page = await table.open('Quigs', screen);
+
+        table.play(allIn, (view) => view.hand!.stage === 'ritVote');
+        await page.waitForSelector('.turn [data-action="rit-2"]');
+
+        const voting = await chancesOn(page, table, 'Quigs');
+        assert.deepEqual(voting, { 0: '~18%', 1: '~12%', 2: '~18%', 3: '~14%', 4: '~12%', 5: '~8%', 6: '~8%', 7: '~8%', 8: '~2%' }, `${screen}: nine hands before the flop, where the two best are level and neither is the favorite`);
+        assert.equal(Object.values(voting).reduce((sum, figure) => sum + wholeOf(figure), 0), 100, `${screen}: the nine chances add up`);
+
+        await inShapesOf(page, screen, async (shape) => {
+          await assertChancesFit(page, `${screen}, nine hands while they vote, ${shape}`);
+          await shot(page, `chances-nine-${screen}-${shape}`);
+        });
+
+        // Run twice, with the first board done, which the jacks won, and the second laid: two figures a seat, and the widest there are
+        table.play(allIn, (view) => view.hand!.boards.length === 2);
+        const twice = await chancesOn(page, table, 'Quigs');
+        assert.deepEqual(twice, { 0: '0 ~19', 1: '0 ~13', 2: '0 ~20', 3: '100* ~8', 4: '0 ~12', 5: '0 ~10', 6: '0 ~8', 7: '0 ~8', 8: '0 ~2' }, `${screen}: nine hands on two boards`);
+        assert.equal(Object.values(twice).reduce((sum, figures) => sum + wholeOf(figures.split(' ')[1]!), 0), 100, `${screen}: the nine chances on the second board add up`);
+
+        await inShapesOf(page, screen, async (shape) => {
+          await assertChancesFit(page, `${screen}, nine hands on two boards, ${shape}`);
+          await shot(page, `chances-nine-two-boards-${screen}-${shape}`);
+        }, { buttonsUp: false });
+
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'nine hands that pick three runs show one chance a seat while they pick, and with the third board laid only its own, whole and clear of everything on the smallest phone and the desktop, standing and lying',
+    async (rig) => {
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        const table = rig.table(LONG_NAMES.slice(0, 9).map((name) => ({ name, stack: 1000 })), { maxRuns: 3 });
+        table.deal({ button: 0, holes: NINE_HOLES, board: '2c 5h 3d 6s Jh', secondBoard: '2d 4h 9s Td 3c', thirdBoard: '4s 6h Qd 8d 2h' });
+        const page = await table.open('Quigs', screen);
+
+        // While three runs may come, every run deals from the same cards, so one figure a seat says each one's chance
+        table.play(allIn, (view) => view.hand!.stage === 'ritVote');
+        await page.waitForSelector('.turn [data-action="rit-3"]');
+        const picking = await chancesOn(page, table, 'Quigs');
+        assert.deepEqual(picking, { 0: '~18%', 1: '~12%', 2: '~18%', 3: '~14%', 4: '~12%', 5: '~8%', 6: '~8%', 7: '~8%', 8: '~2%' }, `${screen}: nine hands while they pick`);
+
+        // Run three times: the jacks won the first board, the nines the second, and the third is laid with no card yet
+        table.play(allInPicking(3), (view) => view.hand!.boards.length === 3);
+        const third = await chancesOn(page, table, 'Quigs');
+        assert.ok(Object.values(third).every((figures) => /^~?\d+%\*?$/.test(figures)), `${screen}: one figure a seat, for the board being run: ${JSON.stringify(third)}`);
+        assert.equal(Object.values(third).reduce((sum, figure) => sum + Number(figure.replace(/[~%*]/g, '')), 0), 100, `${screen}: the nine chances on the third board add up`);
+        assert.match((await page.locator('.seat[data-seat="3"] .status.chance').getAttribute('title'))!, /^Chance to win: board 1 100%, board 2 0%, board 3 ~\d+%$/);
+
+        await inShapesOf(page, screen, async (shape) => {
+          await assertChancesFit(page, `${screen}, nine hands on three boards, ${shape}`);
+          await assertMiddleFits(page, screen);
+          await shot(page, `chances-nine-three-boards-${screen}-${shape}`);
+        }, { buttonsUp: false });
+
+        await page.context().close();
+      }
+    },
+  ],
+  ...MOTION_LAYOUTS.map((layout): Check => [
+    `with animations on, a hand’s chance changes only once the card that changes it has landed, however soon it was worked out, and not at all while the last card lies face down: ${layout.name}`,
+    async (rig) => {
+      const where = (what: string) => `${layout.name}, ${what}`;
+      const held = !layout.slower;
+      const table = rig.table([{ name: 'Quigs', stack: 10_000 }, { name: 'Stu', stack: 10_000 }], { ...layout.config, maxRuns: 1 });
+      table.join('Kibitz');
+
+      const { moving, still } = await watch(table, 'Kibitz', layout);
+      const pending = () => moving.locator('.stage[data-chances-pending]').count();
+
+      // Where moves are held in the air the page's clock is stopped too, so that every chance is worked out before
+      // its card can land: a page that showed one as soon as it had it would show it here. The slow page keeps its time
+      if (held) {
+        await moving.evaluate(STOP_CLOCK);
+      }
+
+      await moving.evaluate(CHANCE_LOG);
+
+      // Does something to the table. With the moves held, the seats read as `before` though the page has drawn what was
+      // done; once everything has landed they read as `after`, and the page is as a still one stands
+      const step = async (what: string, act: () => void, before: Record<string, string>, after: Record<string, string>) => {
+        act();
+
+        const view = table.view('Kibitz');
+        await Promise.all([caughtUp(moving, view), caughtUp(still, view)]);
+
+        if (held) {
+          assert.deepEqual([await chancesShown(moving), await pending()], [before, 1], where(`${what}, in the air`));
+        }
+
+        await flown(moving);
+        await assertAsStill(moving, still, where(what));
+        assert.deepEqual(await chancesShown(moving), after, where(what));
+      };
+
+      table.deal({ button: 0, holes: { 0: 'As Ah', 1: 'Kd Kc' }, board: '3c 8d Jh Qs 4d' });
+      await Promise.all([caughtUp(moving, table.view('Kibitz')), caughtUp(still, table.view('Kibitz'))]);
+      await flown(moving);
+
+      const preflop = { 0: '~82%*', 1: '~18%' };
+      const flop = { 0: '92%*', 1: '8%' };
+      const turn = { 0: '95%*', 1: '5%' };
+
+      // Hands just turned up have no chance to show until they are seen
+      await step('all in', () => table.play(allIn, (view) => view.hand!.stage === 'runout'), { 0: '…', 1: '…' }, preflop);
+      await step('the flop', () => nextStreet(rig, table, 'Quigs'), preflop, flop);
+      await step('the turn', () => nextStreet(rig, table, 'Quigs'), flop, turn);
+
+      // The river comes with the result, and lies face down first: the seats go on reading as on the turn, waiting for nothing
+      nextStreet(rig, table, 'Quigs');
+
+      if (held) {
+        await moving.waitForSelector('.board-card.stand-in');
+        assert.deepEqual([await chancesShown(moving), await pending()], [turn, 0], where('the river face down'));
+        await shot(moving, `chances-river-face-down-${layout.name}`);
+        await moving.evaluate('window.land()');
+      }
+
+      const result = table.view('Kibitz');
+      await Promise.all([caughtUp(moving, result), caughtUp(still, result)]);
+      await flown(moving);
+      await assertAsStill(moving, still, where('the result'));
+      assert.deepEqual(await chancesShown(moving), {}, where('the result'));
+
+      // And nothing but the cards landing ever changed a figure: the first, a street's and the result's are all there is
+      const log = (await moving.evaluate('window.chanceLog')) as ChanceChange[];
+      const figures = log.filter((change) => /\d/.test(change.text));
+
+      assert.deepEqual(figures.filter((change) => change.inFlight > 0), [], where('a chance changed while something on the table was moving'));
+      assert.deepEqual(figures.map((change) => change.text), ['~82% ~18%', '92% 8%', '95% 5%'], where('the chances the page showed, in order'));
+      assert.equal(log.at(-1)!.text, '', where('the result took the chances away'));
+
+      await moving.context().close();
+      await still.context().close();
+    },
+  ]),
+  [
+    'on a phone four times slower, the chances of nine hands all in before the flop are worked out a piece at a time: the page goes on drawing its frames while it does, and no seat grows or moves when the line that said ALL IN says its chance',
+    async (rig) => {
+      const table = nineHandsDealt(rig, { maxRuns: 1 });
+      const page = await table.open('Quigs', 'smallPhone', FRAME_GAPS);
+      const session = await page.context().newCDPSession(page);
+      await session.send('Emulation.setCPUThrottlingRate', { rate: 4 });
+
+      // Everyone all in but the last to speak, and the page at rest with it
+      const saidAllIn = [3, 4, 5, 6, 7, 8, 0, 1];
+      table.play(allIn, (view) => view.seats.filter((seat) => seat?.allIn).length === saidAllIn.length);
+      await page.waitForFunction(`document.querySelectorAll('.plate .status[data-status="All in"]').length === ${saidAllIn.length}`);
+      await dealt(page);
+
+      const saying = ((await page.evaluate(SPOTS)) as Spots).plates;
+
+      await page.evaluate(`(() => {
+        const stage = document.querySelector('.stage');
+        const waiting = () => stage.hasAttribute('data-chances-pending');
+
+        window.working = { from: null, to: null };
+        new MutationObserver(() => {
+          if (waiting() && window.working.from === null) {
+            window.working.from = performance.now();
+            window.frameGaps.length = 0;
+          }
+
+          if (!waiting() && window.working.from !== null && window.working.to === null) {
+            window.working.to = performance.now();
+            window.working.gaps = [...window.frameGaps];
+          }
+        }).observe(stage, { attributes: true });
+      })()`);
+
+      table.play(allIn, (view) => view.hand!.stage === 'runout');
+      await page.waitForFunction('window.working.to !== null');
+
+      const { from, to, gaps } = (await page.evaluate('window.working')) as { from: number; to: number; gaps: number[] };
+      const took = to - from;
+      const longest = Math.max(...gaps);
+
+      assert.deepEqual(Object.values(await chancesShown(page)), ['~18%', '~12%', '~18%', '~14%', '~12%', '~8%', '~8%', '~8%', '~2%']);
+
+      // Worked out in one go, the page would draw nothing from the first figure wanted to the last one shown. A slow
+      // machine stretches the work and the frames alike, so the longest wait for a frame is held to a share of the whole
+      assert.ok(gaps.length >= 10 && longest <= took / 4, `the page went ${Math.round(longest)} ms without a frame while it worked the chances out, which took ${Math.round(took)} ms and ${gaps.length} frames`);
+
+      console.log(`nine hands, five cards to come, four times slower: ${Math.round(took)} ms to the figures, ${Math.round(longest)} ms the longest between two frames`);
+
+      // The chance has the line and the height ALL IN had
+      const now = ((await page.evaluate(SPOTS)) as Spots).plates;
+
+      for (const seat of saidAllIn) {
+        assert.ok(sameBox(now[seat]!, saying[seat]), `seat ${seat} said ALL IN at ${JSON.stringify(saying[seat])}, and has its chance at ${JSON.stringify(now[seat])}`);
+      }
+
+      await page.context().close();
+    },
+  ],
+  [
+    'three boards nine-handed: run three times, the boards, the pot and the result are clear of each other and of every seat, on a 360 and a 375 phone standing and lying and on the desktop, in chips and in cents',
+    async (rig) => {
+      for (const kind of [{ name: 'chips', config: {} }, { name: 'cents', config: CENTS }]) {
+        for (const screen of ['smallPhone', 'phone', 'desktop'] as const) {
+          const table = rig.table(
+            THREE_RUNS.names.map((name, seat) => ({ name, stack: THREE_RUNS.stacks[seat]! })),
+            { ...kind.config, maxRuns: 3 },
+          );
+          table.deal(THREE_RUNS.deal);
+          const page = await table.open('Quigs', screen);
+          const look = (name: string) =>
+            inShapesOf(
+              page,
+              screen,
+              async (shape) => {
+                await shot(page, `three-runs-${name}-${shape}-${kind.name}-${screen}`);
+                await assertMiddleFits(page, screen);
+              },
+              { buttonsUp: false },
+            );
+
+          // Everyone picks three times but Quigs, whose pick the page shows as soon as it is made
+          table.play((view, name) => (THREE_RUNS.allIn.includes(name) ? allIn(view) : { type: 'fold' }), (view) => view.hand!.stage === 'ritVote');
+          for (const name of THREE_RUNS.allIn.slice(1)) {
+            table.act(name, { type: 'ritVote', runs: 3 });
+          }
+          await page.waitForFunction(`document.querySelectorAll('.tag.vote.picked').length === 3`);
+          await look('picking');
+
+          await answeredAfter(page, () => pressOn(page, screen)('.turn [data-action="rit-3"]'));
+          table.play(allInPicking(3), (view) => view.hand!.boards.length === 2 && view.hand!.boards[1]!.length === 3);
+          await page.waitForSelector('.board[data-run="1"] .card[data-card="Qc"]');
+          assert.deepEqual(await page.locator('.board').evaluateAll((boards) => boards.map((board) => board.className)), ['board', 'board', 'board later'], 'the third board has its place from the start');
+          await look('second-board');
+
+          // With the third board out, the viewer's hand is named on each board, a line each
+          table.play(allInPicking(3), (view) => view.hand!.boards.length === 3 && view.hand!.boards[2]!.length === 3);
+          await hintSays(page, 'Straight, five high', 'Pair of aces', 'Three aces');
+          await inShapesOf(
+            page,
+            screen,
+            async (shape) => {
+              await shot(page, `three-runs-third-board-${shape}-${kind.name}-${screen}`);
+              await assertMiddleFits(page, screen);
+              await assertHintFits(page);
+            },
+            { buttonsUp: false },
+          );
+
+          table.play(allInPicking(3), (view) => view.hand!.stage === 'done');
+          await page.waitForSelector('.message.result');
+          assert.equal(await page.locator('.table[data-boards="3"] .board .card[data-card]').count(), 15);
+          const lines = await texts(page, '.message.result > div');
+          assert.ok(lines.length <= 3, `the felt carries ${lines.length} result lines: ${lines.join(' / ')}`);
+          await look('result');
+
+          await page.context().close();
+        }
+      }
+    },
+  ],
+  ...[MOTION_LAYOUTS[0]!, MOTION_LAYOUTS[2]!].map((layout): Check => [
+    `a hand run three times holds each board's last card face down as it comes, nothing names a winner before the third board's is up, and no chance changes before its card has landed, for a player and for a watcher: ${layout.name}`,
+    async (rig) => {
+      const where = (what: string) => `${layout.name}, ${what}`;
+      const table = rig.table([{ name: 'Quigs', stack: 10_000 }, { name: 'Stu', stack: 10_000 }], { ...layout.config, maxRuns: 3 });
+      table.join('Kibitz');
+      const watched = [
+        ['Stu', await watch(table, 'Stu', layout)],
+        ['Kibitz', await watch(table, 'Kibitz', layout)],
+      ] as const;
+
+      for (const [, { moving }] of watched) {
+        await moving.evaluate(CHANCE_LOG);
+      }
+
+      table.deal({ button: 0, holes: { 0: 'Ah Ad', 1: 'Kh Kd' }, board: '2c 7d 9h Jc Ks', secondBoard: '5c 6d Th Qc 3s', thirdBoard: '8c 8d 4h 5s 4s' });
+      table.play(allInPicking(3), (view) => view.hand!.stage === 'runout');
+
+      const handNames = (page: Page) => texts(page, `${HINT} .name`);
+      // Each seat's chance on every board, from the line's title, which has them all however few the line shows
+      const everyChance = (page: Page) =>
+        page.evaluate(`Object.fromEntries([...document.querySelectorAll('.seat[data-seat] .status.chance')].map((line) => [
+          line.closest('.seat').dataset.seat,
+          line.title.replace('Chance to win: ', '').split(', ').map((figure) => figure.replace(/^board \\d+ /, '')),
+        ]))`) as Promise<Record<string, string[]>>;
+
+      while (table.view('Quigs').hand!.stage === 'runout') {
+        const before = table.view('Quigs').hand!.boards.map((board) => board.length);
+        const named: Record<string, string[]> = {};
+        const shownBefore: Record<string, Record<string, string[]>> = {};
+        for (const [name, { moving }] of watched) {
+          // Everything landed and every chance worked out, so what the page says now is what it will hold to. Moves
+          // stop in the air on this page, so whatever started since the last landing is let land
+          await moving.waitForFunction(`(window.land(), document.querySelector('.stage:not([data-moving]):not([data-chances-pending])') !== null)`);
+          await moving.evaluate(SWEAT);
+          named[name] = await handNames(moving);
+          shownBefore[name] = await everyChance(moving);
+        }
+
+        rig.advance(table.view('Quigs').hand!.deadline! - rig.now());
+        const view = table.view('Quigs');
+        const finished = view.hand!.boards.findIndex((board, run) => board.length === 5 && before[run] !== 5);
+
+        for (const [name, { moving, still }] of watched) {
+          await caughtUp(still, table.view(name));
+          if (finished === -1) {
+            await caughtUp(moving, table.view(name));
+            await moving.evaluate('window.land()');
+            continue;
+          }
+
+          // The page that moves is not caught up until the card is turned: the view that ends the hand is held back until then
+          const what = where(`board ${finished + 1}, as ${name}`);
+
+          // The view that brings a board's last card starts the next board, and the hint and the chances speak of it at
+          // once: that tells nothing, so only what they say of the board whose card is face down must hold
+          if (finished < 2) {
+            await moving.waitForSelector('.board-card.stand-in');
+            assert.equal((await handNames(moving))[finished], named[name]![finished], `${what}: the hint names the hand the face-down card makes`);
+            await moving.evaluate(`window.sweat.hint = document.querySelector('.seat.me .hint')?.textContent ?? ''; delete window.sweat.said['the hint']`);
+            await moving.evaluate(`window.sweat.chances = [...document.querySelectorAll('.status.chance')].map((line) => line.textContent).join(); delete window.sweat.said['a hand’s chance to win']`);
+          }
+
+          await sweating(moving, what, view.hand!.boards[finished]![4]!, finished);
+          const now = await everyChance(moving);
+          for (const [seat, figures] of Object.entries(shownBefore[name]!)) {
+            assert.equal(now[seat]?.[finished], figures[finished], `${what}: seat ${seat}'s chance on the board changed while its last card lies face down`);
+          }
+          if (finished === 2 && name === 'Stu') {
+            await shot(moving, `three-runs-sweat-${layout.name}`);
+          }
+
+          await moving.evaluate('window.land()');
+          await moving.waitForFunction('window.sweat.up.length === 1');
+          await assertCardsFirst(moving, 1, what);
+        }
+      }
+
+      for (const [name, { moving }] of watched) {
+        await moving.waitForSelector('.message.result');
+        assert.equal(await moving.locator('.board .card[data-card]').count(), 15, where(`every board is out, as ${name}`));
+
+        const changes = (await moving.evaluate('window.chanceLog')) as ChanceChange[];
+        assert.ok(changes.some((change) => /\d/.test(change.text)), where(`no chance was shown, as ${name}`));
+        assert.deepEqual(changes.filter((change) => change.inFlight > 0 && /\d/.test(change.text)), [], where(`a chance changed while something on the table was moving, as ${name}`));
+        await moving.context().close();
+      }
+    },
+  ]),
+  [
+    'picking how many times to run it: a player has a button for each number the table allows, everyone sees each pick as it is made, and the hand is run once, twice or three times as the fewest picked, told in the play-by-play and the history',
+    async (rig) => {
+      const players = [{ name: 'Quigs', stack: 1000 }, { name: 'Stu', stack: 1000 }, { name: 'Pam', stack: 1000 }];
+      const toThePicking = (table: RigTable, cards: Omit<RigDeal, 'button'>) => {
+        table.deal({ button: 0, holes: { 0: 'As Ah', 1: 'Ks Kh' }, ...cards });
+        table.play((view, name) => (name === 'Pam' ? { type: 'fold' } : allIn(view)), (view) => view.hand!.stage === 'ritVote');
+      };
+      const boards = { board: '2c 7d 9h Jc 3s', secondBoard: 'Kd 5c 8h Ts 4d', thirdBoard: 'Ad 6c 8d 2s 4h' };
+
+      for (const screen of PHONE_AND_DESKTOP) {
+        const buttons = (page: Page) => page.locator('.turn [data-action^="rit-"]').evaluateAll((all) => all.map((button) => [button.getAttribute('data-action'), button.textContent]));
+
+        // A table that runs it twice at most offers no third
+        const upToTwice = rig.table(players, { maxRuns: 2 });
+        toThePicking(upToTwice, boards);
+        const capped = await upToTwice.open('Quigs', screen);
+        await capped.waitForSelector('.turn [data-action="rit-2"]:enabled');
+        assert.deepEqual(await buttons(capped), [['rit-1', 'Once'], ['rit-2', 'Twice']]);
+        await shot(capped, `run-it-up-to-twice-${screen}`);
+        await capped.context().close();
+
+        // Up to three times: the players still in have a button each, and a player who folded and a watcher are told what is going on
+        const table = rig.table(players, { maxRuns: 3 });
+        table.join('Kibitz');
+        toThePicking(table, boards);
+        const quigs = await table.open('Quigs', screen);
+        const others = [await table.open('Pam', screen), await table.open('Kibitz', screen)];
+
+        await quigs.waitForSelector('.turn [data-action="rit-3"]:enabled');
+        assert.deepEqual(await buttons(quigs), [['rit-1', 'Once'], ['rit-2', 'Twice'], ['rit-3', 'Three times']]);
+        assert.deepEqual(await squeezed(quigs, '.turn .btn, .turn .prompt'), [], 'a button or the question is cut off');
+
+        // Each pick shows on the seat that made it, to everyone
+        table.act('Stu', { type: 'ritVote', runs: 3 });
+        for (const page of [quigs, ...others]) {
+          await page.waitForSelector('.seat[data-seat="1"] .tag.vote.picked');
+          assert.deepEqual(await texts(page, '.seat .tag.vote'), ['Deciding…', 'Three ✓']);
+          assert.equal(await text(page, '.message'), 'All in. How many runs?');
+        }
+        for (const page of others) {
+          assert.equal(await page.locator('.turn').count(), 0, 'a player who folded or a watcher has nothing to pick');
+        }
+        assert.equal(await text(others[0]!, '.controls .waiting'), 'Waiting for everyone to pick how many times to run it');
+        await shot(quigs, `run-it-picking-${screen}`);
+        await shot(others[1]!, `run-it-picking-watcher-${screen}`);
+
+        // Twice is the fewest picked
+        await answeredAfter(quigs, () => pressOn(quigs, screen)('.turn [data-action="rit-2"]'));
+        table.play(allIn, (view) => view.hand!.stage === 'done');
+        await quigs.waitForSelector('.table[data-boards="2"] .message.result');
+        assert.equal(await quigs.locator('.board .card[data-card]').count(), 10);
+        await toggleFeed(quigs, screen);
+        assert.ok((await texts(quigs, '.entries li')).includes('Quigs picked twice, Stu three times: running it twice'));
+        await toggleFeed(quigs, screen);
+        await shot(quigs, `run-it-twice-${screen}`);
+
+        // A pick of once settles it at once
+        const once = rig.table(players, { maxRuns: 3 });
+        toThePicking(once, boards);
+        const solo = await once.open('Quigs', screen);
+        await answeredAfter(solo, () => pressOn(solo, screen)('.turn [data-action="rit-1"]'));
+        once.play(allIn, (view) => view.hand!.stage === 'done');
+        await solo.waitForSelector('.table[data-boards="1"] .message.result');
+        assert.equal(await solo.locator('.board .card[data-card]').count(), 5);
+        await toggleFeed(solo, screen);
+        assert.ok((await texts(solo, '.entries li')).includes('Quigs picked once: running it once'));
+        await toggleFeed(solo, screen);
+        await shot(solo, `run-it-once-${screen}`);
+        await solo.context().close();
+
+        // Three times, with Quigs winning two boards and Stu one
+        const thrice = rig.table(players, { maxRuns: 3 });
+        toThePicking(thrice, boards);
+        const page = await thrice.open('Quigs', screen);
+        thrice.act('Stu', { type: 'ritVote', runs: 3 });
+        await answeredAfter(page, () => pressOn(page, screen)('.turn [data-action="rit-3"]'));
+        thrice.play(allIn, (view) => view.hand!.stage === 'done');
+        await page.waitForSelector('.table[data-boards="3"] .message.result');
+        assert.deepEqual(await texts(page, '.message.result > div'), ['Boards 1 and 3: Quigs wins 1,347', 'Board 2: Stu wins 673 with three kings']);
+        await shot(page, `run-it-three-times-${screen}`);
+
+        await toggleFeed(page, screen);
+        const said = await texts(page, '.entries li');
+        assert.ok(said.includes('Everyone agreed: running it three times'));
+        assert.deepEqual(
+          said.filter((line) => line.includes('River')),
+          ['First board, River: 2♣ 7♦ 9♥ J♣ 3♠', 'Second board, River: K♦ 5♣ 8♥ 10♠ 4♦', 'Third board, River: A♦ 6♣ 8♦ 2♠ 4♥'],
+        );
+        assert.deepEqual(await squeezed(page, '.entries li'), [], 'a line of the play-by-play is cut off');
+        await shot(page, `run-it-three-times-play-by-play-${screen}`);
+        await toggleFeed(page, screen);
+
+        thrice.act('Quigs', { type: 'pause' });
+        thrice.play(passive, (view) => view.hand === null);
+        await pressOn(page, screen)('[data-action="menu"]');
+        await pressOn(page, screen)('.menu [data-action="history"]');
+        await page.waitForSelector('.history summary');
+        await pressOn(page, screen)('.history summary');
+        const told = (await text(page, '.history details[open] pre')).split('\n');
+        assert.ok(told.includes('Everyone agreed: running it three times'), told.join('\n'));
+        assert.deepEqual(told.filter((line) => line.includes('River')).length, 3);
+        assert.deepEqual(told.slice(-3), ['Quigs wins 674 on the first board with pair of aces', 'Stu wins 673 on the second board with three kings', 'Quigs wins 673 on the third board with three aces']);
+        assert.deepEqual(await squeezed(page, '.history summary'), [], 'the hand\'s line in the history is cut off');
+        await assertNoSidewaysScroll(page);
+        await shot(page, `run-it-three-times-history-${screen}`);
+
+        for (const open of [quigs, ...others, page]) {
+          await open.context().close();
+        }
+      }
+    },
+  ],
+  [
+    'the high hand is a line in the play-by-play for everyone, a toast for whoever took it alone and a trophy beside their name on every page, once the hand is off the table; a better hand takes it and the trophy moves, and a worse one leaves it',
+    async (rig) => {
+      const table = highHandTable(rig, {}, 1000);
+      toShowdown(table, { 0: 'As Ah', 1: 'Ks Kh', 2: '8c 4d' }, HIGH_HAND_BOARD, true);
+
+      const quigs = await table.open('Quigs', 'smallPhone');
+      const stu = await table.open('Stu', 'phone');
+      const kibitz = await table.open('Kibitz', 'desktop');
+      const pages = [['Quigs', quigs], ['Stu', stu], ['a watcher', kibitz]] as const;
+
+      for (const [who, page] of pages) {
+        assert.deepEqual(await markedOn(page), [], `${who}: the high hand is marked before the hand is off the table`);
+        assert.equal(await page.locator('.feed li:has-text("high hand")').count(), 0, `${who}: the high hand is told before the hand is off the table`);
+      }
+
+      clear(rig, table);
+
+      const toast = await toastTold(quigs);
+      assert.equal(toast.text, 'You have 🏆 the high hand with pair of aces');
+
+      for (const [who, page] of pages) {
+        await page.waitForSelector('.feed li:has-text("Quigs takes the high hand with pair of aces")', { state: 'attached' });
+        await page.waitForSelector('.plate .high-hand');
+        assert.deepEqual(await markedOn(page), ['Quigs'], who);
+        assert.equal(await page.getAttribute('.plate .high-hand', 'title'), 'Holds the high hand: Pair of aces', who);
+      }
+
+      assertOnScreen([toast.box, ...(await boxes(quigs, '.plate .high-hand'))], 'smallPhone', 'the toast and the trophy');
+      assert.deepEqual(await squeezed(quigs, '.plate .high-hand'), [], 'the trophy is cut off');
+      await shot(quigs, 'high-hand-taken-smallPhone');
+      await shot(kibitz, 'high-hand-taken-desktop');
+
+      for (const [who, page] of [['Stu', stu], ['a watcher', kibitz]] as const) {
+        assert.equal(await toastsTold(page), 0, `${who} is shown a toast for Quigs's high hand`);
+      }
+
+      // Stu's pair of kings is not as good, and the three kings after it are better
+      toShowdown(table, { 0: '8s 4h', 1: 'Ks Kh', 2: 'Qs Qh' });
+      clear(rig, table);
+
+      // Every page has to have heard of this hand before the next is played. One that hears of both at once gets
+      // this hand's lines 14 seconds old, takes the view for a late one and tells no news from it, the toast included
+      for (const [, page] of pages) {
+        await table.heardBy(page);
+      }
+
+      assert.deepEqual(await markedOn(kibitz), ['Quigs'], 'a worse hand took the high hand');
+
+      toShowdown(table, { 0: '8s 4h', 1: 'Ks Kh', 2: 'Qs Qh' }, 'Kd 7d 9h Jc 3s');
+      clear(rig, table);
+      await toastTold(stu, 'You have 🏆 the high hand with three kings');
+
+      for (const [, page] of pages) {
+        await page.waitForSelector('.feed li:has-text("Stu takes the high hand with three kings")', { state: 'attached' });
+        await page.waitForSelector('.plate:has(.high-hand) .name > span:first-child:text-is("Stu")');
+        assert.deepEqual(await markedOn(page), ['Stu']);
+      }
+
+      await shot(stu, 'high-hand-taken-again-phone');
+
+      for (const [, page] of pages) {
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'the host pays the high hand from the menu between hands once shown who pays what, the night pays the one shown since when it ends, and Tonight, its copied text and the ledger agree, on the smallest phone and the desktop, in chips and in cents',
+    async (rig) => {
+      for (const kind of HIGH_HAND_TABLES) {
+        for (const screen of ['smallPhone', 'desktop'] as const) {
+          const table = highHandTable(rig, kind.config, kind.stack);
+          const stacks = () => ['Quigs', 'Stu', 'Pam'].map((name) => table.view('Quigs').seats.find((seat) => seat?.name === name)!.stack);
+          const bonus = kind.config.highHandBonus!;
+          const what = `${kind.name} on ${screen}`;
+
+          toShowdown(table, { 0: 'As Ah', 1: 'Ks Kh', 2: '8c 4d' }, HIGH_HAND_BOARD, true);
+          clear(rig, table);
+
+          const host = await table.open('Quigs', screen);
+          const watcher = await table.open('Kibitz', screen);
+          const press = pressOn(host, screen);
+
+          // During a hand the menu says it has to wait, and the dialog why
+          table.dealNext({ holes: { 0: 'Qs Qh', 1: 'Ks Kh', 2: '8c 4d' }, board: HIGH_HAND_BOARD });
+          table.act('Quigs', { type: 'pause' });
+          await host.waitForSelector('.seat.me .card', { state: 'attached' });
+          await press('[data-action="menu"]');
+          assert.equal(await text(host, '.menu [data-action="highHand"] small'), 'Between hands only', what);
+          await press('.menu [data-action="highHand"]');
+          await host.waitForSelector('.dialog[aria-label="Pay the high hand?"]');
+          assert.deepEqual(await texts(host, '.dialog-body p'), ['Quigs holds the high hand with pair of aces.', 'The high hand is paid between hands. Pause the game, and once this hand is over it can be paid.'], what);
+          assert.equal(await host.locator('[data-action="pay-high-hand"]').count(), 0, `${what}: it can be paid during a hand`);
+          await shot(host, `high-hand-pay-during-a-hand-${kind.name}-${screen}`);
+          await press('.dialog .buttons .btn');
+          await host.waitForSelector('.dialog', { state: 'detached' });
+
+          // Stu's kings are not as good, so once the hand is over Quigs's aces are still the high hand
+          table.play(passive, (view) => view.hand!.stage === 'done');
+          clear(rig, table);
+          await host.waitForFunction(`!document.querySelector('.seat.me .card')`);
+
+          await press('[data-action="menu"]');
+          assert.equal(await text(host, '.menu [data-action="highHand"] small'), `Quigs: ${kind.bonus} from everyone else`, what);
+          await press('.menu [data-action="highHand"]');
+          await host.waitForSelector('[data-action="pay-high-hand"]');
+          assert.deepEqual(
+            await texts(host, '.dialog-body p'),
+            ['Quigs holds the high hand with pair of aces.', `Everyone else seated pays ${kind.bonus}, or what they have if that is less: ${kind.total} in all.`, 'Once it is paid, the next high hand starts from nothing. The high hand of the night stays in Tonight.'],
+            what,
+          );
+          assert.equal(await text(host, '[data-action="pay-high-hand"]'), `Pay ${kind.total}`);
+          assertOnScreen(await boxes(host, '.dialog, .dialog .buttons .btn'), screen, 'the dialog to pay the high hand');
+          assert.deepEqual(await squeezed(host, '.dialog :is(h2, p, button)'), [], `${what}: part of the dialog is cut off`);
+          await shot(host, `high-hand-pay-${kind.name}-${screen}`);
+
+          const before = stacks();
+          await press('[data-action="pay-high-hand"]');
+          await host.waitForSelector('.dialog', { state: 'detached' });
+
+          const paidEarly = `The host paid out the high hand. Quigs collects the high-hand bonus: ${kind.bonus} from everyone else seated, ${kind.total} in all`;
+          for (const page of [host, watcher]) {
+            await page.waitForSelector(`.feed li:has-text(${JSON.stringify(paidEarly)})`, { state: 'attached' });
+            await page.waitForFunction(`!document.querySelector('.plate .high-hand')`);
+          }
+
+          assert.deepEqual(stacks(), [before[0]! + 2 * bonus, before[1]! - bonus, before[2]! - bonus], what);
+          await press('[data-action="menu"]');
+          assert.equal(await host.locator('.menu [data-action="highHand"]').count(), 0, `${what}: the menu offers to pay a high hand that was paid`);
+          await host.keyboard.press('Escape');
+          await host.waitForSelector('.dialog', { state: 'detached' });
+          await shot(host, `high-hand-paid-${kind.name}-${screen}`);
+
+          // Stu's kings, shown since, are the high hand the bonus is paid for next
+          toShowdown(table, { 0: '8s 4h', 1: 'Ks Kh', 2: 'Qs Qh' });
+          clear(rig, table);
+          await host.waitForSelector('.feed li:has-text("Stu takes the high hand with pair of kings")', { state: 'attached' });
+          await openTonight(host, screen);
+          assert.deepEqual(await texts(host, '.tonight-leaders div:has-text("High hand")'), [
+            `High hand\nQuigs Pair of aces A♠ A♥ J♣ 9♥ 7♦\nBonus paid: ${kind.total} to Quigs`,
+            `High hand since\nStu Pair of kings K♠ K♥ J♣ 9♥ 7♦\nBonus: ${kind.bonus} from everyone else seated when the night ends`,
+          ]);
+          await assertTonightFits(host, screen);
+          await shot(host, `high-hand-tonight-${kind.name}-${screen}`);
+          await press('.dialog [data-action="close"]');
+
+          // The night ends and pays Stu, and the recap says what the bonus paid, to the host and to a watcher
+          const beforeEnd = stacks();
+          table.act('Quigs', { type: 'endNight' });
+          assert.deepEqual(stacks(), [beforeEnd[0]! - bonus, beforeEnd[1]! + 2 * bonus, beforeEnd[2]! - bonus], what);
+
+          for (const [who, page] of [['host', host], ['watcher', watcher]] as const) {
+            await page.waitForSelector(RECAP);
+            assert.deepEqual(await texts(page, '.tonight-leaders div:has-text("High hand")'), [`High hand\nQuigs Pair of aces A♠ A♥ J♣ 9♥ 7♦\nBonus paid: ${kind.total} to Quigs, ${kind.total} to Stu`], `${what}, ${who}`);
+          }
+
+          await host.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+          await press('[data-action="copy-tonight"]');
+          await host.waitForSelector('[data-action="copy-tonight"]:has-text("Copied")');
+          const copied = ((await host.evaluate('navigator.clipboard.readText()')) as string).split('\n');
+          assert.deepEqual(copied.filter((line) => line.startsWith('High hand')), [`High hand: Quigs, Pair of aces (A♠ A♥ J♣ 9♥ 7♦). Bonus paid: ${kind.total} to Quigs, ${kind.total} to Stu`], what);
+
+          // The nets in Tonight are the ledger's, bonuses and all
+          const night = await tonightNets(host);
+          await closeRecap(host);
+          await host.waitForSelector(`.feed li:has-text(${JSON.stringify(`Stu collects the high-hand bonus: ${kind.bonus} from everyone else seated, ${kind.total} in all`)})`, { state: 'attached' });
+          await shot(host, `high-hand-paid-at-nights-end-${kind.name}-${screen}`);
+          await openLedger(host, screen);
+          assert.deepEqual(night, await ledgerNets(host), `${what}: the night and the ledger disagree`);
+
+          await host.context().close();
+          await watcher.context().close();
+        }
+      }
+    },
+  ],
+  [
+    'the table settings take the high-hand bonus in chips and in cents, and the table is told what it is',
+    async (rig) => {
+      const screen = 'smallPhone';
+
+      for (const kind of HIGH_HAND_TABLES) {
+        const table = highHandTable(rig, { ...kind.config, highHandBonus: 0 }, kind.stack);
+        const page = await table.open('Quigs', screen);
+        const press = pressOn(page, screen);
+
+        await press('[data-action="menu"]');
+        await press('.menu [data-action="settings"]');
+        await page.waitForSelector('#table-high-hand-bonus');
+        assert.equal(await page.inputValue('#table-high-hand-bonus'), kind.zero);
+        await page.locator('#table-high-hand-bonus').scrollIntoViewIfNeeded();
+        assert.deepEqual(await squeezed(page, '.dialog .field input, .dialog .field small'), [], 'part of the settings is cut off');
+        await shot(page, `high-hand-setting-${kind.name}-${screen}`);
+
+        await page.fill('#table-high-hand-bonus', kind.bonus);
+        await press('[data-action="save-settings"]');
+        await page.waitForSelector('.dialog', { state: 'detached' });
+        assert.equal(table.view('Quigs').config.highHandBonus, kind.config.highHandBonus);
+        await page.waitForSelector(`.feed li:has-text(${JSON.stringify(`The high-hand bonus is ${kind.bonus} from everyone else seated`)})`, { state: 'attached' });
+
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'while an all-in hand’s last card lies face down nothing says who took the high hand, to a player or a watcher, in a trophy, a line, a toast or Tonight; it comes once the hand is off the table',
+    async (rig) => {
+      const { screen } = MOTION_LAYOUTS[0]!;
+      const table = feltingHand(rig);
+      table.play(() => null, (view) => view.hand!.boards[0]!.length === 4);
+
+      const open = async (name: string) => {
+        const page = await table.open(name, screen, MOTION, { moving: true });
+        await page.evaluate('window.holdAt = 0');
+
+        return page;
+      };
+      const [quigs, stu, kibitz] = [await open('Quigs'), await open('Stu'), await open('Kibitz')];
+      const reading = [['a player', stu], ['a watcher', kibitz]] as const;
+
+      for (const [, page] of reading) {
+        await openTonight(page, screen);
+      }
+
+      const nothingTold = async (when: string) => {
+        assert.equal(await toastsTold(quigs), 0, `${when}: the toast came`);
+
+        for (const [who, page] of [...reading, ['the taker', quigs]] as const) {
+          assert.equal(await page.locator('.feed li:has-text("high hand")').count(), 0, `${who}, ${when}: the line came`);
+          assert.equal(await page.locator('.plate .high-hand').count(), 0, `${who}, ${when}: the trophy is drawn`);
+          assert.equal(await page.locator('.tonight-leaders div:has-text("High hand")').count(), 0, `${who}, ${when}: Tonight names the high hand`);
+        }
+      };
+
+      clear(rig, table);
+      for (const page of [quigs, stu, kibitz]) {
+        await page.waitForSelector('.board-card.stand-in', { state: 'attached' });
+      }
+
+      await nothingTold('the river face down');
+
+      for (const [, page] of reading) {
+        await page.evaluate('window.holdAt = null; window.land()');
+        await page.waitForFunction(`/^Up the most\\s+Quigs\\b/.test(document.querySelector('.tonight-leaders div')?.innerText)`);
+      }
+
+      await nothingTold('the hand still on the table');
+
+      clear(rig, table);
+      assert.equal((await toastTold(quigs)).text, FELTED_TOAST);
+
+      for (const [who, page] of reading) {
+        await page.waitForSelector('.tonight-leaders div:has-text("High hand")');
+        assert.equal(await text(page, '.tonight-leaders div:has-text("High hand") dd b'), 'Quigs', who);
+        await page.waitForSelector('.plate .high-hand', { state: 'attached' });
+        assert.equal(await toastsTold(page), 0, `${who} is shown a toast for Quigs's high hand`);
+      }
+
+      for (const page of [quigs, stu, kibitz]) {
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'at a full table on the smallest phone, the high hand’s trophy beside the longest name and that seat’s chance all in share the seat: both whole, apart and inside it, the trophy growing nothing',
+    async (rig) => {
+      const screen = 'smallPhone';
+      const table = rig.table(LONG_NAMES.slice(0, 9).map((name) => ({ name, stack: 1000 })), { maxRuns: 1 });
+
+      // The widest name takes the high hand with aces, and then all nine go all in
+      table.deal({ button: 0, holes: { 1: 'As Ah', 2: 'Ks Kh' }, board: HIGH_HAND_BOARD });
+      table.act('Quigs', { type: 'pause' });
+      table.play((view, name) => (name === WIDEST || name === LONG_NAMES[2] ? passive(view) : { type: 'fold' }), (view) => view.hand!.stage === 'done');
+      clear(rig, table);
+      table.dealNext({ holes: NINE_HOLES });
+      table.play(allIn, (view) => view.hand!.stage === 'runout');
+
+      const page = await table.open('Quigs', screen);
+      await chancesOn(page, table, 'Quigs');
+      assert.deepEqual(await markedOn(page), [WIDEST]);
+
+      const holder = '.seat:has(.high-hand) .plate';
+      await assertChancesFit(page, 'the holder all in');
+      assert.deepEqual(await squeezed(page, `${holder} .high-hand, ${holder} .status.chance, ${holder} .stack`), [], 'the trophy, the chance or the stack is cut off');
+
+      const [plate] = await boxes(page, holder);
+      const [trophy] = await boxes(page, `${holder} .high-hand`);
+      // The name's own box, which ends where its ellipsis does: the text runs on, hidden, under the trophy
+      const [name] = await boxes(page, `${holder} .name > span:first-child`);
+      assert.ok(trophy!.left >= plate!.left && trophy!.right <= plate!.right && trophy!.top >= plate!.top && trophy!.bottom <= plate!.bottom, `the trophy at ${JSON.stringify(trophy)} runs out of its seat at ${JSON.stringify(plate)}`);
+      assert.ok(name!.right - name!.left > 0, 'the trophy pushed the name out of its seat');
+      assertApart([trophy!], [name!, ...(await textBoxes(page, `${holder} .status.chance`))], 'the trophy and the name or the chance');
+      await shot(page, `high-hand-all-in-${screen}`);
+
+      // Taken away, the seat is the same size: the trophy takes room from the name, never from the table
+      await page.evaluate(`document.querySelector('.plate .high-hand').remove()`);
+      const [without] = await boxes(page, '.seat:has(.status.chance) .plate:has(.name[title="WWWWWWWWWWWWWWWW"])');
+      assert.ok(sameBox(without!, plate!), `the seat is ${JSON.stringify(plate)} with the trophy and ${JSON.stringify(without)} without it`);
+
+      await page.context().close();
+    },
+  ],
+  ...(['smallPhone', 'desktop'] as const).map(
+    (screen): Check => [
+      `on a ${screen}, after a hand that ends before the flop, on the flop or on the turn, everyone dealt in is offered a rabbit hunt under the result and a watcher is not; a hunt lays the rest out marked, the same for the watcher`,
+      async (rig) => {
+        // Before the flop the bet nobody called goes back, and Quigs wins the blinds and his own call of the big blind
+        for (const [cards, won, hunted] of [[0, 50, ['Kh', '9c', '4s', 'Th', '2c']], [3, 60, ['Th', '2c']], [4, 60, ['2c']]] as const) {
+          const table = rabbitTable(rig);
+          foldedTo(table, cards);
+
+          const stu = await table.open('Stu', screen);
+          const kibitz = await table.open('Kibitz', screen);
+          const where = `${screen}, folded with ${cards} cards out`;
+
+          await stu.waitForSelector('.message.result [data-action="hunt"]');
+          assert.equal(await text(stu, '.message.result [data-action="hunt"]'), '🐇 Rabbit hunt');
+          assert.equal(await text(stu, '.message.result > div'), `Quigs wins ${won}`);
+          assert.equal(await kibitz.locator('.message.result').count(), 1);
+          assert.equal(await kibitz.locator('[data-action="hunt"], .rabbit-note').count(), 0, `${where}: a watcher is offered a hunt`);
+
+          await inShapesOf(
+            stu,
+            screen,
+            async (shape) => {
+              await assertRabbitFits(stu, screen, `${where}, the offer, ${shape}`);
+              await shot(stu, `rabbit-offer-${cards}-${screen}-${shape}`);
+            },
+            { buttonsUp: false },
+          );
+
+          // Not a move: what says it went through is the page showing it
+          await pressOn(stu, screen)('[data-action="hunt"]');
+
+          for (const [who, page] of [['Stu', stu], ['the watcher', kibitz]] as const) {
+            await page.waitForSelector('.rabbit-note');
+            await assertHuntedMarked(page, [[...hunted]], `${where}, ${who}`);
+            await inShapesOf(
+              page,
+              screen,
+              async (shape) => {
+                await assertRabbitFits(page, screen, `${where}, ${who} sees the hunt, ${shape}`);
+                await shot(page, `rabbit-hunted-${cards}-${who === 'Stu' ? 'player' : 'watcher'}-${screen}-${shape}`);
+              },
+              { buttonsUp: false },
+            );
+          }
+
+          await stu.context().close();
+          await kibitz.context().close();
+        }
+      },
+    ],
+  ),
+  [
+    'the hunted cards are told from the board in a dark and a light theme, by the winner and by a player who folded, and the play-by-play and the history say who hunted what',
+    async (rig) => {
+      for (const screen of PHONE_AND_DESKTOP) {
+        const table = rabbitTable(rig);
+        foldedTo(table, 3);
+        table.act('Pam', { type: 'huntRabbit', hand: 1 });
+
+        const quigs = await table.open('Quigs', screen);
+        const pam = await table.open('Pam', screen);
+
+        for (const theme of ['cardroom', 'daylight']) {
+          for (const [who, page] of [['winner', quigs], ['folded', pam]] as const) {
+            await choose(page, { theme });
+            await page.waitForSelector('.rabbit-note');
+            await assertHuntedMarked(page, [['Th', '2c']], `${screen}, ${theme}, the ${who}`);
+            await shot(page, `rabbit-theme-${theme}-${who}-${screen}`);
+          }
+        }
+
+        // The winner's hint reads the board alone: no hunted card is lifted as one that plays
+        assert.equal(await quigs.locator('.board .card.hunted.plays, .board .card.hunted.idle').count(), 0);
+
+        const line = 'Pam hunts the rabbit, cards that did not count: 10♥ 2♣';
+        await toggleFeed(pam, screen);
+        await pam.waitForSelector('.entries li:has-text("hunts the rabbit")');
+        assert.equal((await texts(pam, '.entries li')).at(-1), line);
+        assert.deepEqual(await squeezed(pam, '.entries li'), [], 'a line of the play-by-play is cut off');
+        await shot(pam, `rabbit-play-by-play-${screen}`);
+        await toggleFeed(pam, screen);
+
+        // The history is asked for once the page has the hand off the table: asked sooner, it is answered before the table has put the hand in it
+        clear(rig, table);
+        await table.heardBy(pam);
+        const press = pressOn(pam, screen);
+        await press('[data-action="menu"]');
+        await press('.menu [data-action="history"]');
+        await pam.waitForSelector('.history summary');
+        await press('.history summary');
+        assert.equal((await text(pam, '.history pre')).split('\n').at(-1), line);
+        await shot(pam, `rabbit-history-${screen}`);
+
+        await quigs.context().close();
+        await pam.context().close();
+      }
+    },
+  ],
+  [
+    'a double-board bomb pot that ends on the flop hunts both boards, each marked on its own board, standing, lying and on the desktop',
+    async (rig) => {
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        const table = rabbitTable(rig, { bombPotBoards: 'two', bombPotAmount: 50 });
+        table.act('Quigs', { type: 'setBombPot', on: true });
+        table.deal({ button: 0, holes: RABBIT_HOLES, board: RABBIT_BOARD, secondBoard: 'Ad 8d 3h Js 5s' });
+        table.act('Stu', { type: 'raise', to: 40 });
+        table.act('Pam', { type: 'fold' });
+        table.act('Quigs', { type: 'fold' });
+
+        const pam = await table.open('Pam', screen);
+        await pressOn(pam, screen)('[data-action="hunt"]');
+        await pam.waitForSelector('.rabbit-note');
+        await assertHuntedMarked(pam, [['Th', '2c'], ['Js', '5s']], `${screen}, two boards`);
+
+        await inShapesOf(
+          pam,
+          screen,
+          async (shape) => {
+            await assertRabbitFits(pam, screen, `${screen}, two boards hunted, ${shape}`);
+            await shot(pam, `rabbit-two-boards-${screen}-${shape}`);
+          },
+          { buttonsUp: false },
+        );
+
+        await pam.context().close();
+      }
+    },
+  ],
+  [
+    'with animations on, the hunted cards drop onto their places one after another and land as a still table draws them, standing and on the desktop',
+    async (rig) => {
+      for (const layout of [MOTION_LAYOUTS[0]!, MOTION_LAYOUTS[2]!]) {
+        const table = rabbitTable(rig, layout.config);
+        foldedTo(table, 0);
+
+        const { moving, still, step } = await watch(table, 'Stu', layout);
+        const where = (what: string) => `${layout.name}, ${what}`;
+        const seen = await step('the hunt', () => table.act('Stu', { type: 'huntRabbit', hand: 1 }));
+        const cards = flightsOf(seen, 'card', false);
+
+        assert.deepEqual(seen.flights.map((flight) => flight.name), ['hunt', 'hunt', 'hunt', 'hunt', 'hunt'], where('five hunted cards move, and nothing else'));
+        assert.deepEqual(cards.map((card) => [card.board, card.delay]), [0, 1, 2, 3, 4].map((nth) => [0, nth * 60]), where('one after another'));
+        cards.forEach((card) => assertDrops(card, where('a hunted card')));
+        await shot(moving, `rabbit-motion-landed-${layout.name}`);
+
+        await moving.context().close();
+        await still.context().close();
+      }
+    },
+  ],
+  [
+    'a rabbit hunt asked for at the last moment holds up nothing of the game: with its cards stopped mid-flight the table reads as still, and the next hand is dealt just as after a hand nobody hunted',
+    async (rig) => {
+      const table = rabbitTable(rig);
+      const page = await table.open('Stu', 'smallPhone', MOTION, { moving: true });
+
+      const nextDeal = async (hunting: boolean) => {
+        foldedTo(table, 3);
+        await table.heardBy(page);
+        await page.waitForSelector('.message.result [data-action="hunt"]');
+        await dealt(page);
+
+        if (hunting) {
+          rig.advance(table.view('Stu').hand!.deadline! - rig.now() - 1);
+          await page.evaluate('window.holdAt = 0.5');
+          const before = table.version;
+          table.act('Stu', { type: 'huntRabbit', hand: table.view('Stu').hand!.number });
+          await page.waitForFunction(`${flightsSince(before)}.filter((flight) => flight.name === 'hunt').length === 2`);
+          await page.evaluate(`window.holdAt = null; window.hunting = document.getAnimations().filter((animation) => animation.id === 'hunt')`);
+          await dealt(page);
+        }
+
+        table.act('Quigs', { type: 'pause' });
+        table.play(() => null, (view) => view.hand === null);
+        const cleared = table.version;
+        table.deal({ button: 0, holes: RABBIT_HOLES, board: RABBIT_BOARD });
+
+        await page.waitForFunction(`${flightsSince(cleared)}.filter((flight) => flight.name === 'deal').length === ${2 * RABBIT_PLAYERS.length}`);
+        await dealt(page);
+        const flights = await flown(page, cleared);
+        playOut(table);
+
+        return flights.filter((flight) => flight.name === 'deal').map(({ seat, delay, duration }) => [seat, delay, duration]);
+      };
+
+      const quiet = await nextDeal(false);
+      const hunted = await nextDeal(true);
+      assert.deepEqual(hunted, quiet, 'the deal after a hunt went out otherwise');
+      // Taken off with the board they flew over when the next hand was drawn: never landed, which would end the check's hold
+      assert.deepEqual(await page.evaluate('window.hunting.map((animation) => animation.playState)').then((states) => (states as string[]).filter((state) => state === 'finished')), []);
+      await page.evaluate('window.land()');
+    },
+  ],
+  [
+    'on a 360 phone the offer and the hunted cards stand clear of a reaction popped up over a seat and a throw landed on one, with emoji as this machine draws them and far wider',
+    async (rig) => {
+      for (const glyph of ['own-emoji', 'wide-emoji']) {
+        const table = rabbitTable(rig);
+        foldedTo(table, 3);
+
+        const stu = await table.open('Stu', 'smallPhone');
+        if (glyph === 'wide-emoji') {
+          await stu.addStyleTag({ content: WIDE_EMOJI });
+        }
+
+        table.act('Pam', { type: 'react', kind: 'laugh' });
+        table.act('Quigs', { type: 'react', kind: 'tomato', to: table.auth('Stu').id });
+        await stu.waitForSelector('.seat-reaction[data-reaction="laugh"]');
+        await stu.waitForSelector('.seat-reaction[data-reaction="tomato"]');
+
+        for (const state of ['offer', 'hunted'] as const) {
+          if (state === 'hunted') {
+            await pressOn(stu, 'smallPhone')('[data-action="hunt"]');
+            await stu.waitForSelector('.rabbit-note');
+          }
+
+          await inShapesOf(
+            stu,
+            'smallPhone',
+            async (shape) => {
+              const where = `${state} beside reactions, ${glyph}, ${shape}`;
+
+              await assertRabbitFits(stu, 'smallPhone', where);
+              assert.deepEqual(await squeezed(stu, '.message.result .rabbit-note'), [], `${where}: the note is cut off`);
+              assertApart(await boxes(stu, '.seat-reaction'), await boxes(stu, '.message.result > *, .board .card'), `${where}: a reaction and the middle of the table`);
+              await shot(stu, `rabbit-${state}-reactions-${glyph}-smallPhone-${shape}`);
+            },
+            { buttonsUp: false },
+          );
+        }
+
+        await stu.context().close();
+      }
+    },
+  ],
+  [
+    'the table settings switch rabbit hunting on, off as a table starts, and the table is told',
+    async (rig) => {
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        const table = rig.table(RABBIT_PLAYERS);
+        const host = await table.open('Quigs', screen);
+        const press = pressOn(host, screen);
+        const switchFor = 'label[for="table-rabbit-hunting"]';
+
+        await press('[data-action="menu"]');
+        await press('.menu [data-action="settings"]');
+        await host.waitForSelector('#table-rabbit-hunting');
+        assert.equal(await host.isChecked('#table-rabbit-hunting'), false);
+        assert.equal(await text(host, switchFor), 'Rabbit hunting: after a hand ends early, a player can see the cards that would have come');
+        await host.locator('#table-rabbit-hunting').scrollIntoViewIfNeeded();
+        assertOnScreen(await boxes(host, switchFor), screen, 'the switch for rabbit hunting');
+        assert.deepEqual(await squeezed(host, `${switchFor} span`), [], 'the name of the switch is cut off');
+        await assertNoSidewaysScroll(host);
+        await shot(host, `rabbit-settings-${screen}`);
+
+        await press(switchFor);
+        await press('[data-action="save-settings"]');
+        await host.waitForSelector('.dialog', { state: 'detached' });
+        assert.equal(table.view('Quigs').config.rabbitHunting, true);
+        assert.equal(table.view('Quigs').feed.at(-1)!.text, 'Rabbit hunting is on: after a hand ends early, anyone dealt in can see the cards that would have come');
+        await host.context().close();
+      }
+    },
+  ],
+  [
+    'a table that was put away is a screen of its own on the smallest phone and a desktop: why, and a way to a new table, all of it whole, and nothing of the seat kept',
+    async (rig) => {
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        const table = rig.table([{ name: 'Quigs', stack: 1000 }, { name: 'Stu', stack: 1000 }]);
+        const page = await table.open('Quigs', screen);
+        const press = pressOn(page, screen);
+        const seat = () => page.evaluate(`localStorage.getItem('cnd.seat.${table.id}')`);
+        const screenOf = '[data-screen="put-away"]';
+        assert.ok(await seat(), 'the browser remembers the seat while the table is there');
+
+        // Two weeks with the page left open and nobody playing, and then someone starts another table
+        rig.advance(PUT_AWAY_AFTER_MS);
+        assert.equal(rig.ask({ op: 'create', name: 'Pam' }).ok, true);
+
+        await page.waitForSelector(screenOf);
+        assert.equal(await text(page, `${screenOf} h2`), `Table ${table.id}`);
+        assert.deepEqual(await page.locator(`${screenOf} p`).allInnerTexts(), [PUT_AWAY_MESSAGE, 'Whoever runs the game can still find its ledger and its hands in the game’s Sheet.']);
+        assert.equal(await text(page, `${screenOf} button`), 'Start a new table');
+        assert.deepEqual([await page.locator('.stage').count(), await toastsTold(page)], [0, 0], 'the table is still showing, or a toast was');
+
+        await shot(page, `put-away-${screen}`);
+        assert.deepEqual(await squeezed(page, `${screenOf} h2, ${screenOf} p, ${screenOf} button`), [], 'part of what it says is cut off');
+        assertOnScreen(await boxes(page, `.brand, ${screenOf}, ${screenOf} p, ${screenOf} button`), screen, 'the screen for a table that was put away');
+        await assertNoSidewaysScroll(page);
+
+        const said = await textBoxes(page, `${screenOf} h2, ${screenOf} p`);
+        const [button] = await boxes(page, `${screenOf} button`);
+        assertApart([button!], said, 'the button and what the screen says');
+
+        assert.equal(new URL(page.url()).search, '', 'the address still names the table or the seat');
+        assert.equal(await seat(), null, 'the browser still remembers the seat');
+
+        // The button leads to the lobby, and the table's code typed there back to this screen
+        await press('[data-action="start-new-table"]');
+        await page.waitForSelector('#host-name');
+        await page.fill('#table-code', table.id);
+        await press('button:has-text("Find table")');
+        await page.waitForSelector(screenOf);
+        assert.equal(await toastsTold(page), 0);
+
+        await page.context().close();
+      }
+    },
+  ],
+
+  [
+    'an @ in the chat box offers everyone at the table, seated or watching, and is completed by keyboard and by tap on a 360 phone and the desktop; an update from the server in the middle leaves the text, the list and the caret as they were',
+    async (rig) => {
+      const table = rig.table(['Quigs', 'Al', 'Al Smith', 'Ann'].map((name) => ({ name, stack: 1000 })));
+      table.join('Wanda');
+
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        const page = await table.open('Quigs', screen);
+        const press = pressOn(page, screen);
+
+        if (screen !== 'desktop') {
+          await page.tap('.feed-toggle');
+        }
+
+        await press('#chat-input');
+        await page.keyboard.type('nice @');
+        assert.deepEqual(await texts(page, '#mention-list li'), ['Al', 'Al Smith', 'Ann', 'Wanda'], 'everyone but the viewer');
+        await page.keyboard.type('a');
+        assert.deepEqual(await texts(page, '#mention-list li'), ['Al', 'Al Smith', 'Ann']);
+        await page.keyboard.press('ArrowDown');
+
+        assertOnScreen(await boxes(page, '#mention-list'), screen, 'the names offered');
+        assertApart(await boxes(page, '#mention-list'), await boxes(page, '.say input, .say button'), 'the names offered and the chat box');
+        assert.deepEqual(await squeezed(page, '#mention-list li'), [], 'a name offered is cut off');
+        await shot(page, `mention-list-${screen}`);
+
+        // Word from the server arrives mid-completion: everything in the box is as it was
+        table.act('Ann', { type: 'chat', text: `meanwhile on the ${screen}` });
+        await page.waitForSelector(`.entries li:has-text("meanwhile on the ${screen}")`, { state: 'attached' });
+        assert.deepEqual(await page.evaluate(CHAT_BOX), { value: 'nice @a', caret: 7, focused: true, open: true, names: ['Al', 'Al Smith (picked)', 'Ann'] });
+
+        await page.keyboard.press('Enter');
+        assert.deepEqual(await page.evaluate(CHAT_BOX), { value: 'nice @Al Smith ', caret: 15, focused: true, open: false, names: [] }, 'Enter picks the name and sends nothing');
+
+        await page.keyboard.type('and @an');
+        await press('#mention-list li:has-text("Ann")');
+        assert.deepEqual(await page.evaluate(CHAT_BOX), { value: 'nice @Al Smith and @Ann ', caret: 24, focused: true, open: false, names: [] }, 'a tap picks the name and leaves the keyboard in the box');
+
+        await page.keyboard.press('Enter');
+        await page.waitForSelector('.entries li:last-child:has(.mention:has-text("@Ann"))', { state: 'attached' });
+        const said = table.view('Quigs').feed.at(-1)!;
+        assert.deepEqual(said.mentions?.map(([id]) => id), [table.auth('Al Smith').id, table.auth('Ann').id], 'the table names the two picked');
+        assert.deepEqual(await texts(page, '.entries li:last-child .mention'), ['@Al Smith', '@Ann']);
+
+        // With no room left in the line for the name, Enter closes the list and sends the line as typed
+        const full = `${'x'.repeat(LIMITS.chatLength - 4)} @a`;
+        await page.fill('#chat-input', full.slice(0, -1));
+        await page.keyboard.type('a');
+        assert.equal(((await page.evaluate(CHAT_BOX)) as { open: boolean }).open, true);
+        await page.keyboard.press('Enter');
+        await page.waitForSelector(`.entries li:last-child:has-text("${full}")`, { state: 'attached' });
+        assert.deepEqual(await page.evaluate(CHAT_BOX), { value: '', caret: 0, focused: true, open: false, names: [] });
+
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'a line that names the viewer is marked more strongly for them than one naming someone else, and says so in words; the bar under the table shows the newest line in words alone',
+    async (rig) => {
+      const table = rig.table(['Quigs', 'Pam', 'Sam'].map((name) => ({ name, stack: 1000 })));
+      table.act('Pam', { type: 'chat', text: '@Sam nice hand' });
+      table.act('Pam', { type: 'chat', text: 'deal @quigs, it is on you' });
+
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        const page = await table.open('Quigs', screen);
+
+        if (screen !== 'desktop') {
+          assert.equal(await text(page, '.feed-toggle .latest'), 'Pam: deal @quigs, it is on you');
+          assert.equal(await page.locator('.feed-toggle .latest *').count(), 0, 'the bar shows words and nothing else');
+          await page.tap('.feed-toggle');
+        }
+
+        const yours = page.locator('.entries li[data-names-you]');
+        assert.equal(await yours.count(), 1);
+        assert.deepEqual(await texts(page, '.entries li[data-names-you] .mention[data-you]'), ['@quigs']);
+        assert.equal(await yours.locator('.unseen').textContent(), 'Names you. ');
+        assert.deepEqual(await texts(page, '.entries li:not([data-names-you]) .mention'), ['@Sam']);
+
+        const background = (selector: string) => page.evaluate(`getComputedStyle(document.querySelector('${selector}')).backgroundColor`) as Promise<string>;
+        assert.equal(await background('.entries li:not([data-names-you]) .mention'), TRANSPARENT, 'someone else’s name is marked by its letters alone');
+        assert.notEqual(await background('.mention[data-you]'), TRANSPARENT, 'the viewer’s own name stands out');
+        assert.notEqual(await background('.entries li[data-names-you]'), TRANSPARENT, 'the line that names the viewer stands out');
+        assert.deepEqual(await squeezed(page, '.entries li'), [], 'a line is cut off');
+        await shot(page, `mentions-marked-${screen}`);
+
+        await page.context().close();
+      }
+
+      const sam = await table.open('Sam', 'smallPhone');
+      await sam.tap('.feed-toggle');
+      assert.deepEqual(await texts(sam, '.entries li[data-names-you] .mention[data-you]'), ['@Sam'], 'the same line is marked for whoever it names');
+    },
+  ],
+  [
+    'muting a player from the menu hides their chat lines and reactions on that page alone, marks their seat in words, lasts through a reload, and unmuting brings it all back',
+    async (rig) => {
+      const table = rig.table(NINE_REACTING);
+      table.act('Pam', { type: 'chat', text: 'said before the mute' });
+
+      const page = await table.open('Quigs', 'smallPhone');
+      await page.tap('[data-action="menu"]');
+      assert.match(await text(page, '.menu [data-action="mute"]'), /Mute players/);
+      await page.tap('.menu [data-action="mute"]');
+      assert.deepEqual(await texts(page, '.dialog li b'), ['Al', 'Bo', 'Dot', 'Kai', 'Lu', 'Pam', 'Sam', 'Stu']);
+
+      // Muting someone with nothing in the chat draws no line again, which a screen reader would read out again
+      await page.evaluate(`document.querySelector('.entries li').dataset.untouched = 'yes'`);
+      await page.tap('.dialog li:has(b:text-is("Kai")) [data-action="mute"]');
+      await page.waitForSelector('.dialog li:has(b:text-is("Kai")) [data-action="unmute"]');
+      await page.tap('.dialog li:has(b:text-is("Kai")) [data-action="unmute"]');
+      await page.waitForSelector('.dialog li:has(b:text-is("Kai")) [data-action="mute"]');
+      assert.equal(await page.locator('.entries li[data-untouched]').count(), 1, 'the chat was drawn again for a mute that hid nothing');
+
+      const pamRow = '.dialog li:has(b:text-is("Pam"))';
+      await page.tap(`${pamRow} [data-action="mute"]`);
+      await page.waitForSelector(`${pamRow} [data-action="unmute"][aria-pressed="true"][aria-label="Unmute Pam"]`);
+      assert.match(await text(page, `${pamRow} .mute-note`), /Muted/);
+      assertOnScreen(await boxes(page, '.dialog li [data-action]'), 'smallPhone', 'a mute button');
+      await shot(page, 'mute-dialog-smallPhone');
+      await page.tap('.dialog [data-action="close"]');
+
+      const pamMark = '.seat[data-seat="2"] .muted-mark';
+      assert.equal(await page.getAttribute(pamMark, 'aria-label'), 'Muted by you');
+      assert.equal(await page.locator('.muted-mark').count(), 1, 'only the muted player is marked');
+      assert.ok(!(await texts(page, '.entries li')).some((line) => line.includes('said before the mute')), 'a line said before the mute is hidden too');
+
+      // Pam's reaction and line never show; Sam's do, and the line after them says they have all arrived
+      table.act('Pam', { type: 'react', kind: 'laugh' });
+      table.act('Pam', { type: 'chat', text: '@Quigs hidden' });
+      table.act('Sam', { type: 'react', kind: 'clap' });
+      table.act('Sam', { type: 'chat', text: 'after them all' });
+      await page.waitForSelector('.seat-reaction[data-reaction="clap"]');
+      await page.waitForSelector('.entries li:has-text("after them all")', { state: 'attached' });
+      assert.equal(await page.locator('.seat-reaction[data-reaction="laugh"]').count(), 0, 'the muted player’s reaction showed');
+      assert.ok(!(await texts(page, '.entries li')).some((line) => line.includes('hidden')), 'the muted player’s line showed');
+      assert.equal(await text(page, '.feed-toggle .latest'), 'Sam: after them all');
+      await shot(page, 'muted-seat-smallPhone');
+
+      // Nobody else is told: Sam's page shows Pam as ever
+      const sam = await table.open('Sam', 'smallPhone');
+      await sam.waitForSelector('.entries li:has-text("@Quigs hidden")', { state: 'attached' });
+      assert.equal(await sam.locator('.muted-mark').count(), 0);
+      await sam.context().close();
+
+      await page.reload();
+      await page.waitForSelector('.stage .table');
+      assert.equal(await page.locator(pamMark).count(), 1, 'the mute lasts through a reload');
+      assert.ok(!(await texts(page, '.entries li')).some((line) => line.includes('hidden')));
+
+      await page.tap('[data-action="menu"]');
+      assert.match(await text(page, '.menu [data-action="mute"]'), /1 muted on this screen/);
+      await page.tap('.menu [data-action="mute"]');
+      await page.tap(`${pamRow} [data-action="unmute"]`);
+      await page.waitForSelector(`${pamRow} [data-action="mute"][aria-pressed="false"]`);
+      await page.tap('.dialog [data-action="close"]');
+
+      assert.equal(await page.locator('.muted-mark').count(), 0);
+      const lines = await texts(page, '.entries li');
+      assert.ok(lines.some((line) => line.includes('said before the mute')) && lines.some((line) => line.includes('@Quigs hidden')), 'unmuted, every line of theirs is back');
+    },
+  ],
+  [
+    'the muted mark beside the longest name on the smallest phone, standing and lying, with this machine’s emoji and with emoji drawn far wider: inside its seat, the name still there, the seat no bigger',
+    async (rig) => {
+      const table = rig.table(tenPlayers().slice(0, 9));
+      const width = SCREENS.smallPhone.width;
+      const page = await table.open('Quigs', 'smallPhone');
+      await page.evaluate(`localStorage.setItem('cnd.mute.${table.id}', JSON.stringify(['${table.auth(WIDEST).id}']))`);
+      await page.reload();
+      await page.waitForSelector('.stage .table');
+
+      for (const glyph of ['own-emoji', 'wide-emoji']) {
+        if (glyph === 'wide-emoji') {
+          await page.addStyleTag({ content: WIDE_EMOJI });
+        }
+
+        for (const [height, shape] of [
+          [Math.ceil(width / WIDE_ASPECT) + 1, 'tall'],
+          [Math.floor(width / WIDE_ASPECT) - 1, 'wide'],
+        ] as const) {
+          await setStageHeight(page, height);
+          await page.waitForSelector(`.table.${shape} .muted-mark`);
+
+          const holder = `.seat:has(.muted-mark) .plate`;
+          const [plate] = await boxes(page, holder);
+          const [mark] = await boxes(page, `${holder} .muted-mark`);
+          const [name] = await boxes(page, `${holder} .name > span:first-child`);
+          within([mark!], [plate!], `the muted mark (${glyph}, ${shape})`);
+          assert.ok(name!.right - name!.left > 0, `the mark pushed the name out of its seat (${glyph}, ${shape})`);
+          assertApart([mark!], [name!], 'the mark and the name');
+          assert.deepEqual(await squeezed(page, `${holder} .muted-mark, ${holder} .stack`), [], 'the mark or the stack is cut off');
+          await shot(page, `muted-mark-${glyph}-${shape}-smallPhone`);
+
+          // Taken away, the seat is the same size: the mark takes room from the name, never from the table
+          await page.evaluate(`document.querySelector('.plate .muted-mark').style.display = 'none'`);
+          assert.ok(sameBox((await boxes(page, holder.replace(':has(.muted-mark)', `:has(.name[title="${WIDEST}"])`)))[0]!, plate), 'the mark made the seat bigger');
+          await page.evaluate(`document.querySelector('.plate .muted-mark').style.display = ''`);
+        }
+      }
+    },
+  ],
+  [
+    'a GIF link shows its picture in the open chat, held to its box however tall, and is fetched only then, telling the host nothing of the page; one that fails is its link again; the bar under the table shows words alone',
+    async (rig) => {
+      const table = rig.table(['Quigs', 'Pam', 'Lu'].map((name) => ({ name, stack: 1000 })));
+      const giphy = 'https://media.giphy.com/media/abc123/giphy.gif';
+      table.act('Pam', { type: 'chat', text: giphy });
+      table.act('Pam', { type: 'chat', text: 'https://i.imgur.com/tall.gif' });
+      table.act('Pam', { type: 'chat', text: 'https://media.tenor.com/xyz/missing.gif' });
+      table.act('Lu', { type: 'chat', text: 'https://i.imgur.com/fromLu.gif' });
+      table.act('Pam', { type: 'chat', text: 'https://i.imgur.com/named.gif#@Quigs' });
+
+      const page = await table.open('Quigs', 'smallPhone');
+      await page.evaluate(`localStorage.setItem('cnd.mute.${table.id}', JSON.stringify(['${table.auth('Lu').id}']))`);
+      await page.reload();
+      await page.waitForSelector('.stage .table');
+      await page.waitForTimeout(500);
+      assert.equal(rig.gifs.length, 0, 'a picture was fetched for a closed chat');
+      assert.equal(await text(page, '.feed-toggle .latest'), 'Pam: https://i.imgur.com/named.gif#@Quigs', 'a GIF address that names someone is its words');
+      assert.equal(await page.locator('.feed-toggle img').count(), 0, 'the bar shows a picture');
+
+      await page.tap('.feed-toggle');
+      await page.waitForSelector('.entries li[data-gif="failed"]');
+      await page.waitForSelector('.entries li[data-gif="shown"] >> nth=1');
+      assert.deepEqual(rig.gifs.map((asked) => asked.url).sort(), [giphy, 'https://i.imgur.com/tall.gif', 'https://media.tenor.com/xyz/missing.gif'].sort(), 'the muted player’s GIF was fetched, or one twice');
+      assert.ok(rig.gifs.every((asked) => asked.referer === null), `a host was told the page: ${JSON.stringify(rig.gifs)}`);
+
+      const [list] = await boxes(page, '.entries');
+      for (const picture of await boxes(page, '.entries img.gif')) {
+        assert.ok(picture.bottom - picture.top <= 120.5 && picture.right - picture.left <= 220.5, `a picture outgrew its box: ${JSON.stringify(picture)}`);
+        assert.ok(picture.left >= list!.left && picture.right <= list!.right, `a picture runs out of the chat: ${JSON.stringify(picture)}`);
+      }
+      const [tall] = await boxes(page, '.entries img.gif[src*="tall"]');
+      assert.ok(tall!.bottom - tall!.top >= 119.5, 'the tall picture is held to the height of its box');
+      assert.equal(await text(page, '.entries li[data-gif="failed"] .gif-link'), 'https://media.tenor.com/xyz/missing.gif');
+      assert.equal(await page.locator('.entries li[data-gif="failed"] img').count(), 0);
+      assert.equal(await page.getAttribute('.entries img.gif >> nth=0', 'alt'), 'A GIF from Pam');
+      assert.deepEqual(await texts(page, '.entries li[data-names-you] .mention[data-you]'), ['@Quigs'], 'a GIF’s address that names someone shows its words, the name marked');
+      assert.equal(await page.locator('.entries li[data-names-you] img').count(), 0);
+      await assertNoSidewaysScroll(page);
+      await page.locator('.entries').evaluate((list) => (list.scrollTop = 0));
+      await shot(page, 'gifs-open-chat-smallPhone');
+
+      // Newest, a GIF is named in the bar for what it is, still with nothing fetched for the bar
+      const fetched = rig.gifs.length;
+      table.act('Pam', { type: 'chat', text: 'https://i.imgur.com/newest.gif' });
+      await page.waitForSelector('.feed-toggle .latest:text-is("Pam: GIF")');
+      await page.tap('.feed-toggle');
+      await page.waitForTimeout(300);
+      assert.equal(rig.gifs.length, fetched, 'the bar fetched a picture');
+      await shot(page, 'gifs-bar-smallPhone');
+    },
+  ],
+  [
+    'with GIFs switched off in Preferences a GIF line stays its link and nothing is fetched, on the desktop where the chat is always open',
+    async (rig) => {
+      const table = rig.table(['Quigs', 'Pam'].map((name) => ({ name, stack: 1000 })));
+      const page = await table.open('Quigs', 'desktop');
+
+      await page.click('[data-action="menu"]');
+      await page.click('.menu [data-action="preferences"]');
+      await page.click('[data-pref="gifs"]');
+      assert.equal(await page.getAttribute('[data-pref="gifs"]', 'aria-checked'), 'false');
+      await shot(page, 'gifs-preference-desktop');
+      await page.click('.dialog [data-action="close"]');
+
+      table.act('Pam', { type: 'chat', text: 'https://giphy.com/gifs/funny-cat-abc123' });
+      await page.waitForSelector('.entries li:has-text("funny-cat")');
+      await page.waitForTimeout(500);
+      assert.equal(await page.textContent('.feed-toggle .latest'), 'Pam: https://giphy.com/gifs/funny-cat-abc123', 'with GIFs off the bar has the line as typed');
+      assert.equal(rig.gifs.length, 0, 'a picture was fetched with GIFs switched off');
+      assert.equal(await page.locator('.entries img').count(), 0);
+      assert.ok((await texts(page, '.entries li')).includes('Pam: https://giphy.com/gifs/funny-cat-abc123'));
+
+      // Switched on again, the line shows the picture its page points to
+      await page.click('[data-action="menu"]');
+      await page.click('.menu [data-action="preferences"]');
+      await page.click('[data-pref="gifs"]');
+      await page.click('.dialog [data-action="close"]');
+      await page.waitForSelector('.entries li[data-gif="shown"] img.gif');
+      assert.deepEqual(rig.gifs.map((asked) => asked.url), ['https://media.giphy.com/media/abc123/giphy.gif']);
+      assert.equal(await page.textContent('.feed-toggle .latest'), 'Pam: GIF', 'with GIFs on the bar names the GIF');
+      await shot(page, 'gifs-desktop');
+    },
+  ],
+  ...(['smallPhone', 'desktop'] as const).map(
+    (screen): Check => [
+      `on a ${screen}, after a hand a player who folded is offered each of their cards, drawn on its button, and both, in one group under the table clear of the switches beside it, standing and lying`,
+      async (rig) => {
+        const table = foldedToQuigs(rig);
+        // The chat at its busiest beside the offer: a line naming Pam, and a GIF as the newest in the bar
+        table.act('Stu', { type: 'chat', text: '@Pam nice fold' });
+        table.act('Stu', { type: 'chat', text: 'https://giphy.com/gifs/funny-cat-abc123' });
+        const pam = await table.open('Pam', screen);
+
+        await pam.waitForSelector('.controls .show-cards');
+        assert.deepEqual(await showButtons(pam), [
+          ['Show the ace of spades', 'As'],
+          ['Show the king of diamonds', 'Kd'],
+          ['Show both cards', null],
+        ]);
+        assert.deepEqual(await texts(pam, '.controls .show-cards .show-label, .controls .show-cards [data-action="show"]'), ['Show', 'Both']);
+        assert.equal(await pam.locator('.seat.me .hole .card.seen').count(), 0, 'a card is marked as seen before it is shown');
+
+        await inShapesOf(
+          pam,
+          screen,
+          async (shape) => {
+            await assertShowOfferFits(pam, screen, `${screen}, ${shape}`);
+            await shot(pam, `show-offer-${screen}-${shape}`);
+          },
+          { buttonsUp: false },
+        );
+
+        // Quigs, who won without a call, is offered it too; a watcher is not
+        const quigs = await table.open('Quigs', screen);
+        const kibitz = await table.open('Kibitz', screen);
+        await quigs.waitForSelector('.controls .show-cards');
+        assert.deepEqual((await showButtons(quigs)).map(([label]) => label), ['Show the queen of clubs', 'Show the jack of clubs', 'Show both cards']);
+        assert.equal(await kibitz.locator('.controls .show-cards').count(), 0, 'a watcher is offered to show');
+
+        for (const page of [pam, quigs, kibitz]) {
+          await page.context().close();
+        }
+      },
+    ],
+  ),
+  [
+    'a player shows the card on their left, then the one on their right: their own page marks each as the table sees it and offers what is left, and another player and a watcher see one card up and one down, in her order, at nine seats on a 360 phone standing and lying and on the desktop',
+    async (rig) => {
+      const table = foldedToQuigs(rig);
+      const pam = await table.open('Pam', 'smallPhone');
+      const others = [
+        ['Stu', 'smallPhone', await table.open('Stu', 'smallPhone')],
+        ['Kibitz', 'smallPhone', await table.open('Kibitz', 'smallPhone')],
+        ['Stu', 'desktop', await table.open('Stu', 'desktop')],
+      ] as const;
+      const press = pressOn(pam, 'smallPhone');
+
+      await press('.controls [data-action="show-card"][data-place="0"]');
+      await pam.waitForSelector('.seat.me .hole .card.seen[data-card="As"]');
+      assert.equal(await pam.locator('.seat.me .hole .card.seen').count(), 1);
+      assert.match(await text(pam, '.seat.me > .unseen'), /, your cards: ace of spades, king of diamonds, ace of spades shown to the table[,.]/);
+      assert.deepEqual(await showButtons(pam), [['Show the king of diamonds', 'Kd']], 'what is left to show is the other card alone');
+      assert.deepEqual(table.view('Stu').seats[2]!.cards, ['As', null]);
+      assert.ok(!JSON.stringify(table.view('Stu')).includes('"Kd"'), 'the card still face down is in another player\'s view');
+      await inShapesOf(pam, 'smallPhone', async (shape) => {
+        await assertShowOfferFits(pam, 'smallPhone', `Pam after the ace, ${shape}`);
+        await shot(pam, `show-left-own-smallPhone-${shape}`);
+      }, { buttonsUp: false });
+
+      for (const [who, screen, page] of others) {
+        await inShapesOf(
+          page,
+          screen,
+          async (shape) => {
+            await shot(page, `show-left-${who}-${screen}-${shape}`);
+            await assertPamShows(page, screen, ['As', null], `${who} on a ${screen}, ${shape}`);
+          },
+          { buttonsUp: false },
+        );
+      }
+
+      await press('.controls [data-action="show-card"][data-place="1"]');
+      await pam.waitForSelector('.seat.me .hole .card.seen[data-card="Kd"]');
+      await pam.waitForSelector('.controls .show-cards', { state: 'detached' });
+      for (const [who, screen, page] of others) {
+        await assertPamShows(page, screen, ['As', 'Kd'], `${who} on a ${screen}, both up`);
+      }
+
+      // The next hand she shows the card on her right alone: the one face down is on her left, as she holds them
+      nextFoldedToQuigs(table, 'Qh 7c');
+      await pam.waitForSelector('.controls .show-cards [data-place="1"]');
+      await press('.controls [data-action="show-card"][data-place="1"]');
+      await pam.waitForSelector('.seat.me .hole .card.seen[data-card="7c"]');
+      assert.deepEqual(await showButtons(pam), [['Show the queen of hearts', 'Qh']]);
+
+      for (const [who, screen, page] of others) {
+        await inShapesOf(
+          page,
+          screen,
+          async (shape) => {
+            await shot(page, `show-right-${who}-${screen}-${shape}`);
+            await assertPamShows(page, screen, [null, '7c'], `${who} on a ${screen}, the right card alone, ${shape}`);
+          },
+          { buttonsUp: false },
+        );
+      }
+
+      for (const page of [pam, ...others.map(([, , page]) => page)]) {
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'the play-by-play and the hand history say a card shown alone, the other one after it, and two shown at once',
+    async (rig) => {
+      for (const screen of PHONE_AND_DESKTOP) {
+        const table = foldedToQuigs(rig);
+        table.act('Pam', { type: 'showCards', hand: 1, cards: [0] });
+        table.act('Pam', { type: 'showCards', hand: 1, cards: [1] });
+        table.act('Quigs', { type: 'showCards', hand: 1, cards: [0, 1] });
+
+        const lines = ['Pam shows one card, A♠', 'Pam shows the other card, K♦', 'Quigs shows Q♣ J♣'];
+        const stu = await table.open('Stu', screen);
+        await toggleFeed(stu, screen);
+        await stu.waitForSelector('.entries li:has-text("Quigs shows")');
+        assert.deepEqual((await texts(stu, '.entries li')).slice(-3), lines);
+        assert.deepEqual(await squeezed(stu, '.entries li'), [], 'a line of the play-by-play is cut off');
+        await shot(stu, `show-play-by-play-${screen}`);
+        await toggleFeed(stu, screen);
+
+        clear(rig, table);
+        await table.heardBy(stu);
+        const press = pressOn(stu, screen);
+        await press('[data-action="menu"]');
+        await press('.menu [data-action="history"]');
+        await stu.waitForSelector('.history summary');
+        await press('.history summary');
+        assert.deepEqual((await text(stu, '.history pre')).split('\n').slice(-3), lines);
+        await shot(stu, `show-history-${screen}`);
+
+        await stu.context().close();
+      }
+    },
+  ],
+  [
+    'a show held on its way is marked nowhere until the table has it; one refused gives the button back and shows nothing; one lost before the table heard it is sent again and shows the card once; one lost as the hand moves on is not sent again',
+    async (rig) => {
+      const table = foldedToQuigs(rig);
+      const pam = await table.open('Pam', 'smallPhone');
+      const stu = await table.open('Stu', 'smallPhone');
+      const shows = await Gate.on(pam, 'shows');
+      const sent = { count: 0 };
+      pam.on('request', (request) => {
+        if (request.url().endsWith('/api') && (JSON.parse(request.postData() ?? '{}') as { command?: { type?: string } }).command?.type === 'showCards') {
+          sent.count += 1;
+        }
+      });
+      const press = pressOn(pam, 'smallPhone');
+      const ace = '.controls [data-action="show-card"][data-place="0"]';
+      const king = '.controls [data-action="show-card"][data-place="1"]';
+
+      // Held: the button waits, nothing is marked, and the table has not seen the card
+      await shows.close('requests');
+      await press(ace);
+      await shows.holding();
+      assert.equal(await pam.isDisabled(ace), true, 'the button can be pressed again while its show is out');
+      assert.equal(await pam.locator('.seat.me .hole .card.seen').count(), 0, 'a card is marked as seen before the table has it');
+      assert.deepEqual(table.view('Stu').seats[2]!.cards, [null, null]);
+      await shot(pam, 'show-held-smallPhone');
+      await shows.open();
+      await pam.waitForSelector('.seat.me .hole .card.seen[data-card="As"]');
+      await assertPamShows(stu, 'smallPhone', ['As', null], 'Stu, once the held show went through');
+
+      // Refused: the button is back, and the card is still face down
+      await shows.close('requests');
+      await press(king);
+      await shows.holding();
+      await shows.refuse();
+      await pam.waitForSelector(`${king}:not([disabled])`);
+      await toastTold(pam, 'The table is busy, try again');
+      assert.deepEqual(table.view('Stu').seats[2]!.cards, ['As', null]);
+      assert.equal(await pam.locator('.seat.me .hole .card.seen').count(), 1);
+      await shot(pam, 'show-refused-smallPhone');
+
+      // Lost before the table heard it: sent once more, which the gate holds in turn, and the card comes out once
+      const before = sent.count;
+      await press(king);
+      await shows.holding();
+      await shows.lose();
+      await shows.holding();
+      assert.equal(sent.count, before + 2, 'a show lost on its way was not sent again');
+      await shows.open();
+      await pam.waitForSelector('.seat.me .hole .card.seen[data-card="Kd"]');
+      await assertPamShows(stu, 'smallPhone', ['As', 'Kd'], 'Stu, once the lost show was sent again');
+      assert.equal(table.view('Stu').feed.filter((line) => line.text.startsWith('Pam shows')).length, 2);
+
+      // Lost as the hand moves on: the next view offers nothing of the hand it was for, so it is not sent again
+      nextFoldedToQuigs(table, 'Qh 7c');
+      await pam.waitForSelector(ace);
+      await shows.close('requests');
+      await press(ace);
+      await shows.holding();
+      clear(rig, table);
+      await pam.waitForSelector('.controls .show-cards', { state: 'detached' });
+      const lostAt = sent.count;
+      await shows.lose();
+      await toastTold(pam, 'No answer from the table');
+      await pam.waitForTimeout(500);
+      assert.equal(sent.count, lostAt, 'a show for a hand that is gone was sent again');
+      assert.ok(table.view('Stu').seats[2]!.cards!.every((card) => card === null), 'a card of the next hand was shown');
+
+      await pam.context().close();
+      await stu.context().close();
+    },
+  ],
+  [
+    'a card shown at the last moment of the pause holds up nothing of the game: with it stopped mid-turn the table reads as still, and the next hand is dealt just as after a hand nobody showed',
+    async (rig) => {
+      const table = foldedToQuigs(rig);
+      const page = await table.open('Stu', 'smallPhone', MOTION, { moving: true });
+      playOut(table);
+
+      const nextDeal = async (showing: boolean) => {
+        nextFoldedToQuigs(table, PAM_HOLE);
+        await table.heardBy(page);
+        await page.waitForSelector('.message.result');
+        await dealt(page);
+
+        if (showing) {
+          rig.advance(table.view('Stu').hand!.deadline! - rig.now() - 1);
+          await page.evaluate('window.holdAt = 0.5');
+          const before = table.version;
+          table.act('Pam', { type: 'showCards', hand: table.view('Stu').hand!.number, cards: [0] });
+          await page.waitForFunction(`${flightsSince(before)}.filter((flight) => flight.name === 'flip').length === 1`);
+          await page.evaluate(`window.holdAt = null; window.flipping = document.getAnimations().filter((animation) => animation.id === 'flip')`);
+          assert.deepEqual(await page.evaluate(`${flightsSince(before)}.filter((flight) => flight.name === 'flip').map((flight) => [flight.seat, flight.text])`), [[2, 'A♠']], 'what turned over');
+          await dealt(page);
+        }
+
+        return dealFlights(table, page);
+      };
+
+      const quiet = await nextDeal(false);
+      const shown = await nextDeal(true);
+      assert.deepEqual(shown, quiet, 'the deal after a card shown went out otherwise');
+      assert.deepEqual(await page.evaluate('window.flipping.map((animation) => animation.playState)').then((states) => (states as string[]).filter((state) => state === 'finished')), []);
+      await page.evaluate('window.land()');
+    },
+  ],
+  [
+    'a failure in the page is told to the server once, as the member, and changes nothing the player sees, on a 360 phone',
+    async (rig) => {
+      const table = rig.table(['Quigs', 'Pam', 'Sam'].map((name) => ({ name, stack: 1000 })));
+      table.deal({ button: 0 });
+
+      const page = await table.open('Quigs', 'smallPhone');
+      await dealt(page);
+
+      // The whole page as drawn, less the clocks, which count down by themselves
+      const drawn = () =>
+        page.evaluate(`(() => {
+          const app = document.querySelector('.cnd').cloneNode(true);
+          app.querySelectorAll('.timer, .status.clock').forEach((clock) => clock.remove());
+
+          return app.outerHTML;
+        })()`) as Promise<string>;
+      const before = await drawn();
+      const sent = opsSent(page);
+
+      await rig.throwIn(page, 'A failure on purpose');
+      await rig.throwIn(page, 'A failure on purpose');
+
+      // A report that never reaches the error log is ended by the check's own limit, which says it was waiting here
+      while (rig.errors.rows.length === 0) {
+        await page.waitForTimeout(50);
+      }
+
+      // Long enough for a second report, which must not come
+      await page.waitForTimeout(500);
+      const [row, ...more] = rig.errors.rows;
+      assert.equal(sent.filter((op) => op === 'report').length, 1, 'the same failure was sent more than once');
+      assert.deepEqual(more, []);
+      assert.deepEqual([row!.where, row!.tableId, row!.message, row!.times], ['page', table.id, 'A failure on purpose', 1]);
+      // The rig's phones are a desktop Chrome at a phone's size, and say so
+      assert.match(row!.browser, /^Chrome \d+ on a desktop$/);
+
+      assert.equal(await drawn(), before, 'the page changed what it shows');
+      assert.equal(await toastsTold(page), 0, 'the player was told something');
+      await shot(page, 'page-failure-smallPhone');
+    },
+  ],
+  [
+    'while the game knows nobody, the front page and a table’s link ask only for a name, as they did before there was a list of players',
+    async (rig) => {
+      const table = rig.table([{ name: 'Quigs', stack: 1000 }]);
+
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        for (const [where, path, box] of [['lobby', '', '#host-name'], ['join', `?table=${table.id}`, '#join-name']] as const) {
+          const page = await askedWho(rig, screen, path);
+
+          assert.equal(await page.getAttribute('.who-ask', 'data-who'), 'name');
+          assert.equal(await page.locator('.who-pick:visible, .who-remembered:visible, .who-alike:visible').count(), 0, 'something of a list nobody is on is showing');
+          assert.equal(await text(page, '.who-name > span'), 'Your name');
+          assert.equal(await page.getAttribute(box, 'required'), '');
+
+          await shot(page, `who-nobody-${where}-${screen}`);
+          assertOnScreen(await boxes(page, `.who-name, ${box}`), screen, 'the name');
+          await assertNoSidewaysScroll(page);
+          await page.context().close();
+        }
+      }
+    },
+  ],
+  [
+    'a join whose answer is lost is the same join when it is tried again, and so is a new table: the player is at the table once and on the list of players once, and the key the two askings go under is in nothing the page keeps, shows or sends besides; one who then says the name on the list is theirs is the member the first asking made',
+    async (rig) => {
+      const table = rig.table([{ name: 'Quigs', stack: 1000 }]);
+
+      type Sent = Record<string, unknown> & { op: string };
+      type Lost = { auth: { id: string }; view: { id: string } };
+
+      /** Writes down what a page sends, and loses the answer to its first request of one kind, after the server has acted on it. */
+      const losingFirst = async (page: Page, op: 'join' | 'create') => {
+        const sent: Sent[] = [];
+        const lost: Lost[] = [];
+
+        await page.route('**/api', async (route) => {
+          const request = JSON.parse(route.request().postData() ?? '{}') as Sent;
+          sent.push(request);
+
+          if (request.op !== op || lost.length > 0) {
+            return route.continue();
+          }
+
+          lost.push((await (await route.fetch()).json()) as Lost);
+
+          return route.abort('failed');
+        });
+
+        return { sent, lost, asked: () => sent.filter((request) => request.op === op) };
+      };
+
+      /** Everything a page keeps or shows that could give a key away: its address, what the browser remembers for it, and all it has drawn. */
+      const keptBy = (page: Page) => page.evaluate('JSON.stringify([location.href, { ...localStorage }, { ...sessionStorage }, document.cookie, document.documentElement.outerHTML])') as Promise<string>;
+      // Which member a page is at a table: the id its browser remembers the seat by
+      const memberAt = async (page: Page, tableId: string) => ((await page.evaluate(`localStorage.getItem('cnd.seat.${tableId}')`)) as string | null)?.split('.')[0];
+      const KEY = /^[A-Za-z0-9_-]{22,64}$/;
+
+      // A visitor follows the table's link and joins as Bob. The table lets him in and puts him on the list, and the answer never arrives
+      const visitor = await rig.page('desktop', 'a visitor');
+      const joining = await losingFirst(visitor, 'join');
+      await visitor.goto(`${rig.url}?table=${table.id}`);
+      await visitor.waitForSelector('[data-action="join-table"]:enabled');
+      await visitor.fill('#join-name', 'Bob');
+      await visitor.click('[data-action="join-table"]');
+      await toastTold(visitor, 'Could not join the table');
+      assert.deepEqual(table.view('Quigs').members.map((member) => member.name), ['Quigs', 'Bob'], 'the table did not let him in the first time, so the check shows nothing');
+
+      const joinKey = joining.asked()[0]!.key as string;
+      assert.match(String(joinKey), KEY, 'the join went without a key, or with one too short to be a secret');
+      assert.ok(!(await keptBy(visitor)).includes(joinKey), 'the key is in the address, in what the browser remembers, or on the page');
+
+      // The list of players, asked for again, now has the Bob his first asking made
+      await visitor.waitForSelector('.who-list .who-pill:has-text("Bob")');
+      await shot(visitor, 'join-answer-lost');
+
+      // He tries again, as the page told him to, and is the Bob the table already has
+      await visitor.waitForSelector('[data-action="join-table"]:enabled');
+      await visitor.click('[data-action="join-table"]');
+      await visitor.waitForSelector('.controls-slot .controls');
+      assert.deepEqual(table.view('Quigs').members.map((member) => member.name), ['Quigs', 'Bob'], 'trying again made him a second member');
+      assert.deepEqual(rig.players.list().map((player) => player.name), ['Bob']);
+      assert.equal(await memberAt(visitor, table.id), joining.lost[0]!.auth.id, 'he is not the member the first asking made');
+      assert.deepEqual(joining.asked().map((request) => request.key), [joinKey, joinKey], 'the second asking went under another key than the first');
+
+      // What his page sends next has nothing of the key, and neither has anything it keeps
+      table.act('Quigs', { type: 'chat', text: 'welcome' });
+      await visitor.waitForSelector('.feed li:has-text("welcome")');
+      await visitor.fill('#chat-input', 'thanks');
+      await visitor.press('#chat-input', 'Enter');
+      await visitor.waitForSelector('.feed li:has-text("thanks")');
+      assert.deepEqual(joining.sent.filter((request) => request.op !== 'join' && JSON.stringify(request).includes(joinKey)).map((request) => request.op), [], 'a request that is not the join carries its key');
+      assert.ok(!(await keptBy(visitor)).includes(joinKey), 'the key outlived the join in the address, in what the browser remembers, or on the page');
+
+      // Another whose answer is lost is told by the page that her name is on the list already, which is her first asking's doing.
+      // She says that is her, which it is, and is let in as the member that asking made, not turned away for having her own name
+      const second = await rig.page('desktop', 'a visitor');
+      const again = await losingFirst(second, 'join');
+      await second.goto(`${rig.url}?table=${table.id}`);
+      await second.waitForSelector('[data-action="join-table"]:enabled');
+      await second.fill('#join-name', 'Cy');
+      await second.click('[data-action="join-table"]');
+      await toastTold(second, 'Could not join the table');
+      await second.waitForSelector('[data-action="pick-alike"]');
+      assert.equal(await text(second, '.who-alike'), 'Cy is on the list already. I’m Cy');
+
+      await second.click('[data-action="pick-alike"]');
+      await second.click('[data-action="join-table"]');
+      await second.waitForSelector('.controls-slot .controls');
+      assert.deepEqual(table.view('Quigs').members.map((member) => member.name), ['Quigs', 'Bob', 'Cy']);
+      assert.equal(await memberAt(second, table.id), again.lost[0]!.auth.id, 'she is not the member the first asking made');
+      assert.deepEqual(rig.players.list().map((player) => player.name).sort(), ['Bob', 'Cy']);
+      assert.deepEqual((await toasts(second)).map((toast) => toast.text), ['Could not join the table. Check your connection and try again.'], 'she was told something went wrong after saying who she is');
+
+      // A new table whose answer is lost: tried again, it is the table that was made, and Zed is on the list once
+      const lobby = await rig.lobby('desktop');
+      const making = await losingFirst(lobby, 'create');
+      await lobby.fill('#host-name', 'Zed');
+      await lobby.click('[data-action="create-table"]');
+      await toastTold(lobby, 'Could not create the table');
+
+      const createKey = making.asked()[0]!.key as string;
+      assert.match(String(createKey), KEY);
+      assert.notEqual(createKey, joinKey, 'two arrivals went under one key');
+
+      await lobby.waitForSelector('[data-action="create-table"]:enabled');
+      await lobby.click('[data-action="create-table"]');
+      await lobby.waitForSelector('#table-link');
+      const made = making.lost[0]!;
+      assert.deepEqual([new URL(lobby.url()).searchParams.get('table'), await memberAt(lobby, made.view.id)], [made.view.id, made.auth.id], 'trying again made a second table');
+      assert.deepEqual(rig.players.list().map((player) => player.name).sort(), ['Bob', 'Cy', 'Zed']);
+      assert.deepEqual(making.asked().map((request) => request.key), [createKey, createKey]);
+      assert.ok(!(await keptBy(lobby)).includes(createKey), 'the key is in the address, in what the browser remembers, or on the page');
+
+      for (const page of [visitor, second, lobby]) {
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'with three players known, the page asks who you are above the name, the most recently seen first: a tap picks a player and puts the name away, “Someone new” brings it back as typed, and joining as one of them makes you that player',
+    async (rig) => {
+      const [ann, bob, bigAl] = ['Ann', 'Bob', 'Big Al'].map((name, index) => rig.players.add(name, rig.now() + index * 1000));
+      const table = rig.table([{ name: 'Quigs', stack: 1000 }]);
+
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        for (const [where, path, box] of [['lobby', '', '#host-name'], ['join', `?table=${table.id}`, '#join-name']] as const) {
+          const page = await askedWho(rig, screen, path);
+          const press = pressOn(page, screen);
+          const pressed = () => page.locator('.who-pill[aria-pressed="true"]').allInnerTexts();
+
+          assert.equal(await page.getAttribute('.who-ask', 'data-who'), 'pick');
+          assert.equal(await text(page, '.who-question'), 'Who are you?');
+          assert.deepEqual(await texts(page, '.who-list .who-pill'), ['Big Al', 'Bob', 'Ann']);
+          assert.deepEqual(await pressed(), ['Someone new'], 'nobody is taken for a player they did not pick');
+          assert.equal(await page.isVisible('.who-filter'), false, 'three names need no box to find one in');
+
+          await page.fill(box, 'Cy');
+          await shot(page, `who-three-${where}-${screen}`);
+          assert.deepEqual(await squeezed(page, '.who-pill, .who-question'), [], 'a name is cut off');
+          assertOnScreen(await boxes(page, `.who-question, .who-pill, ${box}`), screen, 'the question');
+          const pills = await boxes(page, '.who-pill');
+          pills.forEach((pill, index) => assertApart([pill], pills.slice(index + 1), 'two names'));
+          assert.ok(pills.every((pill) => pill.bottom - pill.top >= 40), 'a name is too small to tap');
+          await assertNoSidewaysScroll(page);
+
+          await press('.who-pill:text-is("Bob")');
+          assert.deepEqual(await pressed(), ['Bob']);
+          assert.equal(await page.isVisible(box), false, 'a known player is still asked for a name');
+          await shot(page, `who-picked-${where}-${screen}`);
+
+          await press('[data-action="someone-new"]');
+          assert.deepEqual(await pressed(), ['Someone new']);
+          assert.equal(await page.inputValue(box), 'Cy', 'the name that was typed is gone');
+          assert.equal(await page.evaluate('document.activeElement.id'), box.slice(1));
+
+          await press('.who-pill:text-is("Bob")');
+          await press(where === 'lobby' ? '[data-action="create-table"]' : '[data-action="join-table"]');
+          await page.waitForSelector('.stage .table');
+
+          const tableId = new URL(page.url()).searchParams.get('table')!;
+          const members = rig.store.read(tableId)!.members.filter((member) => member.identity === bob!.id);
+          assert.deepEqual(members.map((member) => member.name), where === 'lobby' || screen === 'smallPhone' ? ['Bob'] : ['Bob', 'Bob 2'], 'the second Bob at a table is a member of his own, under a number');
+          assert.deepEqual(JSON.parse((await page.evaluate(`localStorage.getItem('cnd.player')`)) as string), bob);
+          assert.equal(await toastsTold(page), 0);
+          await page.context().close();
+        }
+      }
+
+      assert.deepEqual(rig.players.list().map((player) => player.id).sort(), [ann!.id, bob!.id, bigAl!.id].sort(), 'picking a player put someone on the list');
+    },
+  ],
+  [
+    'forty players, the longest names among them, on the smallest phone and a desktop: the list scrolls inside its own box, every name is whole, a box narrows it to the one looked for, and a name at its end can be picked',
+    async (rig) => {
+      const longest = ['WWWWWWWWWWWWWWWW', 'Ünïcödé Ñandú Ø!', 'Marge Simpson-Jr', 'iiiiiiiiiiiiiiii', '你好你好你好你好'];
+      const names = [...Array.from({ length: 35 }, (_name, index) => `Player ${index + 1}`), ...longest];
+      names.forEach((name, index) => rig.players.add(name, rig.now() + index * 1000));
+      const table = rig.table([{ name: 'Quigs', stack: 1000 }]);
+
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        const page = await askedWho(rig, screen, `?table=${table.id}`);
+        const press = pressOn(page, screen);
+        const listBox = async () => (await boxes(page, '.who-list'))[0]!;
+
+        assert.deepEqual(await texts(page, '.who-list .who-pill'), [...names].reverse());
+        assert.equal(await page.isVisible('.who-filter'), true);
+        await shot(page, `who-forty-${screen}`);
+
+        // The list is a box of its own a few rows tall, so the name and the button under it are never forty names away
+        const list = await listBox();
+        const scrolls = (await page.evaluate(`(() => { const list = document.querySelector('.who-list'); return [list.scrollHeight, list.clientHeight]; })()`)) as [number, number];
+        assert.ok(list.bottom - list.top <= 220 && scrolls[0] > scrolls[1], `the list is ${list.bottom - list.top} tall and holds ${scrolls[0]}`);
+        assertOnScreen([list, ...(await boxes(page, '.who-filter, .who-question'))], screen, 'the list of players');
+        assert.deepEqual(await squeezed(page, '.who-pill, .who-list'), [], 'a name is cut off, or the list scrolls sideways');
+        assert.ok((await boxes(page, '.who-list .who-pill')).every((pill) => pill.left >= list.left && pill.right <= list.right), 'a name runs out of the side of the list');
+        await assertNoSidewaysScroll(page);
+
+        await page.locator('[data-action="join-table"]').scrollIntoViewIfNeeded();
+        assertOnScreen(await boxes(page, '[data-action="someone-new"], #join-name, [data-action="join-table"]'), screen, 'what comes after the list');
+
+        // Any part of a name finds it, in small letters or capitals, and Enter picks the one name left without sending the form
+        await page.fill('.who-filter', 'ñandú');
+        assert.deepEqual(await texts(page, '.who-list .who-pill'), ['Ünïcödé Ñandú Ø!']);
+        await page.press('.who-filter', 'Enter');
+        assert.deepEqual(await texts(page, '.who-pill[aria-pressed="true"]'), ['Ünïcödé Ñandú Ø!']);
+        await press('[data-action="someone-new"]');
+        await page.fill('.who-filter', 'player 3');
+        assert.deepEqual(await texts(page, '.who-list .who-pill'), ['Player 35', 'Player 34', 'Player 33', 'Player 32', 'Player 31', 'Player 30', 'Player 3']);
+        await page.press('.who-filter', 'Enter');
+        assert.deepEqual(await texts(page, '.who-pill[aria-pressed="true"]'), ['Someone new'], 'Enter picked one of several names');
+        assert.equal(await page.locator('.stage').count(), 0, 'Enter in the box for finding a name joined the table');
+        await shot(page, `who-forty-found-${screen}`);
+
+        await page.fill('.who-filter', 'zz');
+        assert.equal(await text(page, '.who-list'), 'Nobody by that name. New here? Pick “Someone new”.');
+        assert.deepEqual(await squeezed(page, '.who-list .note'), []);
+        await page.fill('.who-filter', '');
+        assert.equal(await page.locator('.who-list .who-pill').count(), 40);
+
+        // The last name in the list, forty down, is brought into the box by the tap that picks it
+        await page.locator('.who-pill:text-is("Player 1")').scrollIntoViewIfNeeded();
+        await press('.who-pill:text-is("Player 1")');
+        assert.deepEqual(await texts(page, '.who-pill[aria-pressed="true"]'), ['Player 1']);
+        const [picked] = await boxes(page, '.who-pill[aria-pressed="true"]');
+        const around = await listBox();
+        assert.ok(picked!.top >= around.top - 1 && picked!.bottom <= around.bottom + 1, 'the name that was picked is not in sight');
+        assert.equal(await page.isVisible('#join-name'), false);
+        await shot(page, `who-forty-picked-${screen}`);
+
+        await press('[data-action="join-table"]');
+        await page.waitForSelector('.stage .table');
+        assert.ok(rig.store.read(table.id)!.members.some((member) => member.name.startsWith('Player 1') && member.identity === rig.players.list().find((player) => player.name === 'Player 1')!.id));
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'a browser that remembers a player says who it takes you for, the longest name whole, before the list is in and after; “Not me” opens the list with the name last typed, and a player the list no longer has is forgotten without a word',
+    async (rig) => {
+      const [wide] = ['WWWWWWWWWWWWWWWW', 'Bob', 'Ann'].map((name, index) => rig.players.add(name, rig.now() + index * 1000));
+      const table = rig.table([{ name: 'Quigs', stack: 1000 }]);
+      const remembers = (player: object, typed: string) => `localStorage.setItem('cnd.player', ${JSON.stringify(JSON.stringify(player))}); localStorage.setItem('cnd.name', '${typed}')`;
+
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        for (const [where, path, box, go] of [['lobby', '', '#host-name', '[data-action="create-table"]'], ['join', `?table=${table.id}`, '#join-name', '[data-action="join-table"]']] as const) {
+          // The name this browser last typed, which joining as someone new puts on the list: another one each time round
+          const typed = `Wendy ${rig.players.list().length}`;
+
+          // The list is kept from the page until the check has looked: what it says first comes from the browser alone
+          const page = await rig.page(screen, 'a returning player');
+          const press = pressOn(page, screen);
+          const list = await Gate.on(page, 'players');
+
+          await page.addInitScript(remembers(wide!, typed));
+          await list.close('requests');
+          await page.goto(`${rig.url}${path}`);
+          await page.waitForSelector('.who-remembered');
+          await page.evaluate('document.fonts.ready.then(() => undefined)');
+
+          for (const when of ['before the list is in', 'with the list in']) {
+            assert.equal(await page.getAttribute('.who-ask', 'data-who'), 'remembered', when);
+            assert.equal(await text(page, '.who-remembered span'), 'Playing as WWWWWWWWWWWWWWWW', when);
+            assert.equal(await text(page, '[data-action="not-me"]'), 'Not me');
+            assert.equal(await page.locator(`${box}:visible, .who-pick:visible`).count(), 0, `${when}: a remembered player is asked all the same`);
+
+            if (when === 'before the list is in') {
+              const heard = page.waitForResponse((response) => (response.request().postData() ?? '').includes('"op":"players"'));
+              await list.open();
+              await heard;
+            }
+          }
+
+          await shot(page, `who-remembered-${where}-${screen}`);
+          assert.deepEqual(await squeezed(page, '.who-remembered, .who-remembered b, [data-action="not-me"]'), [], 'who the page takes you for is cut off');
+          assertOnScreen(await boxes(page, '.who-remembered, [data-action="not-me"]'), screen, 'who the page takes you for');
+          assertApart(await textBoxes(page, '.who-remembered span'), await boxes(page, '[data-action="not-me"]'), 'the name and “Not me”');
+          assert.ok((await boxes(page, '[data-action="not-me"]')).every((button) => button.bottom - button.top >= 32), '“Not me” is too small to tap');
+          await assertNoSidewaysScroll(page);
+
+          await press('[data-action="not-me"]');
+          assert.equal(await page.getAttribute('.who-ask', 'data-who'), 'pick');
+          assert.deepEqual((await texts(page, '.who-list .who-pill')).filter((name) => !name.startsWith('Wendy')), ['Ann', 'Bob', 'WWWWWWWWWWWWWWWW'], 'the player they are not is still there to go back to');
+          assert.deepEqual(await texts(page, '.who-pill[aria-pressed="true"]'), ['Someone new']);
+          assert.equal(await page.inputValue(box), typed);
+          assert.equal(await page.evaluate('document.activeElement.id'), box.slice(1));
+          await shot(page, `who-not-me-${where}-${screen}`);
+          assert.equal(JSON.parse((await page.evaluate(`localStorage.getItem('cnd.player')`)) as string).id, wide!.id, 'saying “not me” forgot the player before anyone else was picked');
+
+          // Joining as someone else is what makes the browser theirs
+          await press(go);
+          await page.waitForSelector('.stage .table');
+          assert.equal(JSON.parse((await page.evaluate(`localStorage.getItem('cnd.player')`)) as string).name, typed);
+          await page.context().close();
+        }
+      }
+
+      // A player whose row was taken out of the list: the page asks as it asks anyone, says nothing, and keeps the seat it has
+      const gone = await rig.page('smallPhone', 'a player who was removed');
+      await gone.addInitScript(`${remembers({ id: 'GONE234567', name: 'Ghost' }, 'Ghost')}; localStorage.setItem('cnd.seat.ABC234', 'MEMBER23.TOKEN')`);
+      const heard = gone.waitForResponse((response) => (response.request().postData() ?? '').includes('"op":"players"'));
+      await gone.goto(rig.url);
+      await heard;
+      await gone.waitForSelector('.who-pick');
+
+      assert.deepEqual([await gone.locator('.who-remembered:visible').count(), await toastsTold(gone)], [0, 0]);
+      assert.deepEqual(await gone.evaluate(`[localStorage.getItem('cnd.player'), localStorage.getItem('cnd.seat.ABC234')]`), [null, 'MEMBER23.TOKEN']);
+      await shot(gone, 'who-forgotten-smallPhone');
+      await gone.context().close();
+    },
+  ],
+  [
+    'someone new typing a name the game knows is pointed at that player as they type, told whose name it is on trying anyway, and gets in as that player with one tap, nothing typed lost',
+    async (rig) => {
+      const bigAl = rig.players.add('Big Al', rig.now());
+      rig.players.add('Bob', rig.now() + 1000);
+      const table = rig.table([{ name: 'Quigs', stack: 1000 }]);
+
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        const page = await askedWho(rig, screen, `?table=${table.id}`);
+        const press = pressOn(page, screen);
+
+        await page.fill('#join-name', 'big a');
+        assert.equal(await page.isVisible('.who-alike'), false, 'a name is pointed out before it is one');
+
+        await page.fill('#join-name', 'big al');
+        assert.equal(await text(page, '.who-alike'), 'Big Al is on the list already. I’m Big Al');
+        await shot(page, `who-taken-name-${screen}`);
+        assert.deepEqual(await squeezed(page, '.who-alike, [data-action="pick-alike"]'), []);
+        assertOnScreen(await boxes(page, '.who-alike, [data-action="pick-alike"], #join-name'), screen, 'the pointer to the player of that name');
+        assertApart(await boxes(page, '[data-action="pick-alike"]'), await boxes(page, '#join-name, [data-action="join-table"]'), 'the pointer’s button and what is around it');
+        await assertNoSidewaysScroll(page);
+
+        // Trying anyway is refused in words that say what to do, and the form is as it was
+        await press('[data-action="join-table"]');
+        const refusal = await toastTold(page);
+        assert.equal(refusal.text, 'Big Al is already on the list of players. If that is you, pick Big Al from the list. If not, add something to your name');
+        await shot(page, `who-taken-name-refused-${screen}`);
+        assert.equal(refusal.squeezed, false, 'the reason is cut off');
+        assertOnScreen([refusal.box], screen, 'the reason');
+        assert.equal(await page.inputValue('#join-name'), 'big al');
+        assert.equal(rig.players.list().length, 2);
+        assert.equal(rig.store.read(table.id)!.members.filter((member) => member.identity === bigAl.id).length, screen === 'smallPhone' ? 0 : 1);
+
+        await press('[data-action="pick-alike"]');
+        assert.deepEqual(await texts(page, '.who-pill[aria-pressed="true"]'), ['Big Al']);
+        assert.equal(await page.locator('#join-name:visible, .who-alike:visible').count(), 0);
+
+        await press('[data-action="join-table"]');
+        await page.waitForSelector('.stage .table');
+        assert.equal(rig.store.read(table.id)!.members.filter((member) => member.identity === bigAl.id).length, screen === 'smallPhone' ? 1 : 2);
+        await page.context().close();
+      }
+
+      assert.equal(rig.players.list().length, 2);
+    },
+  ],
+  [
+    'while the list of players will not load, the page asks for a name and says nothing of it, a remembered player is still who the page takes them for, and both get in',
+    async (rig) => {
+      const bob = rig.players.add('Bob', rig.now());
+      const table = rig.table([{ name: 'Quigs', stack: 1000 }]);
+
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        for (const remembered of [false, true]) {
+          const page = await rig.page(screen, 'a visitor without the list');
+          const press = pressOn(page, screen);
+          const list = await Gate.on(page, 'players');
+
+          if (remembered) {
+            await page.addInitScript(`localStorage.setItem('cnd.player', ${JSON.stringify(JSON.stringify(bob))})`);
+          }
+
+          await list.close('requests');
+          await page.goto(`${rig.url}?table=${table.id}`);
+          await page.waitForSelector('[data-action="join-table"]:enabled');
+          await page.evaluate('document.fonts.ready.then(() => undefined)');
+
+          // The request fails, as on a bad line, and the page asks again
+          await list.holding();
+          await list.lose();
+          await list.holding();
+
+          assert.equal(await page.getAttribute('.who-ask', 'data-who'), remembered ? 'remembered' : 'name');
+          assert.equal(await toastsTold(page), 0, 'the page said something about a list it can do without');
+          assert.equal(await page.locator('.who-pick:visible').count(), 0);
+          await shot(page, `who-no-list-${remembered ? 'remembered-' : ''}${screen}`);
+
+          if (!remembered) {
+            await page.fill('#join-name', `Dee ${screen}`);
+          }
+
+          await press('[data-action="join-table"]');
+          await page.waitForSelector('.stage .table');
+          assert.equal(await toastsTold(page), 0);
+
+          const member = rig.store.read(table.id)!.members.at(-1)!;
+          assert.deepEqual([member.name.replace(/ \d$/, ''), member.identity], remembered ? ['Bob', bob.id] : [`Dee ${screen}`, rig.players.list().find((player) => player.name === `Dee ${screen}`)!.id]);
+          await page.context().close();
+        }
+      }
+    },
+  ],
+  [
+    '“Who you are” in the menu lets a member the game does not know pick themselves or go on the list, whole on the smallest phone and a desktop, and the host’s list of players names those who have not until they do',
+    async (rig) => {
+      const bob = rig.players.add('Bob', rig.now());
+      rig.players.add('WWWWWWWWWWWWWWWW', rig.now() + 1000);
+
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        const table = rig.table([{ name: 'Quigs', stack: 1000 }, { name: 'Bobby', stack: 1000 }, { name: `Cy ${screen}`, stack: 1000 }]);
+        const identityOf = (name: string) => rig.store.read(table.id)!.members.find((member) => member.name === name)!.identity;
+        const unknown = '.dialog .unknown-players';
+
+        const host = await table.open('Quigs', screen);
+        const hostPress = pressOn(host, screen);
+        await hostPress('[data-action="menu"]');
+        await hostPress('.menu [data-action="players"]');
+        assert.equal(await text(host, unknown), `Not on the list of players: Quigs, Bobby, Cy ${screen}. Each can say who they are under “Who you are” in the menu.`);
+        await host.locator(unknown).scrollIntoViewIfNeeded();
+        await shot(host, `who-players-dialog-${screen}`);
+        assert.deepEqual(await squeezed(host, unknown), []);
+        assertOnScreen(await boxes(host, unknown), screen, 'who is not on the list');
+
+        // One of them picks himself from the list
+        const page = await table.open('Bobby', screen);
+        const press = pressOn(page, screen);
+        await press('[data-action="menu"]');
+        assert.equal(await text(page, '.menu [data-action="who"]'), 'Who you areNot on the list of players yet');
+        await press('.menu [data-action="who"]');
+        await page.waitForSelector('.dialog .who-pick');
+
+        assert.equal(await text(page, '.dialog h2'), 'Who you are');
+        assert.deepEqual((await texts(page, '.dialog .who-list .who-pill')).filter((name) => !name.startsWith('Cy ')), ['WWWWWWWWWWWWWWWW', 'Bob']);
+        assert.equal(await page.inputValue('#who-name'), 'Bobby', 'someone new starts from the name they go by here');
+        assert.equal(await text(page, '[data-action="say-who"]'), 'That’s me');
+        await shot(page, `who-dialog-${screen}`);
+        assert.deepEqual(await squeezed(page, '.dialog .note, .dialog .who-pill, [data-action="say-who"]'), []);
+        assertOnScreen(await boxes(page, '.dialog, .dialog .who-pill, #who-name, [data-action="say-who"]'), screen, 'the dialog');
+        await assertNoSidewaysScroll(page);
+
+        await press('.dialog .who-pill:text-is("Bob")');
+        await press('[data-action="say-who"]');
+        await page.waitForSelector('.dialog', { state: 'detached' });
+        assert.equal((await toastTold(page)).text, 'Noted: on the list of players you are Bob.');
+        assert.equal(identityOf('Bobby'), bob.id);
+
+        // The table hears of it as it hears of anything, and goes on calling him what it did
+        await page.waitForSelector('.feed li:has-text("Bobby is Bob on the list of players")', { state: 'attached' });
+        assert.equal(await text(page, '.seat.me .name'), 'Bobby', 'saying who he is changed what the table calls him');
+
+        await press('[data-action="menu"]');
+        assert.equal(await text(page, '.menu [data-action="who"]'), 'Who you areOn the list of players as Bob');
+
+        // Opened again it shows who he said he is, and can be said otherwise
+        await press('.menu [data-action="who"]');
+        await page.waitForSelector('.dialog .who-pick');
+        assert.deepEqual(await texts(page, '.dialog .who-pill[aria-pressed="true"]'), ['Bob']);
+        await press('[data-action="close"]');
+
+        // Another goes on the list as someone new, under the name he goes by here
+        const other = await table.open(`Cy ${screen}`, screen);
+        const otherPress = pressOn(other, screen);
+        await otherPress('[data-action="menu"]');
+        await otherPress('.menu [data-action="who"]');
+        await other.waitForSelector('.dialog .who-pick');
+        await otherPress('[data-action="say-who"]');
+        await other.waitForSelector('.dialog', { state: 'detached' });
+        assert.equal(identityOf(`Cy ${screen}`), rig.players.list().find((player) => player.name === `Cy ${screen}`)!.id);
+
+        // The host's list follows without being opened again
+        await host.waitForSelector(`${unknown}:text-is("Not on the list of players: Quigs. Each can say who they are under “Who you are” in the menu.")`);
+
+        for (const each of [host, page, other]) {
+          await each.context().close();
+        }
+      }
+    },
+  ],
+  [
+    'a player switches each choice to show on in Show or muck from the menu, on a 360 phone and the desktop: the menu line says what is set, nobody else is told, and a watcher has no such line',
+    async (rig) => {
+      const entry = '.menu [data-action="autoShow"]';
+      const switchOf = (when: string) => `.dialog [data-auto-show="${when}"]`;
+
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        const table = rig.table(SHOW_PLAYERS);
+        table.join('Kibitz');
+        const page = await table.open('Pam', screen);
+        const press = pressOn(page, screen);
+
+        await press('[data-action="menu"]');
+        await page.waitForSelector(entry);
+        assert.equal(await text(page, `${entry} small`), 'Muck losers · muck when folded to');
+        await press(entry);
+        await page.waitForSelector(switchOf('lost'));
+        assert.deepEqual((await texts(page, '.dialog [data-auto-show]')).map((label) => label.split('\n')[0]), ['Show my losing hands', 'Show when everyone folds to me']);
+        assert.deepEqual(await page.locator('.dialog [data-auto-show]').evaluateAll((switches) => switches.map((one) => one.getAttribute('aria-checked'))), ['false', 'false']);
+
+        await press(switchOf('lost'));
+        await page.waitForSelector(`${switchOf('lost')}[aria-checked="true"]`);
+        assert.deepEqual(table.view('Pam').autoShow, ['lost']);
+        await press(switchOf('foldedTo'));
+        await page.waitForSelector(`${switchOf('foldedTo')}[aria-checked="true"]`);
+        assert.deepEqual(table.view('Pam').autoShow, ['lost', 'foldedTo']);
+
+        assert.deepEqual(await squeezed(page, '.dialog [data-auto-show] span, .dialog .note'), [], 'what a switch says is cut off');
+        assertOnScreen(await boxes(page, '.dialog [data-auto-show], .dialog [data-action="close"]'), screen, 'the switches of the dialog');
+        const switches = await boxes(page, '.dialog [data-auto-show]');
+        switches.forEach((one, index) => assertApart([one], switches.slice(index + 1), 'two switches of the dialog'));
+        await assertNoSidewaysScroll(page);
+        await shot(page, `auto-show-dialog-${screen}`);
+
+        await press('.dialog [data-action="close"]');
+        await page.waitForSelector('.dialog', { state: 'detached' });
+        await press('[data-action="menu"]');
+        await page.waitForSelector(`${entry} small:has-text("Show losers · show when folded to")`);
+        await page.locator(entry).scrollIntoViewIfNeeded();
+        assertOnScreen(await boxes(page, entry), screen, 'the menu line');
+        assert.deepEqual(await squeezed(page, `${entry}, ${entry} small`), [], 'the menu line is cut off');
+        await shot(page, `auto-show-menu-${screen}`);
+
+        for (const other of ['Stu', 'Kibitz']) {
+          assert.deepEqual(table.view(other).autoShow, []);
+          assert.ok(!JSON.stringify(table.view(other)).includes('foldedTo'), `${other} is told what Pam chose`);
+        }
+
+        const watcher = await table.open('Kibitz', screen);
+        await pressOn(watcher, screen)('[data-action="menu"]');
+        await watcher.waitForSelector('.menu [data-action="history"]');
+        assert.equal(await watcher.locator(entry).count(), 0, 'a watcher is offered choices for a seat they do not have');
+
+        await page.context().close();
+        await watcher.context().close();
+      }
+    },
+  ],
+  [
+    'at a showdown at nine seats the losing hand Pam chose to show is turned up in its turn and Quigs’s is mucked, for another player and a watcher on a 360 phone standing and lying and on the desktop',
+    async (rig) => {
+      const table = pamShowsHerLoser(rig);
+      assert.deepEqual([table.view('Stu').seats[2]!.cards, table.view('Stu').seats[0]!.cards], [['4h', '4d'], [null, null]]);
+      const pages = [
+        ['Stu', 'smallPhone', await table.open('Stu', 'smallPhone')],
+        ['Kibitz', 'smallPhone', await table.open('Kibitz', 'smallPhone')],
+        ['Stu', 'desktop', await table.open('Stu', 'desktop')],
+      ] as const;
+
+      for (const [who, screen, page] of pages) {
+        await page.waitForSelector('.message.result');
+        await inShapesOf(
+          page,
+          screen,
+          async (shape) => {
+            await assertPamShows(page, screen, ['4h', '4d'], `${who} on a ${screen}, ${shape}`);
+            assert.deepEqual(await drawnCards(page, 0), [null, null], `${who} on a ${screen}, ${shape}: Quigs's mucked hand`);
+            await shot(page, `auto-show-showdown-${who}-${screen}-${shape}`);
+          },
+          { buttonsUp: false },
+        );
+      }
+
+      for (const [, , page] of pages) {
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'the play-by-play and the hand history say the loser shown by choice where a muck was, and the cards of a player everyone folded to who chose to show them',
+    async (rig) => {
+      for (const screen of PHONE_AND_DESKTOP) {
+        const table = pamShowsHerLoser(rig);
+        clearTable(table);
+        table.act('Quigs', { type: 'setAutoShow', when: 'foldedTo', on: true });
+        dealFoldedToQuigs(table, PAM_HOLE);
+
+        const stu = await table.open('Stu', screen);
+        await stu.waitForSelector('.seat[data-seat="0"] .hole .card[data-card="Jc"]');
+        assert.deepEqual(await drawnCards(stu, 0), ['Qc', 'Jc']);
+        await shot(stu, `auto-show-folded-to-${screen}`);
+        await toggleFeed(stu, screen);
+        await stu.waitForSelector('.entries li:has-text("Quigs shows")');
+        const lines = await texts(stu, '.entries li');
+        const from = lines.indexOf(SHOWDOWN_LINES[0]!);
+        assert.deepEqual(lines.slice(from, from + SHOWDOWN_LINES.length), SHOWDOWN_LINES);
+        assert.equal(lines.at(-1), 'Quigs shows Q♣ J♣');
+        assert.deepEqual(await squeezed(stu, '.entries li'), [], 'a line of the play-by-play is cut off');
+        await shot(stu, `auto-show-play-by-play-${screen}`);
+        await toggleFeed(stu, screen);
+
+        clear(rig, table);
+        await table.heardBy(stu);
+        const press = pressOn(stu, screen);
+        await press('[data-action="menu"]');
+        await press('.menu [data-action="history"]');
+        await stu.waitForSelector('.history summary >> nth=1');
+        await press('.history details:nth-child(1) summary');
+        await press('.history details:nth-child(2) summary');
+        const [folded, shownDown] = (await texts(stu, '.history pre')).map((hand) => hand.split('\n'));
+        assert.equal(folded!.at(-1), 'Quigs shows Q♣ J♣');
+        const at = shownDown!.indexOf(SHOWDOWN_LINES[0]!);
+        assert.deepEqual(shownDown!.slice(at, at + SHOWDOWN_LINES.length), SHOWDOWN_LINES);
+        await shot(stu, `auto-show-history-${screen}`);
+
+        await stu.context().close();
+      }
+    },
+  ],
+  [
+    'with animations on, a player everyone folded to who chose to show turns their cards over beside the game: with the turn stopped the table reads as still, and the next hand is dealt just as after a hand nobody showed',
+    async (rig) => {
+      const table = foldedToQuigs(rig);
+      const page = await table.open('Stu', 'smallPhone', MOTION, { moving: true });
+      playOut(table);
+
+      const nextDeal = async (showing: boolean) => {
+        table.act('Quigs', { type: 'setAutoShow', when: 'foldedTo', on: showing });
+        const before = table.version;
+        nextFoldedToQuigs(table, PAM_HOLE);
+
+        // A result, cards at rest and Quigs's cards face down are as true of the hand before as of this one: only the version says which the page shows
+        await table.heardBy(page);
+        await page.waitForSelector('.message.result');
+
+        if (showing) {
+          await page.waitForFunction(`${flightsSince(before)}.some((flight) => flight.name === 'flip')`);
+          await page.evaluate(`window.flipping = document.getAnimations().filter((animation) => animation.id === 'flip'); window.flipping.forEach((animation) => animation.pause())`);
+          assert.deepEqual(await page.evaluate(`${flightsSince(before)}.filter((flight) => flight.name === 'flip' || flight.name === 'show').map((flight) => [flight.name, flight.seat])`), [['flip', 0], ['flip', 0]], 'what turned over: both of Quigs’s cards, beside the game');
+        }
+
+        await dealt(page);
+        assert.deepEqual(await drawnCards(page, 0), showing ? ['Qc', 'Jc'] : [null, null]);
+
+        return dealFlights(table, page);
+      };
+
+      const quiet = await nextDeal(false);
+      const shown = await nextDeal(true);
+      assert.deepEqual(shown, quiet, 'the deal after the cards shown went out otherwise');
+      assert.deepEqual(await page.evaluate('window.flipping.map((animation) => animation.playState)').then((states) => (states as string[]).filter((state) => state === 'finished')), []);
+      await page.evaluate('window.flipping.forEach((animation) => animation.finish())');
+    },
+  ],
+  [
+    'with animations on, a hand a page first hears of when it is already over is told in short: cards go out to the seats that still hold them, the cards of everyone else go in, the chips cross to the winner last, and the table comes to rest as a still page has it',
+    async (rig) => {
+      const table = foldedToQuigs(rig);
+      const moving = await table.open('Stu', 'smallPhone', MOTION, { moving: true });
+      const still = await table.open('Stu', 'smallPhone');
+      const polls = await Gate.on(moving, 'polls');
+
+      playOut(table);
+      await table.heardBy(moving);
+      await dealt(moving);
+
+      // The whole of the next hand is played while the answer to the page's poll is on its way, as on a machine too busy to get to the page
+      const before = table.version;
+      await polls.close('answers');
+      nextFoldedToQuigs(table, PAM_HOLE);
+      await polls.holding();
+      await polls.open();
+      await table.heardBy(moving);
+
+      // On purpose, and not an accident of how the moves are worked out: a page that was behind is told what happened in a few moves and
+      // nothing is left wrong on it. Whoever changes what `TableMotion` makes of such a view changes this list knowingly
+      const flights = await flown(moving, before);
+      assert.deepEqual(
+        flights.map((flight) => (flight.name === 'chips' ? [flight.name, flight.text] : [flight.name, flight.seat])),
+        [
+          // To Stu, whose page it is, and to Quigs, who won: the two who still have cards
+          ...[1, 1, 0, 0].map((seat) => ['deal', seat]),
+          // The cards of each of the seven others
+          ...SHOW_PLAYERS.slice(2).map(() => ['muck', null]),
+          // What Quigs bet over the big blind comes back to him, the three bets go to the middle, and the pot crosses to him
+          ...['40', '20', '10', '20', '50'].map((chips) => ['chips', chips]),
+        ],
+        'what a hand heard of when it was over set moving',
+      );
+
+      const mucks = flights.filter((flight) => flight.name === 'muck').map((flight) => flight.delay);
+      assert.ok(flights.at(-1)!.delay >= Math.max(...mucks), 'the pot crossed before the last cards went in');
+
+      await table.heardBy(still);
+      await assertAsStill(moving, still, 'a hand heard of when it was over');
+    },
+  ],
+  [
+    'with animations on and nobody choosing to show, seven-deuce everyone folded to turns up for its bounty with the pot, before the bounty’s chips, and the badge’s toast comes only once the hand is cleared',
+    async (rig) => {
+      const table = rig.table(SHOW_PLAYERS, { bounties: [['72', 10]] });
+      const stu = await table.open('Stu', 'smallPhone', MOTION, { moving: true });
+      const quigs = await table.open('Quigs', 'smallPhone');
+
+      table.deal({ button: 0, holes: { 0: '7s 2d', 2: PAM_HOLE } });
+      table.play((_view, name) => (name === 'Quigs' ? { type: 'raise', to: 60 } : { type: 'fold' }), (view) => view.hand!.stage === 'done');
+      assert.ok(table.view('Stu').hand!.result!.bounty, 'no bounty was paid');
+
+      await stu.waitForSelector('.entries li:has-text("for the 72 bounty")', { state: 'attached' });
+      await stu.waitForFunction(`${flightsSince()}.some((flight) => flight.name === 'flip')`);
+      await dealt(stu);
+      const flights = (await flown(stu)).filter((flight) => flight.name === 'flip' || flight.name === 'show' || flight.name === 'chips');
+      const startOf = (name: string) => flights.filter((flight) => flight.name === name).map((flight) => flight.delay);
+      // On the beat of the pot going to Quigs, as before they moved beside the game, and a beat before the bounty's chips
+      const [flip] = new Set(startOf('flip'));
+      assert.ok(startOf('chips').includes(flip!) && flip! < Math.max(...startOf('chips')), `the cards turn at ${flip} ms, the chips at ${startOf('chips').join(', ')}`);
+      assert.deepEqual(startOf('show'), []);
+      assert.deepEqual(await drawnCards(stu, 0), ['7s', '2d']);
+
+      // The badge is earned as the hand is cleared, seconds after the cards were seen
+      assert.equal(await toastsTold(quigs), 0, 'a toast came with the result');
+      clear(rig, table);
+      await toastTold(quigs, 'Seven-Deuce');
+
+      await stu.context().close();
+      await quigs.context().close();
+    },
+  ],
+  [
+    'the bounty hands in the table settings: as many as a table can have fit a small phone and the desktop, each says its hand in words, a refused row says why where it was typed, a row half typed stays through the table changing, and the list saved is the table’s',
+    async (rig) => {
+      for (const [screen, config] of [['smallPhone', {}], ['desktop', CENTS]] as const) {
+        const listed: Bounty[] = [['72', 25], ['72s', 100], ['J4s', 50], ['AA', 200], ['T9o', 20], ['K2o', 10], ['QQ', 75]];
+        const table = rig.table([{ name: 'Quigs', stack: 5000 }, { name: 'Stu', stack: 5000 }], { ...config, bounties: listed });
+        const page = await table.open('Quigs', screen);
+        const press = pressOn(page, screen);
+        const said = () => texts(page, '#table-bounties .said');
+        const hands = () => page.evaluate(`[...document.querySelectorAll('#table-bounties .bounty-hand')].map((input) => input.value)`) as Promise<string[]>;
+        const newHand = '#table-bounties-hand-7';
+        const newAmount = '#table-bounties-amount-7';
+
+        await press('[data-action="menu"]');
+        await press('.menu [data-action="settings"]');
+        await page.waitForSelector('#table-bounties');
+
+        assert.deepEqual(await hands(), ['72', '72s', 'J4s', 'AA', 'T9o', 'K2o', 'QQ']);
+        assert.deepEqual(await said(), ['Seven-deuce', 'Seven-deuce suited', 'Jack-four suited', 'Pocket aces', 'Ten-nine offsuit', 'King-deuce offsuit', 'Pocket queens']);
+        assert.equal(await page.inputValue('#table-bounties-amount-2'), screen === 'desktop' ? '0.50' : '50');
+
+        // The eighth is the last a table can have
+        await press('[data-action="add-bounty"]');
+        assert.equal(await page.evaluate('document.activeElement.id'), 'table-bounties-hand-7', 'the new row was not ready to type in');
+        assert.equal(await page.locator('[data-action="add-bounty"]:visible').count(), 0, 'a ninth hand can be added');
+        assert.equal(await page.locator('#table-bounties small:has-text("at most 8 bounty hands"):visible').count(), 1);
+
+        // Refused where it is typed, and the form isn't sent
+        await page.fill(newHand, 'j4s');
+        assert.equal((await said())[7], 'J4s is on the list of bounties twice: give it one amount');
+        await page.fill(newHand, '7x');
+        const refusal = '“7x” isn\'t a hand. Write two ranks, such as 72 or AA, with s after them for suited only or o for offsuit only, such as J4s or 72o. A ten is T or 10';
+        assert.equal((await said())[7], refusal);
+        assert.equal(await complaintOf(page, newHand), refusal);
+        assert.equal(await page.locator('#table-bounties .said.warn').count(), 1);
+        await page.fill(newAmount, screen === 'desktop' ? '0.30' : '30');
+        await press('[data-action="save-settings"]');
+        assert.equal(await page.locator('#table-bounties').count(), 1, 'the settings were sent with a row that is no hand');
+        await page.locator(`${newHand}`).scrollIntoViewIfNeeded();
+        await shot(page, `bounties-refused-row-${screen}`);
+
+        // Half typed while the table changes, as when someone chats
+        await page.fill(newHand, '9 5s');
+        table.act('Stu', { type: 'chat', text: 'nice hand' });
+        await page.waitForSelector('.entries li:has-text("nice hand")', { state: 'attached' });
+        assert.deepEqual([await page.inputValue(newHand), await page.inputValue(newAmount)], ['9 5s', screen === 'desktop' ? '0.30' : '30'], 'the row being typed was redrawn');
+        await page.locator(newHand).blur();
+        assert.equal(await page.inputValue(newHand), '95s', 'the hand is not written back the one way it is kept');
+        assert.equal((await said())[7], 'Nine-five suited');
+
+        // The most rows lie whole across the screen, none of their parts over another
+        const { width } = SCREENS[screen];
+        await page.locator('#table-bounties').scrollIntoViewIfNeeded();
+        assert.deepEqual(await squeezed(page, '#table-bounties input, #table-bounties .said, #table-bounties legend, #table-bounties .bounty-heads span, #table-bounties button, #table-bounties small'), [], 'part of the bounty list is cut off');
+        for (let row = 0; row < 8; row++) {
+          const parts = await boxes(page, `#table-bounties .bounty-row:nth-child(${row + 1}) :is(input, button)`);
+          assert.equal(parts.length, 3);
+          parts.forEach((part, index) => {
+            assert.ok(part.left >= -1 && part.right <= width + 1, `row ${row + 1} runs off the side: ${JSON.stringify(part)}`);
+            assertApart([part], parts.slice(index + 1), `row ${row + 1}`);
+          });
+        }
+        await assertNoSidewaysScroll(page);
+        await shot(page, `bounties-settings-${screen}`);
+
+        // Taking one off makes room for another
+        await press('#table-bounties .bounty-row:nth-child(6) [data-action="remove-bounty"]');
+        assert.deepEqual(await hands(), ['72', '72s', 'J4s', 'AA', 'T9o', 'QQ', '95s']);
+        assert.equal(await page.locator('[data-action="add-bounty"]:visible').count(), 1);
+
+        await press('[data-action="save-settings"]');
+        await page.waitForSelector('.entries li:has-text("The bounties are")', { state: 'attached' });
+        assert.deepEqual(table.view('Quigs').config.bounties, [...listed.filter(([hand]) => hand !== 'K2o'), ['95s', 30]]);
+
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'the form for a new table takes bounty hands on a small phone and the desktop, and someone following the table’s link is told them under the blinds',
+    async (rig) => {
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        const cents = screen === 'desktop';
+        const page = await rig.lobby(screen);
+        const press = pressOn(page, screen);
+
+        assert.equal(await text(page, '#new-table-bounties .note'), 'No bounties.');
+        assert.equal(await page.locator('#new-table-bounties .bounty-heads:visible').count(), 0);
+
+        await page.fill('#host-name', `Quigs ${screen}`);
+        await press('[data-action="add-bounty"]');
+        await page.fill('#new-table-bounties-hand-0', '27');
+        await page.fill('#new-table-bounties-amount-0', '25');
+        await press('[data-action="add-bounty"]');
+        await page.fill('#new-table-bounties-hand-1', 'J4S');
+        await page.fill('#new-table-bounties-amount-1', '50');
+        await page.locator('#new-table-bounties-hand-1').blur();
+
+        // Picked after the hands were typed, dollars and cents keeps the hands and starts what they pay over
+        if (cents) {
+          await press('#new-table-unit label:has-text("Dollars and cents")');
+          const rows = () => page.evaluate(`[...document.querySelectorAll('#new-table-bounties .bounty-row input')].map((input) => input.value)`) as Promise<string[]>;
+          assert.deepEqual(await rows(), ['72', '', 'J4s', '']);
+          await page.fill('#new-table-bounties-amount-0', '.25');
+          await page.fill('#new-table-bounties-amount-1', '0.5');
+        }
+        assert.deepEqual(await texts(page, '#new-table-bounties .said'), ['Seven-deuce', 'Jack-four suited']);
+        assert.equal(await page.locator('#new-table-bounties .note:visible').count(), 0);
+
+        await page.locator('#new-table-bounties').scrollIntoViewIfNeeded();
+        assert.deepEqual(await squeezed(page, '#new-table-bounties input, #new-table-bounties .said, #new-table-bounties legend, #new-table-bounties button, #new-table-bounties small'), [], 'part of the bounty list is cut off');
+        await assertNoSidewaysScroll(page);
+        await shot(page, `bounties-new-table-${screen}`);
+
+        await press('[data-action="create-table"]');
+        await page.waitForSelector('#table-link');
+        const link = await page.inputValue('#table-link');
+        const tableId = new URL(link).searchParams.get('table')!;
+        assert.deepEqual(rig.store.read(tableId)!.config.bounties, [['72', 25], ['J4s', 50]]);
+
+        const visitor = await rig.page(screen, 'a visitor');
+        await visitor.goto(link);
+        await visitor.waitForSelector('[data-action="join-table"]:enabled');
+        assert.deepEqual(await texts(visitor, '.about p:not(.note)'), [cents ? 'Blinds 0.25/0.50' : 'Blinds 10/20', cents ? 'Bounties: 72 for 0.25 and J4s for 0.50' : 'Bounties: 72 for 25 and J4s for 50']);
+        assert.deepEqual(await squeezed(visitor, '.about p'), []);
+        await shot(visitor, `bounties-join-${screen}`);
+
+        await visitor.context().close();
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'a bounty hand that is not seven-deuce is pointed out under its holder’s cards with its amount, in every shape of the table, and won without a call its bounty is named over the table and in the play-by-play, in chips and in dollars',
+    async (rig) => {
+      for (const config of [{}, CENTS]) {
+        const cents = 'unit' in config;
+        const table = rig.table(['Quigs', 'Stu', 'Pam'].map((name) => ({ name, stack: 5000 })), { ...config, bounties: [['J4s', 50], ['72', 10]] });
+        table.deal({ button: 0, holes: { 0: 'Jd 4d', 1: '7h 2c' } });
+
+        const page = await table.open('Quigs', 'phone');
+        await hintSays(page, 'Jack-four suited');
+        assert.equal(await text(page, `${HINT} .bounty`), cents ? 'Bounty 0.50' : 'Bounty 50');
+        await shot(page, `bounty-hint-j4s-${cents ? 'cents' : 'chips'}`);
+        await inEveryShape(page, () => assertHintFits(page));
+
+        const raise = cents ? 150 : 60;
+        table.play((_view, name) => (name === 'Quigs' ? { type: 'raise', to: raise } : { type: 'fold' }), (view) => view.hand!.stage === 'done');
+        await page.waitForSelector('.message.result > div:has-text("bounty")');
+        assert.equal((await texts(page, '.message.result > div')).at(-1), `Quigs collects ${cents ? '1.00' : '100'} for the J4s bounty`);
+        await page.waitForSelector('.entries li:has-text("for the J4s bounty")', { state: 'attached' });
+        assert.deepEqual(await squeezed(page, '.message.result > div, .seat .plate .status'), [], 'the result or what a seat took is cut off');
+        assert.deepEqual(await drawnCards(page, 0), ['Jd', '4d']);
+        await shot(page, `bounty-paid-j4s-${cents ? 'cents' : 'chips'}`);
+
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'a table saved when its bounty was one amount for seven-deuce opens with 72 as the one hand on its list, points it out and pays it as before',
+    async (rig) => {
+      const table = rig.table(['Quigs', 'Stu', 'Pam'].map((name) => ({ name, stack: 1000 })));
+      table.deal({ button: 0, holes: { 0: '7h 2c' } });
+
+      // As the code before saved it: one amount in the settings, and the same on the hand
+      table.alter((state) => {
+        const old = state as unknown as { schema: number; config: Record<string, unknown>; hand: Record<string, unknown> };
+        old.schema = 6;
+        delete old.config.bounties;
+        old.config.sevenDeuceBounty = 25;
+        delete old.hand.bounties;
+        old.hand.bounty = 25;
+      });
+      assert.deepEqual(rig.store.read(table.id)!.config.bounties, [['72', 25]]);
+
+      const page = await table.open('Quigs', 'phone');
+      const press = pressOn(page, 'phone');
+      await hintSays(page, 'Seven-deuce offsuit');
+      assert.equal(await text(page, `${HINT} .bounty`), 'Bounty 25');
+
+      await press('[data-action="menu"]');
+      await press('.menu [data-action="settings"]');
+      await page.waitForSelector('#table-bounties');
+      assert.deepEqual([await page.inputValue('#table-bounties-hand-0'), await page.inputValue('#table-bounties-amount-0'), await text(page, '#table-bounties .said')], ['72', '25', 'Seven-deuce']);
+      await page.locator('#table-bounties').scrollIntoViewIfNeeded();
+      await shot(page, 'bounties-upgraded-72-phone');
+      await press('[data-action="close"]');
+
+      table.play((_view, name) => (name === 'Quigs' ? { type: 'raise', to: 60 } : { type: 'fold' }), (view) => view.hand!.stage === 'done');
+      await page.waitForSelector('.message.result > div:has-text("bounty")');
+      assert.equal((await texts(page, '.message.result > div')).at(-1), 'Quigs collects 50 for the 72 bounty');
+
+      await page.context().close();
+    },
+  ],
+  ...REPLAY_SIZES.map(
+    (size): Check => [
+      `a finished hand opens from the history as a replay, a table with its controls, on a ${size.name.replace('-', ' ')}: it starts as dealt with the viewer's own cards up, steps to its end, and closes back onto the history where it was`,
+      async (rig) => {
+        const screen = size.name === 'desktop' ? 'desktop' : 'smallPhone';
+        const table = rig.table(REPLAY_PLAYERS);
+        const page = await table.open('Quigs', screen);
+        const press = pressOn(page, screen);
+
+        await page.setViewportSize(size);
+        table.deal({ button: 0, holes: REPLAY_HOLES, board: REPLAY_BOARD });
+        await page.waitForSelector('.seat.me .card[data-card="As"]');
+        table.play(passive, (view) => view.hand?.stage === 'done');
+        playOut(table);
+        await page.waitForSelector('.center .message:not(.result)');
+
+        await openReplay(page, screen, 1);
+        assert.equal(await replayCount(page), 'Step 1 of 18 · Preflop');
+        assert.deepEqual(await replayLines(page), ['Hand #1 · blinds 10/20 · Quigs has the button', 'Pam posts small blind 10', 'Sam posts big blind 20']);
+        assert.deepEqual(await replayTable(page), {
+          seats: { Quigs: '1,000 | As Ah | ', Pam: '990 | ?? ?? | SB', Sam: '980 | ?? ?? | BB' },
+          boards: [''],
+          bets: '10 20',
+          pot: 'Pot30',
+          result: [],
+        });
+        assert.ok(await page.locator('.replay [data-replay="back"]').isDisabled(), 'there is a step before the first');
+        assert.ok(await page.locator('.replay [data-replay="previous-street"]').isDisabled());
+        assert.ok(await page.evaluate(`document.activeElement?.matches('.replay [data-replay="play"]')`), 'the keyboard is not on the replay');
+        assert.ok(await page.evaluate(`document.querySelector('.app').inert`), 'the page under the replay can still be reached');
+        await assertReplayFits(page, `replay-open-${size.name}`);
+        await shot(page, `replay-open-${size.name}`);
+
+        await press('.replay [data-replay="forward"]');
+        assert.equal(await replayCount(page), 'Step 2 of 18 · Preflop');
+        assert.deepEqual(await replayLines(page), ['Quigs calls 20']);
+
+        await press('.replay [data-replay="next-street"]');
+        assert.equal(await replayCount(page), 'Step 5 of 18 · Flop');
+        assert.deepEqual((await replayTable(page)).boards, ['9s 7s 2h']);
+        await assertReplayFits(page, `replay-flop-${size.name}`);
+        await shot(page, `replay-flop-${size.name}`);
+
+        for (let street = 0; street < 3; street++) {
+          await press('.replay [data-replay="next-street"]');
+        }
+        assert.equal(await replayCount(page), 'Step 17 of 18 · Showdown');
+        await press('.replay [data-replay="next-street"]');
+        assert.equal(await replayCount(page), 'Step 18 of 18 · Showdown');
+        assert.deepEqual(await replayLines(page), ['Quigs wins 60 with pair of aces']);
+        assert.deepEqual(await replayTable(page), {
+          seats: { Quigs: '1,040 | As Ah | +60', Pam: '980 | Kd Kh | ', Sam: '980 | ?? ?? | ' },
+          boards: ['9s 7s 2h 3c 4d'],
+          bets: '',
+          pot: '',
+          result: ['Quigs wins 60 with pair of aces'],
+        });
+        assert.ok(await page.locator('.replay [data-replay="forward"]').isDisabled(), 'there is a step after the last');
+        assert.ok(await page.locator('.replay [data-replay="next-street"]').isDisabled());
+        await assertReplayFits(page, `replay-end-${size.name}`);
+        await shot(page, `replay-end-${size.name}`);
+
+        // Back where it was opened from: the history, with the hand still open in it
+        await press('.replay [data-replay="close"]');
+        await page.waitForSelector('.replay', { state: 'hidden' });
+        assert.ok(await page.locator('.history details[data-hand="1"][open] [data-action="replay"]').isVisible());
+        assert.ok(await page.evaluate(`document.activeElement?.matches('.history [data-action="replay"]')`), 'the keyboard is not back on the button that opened the replay');
+        assert.ok(!(await page.evaluate(`document.querySelector('.app').inert`)), 'the page stayed out of reach once the replay closed');
+      },
+    ],
+  ),
+  [
+    'nine seats all in and run three times replay with each hand\'s chances as the live table said them, through three boards and the side pots, and fit a 360 phone standing and lying and a desktop',
+    async (rig) => {
+      const table = rig.table(THREE_RUNS.names.map((name, seat) => ({ name, stack: THREE_RUNS.stacks[seat]! })), { maxRuns: 3 });
+      const moves = (view: TableView, name: string): Command => (THREE_RUNS.allIn.includes(name) ? allInPicking(3)(view) : { type: 'fold' });
+
+      table.deal(THREE_RUNS.deal);
+      const page = await table.open('Quigs', 'smallPhone');
+
+      // What the live table says of the chances at two moments, for the replay to say again at the same two
+      table.play(moves, (view) => view.hand!.stage === 'runout');
+      const beforeTheFlop = await chancesOn(page, table, 'Quigs');
+      table.play(moves, (view) => view.hand!.boards.length === 2 && view.hand!.boards[1]!.length === 3);
+      const onTheSecondBoard = await chancesOn(page, table, 'Quigs');
+      assert.equal(Object.keys(beforeTheFlop).length, 4);
+      assert.notDeepEqual(onTheSecondBoard, beforeTheFlop);
+
+      table.play(moves, (view) => view.hand!.stage === 'done');
+      playOut(table);
+      await page.waitForSelector('.center .message:not(.result)');
+
+      await openReplay(page, 'smallPhone', 1);
+      assert.match(await replayCount(page), /^Step 1 of \d+ · Preflop$/);
+      assert.equal(await page.locator('.replay .seat[data-seat]').count(), 9);
+      await assertReplayFits(page, 'replay-nine-dealt');
+
+      // The hands turn up, each pick is a step, and then the table says what was picked
+      await forwardTo(page, 'smallPhone', /picks three times/);
+      assert.equal(await page.locator('.replay .tag.vote.picked').count(), 1);
+      await replayFitsEverySize(page, 'replay-nine-picking');
+
+      await forwardTo(page, 'smallPhone', /running it three times/i);
+      assert.deepEqual(await replayChances(page), beforeTheFlop);
+      await assertChancesFit(page, 'replay-nine-before-the-flop');
+      await shot(page, 'replay-nine-chances-phone-standing');
+
+      // Each board run after the first is a part of its own, which the street buttons stop at
+      const tap = pressOn(page, 'smallPhone');
+      for (const part of ['Flop', 'Turn', 'River', 'Second board']) {
+        await tap('.replay [data-replay="next-street"]');
+        assert.match(await replayCount(page), new RegExp(` · ${part}$`));
+      }
+      await replayDrawn(page);
+      assert.deepEqual((await replayTable(page)).boards, ['2c 3d 4c 5d Jc', 'Kd Qc 8d']);
+      assert.deepEqual(await replayChances(page), onTheSecondBoard);
+      await replayFitsEverySize(page, 'replay-nine-second-board', (named) => assertChancesFit(page, named));
+
+      await tap('.replay [data-replay="next-street"]');
+      assert.match(await replayCount(page), / · Third board$/);
+      await tap('.replay [data-replay="next-street"]');
+      assert.match(await replayCount(page), / · Showdown$/);
+
+      // Every step from the first award to the last, with the pots paid one at a time
+      const marks = await texts(page, '.replay-marks span');
+      assert.deepEqual(marks, ['P', 'F', 'T', 'R', '2', '3', 'S']);
+      for (let step = 0; step < 20 && !(await page.locator('.replay [data-replay="forward"]').isDisabled()); step++) {
+        await tap('.replay [data-replay="forward"]');
+        await assertReplayFits(page, `replay-nine-award-${step}`);
+      }
+      await replayDrawn(page);
+
+      const end = await replayTable(page);
+      const live = table.view('Quigs');
+      assert.deepEqual(end.boards, ['2c 3d 4c 5d Jc', 'Kd Qc 8d 7c 2d', 'Ad Tc 9d 4d 3c']);
+      assert.deepEqual(await replayChances(page), {}, 'a chance is still said at the result');
+      assert.ok(end.result.length > 0 && end.result.length <= 3, `the felt carries ${end.result.length} result lines`);
+      // The stacks the hand ended on are the ones the table has now, since no hand was played after it
+      assert.deepEqual(Object.values(end.seats).map((seat) => seat.split(' | ')[0]), live.seats.flatMap((seat) => (seat ? [shortAmount(seat.stack, live.config)] : [])));
+      await replayFitsEverySize(page, 'replay-nine-result');
+    },
+  ],
+  [
+    'a bomb pot on two boards replays with both boards a street at a time from its first step, and a chop of the blinds at a table of cents with the offer, then the answer and the blinds going back in dollars',
+    async (rig) => {
+      const bomb = rig.table(REPLAY_PLAYERS, { bombPotBoards: 'two', bombPotAmount: 50 });
+      bomb.act('Quigs', { type: 'setBombPot', on: true });
+      bomb.deal({ button: 0, holes: REPLAY_HOLES, board: REPLAY_BOARD, secondBoard: REPLAY_SECOND });
+
+      const page = await bomb.open('Quigs', 'smallPhone');
+      const tap = pressOn(page, 'smallPhone');
+
+      bomb.play(passive, (view) => view.hand?.stage === 'done');
+      playOut(bomb);
+      await page.waitForSelector('.center .message:not(.result)');
+
+      await openReplay(page, 'smallPhone', 1);
+      assert.equal(await replayCount(page), 'Step 1 of 15 · Preflop');
+      assert.deepEqual(await replayLines(page), ['Hand #1 · double-board bomb pot 50 · Quigs has the button', 'Everyone posts bomb pot 50']);
+
+      // The flop of a bomb pot comes with the deal, on both boards at once, and so does every street after it
+      await tap('.replay [data-replay="forward"]');
+      assert.equal(await replayCount(page), 'Step 2 of 15 · Flop');
+      assert.deepEqual(await replayLines(page), ['First board, Flop: 9♠ 7♠ 2♥', 'Second board, Flop: A♣ Q♦ 8♥']);
+      assert.deepEqual(await replayTable(page), {
+        seats: { Quigs: '950 | As Ah | ', Pam: '950 | ?? ?? | ', Sam: '950 | ?? ?? | ' },
+        boards: ['9s 7s 2h', 'Ac Qd 8h'],
+        bets: '',
+        pot: 'Bomb pot150',
+        result: [],
+      });
+      await replayFitsEverySize(page, 'replay-bomb-pot-flop');
+
+      await tap('.replay [data-replay="next-street"]');
+      assert.match(await replayCount(page), / · Turn$/);
+      assert.deepEqual((await replayTable(page)).boards, ['9s 7s 2h 3c', 'Ac Qd 8h 5c']);
+      assert.deepEqual(await replayLines(page), ['First board, Turn: 9♠ 7♠ 2♥ 3♣', 'Second board, Turn: A♣ Q♦ 8♥ 5♣']);
+
+      await tap('.replay [data-replay="next-street"]');
+      await tap('.replay [data-replay="next-street"]');
+      assert.match(await replayCount(page), / · Showdown$/);
+      await page.locator('.replay [data-replay="scrub"]').fill(await page.getAttribute('.replay [data-replay="scrub"]', 'max') ?? '');
+
+      const end = await replayTable(page);
+      assert.deepEqual(end.boards, ['9s 7s 2h 3c 4d', 'Ac Qd 8h 5c 6s']);
+      assert.deepEqual(end.seats, { Quigs: '1,100 | As Ah | +150', Pam: '950 | Kd Kh | ', Sam: '950 | Qc Qs | ' });
+      await replayFitsEverySize(page, 'replay-bomb-pot-result');
+      await page.context().close();
+
+      // A table playing dollars and cents, so every amount the replay writes is read in dollars
+      const chop = rig.table(REPLAY_PLAYERS.map((player) => ({ ...player, stack: 10_000 })), { ...CENTS, allowChop: true });
+      chop.deal({ button: 0, holes: REPLAY_HOLES, board: REPLAY_BOARD });
+
+      const watching = await chop.open('Pam', 'smallPhone');
+      chop.act('Quigs', { type: 'fold' });
+      chop.act('Pam', { type: 'offerChop' });
+      chop.act('Sam', { type: 'answerChop', agree: true });
+      playOut(chop);
+      await watching.waitForSelector('.center .message:not(.result)');
+
+      await openReplay(watching, 'smallPhone', 1);
+      assert.equal(await replayCount(watching), 'Step 1 of 4 · Preflop');
+
+      const told: string[][] = [];
+      const seen: Awaited<ReturnType<typeof replayTable>>[] = [];
+      for (let step = 0; step < 4; step++) {
+        told.push(await replayLines(watching));
+        seen.push(await replayTable(watching));
+        await assertReplayFits(watching, `replay-chop-step-${step}`);
+        if (step === 2) {
+          await shot(watching, 'replay-chop-offered-phone-standing');
+        }
+        if (step < 3) {
+          await pressOn(watching, 'smallPhone')('.replay [data-replay="forward"]');
+        }
+      }
+
+      assert.deepEqual(told, [
+        ['Hand #1 · blinds 0.25/0.50 · Quigs has the button', 'Pam posts small blind 0.25', 'Sam posts big blind 0.50'],
+        ['Quigs folds'],
+        ['Pam offers to chop the blinds'],
+        ['Sam agrees to chop', 'Pam and Sam chop the blinds: each takes back their own'],
+      ]);
+      assert.deepEqual(seen[2]!.seats, { Quigs: '100.00 |  | Fold', Pam: '99.75 | Kd Kh | Chop?', Sam: '99.50 | ?? ?? | ' });
+      assert.deepEqual([seen[2]!.bets, seen[2]!.pot], ['0.25 0.50', 'Pot0.75']);
+      assert.deepEqual(seen[3]!.seats, { Quigs: '100.00 |  | Fold', Pam: '100.00 | Kd Kh | ', Sam: '100.00 | ?? ?? | ' });
+      assert.equal(await replayCount(watching), 'Step 4 of 4 · End');
+      await shot(watching, 'replay-chop-result-phone-standing');
+    },
+  ],
+  [
+    'a hand won with nothing shown replays with the viewer\'s own cards from this browser alone, a card shown after it one at a time and the rabbit hunted; another browser has them face down, and no request carries them',
+    async (rig) => {
+      const table = rig.table(REPLAY_PLAYERS, { rabbitHunting: true });
+      const page = await table.open('Quigs', 'smallPhone');
+      const bodies: string[] = [];
+      page.on('request', (request) => bodies.push(request.postData() ?? ''));
+
+      table.deal({ button: 0, holes: { 0: 'Ac 8d', 1: 'Kd Kh', 2: 'Qc Qs' }, board: REPLAY_BOARD });
+      await page.waitForSelector('.seat.me .card[data-card="Ac"]');
+      table.act('Quigs', { type: 'raise', to: 60 });
+      table.act('Pam', { type: 'fold' });
+      table.act('Sam', { type: 'fold' });
+      table.act('Pam', { type: 'showCards', hand: 1, cards: [1] });
+      table.act('Pam', { type: 'showCards', hand: 1, cards: [0] });
+      table.act('Sam', { type: 'huntRabbit', hand: 1 });
+      playOut(table);
+      await page.waitForSelector('.center .message:not(.result)');
+
+      const sent = opsSent(page);
+      await openReplay(page, 'smallPhone', 1);
+      assert.deepEqual((await replayTable(page)).seats, { Quigs: '1,000 | Ac 8d | ', Pam: '990 | ?? ?? | SB', Sam: '980 | ?? ?? | BB' });
+
+      await forwardTo(page, 'smallPhone', /^Quigs wins 50$/);
+      assert.equal(await replayCount(page), 'Step 5 of 8 · End');
+      await forwardTo(page, 'smallPhone', /^Pam shows one card, K♥$/);
+      assert.equal((await replayTable(page)).seats.Pam!.split(' | ')[1], '?? Kh');
+      await assertReplayFits(page, 'replay-one-card-shown');
+      await shot(page, 'replay-one-card-shown-phone-standing');
+
+      await forwardTo(page, 'smallPhone', /^Pam shows the other card, K♦$/);
+      assert.equal((await replayTable(page)).seats.Pam!.split(' | ')[1], 'Kd Kh');
+      assert.deepEqual((await replayTable(page)).boards, ['']);
+
+      await forwardTo(page, 'smallPhone', /^Rabbit hunt/);
+      assert.deepEqual(await replayLines(page), ['Rabbit hunt, cards that did not count: 9♠ 7♠ 2♥ 3♣ 4♦']);
+      assert.deepEqual((await replayTable(page)).boards, ['9s 7s 2h 3c 4d']);
+      assert.equal(await page.locator('.replay .board .card.hunted').count(), 5, 'the hunted cards are drawn as cards that counted');
+      assert.ok(await page.locator('.replay [data-replay="forward"]').isDisabled());
+      // The winner never showed, so the record has no card of his: what the replay shows the browser kept
+      assert.equal((await replayTable(page)).seats.Quigs!.split(' | ')[1], 'Ac 8d');
+      assert.equal((await replayTable(page)).seats.Sam!.split(' | ')[1], '', 'a hand folded and never shown is drawn');
+      await replayFitsEverySize(page, 'replay-hunted');
+
+      assert.deepEqual(sent.filter((op) => op !== 'poll'), ['history'], 'a replay asked the server for more than the history');
+      assert.deepEqual(bodies.filter((body) => /"(Ac|8d)"/.test(body)), [], 'the cards the browser kept were sent');
+      assert.match(await page.evaluate(`localStorage.getItem('cnd.dealt.${table.id}')`) as string, /"Ac","8d"/);
+
+      // Sam, on a browser that was not there for the hand: her own cards are as face down as the winner's
+      const other = await table.open('Sam', 'smallPhone');
+      await openReplay(other, 'smallPhone', 1);
+      assert.deepEqual((await replayTable(other)).seats, { Quigs: '1,000 | ?? ?? | ', Pam: '990 | ?? ?? | SB', Sam: '980 | ?? ?? | BB' });
+      await other.locator('.replay [data-replay="scrub"]').fill(await other.getAttribute('.replay [data-replay="scrub"]', 'max') ?? '');
+      // Her own folded hand has its place at her seat, as on the live table, with nothing on it to see
+      assert.deepEqual(Object.values((await replayTable(other)).seats).map((seat) => seat.split(' | ')[1]), ['?? ??', 'Kd Kh', '?? ??']);
+      await shot(other, 'replay-not-seen-phone-standing');
+    },
+  ],
+  [
+    'a replay is scrubbed to any step by a drag that an update of the live table under it does not break, and is worked from the keyboard: the arrows, Home and End, the space bar, and Escape to close',
+    async (rig) => {
+      const table = replayTableOf(rig);
+      const page = await table.open('Quigs', 'desktop');
+      const moves = movesSent(page);
+
+      // The next hand, with the action on Pam: the game the replay lies over
+      table.dealNext();
+      await page.waitForSelector('.app .seat[data-seat="1"].acting');
+      await openReplay(page, 'desktop', 1);
+
+      const [bar] = await boxes(page, '.replay [data-replay="scrub"]');
+      const [thumb] = await boxes(page, '.replay-marks');
+      const at = (step: number) => thumb!.left + ((thumb!.right - thumb!.left) * step) / 17;
+      const y = (bar!.top + bar!.bottom) / 2;
+
+      await page.mouse.move(at(0), y);
+      await page.mouse.down();
+      await page.mouse.move(at(9), y, { steps: 5 });
+      assert.equal(await replayCount(page), 'Step 10 of 18 · Turn');
+      await markReplay(page);
+
+      // The live table moves on under a drag that is still held
+      table.act('Pam', { type: 'call' });
+      await page.waitForSelector('.app .bet[data-bet="1"]', { state: 'attached' });
+      assert.equal(await replayCount(page), 'Step 10 of 18 · Turn');
+      assert.ok(await replayMarked(page), 'the live table\'s update drew the replay again under the finger');
+
+      await page.mouse.move(at(13), y, { steps: 5 });
+      assert.equal(await replayCount(page), 'Step 14 of 18 · River');
+      await page.mouse.move(at(17), y, { steps: 5 });
+      await page.mouse.up();
+      assert.equal(await replayCount(page), 'Step 18 of 18 · Showdown');
+      assert.deepEqual((await replayTable(page)).result, ['Quigs wins 60 with pair of aces']);
+      assert.equal(await page.getAttribute('.replay [data-replay="scrub"]', 'aria-valuetext'), 'Step 18 of 18, Showdown');
+      await shot(page, 'replay-scrubbed-desktop');
+
+      // On the bar the arrows are the bar's own, and on a button the space bar is the button's
+      await page.keyboard.press('ArrowLeft');
+      assert.equal(await replayCount(page), 'Step 17 of 18 · Showdown');
+      await page.focus('.replay [data-replay="previous-street"]');
+      await page.keyboard.press(' ');
+      assert.equal(await replayCount(page), 'Step 13 of 18 · River');
+
+      // Anywhere else they are the replay's
+      await page.focus('.replay');
+      const pressed = async (key: string) => {
+        await page.keyboard.press(key);
+
+        return replayCount(page);
+      };
+      assert.equal(await pressed('ArrowRight'), 'Step 14 of 18 · River');
+      assert.equal(await pressed('ArrowLeft'), 'Step 13 of 18 · River');
+      assert.equal(await pressed('Shift+ArrowLeft'), 'Step 9 of 18 · Turn');
+      assert.equal(await pressed('Shift+ArrowRight'), 'Step 13 of 18 · River');
+      assert.equal(await pressed('Home'), 'Step 1 of 18 · Preflop');
+      assert.equal(await pressed('End'), 'Step 18 of 18 · Showdown');
+      await page.keyboard.press(' ');
+      assert.equal(await text(page, '.replay [data-replay="play"]'), 'Pause');
+      assert.equal(await replayCount(page), 'Step 1 of 18 · Preflop', 'played from its end, a hand starts over');
+      await page.keyboard.press(' ');
+      assert.equal(await text(page, '.replay [data-replay="play"]'), 'Play');
+
+      // Escape closes the replay and leaves the history it was opened from, which the next one closes
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('.replay', { state: 'hidden' });
+      assert.ok(await page.locator('.history details[data-hand="1"][open]').isVisible());
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('.history', { state: 'detached' });
+      assert.deepEqual(moves, [], 'a key meant for the replay made a move in the hand');
+    },
+  ],
+  [
+    'a replay plays a step at a time at the pace picked, stops for a step taken by hand and at the end, and starts over from there, with no sound and nothing set moving',
+    async (rig) => {
+      const table = replayTableOf(rig);
+      const page = await table.open('Quigs', 'smallPhone', LISTEN, { moving: true });
+      const tap = pressOn(page, 'smallPhone');
+      const playing = () => text(page, '.replay [data-replay="play"]');
+
+      await dealt(page);
+      await openReplay(page, 'smallPhone', 1);
+      const sounds = (await played(page)).length;
+
+      // The page's own clock, which stands still but for what the check lets pass
+      await page.clock.install();
+      await page.clock.pauseAt(Date.now() + 1000);
+
+      await tap('.replay [data-replay="play"]');
+      assert.equal(await playing(), 'Pause');
+      await page.clock.runFor(STEP_MS - 50);
+      assert.equal(await replayCount(page), 'Step 1 of 18 · Preflop');
+      await page.clock.runFor(50);
+      assert.equal(await replayCount(page), 'Step 2 of 18 · Preflop');
+      await shot(page, 'replay-playing-phone-standing');
+
+      await tap('.replay [data-replay="speed"]');
+      assert.equal(await text(page, '.replay [data-replay="speed"]'), 'Speed 2×');
+      await page.clock.runFor(STEP_MS / 2);
+      assert.equal(await replayCount(page), 'Step 3 of 18 · Preflop');
+      await page.clock.runFor(STEP_MS);
+      assert.equal(await replayCount(page), 'Step 5 of 18 · Flop');
+
+      await tap('.replay [data-replay="speed"]');
+      await tap('.replay [data-replay="speed"]');
+      assert.equal(await text(page, '.replay [data-replay="speed"]'), 'Speed 0.5×');
+      assert.equal(await page.getAttribute('.replay [data-replay="speed"]', 'aria-label'), 'Speed 0.5×, press to change');
+      await page.clock.runFor(STEP_MS * 2 - 50);
+      assert.equal(await replayCount(page), 'Step 5 of 18 · Flop');
+      await page.clock.runFor(50);
+      assert.equal(await replayCount(page), 'Step 6 of 18 · Flop');
+      await tap('.replay [data-replay="speed"]');
+      assert.equal(await text(page, '.replay [data-replay="speed"]'), 'Speed 1×');
+
+      // A step taken by hand stops the playing
+      await tap('.replay [data-replay="forward"]');
+      assert.deepEqual([await replayCount(page), await playing()], ['Step 7 of 18 · Flop', 'Play']);
+      await page.clock.runFor(STEP_MS * 3);
+      assert.equal(await replayCount(page), 'Step 7 of 18 · Flop');
+
+      await tap('.replay [data-replay="play"]');
+      await page.clock.runFor(STEP_MS * 30);
+      assert.deepEqual([await replayCount(page), await playing()], ['Step 18 of 18 · Showdown', 'Play']);
+      assert.deepEqual((await replayTable(page)).result, ['Quigs wins 60 with pair of aces']);
+
+      await tap('.replay [data-replay="play"]');
+      assert.deepEqual([await replayCount(page), await playing()], ['Step 1 of 18 · Preflop', 'Pause']);
+      await tap('.replay [data-replay="play"]');
+      assert.equal(await playing(), 'Play');
+
+      // A whole hand played back, the winner's result with it: not a sound, not a thing in the air, and the live table at rest all along
+      assert.equal((await played(page)).length, sounds, 'the replay made a sound');
+      assert.equal(await page.evaluate(`document.querySelector('.replay').getAnimations({ subtree: true }).length`), 0, 'something of the replay is moving');
+      assert.equal(await page.locator('.replay [data-moving], .replay .confetti, .cnd > .confetti').count(), 0);
+      await dealt(page);
+    },
+  ],
+  [
+    'the game goes on under a replay, which stays where it is until the action reaches the viewer: then it closes by itself with the history, the turn is called, what was typed is still there, and the hand opens again at the step it was left at; opened on the viewer\'s own turn it keeps the keys from the hand and its way out goes to the table',
+    async (rig) => {
+      const table = replayTableOf(rig);
+      const page = await table.open('Quigs', 'desktop', LISTEN);
+      const moves = movesSent(page);
+      const chimes = async () => (await playedNames(page)).filter((sound) => sound === 'turn').length;
+
+      // Hand 2: Pam has the button and acts first, Sam is the small blind, and the viewer the big blind
+      table.dealNext();
+      await page.waitForSelector('.app .seat[data-seat="1"].acting');
+      await page.fill('#chat-input', 'half a thou');
+
+      const sent = opsSent(page);
+      await openReplay(page, 'desktop', 1);
+      for (let step = 0; step < 3; step++) {
+        await page.click('.replay [data-replay="forward"]');
+      }
+      assert.equal(await replayCount(page), 'Step 4 of 18 · Preflop');
+      assert.equal(await text(page, '.replay [data-replay="close"]'), 'Close');
+      await markReplay(page);
+
+      table.act('Pam', { type: 'call' });
+      await page.waitForSelector('.app .bet[data-bet="1"]', { state: 'attached' });
+      assert.equal(await replayCount(page), 'Step 4 of 18 · Preflop');
+      assert.ok(await replayMarked(page), 'the live table\'s update drew the replay again');
+      assert.equal(await chimes(), 0);
+      await shot(page, 'replay-over-live-desktop');
+
+      // The action reaches the viewer
+      table.act('Sam', { type: 'call' });
+      await page.waitForSelector('.replay', { state: 'hidden' });
+      await page.waitForSelector('.turn [data-action="check"]:enabled');
+      assert.equal(await page.locator('.history').count(), 0, 'the history the replay was opened from still hides the buttons');
+      assert.equal((await toastTold(page)).text, 'Your turn. The replay will pick up where you left it.');
+      // The buttons came up where the replay's lay, and take no tap for a moment (the tap guard)
+      await tapsLive(page);
+      assert.ok(await page.evaluate(`(() => {
+        const box = document.querySelector('.turn [data-action="check"]').getBoundingClientRect();
+
+        return document.elementFromPoint((box.left + box.right) / 2, (box.top + box.bottom) / 2)?.closest('[data-action="check"]') !== null && !document.querySelector('.app').inert;
+      })()`), 'the buttons of the turn cannot be reached');
+      assert.equal(await page.inputValue('#chat-input'), 'half a thou', 'what was typed on the live table is gone');
+      assert.equal(await chimes(), 1, 'the turn was not called');
+      assert.deepEqual(sent.filter((op) => op !== 'poll'), ['history'], 'a replay sent something other than the request for the history');
+      await shot(page, 'replay-made-way-desktop');
+
+      // Opened again, on the viewer's own turn: it goes on from the step it was left at, and says whose turn it is where its way out is
+      await openReplay(page, 'desktop', 1);
+      assert.equal(await replayCount(page), 'Step 4 of 18 · Preflop');
+      assert.equal(await text(page, '.replay [data-replay="close"]'), 'Your turn');
+      await assertReplayFits(page, 'replay-on-own-turn-desktop');
+      await page.setViewportSize(REPLAY_SIZES[0]!);
+      await assertReplayFits(page, 'replay-on-own-turn-phone-standing');
+      await shot(page, 'replay-on-own-turn-phone-standing');
+      await page.setViewportSize(SCREENS.desktop);
+
+      // The keys that would play the turn are the replay's while it is open
+      await settle(page);
+      for (const key of ['c', 'f', 'r', '1', 'Enter']) {
+        await page.keyboard.press(key);
+      }
+      await page.waitForTimeout(300);
+      assert.deepEqual(moves, [], 'a key made a move in the hand under the replay');
+      assert.equal(table.view('Quigs').hand!.toAct, 0);
+
+      await page.click('.replay [data-replay="close"]');
+      await page.waitForSelector('.replay', { state: 'hidden' });
+      assert.equal(await page.locator('.history').count(), 0, 'the way out on the viewer\'s turn stopped at the history');
+      assert.equal(await chimes(), 1, 'the same turn was called again');
+
+      // And the hand is the viewer's to play again, by key as before
+      await settle(page);
+      await answeredAfter(page, () => page.keyboard.press('c'));
+      assert.deepEqual(moves, ['check']);
+
+      // The place is kept for a replay the game took the viewer from, once: one they close themselves starts at the start
+      await openReplay(page, 'desktop', 1);
+      assert.equal(await replayCount(page), 'Step 4 of 18 · Preflop', 'the place the viewer went back to the table from was not kept');
+      assert.equal(await text(page, '.replay [data-replay="close"]'), 'Close');
+      await page.click('.replay [data-replay="close"]');
+      await page.click('.history details[data-hand="1"] [data-action="replay"]');
+      await replayDrawn(page);
+      assert.equal(await replayCount(page), 'Step 1 of 18 · Preflop');
+    },
+  ],
+  [
+    'a hand recorded before replays, and one whose record no longer tells it, are in the history as text with a line saying why, and no way to replay them',
+    async (rig) => {
+      const table = replayTableOf(rig);
+
+      table.dealNext();
+      table.play(passive, (view) => view.hand?.stage === 'done');
+      playOut(table);
+
+      // As the Hands tab holds them: one from before events were recorded, which has no blinds either, and one cut short since
+      const [before, since] = rig.store.hands;
+      Object.assign(before!, { events: [], bigBlind: 0, smallBlind: 0 });
+      since!.events.length = 4;
+
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        const page = await table.open('Quigs', screen);
+        const press = pressOn(page, screen);
+
+        await press('[data-action="menu"]');
+        await press('.menu [data-action="history"]');
+        await page.waitForSelector('.history details[data-hand="2"]');
+        assert.equal(await page.locator('.history [data-action="replay"]').count(), 0);
+
+        await press('.history details[data-hand="1"] summary');
+        assert.equal(await text(page, '.history details[data-hand="1"] .no-replay'), 'This hand was recorded before hands could be replayed, so here it is as text.');
+        assert.match(await text(page, '.history details[data-hand="1"] pre'), /^Hand #1 · blinds 10\/20 · Quigs has the button\n/);
+        await press('.history details[data-hand="2"] summary');
+        assert.equal(await text(page, '.history details[data-hand="2"] .no-replay'), 'This hand cannot be replayed, so here it is as text.');
+        assert.match(await text(page, '.history details[data-hand="2"] pre'), /^Hand #2 · /);
+        assert.deepEqual(await squeezed(page, '.history .no-replay'), []);
+        await page.locator('.history details[data-hand="1"] .no-replay').scrollIntoViewIfNeeded();
+        assertOnScreen(await boxes(page, '.history details[data-hand="1"] .no-replay'), screen, 'why the hand cannot be replayed');
+        await shot(page, `replay-not-possible-${screen}`);
+
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'the standings open over the first screen: they say they are loading, offer another try when they cannot be had, say so when no night is on record, and close back to the screen as it was left',
+    async (rig) => {
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        const page = await rig.lobby(screen);
+        const press = pressOn(page, screen);
+        const standings = await Gate.on(page, 'standings');
+        await page.fill('#host-name', `Hal ${screen}`);
+
+        await standings.close('requests');
+        await press('[data-action="standings"]');
+        await standings.holding();
+        assert.equal(await text(page, '.overlay .dialog h2'), 'Standings');
+        assert.equal(await text(page, '[data-standings="loading"]'), 'Loading…');
+        await shot(page, `standings-loading-${screen}`);
+
+        await standings.lose();
+        await page.waitForSelector('[data-standings="failed"]');
+        assert.equal(await text(page, '[data-standings="failed"]'), 'Could not load the standings.');
+        assertOnScreen(await boxes(page, '.overlay .dialog, [data-action="retry-standings"]'), screen, 'the standings that could not be had');
+        await shot(page, `standings-failed-${screen}`);
+
+        await standings.open();
+        await press('[data-action="retry-standings"]');
+        await page.waitForSelector('[data-standings="empty"]');
+        assert.equal(await text(page, '[data-standings="empty"]'), 'No nights on record yet.');
+        assert.match(await text(page, '[data-standings="as-of"]'), /^As of \d{1,2}:\d\d(\s[AP]M)?\. A night goes on record when it is ended, or once its table has been left alone for 3 hours\.$/);
+        assert.deepEqual(await squeezed(page, '.standings .note'), []);
+        assertOnScreen(await boxes(page, '.overlay .dialog, .standings p'), screen, 'the standings with no night on record');
+        await assertNoSidewaysScroll(page);
+        await shot(page, `standings-empty-${screen}`);
+
+        // The first screen is underneath as it was left, and the keyboard is back where it came from
+        await press('.overlay [data-action="close"]');
+        await page.waitForSelector('.overlay', { state: 'detached' });
+        assert.equal(await page.inputValue('#host-name'), `Hal ${screen}`);
+        assert.equal(await page.evaluate('document.activeElement.dataset.action'), 'standings');
+        assert.equal(await page.evaluate('[...document.querySelectorAll(".cnd > *")].some((part) => part.inert)'), false);
+
+        await press('[data-action="standings"]');
+        await page.waitForSelector('[data-standings="empty"]');
+        assert.equal(await page.evaluate('document.querySelector("main.lobby").inert'), true, 'the screen underneath can be reached while the standings are up');
+        await page.keyboard.press('Escape');
+        await page.waitForSelector('.overlay', { state: 'detached' });
+
+        // And the screen still does what it is for
+        await press('[data-action="create-table"]');
+        await page.waitForSelector('#table-link');
+        assert.equal(await page.locator('.overlay[data-screen="standings"]').count(), 0);
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'the standings with three players: whoever is up the most first and the viewer marked, in another order when asked, each kind of money apart, and a player’s nights asked for when their line is opened; from a table’s menu they are the same, stay as they are while the table plays on, and leave the table where it was',
+    async (rig) => {
+      const [ann, bob, cy] = ['Ann', 'Bob', 'Cy'].map((name, index) => rig.players.add(name, rig.now() + index)) as [KnownPlayer, KnownPlayer, KnownPlayer];
+      const day = 24 * 60 * 60 * 1000;
+      const line = (player: KnownPlayer, net: number, more: object = {}) => ({ playerId: player.id, name: player.name, net, hands: 100, won: 25, biggest: 400, best: null, badges: {}, highHand: false, ...more });
+
+      rig.results.write([
+        { tableId: 'FRIDAY', tableName: 'Dave’s place', unit: 'chips', createdAt: rig.now() - 14 * day, version: 1, players: [line(ann, 1500, { hands: 120, won: 30, biggest: 2400, best: ['Ks', 'Kh', 'Kd', 'Kc', 'As'], badges: { quads: 1, heater: 2 }, highHand: true }), line(bob, -500), line(cy, -1000)] },
+        { tableId: 'SUNDAY', tableName: 'The garage', unit: 'chips', createdAt: rig.now() - 7 * day, version: 1, players: [line(ann, -200, { hands: 80, won: 20 }), line(bob, 900, { biggest: 3100 }), line(cy, -700)] },
+        { tableId: 'TUESDAY', tableName: 'The back room', unit: 'chips', createdAt: rig.now() - 2 * day, version: 1, players: [line(bob, 100), line(cy, -100)] },
+        { tableId: 'CASH', tableName: 'Cash game', unit: 'cents', createdAt: rig.now() - day, version: 1, players: [line(ann, -2550), line(cy, 2550)] },
+      ]);
+
+      const names = (page: Page) => texts(page, '.standings-players .who');
+      const nets = (page: Page) => texts(page, '.standings-players summary .net');
+
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        // A browser that remembers being Bob
+        const page = await rig.page(screen, 'a returning player');
+        const press = pressOn(page, screen);
+        const nights = await Gate.on(page, 'nights');
+        await page.addInitScript(`localStorage.setItem('cnd.player', ${JSON.stringify(JSON.stringify(bob))})`);
+        await page.goto(rig.url);
+        await page.waitForSelector('[data-action="standings"]');
+        await page.evaluate('document.fonts.ready.then(() => undefined)');
+
+        await press('[data-action="standings"]');
+        await page.waitForSelector('.standings-players li');
+        assert.deepEqual(await names(page), ['Ann', 'Bob (you)', 'Cy']);
+        assert.deepEqual(await nets(page), ['+1,300', '+500', '-1,800']);
+        assert.deepEqual(await texts(page, '.standings-players .place'), ['1', '2', '3']);
+        assert.deepEqual(await texts(page, '.standings-players summary .counts'), ['2 nights · up in 1 · won 25% of hands', '3 nights · up in 2 · won 25% of hands', '3 nights · up in 0 · won 25% of hands']);
+        assert.deepEqual(await texts(page, '.standings-players li.me .who'), ['Bob (you)']);
+        // Written on the page, not drawn by the stylesheet, so that it is read out and copied with the name
+        assert.equal(await text(page, '.standings-players li.me .who .you'), '(you)');
+        assert.deepEqual(await texts(page, '.standings-units [aria-pressed="true"]'), ['Chips'], 'the money the viewer has a record in');
+        assert.equal(await page.locator('[data-player="Ann"] summary .badge').count(), 2);
+        assert.deepEqual(await squeezed(page, '.standings-players .who, .standings-players .net, .standings-players .counts, .standings .note, .standings-controls *'), []);
+        assertOnScreen(await boxes(page, '.overlay .dialog, .standings-players summary, #standings-sort, .standings-units button'), screen, 'the standings');
+        await assertNoSidewaysScroll(page);
+        await shot(page, `standings-three-${screen}`);
+
+        // What the list says of itself is under it, where a wider font may leave it to be scrolled to
+        await page.locator('.standings-about').scrollIntoViewIfNeeded();
+        assertOnScreen(await boxes(page, '.standings-about'), screen, 'what the standings say of themselves');
+
+        // Another order
+        await page.selectOption('#standings-sort', 'nights');
+        assert.deepEqual(await names(page), ['Bob (you)', 'Cy', 'Ann']);
+        assert.deepEqual(await texts(page, '.standings-players .place'), ['1', '2', '3']);
+        await page.selectOption('#standings-sort', 'biggest');
+        assert.deepEqual(await names(page), ['Bob (you)', 'Ann', 'Cy']);
+        await page.selectOption('#standings-sort', 'net');
+        assert.deepEqual(await names(page), ['Ann', 'Bob (you)', 'Cy']);
+
+        // A player's nights: asked for when the line is opened, and asked again when that fails
+        await nights.close('requests');
+        await press('[data-player="Ann"] summary');
+        await nights.holding();
+        assert.equal(await text(page, '[data-player="Ann"] [data-standings="loading"]'), 'Loading…');
+        assert.deepEqual((await texts(page, '[data-player="Ann"] dd')).slice(0, 4), ['50 of 200 hands (25%)', '2,400', 'Four kings K♠ K♥ K♦ K♣ A♠', 'Once']);
+        assert.deepEqual(await texts(page, '[data-player="Ann"] dd .badge-list b'), ['🍀 Quads', '🔥 Heater ×2']);
+        await nights.lose();
+        await page.waitForSelector('[data-player="Ann"] [data-standings="failed"]');
+        assert.equal(await text(page, '[data-player="Ann"] [data-standings="failed"]'), 'Could not load Ann’s nights.');
+        await nights.open();
+        await press('[data-player="Ann"] [data-action="retry-standings"]');
+        await page.waitForSelector('[data-player="Ann"] .standings-nights li');
+
+        assert.deepEqual(await texts(page, '[data-player="Ann"] .standings-nights .net'), ['-200', '+1,500'], 'the latest night first');
+        assert.deepEqual((await texts(page, '[data-player="Ann"] .standings-nights .when small')).map((table) => table.trim()), ['· The garage', '· Dave’s place']);
+        assert.deepEqual(await texts(page, '[data-player="Ann"] .standings-nights li:last-child .counts'), ['120 hands · 30 pots · biggest 2,400 · high hand of the night', 'Four kings K♠ K♥ K♦ K♣ A♠']);
+        assert.deepEqual(await squeezed(page, '.standings-nights .when, .standings-nights .net, .standings-nights .counts, .standings-players dd'), []);
+        await page.locator('[data-player="Ann"] .standings-nights').scrollIntoViewIfNeeded();
+        assertOnScreen(await boxes(page, '[data-player="Ann"] .standings-nights li'), screen, 'a player’s nights');
+        await assertNoSidewaysScroll(page);
+        await shot(page, `standings-nights-${screen}`);
+
+        // The other money is a list of its own, and coming back finds the open line as it was, with nothing asked for again
+        await nights.close('requests');
+        await press('.standings-units [data-unit="cents"]');
+        assert.deepEqual([await names(page), await nets(page)], [['Cy', 'Ann'], ['+25.50', '-25.50']]);
+        assert.equal(await page.locator('.standings-players details[open]').count(), 0);
+        await shot(page, `standings-dollars-${screen}`);
+        await press('.standings-units [data-unit="chips"]');
+        await page.selectOption('#standings-sort', 'nights');
+        assert.deepEqual(await names(page), ['Bob (you)', 'Cy', 'Ann']);
+        assert.equal(await page.locator('[data-player="Ann"] details[open] .standings-nights li').count(), 2);
+        await nights.open();
+        await page.context().close();
+
+        // From a table, as a member who is Bob there
+        const table = rig.table([{ name: `Quigs ${screen}`, stack: 1000 }, { name: `Bobby ${screen}`, stack: 1000 }]);
+        table.alter((state) => {
+          state.members.find((member) => member.name === `Bobby ${screen}`)!.identity = bob.id;
+        });
+
+        const seat = await table.open(`Bobby ${screen}`, screen);
+        const seatPress = pressOn(seat, screen);
+        const address = seat.url();
+        await seatPress('[data-action="menu"]');
+        assert.equal(await text(seat, '.menu [data-action="standings"]'), 'StandingsWho is up and who is down, over every night');
+        await seatPress('.menu [data-action="standings"]');
+        await seat.waitForSelector('.standings-players li');
+        assert.equal(await text(seat, '.dialog h2'), 'Standings');
+        assert.deepEqual([await names(seat), await nets(seat)], [['Ann', 'Bob (you)', 'Cy'], ['+1,300', '+500', '-1,800']]);
+        assert.deepEqual(await texts(seat, '.standings-players li.me .who'), ['Bob (you)']);
+        await seatPress('[data-player="Cy"] summary');
+        await seat.waitForSelector('[data-player="Cy"] .standings-nights li');
+        await shot(seat, `standings-at-table-${screen}`);
+
+        // The table plays on underneath, and what the viewer opened stays open
+        table.act(`Quigs ${screen}`, { type: 'chat', text: 'still here' });
+        await seat.waitForSelector('.feed li:has-text("still here")', { state: 'attached' });
+        // The viewer's own turn comes too, which takes a hand being played back off the table and must leave this alone
+        table.deal({ button: 1 });
+        await seat.waitForSelector('.turn [data-action="fold"]', { state: 'attached' });
+        assert.equal(await text(seat, '.dialog h2'), 'Standings');
+        assert.equal(await seat.locator('[data-player="Cy"] details[open] .standings-nights li').count(), 3);
+
+        await seatPress('.dialog [data-action="close"]');
+        await seat.waitForSelector('.dialog', { state: 'detached' });
+        assert.equal(await seat.locator('.seat.me').count(), 1);
+        assert.equal(seat.url(), address);
+        await seat.context().close();
+      }
+    },
+  ],
+  [
+    'forty players with the longest names, the biggest numbers and every badge fit the smallest phone and a desktop: nothing is squeezed or runs out of the dialog, and the list scrolls inside it',
+    async (rig) => {
+      const name = (n: number) => [`${'W'.repeat(13)}${String(n).padStart(3, '0')}`, `Ünïcödé Ñandú ${String(n).padStart(2, '0')}`, `你好你好你好你好 ${n}`, `Player ${n}`][n % 4]!;
+      const players = Array.from({ length: 40 }, (_player, n) => rig.players.add(name(n), rig.now() + n));
+      const badges = Object.fromEntries(BADGES.map((badge) => [badge.id, 12]));
+      const day = 24 * 60 * 60 * 1000;
+
+      // More to a table than a table seats, to put forty records on the page in three nights
+      for (let night = 0; night < 3; night++) {
+        rig.results.write([
+          {
+            tableId: `BIG${night}`,
+            tableName: 'W'.repeat(LIMITS.tableNameLength),
+            unit: 'chips',
+            createdAt: rig.now() - night * 7 * day,
+            version: 1,
+            players: players.map((player, n) => ({ playerId: player.id, name: player.name, net: (n % 2 === 0 ? 1 : -1) * (333_333_333 - n), hands: 3333, won: 1111, biggest: 999_999_999, best: ['As', 'Ks', 'Qs', 'Js', 'Ts'] as Card[], badges, highHand: true })),
+          },
+        ]);
+      }
+
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        const page = await rig.lobby(screen);
+        const press = pressOn(page, screen);
+        await press('[data-action="standings"]');
+        await page.waitForSelector('.standings-players li');
+
+        const withinTheDialog = async (selector: string, what: string) => {
+          const [dialog] = await boxes(page, '.overlay .dialog');
+
+          for (const box of await boxes(page, selector)) {
+            assert.ok(box.left >= dialog!.left - 1 && box.right <= dialog!.right + 1, `${what} runs out of the dialog: ${JSON.stringify(box)} in ${JSON.stringify(dialog)}`);
+          }
+        };
+
+        assert.equal(await page.locator('.standings-players > li').count(), 40);
+        assert.equal(await text(page, '.standings-players summary .net'), '+999,999,999');
+        assert.deepEqual(await squeezed(page, '.standings-players .who, .standings-players .net, .standings-players .counts, .standings-players .place, .dialog-body'), []);
+        await withinTheDialog('.standings-players summary > *, .standings-players .badge', 'a line of the list');
+        assertOnScreen(await boxes(page, '.overlay .dialog, .overlay [data-action="close"], #standings-sort'), screen, 'the dialog');
+        assert.equal(await page.evaluate('(() => { const body = document.querySelector(".dialog-body"); return body.scrollHeight > body.clientHeight; })()'), true, 'forty players fit without scrolling, which they cannot');
+        await assertNoSidewaysScroll(page);
+        await shot(page, `standings-forty-${screen}`);
+
+        // The longest name's line, opened
+        await press('.standings-players li:first-child summary');
+        await page.waitForSelector('.standings-players li:first-child .standings-nights li');
+        assert.deepEqual(await squeezed(page, '.standings-players dd, .standings-nights .when, .standings-nights .net, .standings-nights .counts, .dialog-body'), []);
+        await withinTheDialog('.standings-players li:first-child dl > div, .standings-players li:first-child .standings-nights li > *, .standings-players li:first-child .badge-list li', 'the opened line');
+        await assertNoSidewaysScroll(page);
+        await page.locator('.standings-players li:first-child .standings-nights').scrollIntoViewIfNeeded();
+        await shot(page, `standings-forty-open-${screen}`);
+
+        // The last line can be reached
+        await page.locator('.standings-players > li:last-child').scrollIntoViewIfNeeded();
+        assertOnScreen(await boxes(page, '.standings-players > li:last-child summary'), screen, 'the last player');
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'a page that heard nothing through a whole hand is not told it took the high hand by the late view that shows it, and is told by the next view that reaches it on time',
+    async (rig) => {
+      const table = highHandTable(rig, {}, 1000);
+      toShowdown(table, { 0: 'As Ah', 1: 'Ks Kh', 2: '8c 4d' }, HIGH_HAND_BOARD, true);
+      clear(rig, table);
+
+      const stu = await table.open('Stu', 'phone');
+      const polls = await Gate.on(stu, 'polls');
+
+      await stu.waitForSelector('.plate:has(.high-hand)');
+
+      // Two hands go by, the second of them Stu's three kings, and the one answer on its way to his page is lost
+      await polls.close('answers');
+      const before = rig.now();
+      toShowdown(table, { 0: '8s 4h', 1: 'Ks Kh', 2: 'Qs Qh' });
+      clear(rig, table);
+      toShowdown(table, { 0: '8s 4h', 1: 'Ks Kh', 2: 'Qs Qh' }, 'Kd 7d 9h Jc 3s');
+      clear(rig, table);
+      assert.ok(rig.now() - before > 10_000, 'the first of the two hands is no older than a page takes for fresh');
+      await polls.holding();
+      await polls.lose();
+      await polls.open();
+
+      // The view that shows it is a late one: the table is drawn as it stands, and nothing in it is news
+      await stu.waitForSelector('.feed li:has-text("Stu takes the high hand with three kings")', { state: 'attached' });
+      assert.deepEqual(await markedOn(stu), ['Stu']);
+      assert.equal(await toastsTold(stu), 0, 'a late view told its news');
+
+      // The next thing to happen brings a view on time, which tells what the late one could not
+      table.act('Kibitz', { type: 'chat', text: 'nice kings' });
+      await toastTold(stu, 'You have 🏆 the high hand with three kings');
+      await stu.context().close();
+    },
+  ],
+  [
+    'a player waiting for the action has the five moves they can choose ahead in the same five places whatever they face, the ones not on offer dimmed, at nine seats on a 360 phone standing and lying, a phone held sideways and the desktop: every one is whole, on the screen and apart from the others, and none lies where a button of the turn comes up, even a turn that can only fold or call',
+    async (rig) => {
+      for (const layout of AHEAD_LAYOUTS) {
+        const table = rig.table(tenPlayers().slice(0, 9));
+        table.deal({ button: 0 });
+        const page = await table.open('Stu', layout.screen);
+        const where = (what: string) => `${layout.name}, ${what}`;
+        const turnButtons = () => boxes(page, '.turn .buttons button');
+        // Of a turn, only its buttons: how the bets of nine players lie on the table is other checks' to hold
+        const assertTurnWhole = async (turn: string): Promise<void> => {
+          assert.deepEqual(await squeezed(page, '.turn .buttons button, .turn .buttons button span'), [], where(`a button of ${turn} is cut off`));
+          assert.ok((await turnButtons()).every((box) => box.top >= 0 && box.bottom <= page.viewportSize()!.height + 1), where(`a button of ${turn} is off the screen`));
+        };
+
+        if (layout.height) {
+          await setStageHeight(page, layout.height);
+        }
+
+        // Before the flop Stu faces the big blind, with Marge to act before him
+        await page.waitForSelector('.ahead');
+        assert.deepEqual(await aheadOffered(page), ['Fold', 'Call 20', 'Call any']);
+        assert.deepEqual(await texts(page, `${AHEAD_BUTTONS}:disabled`), ['Check/Fold', 'Check']);
+        const places = await assertAheadFits(page, where('facing a bet'));
+        await shot(page, `ahead-facing-bet-${layout.name}`);
+
+        table.act(MARGE, { type: 'call' });
+        await page.waitForSelector('.turn [data-action="fold"]:enabled');
+        assert.equal(await page.locator('.ahead').count(), 0, where('choices ahead are offered on the turn itself'));
+        assertApart(places, await turnButtons(), where('a choice ahead and a button of the turn that came up'));
+        await assertTurnWhole('the turn that followed');
+
+        // Having called, he has no turn to come unless someone raises
+        table.act('Stu', { type: 'call' });
+        await page.waitForSelector('.turn', { state: 'detached' });
+        assert.equal(await page.locator('.ahead').count(), 0, where('a player whose bet stands is offered a choice ahead'));
+
+        table.act('Big Al', { type: 'raise', to: 120 });
+        await page.waitForSelector(aheadChoice('call'));
+        assert.deepEqual(await aheadOffered(page), ['Fold', 'Call 100', 'Call any']);
+
+        // On the flop nothing is bet, and three players act before him
+        table.play(passive, (view) => view.hand!.street === 'flop');
+        await page.waitForSelector(`${aheadChoice('check')}:enabled`);
+        assert.deepEqual(await aheadOffered(page), ['Fold', 'Check/Fold', 'Check', 'Check/Call any']);
+        assert.deepEqual(await texts(page, `${AHEAD_BUTTONS}:disabled`), ['Call']);
+        assertSamePlaces(await assertAheadFits(page, where('with nothing bet')), places, where('the choices moved between a bet and none'));
+        await shot(page, `ahead-nothing-bet-${layout.name}`);
+
+        // A bet bigger than his stack leaves the Check/Fold he chose set, which folds now, and every choice where it was
+        chooseAhead(table, 'Stu', 'checkFold');
+        await page.waitForSelector(aheadSet('checkFold'));
+        table.act(WIDEST, { type: 'raise', to: table.view(WIDEST).hand!.options!.maxRaiseTo });
+        await page.waitForSelector(`${aheadChoice('call')}:enabled`);
+        assert.deepEqual(await aheadOffered(page), ['Fold', 'Check/Fold ✓', 'Call all in 999,879', 'Call any']);
+        assertSamePlaces(await assertAheadFits(page, where('facing a bet of more than the stack')), places, where('the choices moved as a bet came'));
+        await shot(page, `ahead-facing-all-in-${layout.name}`);
+
+        // Taken back, it is no longer on offer: Fold says the same
+        chooseAhead(table, 'Stu', null);
+        await page.waitForSelector(`${aheadChoice('checkFold')}:disabled`);
+        assert.deepEqual(await aheadOffered(page), ['Fold', 'Call all in 999,879', 'Call any']);
+
+        // His turn has two buttons and no bet to size, the least a turn can have
+        table.act(UNICODE, { type: 'fold' });
+        table.act(MARGE, { type: 'fold' });
+        await page.waitForSelector('.turn [data-action="fold"]:enabled');
+        assert.deepEqual(await turnActions(page), ['fold', 'call']);
+        assertApart(places, await turnButtons(), where('a choice ahead and a button of a turn that can only fold or call'));
+        await assertTurnWhole('a turn that can only fold or call');
+        await shot(page, `ahead-turn-after-${layout.name}`);
+
+        // Having folded, he has none at all
+        table.act('Stu', { type: 'fold' });
+        await page.waitForSelector('.seat.me.folded');
+        assert.equal(await page.locator('.ahead').count(), 0, where('a player who folded is offered a choice ahead'));
+
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'with the chat open on a 360 phone the bar gives the chat its room and offers no choices ahead: the table is no smaller for them, the one that is set stays in sight, a tap takes it back, and it lies clear of the buttons of a turn that a raise brings',
+    async (rig) => {
+      const table = rig.table(MOTION_PLAYERS);
+      const page = await table.open('Pam', 'smallPhone');
+      const shown = () => texts(page, `${AHEAD_BUTTONS}:visible`);
+      const stage = async () => (await boxes(page, '.stage'))[0]!;
+
+      await toggleFeed(page, 'smallPhone');
+      await page.waitForSelector('.feed.open');
+      const before = await stage();
+
+      // In the big blind, with three players to act before her
+      table.deal({ button: 0 });
+      await page.waitForSelector('.ahead', { state: 'attached' });
+      assert.deepEqual(await shown(), []);
+      assert.ok((await stage()).bottom >= before.bottom - 1, 'the choices took room from the table while the chat is open');
+
+      chooseAhead(table, 'Pam', 'check');
+      await page.waitForSelector(`${aheadSet('check')}:visible`);
+      assert.deepEqual(await shown(), ['Check']);
+      assert.deepEqual(await squeezed(page, `${AHEAD_BUTTONS}[aria-pressed="true"]`), []);
+      await shot(page, 'ahead-chat-open-set');
+
+      const off = page.waitForResponse((response) => (response.request().postData() ?? '').includes('"type":"preAct"'));
+      await page.tap(aheadSet('check'));
+      await off;
+      await page.waitForSelector(aheadSet('check'), { state: 'detached' });
+      assert.deepEqual(await shown(), []);
+      assert.equal(table.view('Pam').preAction, null);
+
+      // A call she chose is taken off by a raise that brings her turn: where it lay there is no button of the turn
+      table.act('Al', { type: 'raise', to: 60 });
+      chooseAhead(table, 'Pam', 'call');
+      await page.waitForSelector(`${aheadSet('call')}:visible`);
+      assert.deepEqual(await shown(), ['Call 40']);
+      const [place] = await boxes(page, aheadSet('call'));
+
+      table.act('Quigs', { type: 'raise', to: 200 });
+      table.act('Stu', { type: 'fold' });
+      await page.waitForSelector('.turn [data-action="fold"]:enabled');
+      assert.deepEqual(await turnActions(page), ['fold', 'call', 'raise']);
+      assertApart([place!], await boxes(page, '.turn .buttons button'), 'the choice that was set and a button of the turn that came up');
+
+      await page.context().close();
+    },
+  ],
+  [
+    'a choice ahead shows as set the moment it is tapped, before the table has answered, stays set through news of the table, moves when another is tapped and comes off when tapped again, on a 360 phone and the desktop; pressed with a key, the keyboard stays on it, and never lands on a button of the turn',
+    async (rig) => {
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        // The desktop's table plays in dollars and cents
+        const cents = screen === 'desktop';
+        const call = cents ? 'Call 0.25' : 'Call 10';
+        const table = rig.table(MOTION_PLAYERS, cents ? CENTS : {});
+        table.deal({ button: 0 });
+        const page = await table.open('Stu', screen);
+        const press = pressOn(page, screen);
+        const gate = await Gate.on(page, 'choices');
+        const answerTo = (what: string | null) => page.waitForResponse((response) => (response.request().postData() ?? '').includes(`"type":"preAct","what":${JSON.stringify(what)}`));
+
+        // Held on its way: the table has heard nothing, and the page shows the choice
+        await gate.close('requests');
+        await press(aheadChoice('call'));
+        await page.waitForSelector(aheadSet('call'));
+        await gate.holding();
+        assert.equal(table.view('Stu').preAction, null);
+
+        // News of the table draws the bar again, with the choice still on it
+        table.act('Quigs', { type: 'chat', text: 'good luck all' });
+        await page.waitForSelector('.feed li:has-text("good luck all")', { state: 'attached' });
+        assert.deepEqual(await aheadOffered(page), ['Fold', `${call} ✓`, 'Call any']);
+
+        // Another, tapped before the first is answered, takes its place at once and goes after it
+        const [first, second] = [answerTo('call'), answerTo('fold')];
+        await press(aheadChoice('fold'));
+        await page.waitForSelector(aheadSet('fold'));
+        assert.deepEqual(await aheadOffered(page), ['Fold ✓', call, 'Call any']);
+        assert.equal(table.view('Stu').preAction, null);
+        await shot(page, `ahead-fold-set-${screen}`);
+
+        await gate.open();
+        await first;
+        await second;
+        assert.deepEqual(table.view('Stu').preAction, ['fold']);
+        assert.deepEqual(await aheadOffered(page), ['Fold ✓', call, 'Call any'], 'the answers put an earlier choice back on the page');
+
+        // Tapped again, it comes off
+        const off = answerTo(null);
+        await press(aheadChoice('fold'));
+        await page.waitForSelector(`${aheadChoice('fold')}[aria-pressed="false"]`);
+        await off;
+        assert.equal(table.view('Stu').preAction, null);
+        assert.deepEqual(await aheadOffered(page), ['Fold', call, 'Call any']);
+
+        if (screen === 'desktop') {
+          const set = answerTo('call');
+          await page.focus(aheadChoice('call'));
+          await page.keyboard.press('Space');
+          await page.waitForSelector(aheadSet('call'));
+          await set;
+          assert.equal(await page.evaluate('document.activeElement.dataset.action'), 'ahead-call', 'the bar was drawn again and the keyboard is no longer on the choice');
+
+          // A raise takes the call off and brings the turn: the keyboard is on no button that would play a move
+          table.act('Al', { type: 'raise', to: 600 });
+          table.act('Quigs', { type: 'fold' });
+          await page.waitForSelector('.turn [data-action="fold"]:enabled');
+          assert.equal(await page.evaluate(`document.activeElement.closest('.turn') === null`), true, 'the keyboard landed on a button of the turn');
+        }
+
+        assert.deepEqual(await toasts(page), []);
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'a move chosen ahead is made the moment the action arrives, with motion on, for its player and for another, on a phone standing and lying and on the desktop: the bets slide in and land where the still table has them, and three in a row take the hand to the next street in one view',
+    async (rig) => {
+      // The layouts every check of motion holds a table's shape at
+      for (const layout of MOTION_LAYOUTS.filter((each) => !each.slower)) {
+        const table = rig.table(MOTION_PLAYERS);
+        table.deal({ button: 0, holes: { 0: 'Ah Kd', 1: 'Qc Qd', 2: '7h 7s', 3: '9c 4d' }, board: 'Kh 7c 2c 9d 3s' });
+
+        const own = await watch(table, 'Stu', layout);
+        const other = await watch(table, 'Pam', layout);
+        const where = (what: string) => `${layout.name}, ${what}`;
+        const both = async (what: string, act: () => unknown) => {
+          const seen = await own.step(what, act);
+
+          return [seen, await other.step(what, () => undefined)] as const;
+        };
+
+        // Stu chooses on another device, and both of his pages here show it
+        chooseAhead(table, 'Stu', 'call');
+        await Promise.all([own.moving, own.still].map((page) => page.waitForSelector(aheadSet('call'))));
+        assert.equal(await other.still.locator('.ahead [aria-pressed="true"]').count(), 0, where('another player is shown the choice'));
+
+        await both('the call before', () => table.act('Al', { type: 'call' }));
+
+        // Quigs calls, and the table calls for Stu in the same breath: two bets slide in, a beat apart, each from its seat
+        for (const seen of await both('a call, and the call chosen ahead after it', () => table.act('Quigs', { type: 'call' }))) {
+          const bets = flightsOf(seen, 'chips', false);
+
+          assert.deepEqual(bets.map((bet) => [bet.seat, bet.text]), [[0, '20'], [1, '20']], where('the two calls'));
+          bets.forEach((bet) => assertOver(bet.from, seen.after.plates[bet.seat!], where(`the call of seat ${bet.seat} leaves its seat`)));
+          assert.ok(bets[1]!.delay >= bets[0]!.delay, where('the call chosen ahead comes after the call that brought the action'));
+        }
+
+        assert.equal(await own.still.locator('.ahead, .turn').count(), 0, where('the player is asked nothing: their move is made'));
+        assert.equal(await text(own.still, '.seat.me .status'), 'Call');
+        await shot(own.still, `ahead-played-${layout.name}`);
+
+        // On the flop Stu is first, and the three behind him have each chosen
+        await both('the flop', () => table.act('Pam', { type: 'check' }));
+
+        chooseAhead(table, 'Pam', 'check');
+        chooseAhead(table, 'Al', 'callAny');
+        chooseAhead(table, 'Quigs', 'checkFold');
+        await other.still.waitForSelector(aheadSet('check'));
+
+        for (const seen of await both('three checks in a row and the turn card', () => table.act('Stu', { type: 'check' }))) {
+          const cards = flightsOf(seen, 'card', false);
+
+          assert.equal(cards.length, 1, where('the turn card comes'));
+          assertDrops(cards[0]!, where('the turn card'));
+        }
+
+        assert.deepEqual(table.view('Stu').hand!.boards[0], ['Kh', '7c', '2c', '9d']);
+        assert.deepEqual((await texts(other.still, '.feed li')).slice(-5), ['Stu checks', 'Pam checks', 'Al checks', 'Quigs checks', 'Turn: K♥ 7♣ 2♣ 9♦']);
+        await shot(other.still, `ahead-three-in-a-row-${layout.name}`);
+
+        for (const page of [own.moving, own.still, other.moving, other.still]) {
+          await page.context().close();
+        }
+      }
+    },
+  ],
+  [
+    'a player whose move chosen ahead is made for them is not told it is their turn, and hears the move; one whose choice a raise took off is told, has the buttons of the turn where they always are with nothing set, and a screen reader hears that the choice is off',
+    async (rig) => {
+      const table = rig.table(MOTION_PLAYERS, { name: 'Friday Night' });
+      table.deal({ button: 0 });
+      const page = await table.open('Stu', 'desktop', LISTEN);
+      const usual = await table.open('Pam', 'desktop');
+      const spoken = () => text(page, 'p.unseen[role="status"]');
+
+      chooseAhead(table, 'Stu', 'call');
+      await page.waitForSelector(aheadSet('call'));
+
+      table.act('Al', { type: 'call' });
+      await toldOf(page, 'Al');
+      await page.waitForFunction('window.played.length > 0');
+      const heard = (await page.evaluate('window.played.length')) as number;
+
+      // A fold brings the action, so the call that follows it can only be the one made for him
+      table.act('Quigs', { type: 'fold' });
+      await toldOf(page, 'Stu');
+      await page.waitForFunction(`window.played.length >= ${heard} + 2`);
+      // Long enough for a chime to have followed, had the page taken this for a turn
+      await page.waitForTimeout(300);
+      assert.deepEqual(await playedNames(page, heard), ['fold', 'chips'], 'the fold, then the player’s own call, and no chime for a turn');
+      assert.equal(await spoken(), '');
+
+      // The flop: Stu is first, which is a turn like any other and chimes, and Pam behind him has chosen to check
+      table.act('Pam', { type: 'check' });
+      await page.waitForFunction(`window.played.length >= ${heard} + 5`);
+      assert.deepEqual(await playedNames(page, heard + 2), ['knock', 'street', 'turn']);
+      chooseAhead(table, 'Pam', 'check');
+      await usual.waitForSelector(aheadSet('check'));
+
+      table.act('Stu', { type: 'raise', to: 40 });
+      await usual.waitForSelector('.turn [data-action="fold"]:enabled');
+      assert.equal(await usual.locator('.ahead, .controls [aria-pressed="true"]').count(), 0, 'something shows as chosen on the turn');
+      assert.deepEqual(await turnActions(usual), ['fold', 'call', 'raise']);
+      assert.equal(await text(usual, 'p.unseen[role="status"]'), 'Check is no longer set for your turn.');
+      await assertTurnFits(usual, 'the turn after a choice came off');
+      await shot(usual, 'ahead-dropped-turn-desktop');
+
+      // The buttons are where the buttons of a turn are for a player who chose nothing
+      const dropped = await boxes(usual, '.turn .buttons button');
+
+      table.act('Pam', { type: 'call' });
+      table.act('Al', { type: 'fold' });
+      table.act('Stu', { type: 'check' });
+      await usual.waitForSelector('.turn [data-action="check"]:enabled');
+
+      const plain = await boxes(usual, '.turn .buttons button');
+      assert.ok(dropped.length === 3 && dropped.every((box, nth) => sameBox(box, plain[nth])), `the buttons of the turn after a choice came off lie at ${JSON.stringify(dropped)}, and those of a plain turn at ${JSON.stringify(plain)}`);
+
+      await page.context().close();
+      await usual.context().close();
+    },
+  ],
+  [
+    'no order of a choice ahead and the table makes a player do what their screen did not show: held while the action arrives, lost on the way, refused, and taken back too late',
+    async (rig) => {
+      const open = async () => {
+        const table = rig.table(MOTION_PLAYERS);
+        table.deal({ button: 0 });
+        const page = await table.open('Stu', 'desktop');
+        const gate = await Gate.on(page, 'choices');
+
+        return { table, page, gate };
+      };
+      const untouched = (table: RigTable) => table.view('Stu').seats[1]!.lastAction === 'small blind';
+      const answered = (page: Page) => page.waitForResponse((response) => (response.request().postData() ?? '').includes('"type":"preAct"'));
+
+      // Held while the action arrives: the turn comes up with nothing set, and the choice is refused when it gets there
+      const held = await open();
+      await held.gate.close('requests');
+      await held.page.click(aheadChoice('fold'));
+      await held.page.waitForSelector(aheadSet('fold'));
+      await held.gate.holding();
+
+      held.table.act('Al', { type: 'call' });
+      held.table.act('Quigs', { type: 'call' });
+      await held.page.waitForSelector('.turn [data-action="fold"]:enabled');
+      assert.equal(await held.page.locator('.ahead, [aria-pressed="true"]').count(), 0, 'held: something shows as chosen on the turn');
+
+      const late = answered(held.page);
+      await held.gate.open();
+      await late;
+      await toastTold(held.page, 'The hand moved on before that arrived, so nothing is set ahead');
+      assert.ok(untouched(held.table), 'held: the table made a move for the player');
+      assert.deepEqual(await turnActions(held.page), ['fold', 'call', 'raise']);
+      await shot(held.page, 'ahead-held-until-the-turn');
+      await held.page.context().close();
+
+      // Lost on the way: the page goes on showing the choice until it has asked the table, which has none
+      const lost = await open();
+      const polls = await Gate.on(lost.page, 'polls');
+      await lost.gate.close('requests');
+      await lost.page.click(aheadChoice('callAny'));
+      await lost.gate.holding();
+      await polls.close('requests');
+      await lost.gate.lose();
+      await toastTold(lost.page, 'No answer from the table');
+      assert.deepEqual(await aheadOffered(lost.page), ['Fold', 'Call 10', 'Call any ✓'], 'lost: the choice went off the page before the table was heard from');
+
+      await lost.gate.open();
+      await polls.open();
+      await lost.page.waitForSelector(`${aheadChoice('callAny')}[aria-pressed="false"]`);
+      assert.equal(lost.table.view('Stu').preAction, null);
+
+      lost.table.act('Al', { type: 'call' });
+      lost.table.act('Quigs', { type: 'call' });
+      await lost.page.waitForSelector('.turn [data-action="fold"]:enabled');
+      assert.ok(untouched(lost.table), 'lost: the table made a move for the player');
+      await lost.page.context().close();
+
+      // Refused: nothing is set, on the page or at the table, and the table's words say why
+      const refused = await open();
+      await refused.gate.close('requests');
+      await refused.page.click(aheadChoice('call'));
+      await refused.gate.holding();
+      await refused.gate.refuse();
+      await toastTold(refused.page, 'The table is busy, try again');
+      await refused.page.waitForSelector(`${aheadChoice('call')}[aria-pressed="false"]`);
+      assert.equal(refused.table.view('Stu').preAction, null);
+      await refused.page.context().close();
+
+      // Taken back too late: the fold was made, the page shows it and says so, and the take-back is no refusal
+      const back = await open();
+      const set = answered(back.page);
+      await back.page.click(aheadChoice('fold'));
+      await set;
+      await back.page.waitForSelector(aheadSet('fold'));
+
+      await back.gate.close('requests');
+      await back.page.click(aheadChoice('fold'));
+      await back.page.waitForSelector(`${aheadChoice('fold')}[aria-pressed="false"]`);
+      await back.gate.holding();
+
+      back.table.act('Al', { type: 'call' });
+      back.table.act('Quigs', { type: 'call' });
+      const sentence = 'That came too late: your fold was already made.';
+      await toastTold(back.page, sentence);
+      await back.page.waitForSelector('.seat.me.folded');
+
+      // The take-back gets there after the fold: the table answers with itself, and the page says nothing more
+      const tooLate = answered(back.page);
+      await back.gate.open();
+      assert.equal(((await (await tooLate).json()) as { ok: boolean }).ok, true, 'a take-back that came too late was refused');
+      assert.equal(back.table.view('Stu').seats[1]!.folded, true);
+      assert.deepEqual((await toasts(back.page)).map((toast) => toast.text).filter((said) => said !== sentence), []);
+      await shot(back.page, 'ahead-taken-back-too-late');
+      await back.page.context().close();
+    },
+  ],
+  [
+    'a player whose choice ahead came off with their seat, removed by the host or standing up on another device, is not told anything came too late when the next bet folds them: they changed nothing, and the fold is that of a player who left',
+    async (rig) => {
+      for (const leaves of ['removed by the host', 'standing up on another device'] as const) {
+        const table = rig.table(MOTION_PLAYERS, { actionSeconds: 30 });
+        table.deal({ button: 0 });
+
+        const page = await table.open('Stu', 'desktop');
+        const set = page.waitForResponse((response) => (response.request().postData() ?? '').includes('"type":"preAct"'));
+        await page.click(aheadChoice('callAny'));
+        await set;
+        await page.waitForSelector(aheadSet('callAny'));
+
+        // The seat is given up and the next bet comes round, both between two of this page's updates, as on a slow line
+        const polls = await Gate.on(page, 'polls');
+        await polls.close('answers');
+
+        if (leaves === 'removed by the host') {
+          table.act('Quigs', { type: 'kick', playerId: table.auth('Stu').id });
+        } else {
+          const other = await table.open('Stu', 'phone');
+          const stood = other.waitForResponse((response) => (response.request().postData() ?? '').includes('"type":"standUp"'));
+          await other.tap('[data-action="menu"]');
+          await other.tap('[data-action="stand"]');
+          await other.tap('[data-action="confirm"]');
+          await stood;
+
+          table.act('Al', { type: 'raise', to: 100 });
+          table.act('Quigs', { type: 'call' });
+          await table.heardBy(other);
+          await other.waitForSelector('.seat.folded:has-text("Stu")');
+          assert.deepEqual((await toasts(other)).map((toast) => toast.text).filter((said) => said.includes('too late')), [], 'on the device he stood up on');
+          await other.context().close();
+        }
+
+        if (leaves === 'removed by the host') {
+          table.act('Al', { type: 'raise', to: 100 });
+          table.act('Quigs', { type: 'call' });
+        }
+
+        assert.deepEqual(table.view('Quigs').hand!.events.filter((event) => event[1] === 1).at(-1), ['fold', 1, true], `${leaves}: the hand did not fold him unasked, so the check shows nothing`);
+
+        await polls.open();
+        await table.heardBy(page);
+        await page.waitForSelector('.seat.folded:has-text("Stu")');
+        assert.deepEqual((await toasts(page)).map((toast) => toast.text), [], `${leaves}: he was told something came too late, or something else that is not so`);
+        assert.equal(await page.locator('.ahead [aria-pressed="true"]').count(), 0, `${leaves}: a choice still shows as set`);
+        await shot(page, `ahead-off-with-the-seat-${leaves.replaceAll(' ', '-')}`);
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'a page of the rig tells the time by the rig’s clock alone: it stands still through a real wait, goes on with the clock when the check moves it, with news or with none, is the rig’s again once a page loaded anew has heard from the table, and is what a move’s wait for its answer is counted by',
+    async (rig) => {
+      const table = rig.table(['Quigs', 'Pam', 'Sam'].map((name) => ({ name, stack: 1000 })), { actionSeconds: 60 });
+      table.deal({ button: 0 });
+
+      const page = await table.open('Quigs', 'phone');
+      const pageTime = () => page.evaluate('Date.now()') as Promise<number>;
+      const counted = (seconds: number) => page.waitForFunction(`document.querySelector('.seat.acting [data-countdown]')?.textContent === '${seconds}'`);
+
+      // What the turn's clock starts at: the seconds the table gives, and whatever the deal adds to them
+      const whole = Math.ceil((table.view('Quigs').hand!.deadline! - rig.now()) / 1000);
+      await counted(whole);
+      assert.equal(await pageTime(), rig.now());
+
+      // Longer than a second of the countdown and several of its ticks: a clock that ran would show it
+      await page.waitForTimeout(2500);
+      assert.equal(await pageTime(), rig.now(), 'the page’s clock ran while the rig’s stood still');
+      assert.equal(await text(page, '.seat.acting [data-countdown]'), String(whole), 'the countdown ran while the rig’s clock stood still');
+
+      // Time passes and nothing else happens, so the server has nothing to tell
+      rig.advance(10_000);
+      await counted(whole - 10);
+      assert.equal(await pageTime(), rig.now());
+
+      // Time passes and something happens: the answer that brings the news brings the time
+      rig.advance(5000);
+      table.act('Pam', { type: 'chat', text: 'tick' });
+      await page.waitForSelector('.feed li:has-text("tick")', { state: 'attached' });
+      assert.equal(await pageTime(), rig.now(), 'a page that has the news does not have the time it was made at');
+      await counted(whole - 15);
+
+      // A page loaded again starts from the time it was opened at, and has the rig's with the first answer it gets
+      await page.reload();
+      await page.waitForSelector('.stage .table');
+      await counted(whole - 15);
+      assert.equal(await pageTime(), rig.now());
+
+      // A page that hears nothing from the server, as a phone off the network, still has the time
+      const polls = await Gate.on(page, 'polls');
+      await polls.close('requests');
+      rig.advance(5000);
+      await counted(whole - 20);
+      assert.equal(await pageTime(), rig.now());
+
+      // How long a move has gone unanswered is the device's own time, which on a rig is the rig's as well:
+      // a second short of when the page says so it says nothing, however long the check takes to look
+      const moves = await Gate.on(page, 'moves');
+      await moves.close('requests');
+      await page.tap('.turn [data-action="fold"]');
+      await moves.holding();
+      rig.advance(UNCONFIRMED_AFTER_MS - 1000);
+      await page.waitForFunction(`Date.now() === ${rig.now()}`);
+      await page.waitForTimeout(3 * OFFER_TICK_MS);
+      assert.equal(await page.locator('.stage[data-unconfirmed]').count(), 0, 'a move is marked as unconfirmed before its time');
+
+      rig.advance(1000);
+      await page.waitForSelector('.stage[data-unconfirmed]');
+    },
+  ],
+  ...ACCESSIBILITY_CHECKS,
+];
+
+await mkdir(OUT, { recursive: true });
+
+// Told to stop, Playwright closes the browsers and leaves the script running, and the workers would launch new ones and go on
+process.once('SIGTERM', () => process.exit(143));
+
+// After the checks of one thing each, every screen at its fullest held to one question: whether anything a player reads is covered
+const passed = await runChecks([...CHECKS, ...layoutSweep(OUT)], { only: process.argv.slice(2), picturesIn: OUT });
+
+// Ended outright once the report is out: a check that was stopped may have left a timer behind that would keep the script going
+process.stdout.write('', () => process.exit(passed ? 0 : 1));

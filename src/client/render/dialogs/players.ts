@@ -1,0 +1,185 @@
+import { formatAmount } from '../../../engine/amounts.ts';
+import type { SeatView, TableView } from '../../../engine/view.ts';
+import { h } from '../../ui.ts';
+import { roleOf } from '../../../engine/hosts.ts';
+import { badgeMarks } from '../badges.ts';
+import { hostAlone, hostOrCohost, roleMark } from '../roles.ts';
+import { frame, rowActions } from './dialog.ts';
+import type { DialogHandlers, DialogKind } from './dialog.ts';
+
+function players(view: TableView, handlers: DialogHandlers): HTMLElement {
+  const requests = view.requests.map((request) =>
+    h(
+      'li',
+      null,
+      h('span', null, h('b', null, request.name), request.kind === 'seat' ? ` wants seat ${request.seat + 1} with ${formatAmount(request.amount, view.config)}` : ` wants to add ${formatAmount(request.amount, view.config)}`),
+      rowActions(
+        { id: request.playerId, name: request.name },
+        h('button.btn.small.primary', { type: 'button', 'data-action': 'approve', onclick: () => void handlers.send({ type: 'approve', playerId: request.playerId }) }, 'Approve'),
+        h('button.btn.small', { type: 'button', 'data-action': 'deny', onclick: () => void handlers.send({ type: 'deny', playerId: request.playerId }) }, 'Deny'),
+      ),
+    ),
+  );
+
+  // Who runs the table is the host's choice alone, and nobody is offered a say over their own role
+  const roleButtons = (playerId: string, name: string) => {
+    if (!hostAlone(view) || playerId === view.you.id) {
+      return [];
+    }
+
+    const cohost = roleOf(view, playerId) === 'cohost'
+      ? h('button.btn.small', { type: 'button', 'data-action': 'end-cohost', onclick: () => void handlers.send({ type: 'setCohost', playerId, on: false }) }, 'End co-host')
+      : h(
+          'button.btn.small',
+          {
+            type: 'button',
+            'data-action': 'make-cohost',
+            onclick: () =>
+              handlers.open({
+                kind: 'confirm',
+                title: `Make ${name} a co-host?`,
+                body: 'They can approve players, start and pause the game, change settings, adjust stacks, transfer chips between players and remove players, just as you can. You can end it at any time.',
+                action: 'Make co-host',
+                command: { type: 'setCohost', playerId, on: true },
+              }),
+          },
+          'Make co-host',
+        );
+
+    const makeHost = h(
+      'button.btn.small',
+      {
+        type: 'button',
+        'data-action': 'make-host',
+        onclick: () =>
+          handlers.open({
+            kind: 'confirm',
+            title: `Make ${name} the host?`,
+            body: 'They take over the table, and you stay on as a co-host until they say otherwise.',
+            action: 'Hand over',
+            command: { type: 'transferHost', playerId },
+          }),
+      },
+      'Make host',
+    );
+
+    return [cohost, makeHost];
+  };
+
+  // A co-host may not remove the host, nor take another co-host off the table, which would end their role
+  const remove = (playerId: string, name: string, body: string, altogether: boolean) =>
+    !hostAlone(view) && (roleOf(view, playerId) === 'host' || (altogether && roleOf(view, playerId) === 'cohost'))
+      ? null
+      : h(
+          'button.btn.small',
+          {
+            type: 'button',
+            'data-action': 'remove',
+            onclick: () => handlers.open({ kind: 'confirm', title: `Remove ${name}?`, body, action: 'Remove', command: { type: 'kick', playerId } }),
+          },
+          'Remove',
+        );
+
+  const badges = new Map(view.tonight.players.map((row) => [row.playerId, row.badges]));
+
+  const nameOf = (playerId: string, name: string) => [h('b', null, name, roleMark(view, playerId)), badgeMarks(badges.get(playerId) ?? [])];
+
+  // Only to an open seat, not for a player already on their way out, and not while a shuffle is coming. A move that waits can be taken back
+  const move = (seat: SeatView) => {
+    if (seat.moveTo !== null) {
+      return h('button.btn.small', { type: 'button', 'data-action': 'keep-seat', onclick: () => void handlers.send({ type: 'moveSeat', playerId: seat.playerId, seat: seat.seat }) }, 'Stay put');
+    }
+
+    return view.seats.includes(null) && !seat.leaving && !view.shuffleAfterHand
+      ? h('button.btn.small', { type: 'button', 'data-action': 'move', onclick: () => handlers.pickSeat(seat.playerId) }, 'Move')
+      : null;
+  };
+
+  const owes = (seat: SeatView) => [seat.owesBigBlind ? 'the big blind' : '', seat.owesSmallBlind ? 'the small blind' : ''].filter(Boolean).join(' and ');
+
+  const seatedIds = new Set(view.seats.flatMap((seat) => (seat ? [seat.playerId] : [])));
+  const seated = view.seats.flatMap((seat) =>
+    seat
+      ? [
+          h(
+            'li',
+            null,
+            h(
+              'span',
+              null,
+              nameOf(seat.playerId, seat.name),
+              ` · seat ${seat.seat + 1} · ${formatAmount(seat.stack, view.config)}`,
+              seat.moveTo !== null ? h('small.move-note', null, `Moves to seat ${seat.moveTo + 1} after this hand`) : null,
+              owes(seat) ? h('small.owes-note', null, `Owes ${owes(seat)}`) : null,
+            ),
+            rowActions(
+              { id: seat.playerId, name: seat.name },
+              h('button.btn.small', { type: 'button', 'data-action': 'set-stack', onclick: () => handlers.open({ kind: 'setStack', playerId: seat.playerId }) }, 'Set stack'),
+              move(seat),
+              owes(seat) ? h('button.btn.small', { type: 'button', 'data-action': 'forgive-blinds', onclick: () => void handlers.send({ type: 'forgiveBlinds', playerId: seat.playerId }) }, 'Forgive blinds') : null,
+              roleButtons(seat.playerId, seat.name),
+              remove(seat.playerId, seat.name, 'They lose their seat and their chips are cashed out in the ledger. They can ask for a seat again.', false),
+            ),
+          ),
+        ]
+      : [],
+  );
+
+  const watching = view.members.filter((member) => !seatedIds.has(member.id) && member.id !== view.you.id);
+
+  // Only someone with no line in the ledger can be taken off the table altogether
+  const played = new Set(view.ledger.map((row) => row.playerId));
+  const watcherRow = (playerId: string, name: string) =>
+    h(
+      'li',
+      null,
+      h('span', null, nameOf(playerId, name)),
+      rowActions(
+        { id: playerId, name },
+        roleButtons(playerId, name),
+        played.has(playerId) ? null : remove(playerId, name, 'They have not played here, so they are taken off the table and their name is free again. They can join again from the link.', true),
+      ),
+    );
+
+  // Whoever runs the table is the one who can ask a player to say who they are, so that their night counts for them.
+  // Said once and last, where it moves nothing the host reaches for
+  const unknown = view.members.filter((member) => member.identity === null).map((member) => member.name);
+  const unknownNote = unknown.length > 0 ? h('p.note.unknown-players', null, `Not on the list of players: ${unknown.join(', ')}. Each can say who they are under “Who you are” in the menu.`) : null;
+
+  return frame(
+    'Players',
+    handlers,
+    requests.length > 0 ? h('section', null, h('h3', null, 'Waiting for you'), h('ul.rows', null, requests)) : null,
+    h(
+      'section',
+      null,
+      h('h3', null, 'Seated'),
+      seated.length > 0 ? h('ul.rows', null, seated) : h('p.note', null, 'Nobody is seated yet.'),
+      view.seats.filter((seat) => seat && !seat.leaving).length > 1 ? h('button.btn', { type: 'button', 'data-action': 'transfer', onclick: () => handlers.open({ kind: 'transfer' }) }, 'Transfer chips between players') : null,
+    ),
+    watching.length > 0 ? h('section', null, h('h3', null, 'Watching'), h('ul.rows', null, watching.map((member) => watcherRow(member.id, member.name)))) : null,
+    unknownNote,
+  );
+}
+
+export const playersDialog: DialogKind<'players'> = {
+  kind: 'players',
+  menu: {
+    label: 'Players',
+    who: hostOrCohost,
+    note: (view) => (view.requests.length > 0 ? `${view.requests.length} waiting for you` : 'Approve, adjust stacks, transfer chips, move, remove'),
+  },
+  // Stacks move with every bet. Redrawn that often, a button here would be gone before a tap on it landed,
+  // so during a hand the list keeps the stacks it was drawn with
+  shows: (view) => [
+    view.requests,
+    view.members,
+    view.hostId,
+    view.cohostIds,
+    view.hand?.number,
+    view.shuffleAfterHand,
+    view.tonight.players.map((row) => [row.playerId, row.badges]),
+    view.seats.map((seat) => seat && [seat.playerId, seat.name, seat.seat, seat.moveTo, seat.leaving, seat.owesBigBlind, seat.owesSmallBlind, view.hand ? null : seat.stack]),
+  ],
+  draw: players,
+};

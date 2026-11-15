@@ -1,40 +1,19 @@
 import type { Rng } from './cards.ts';
-import { act, foldIfOnTheClock, restartActionClock, showCards, startHand, stepHand, TIMING, voteRunItTwice } from './hand.ts';
-import { formatChips } from './format.ts';
-import { addFeed, eligibleSeats, memberOf, recordLedger, seatIndexOf, vacateSeat } from './seats.ts';
+import { dispatch } from './commands/index.ts';
+import { newConfig } from './config.ts';
+import { startHand, stepHand, TIMING } from './hand.ts';
+import { handEnded } from './handEnd.ts';
+import { numberedName, playerName, readAlike } from './names.ts';
+import { addFeed, eligibleSeats, memberOf } from './seats.ts';
+import { newTonight } from './tonight.ts';
 import { GameError, SEAT_COUNT, STATE_SCHEMA } from './types.ts';
-import type { Command, Ctx, Member, Seat, SeatRequest, TableConfig, TableState } from './types.ts';
-
-export const DEFAULT_CONFIG: TableConfig = {
-  name: "Chips n' Dipshits",
-  smallBlind: 10,
-  bigBlind: 20,
-  minBuyIn: 400,
-  maxBuyIn: 2000,
-  actionSeconds: 30,
-  allowStraddle: true,
-  allowRunItTwice: true,
-  sevenDeuceBounty: 0,
-};
-
-export const LIMITS = {
-  nameLength: 16,
-  tableNameLength: 40,
-  chatLength: 200,
-  members: 60,
-  /** Keeps every chip count far inside the range where integers are exact. */
-  chips: 1_000_000_000,
-  minActionSeconds: 5,
-  maxActionSeconds: 300,
-};
+import type { Command, Ctx, KnownPlayer, Member, TableState } from './types.ts';
+import { LIMITS } from './validate.ts';
 
 // Without look-alike characters, so an id read aloud or retyped survives
 const ID_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const PLAYER_ID_LENGTH = 8;
 const TOKEN_LENGTH = 24;
-
-// Starting with a letter or digit keeps a name from being read as a formula when it lands in a spreadsheet
-const NAME_PATTERN = /^[\p{L}\p{N}][\p{L}\p{N} _.'!?-]*$/u;
 
 // A tick that cascades through more steps than this means a deadline is not moving forward
 const MAX_STEPS_PER_TICK = 200;
@@ -49,96 +28,48 @@ export function randomId(rng: Rng, length: number): string {
   return id;
 }
 
-function wholeNumber(value: unknown, what: string, min: number, max = LIMITS.chips): number {
-  if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max) {
-    throw new GameError(`${what} must be a whole number from ${min} to ${max}`);
-  }
-
-  return value;
+/**
+ * Who a new member is, as far as the game's list of players goes. `identity` is their id on the list,
+ * or null for nobody it knows. `keepsName` says the name is the list's and not theirs to change, so a
+ * table that has the name already makes room for them as "Bob 2" instead of turning them away.
+ */
+export interface Arriving {
+  identity: string | null;
+  keepsName: boolean;
 }
 
-function yesOrNo(value: unknown, what: string): boolean {
-  if (typeof value !== 'boolean') {
-    throw new GameError(`${what} must be on or off`);
-  }
+const NOBODY_KNOWN: Arriving = { identity: null, keepsName: false };
 
-  return value;
-}
-
-/** The decision an action says it answers. Left out, the action is for whichever decision is open. */
-function turnOf(value: unknown): number | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-
-  if (typeof value !== 'number' || !Number.isInteger(value)) {
-    throw new GameError('The turn must be a whole number');
-  }
-
-  return value;
-}
-
-function text(value: unknown, what: string, maxLength: number): string {
-  if (typeof value !== 'string') {
-    throw new GameError(`${what} is missing`);
-  }
-
-  const trimmed = value.trim().replace(/\s+/g, ' ');
-  if (trimmed.length === 0 || trimmed.length > maxLength) {
-    throw new GameError(`${what} must be 1 to ${maxLength} characters`);
-  }
-
-  return trimmed;
-}
-
-function playerName(value: unknown): string {
-  const name = text(value, 'Your name', LIMITS.nameLength);
-
-  if (!NAME_PATTERN.test(name)) {
-    throw new GameError('Names start with a letter or number and use only letters, numbers, spaces and . _ - \' ! ?');
-  }
-
-  return name;
-}
-
-/** Checks a full set of table settings, filling anything missing from the current ones. */
-export function validatedConfig(input: unknown, current: TableConfig): TableConfig {
-  const given = (typeof input === 'object' && input !== null ? input : {}) as Record<string, unknown>;
-  const pick = <K extends keyof TableConfig>(key: K): unknown => (given[key] === undefined ? current[key] : given[key]);
-
-  const smallBlind = wholeNumber(pick('smallBlind'), 'The small blind', 1);
-  const bigBlind = wholeNumber(pick('bigBlind'), 'The big blind', smallBlind);
-  const minBuyIn = wholeNumber(pick('minBuyIn'), 'The minimum buy-in', 1);
-  const maxBuyIn = wholeNumber(pick('maxBuyIn'), 'The maximum buy-in', minBuyIn);
-
-  const actionSeconds = wholeNumber(pick('actionSeconds'), 'The action clock', 0, LIMITS.maxActionSeconds);
-  if (actionSeconds !== 0 && actionSeconds < LIMITS.minActionSeconds) {
-    throw new GameError(`The action clock must be off or at least ${LIMITS.minActionSeconds} seconds`);
-  }
-
-  return {
-    name: text(pick('name'), 'The table name', LIMITS.tableNameLength),
-    smallBlind,
-    bigBlind,
-    minBuyIn,
-    maxBuyIn,
-    actionSeconds,
-    allowStraddle: yesOrNo(pick('allowStraddle'), 'Straddles'),
-    allowRunItTwice: yesOrNo(pick('allowRunItTwice'), 'Run it twice'),
-    sevenDeuceBounty: wholeNumber(pick('sevenDeuceBounty'), 'The seven-deuce bounty', 0),
-  };
-}
-
-function newMember(state: TableState, rawName: unknown, rng: Rng): Member {
+/** The name someone goes by as a new member of this table, or the reason the table can't take them: a name it already has, or no room. */
+function joiningName(state: TableState, rawName: unknown, keepsName: boolean): string {
   const name = playerName(rawName);
+  const holderOf = (wanted: string) => state.members.find((m) => readAlike(m.name, wanted));
 
-  if (state.members.some((m) => m.name.toLowerCase() === name.toLowerCase())) {
-    throw new GameError(`Someone at this table is already called ${name}`);
+  const holder = holderOf(name);
+  if (holder && !keepsName) {
+    throw new GameError(
+      holder.name.toLowerCase() === name.toLowerCase()
+        ? `Someone at this table is already called ${name}`
+        : `That name reads too much like ${holder.name}, who is already at this table`,
+    );
   }
 
   if (state.members.length >= LIMITS.members) {
-    throw new GameError('This table is full');
+    throw new GameError('This table is full. The host can make room by removing someone who is only watching');
   }
+
+  // A table has fewer members than there are numbers to try, so one of them is free
+  let free = name;
+  for (let number = 2; holderOf(free); number++) {
+    free = numberedName(name, number);
+  }
+
+  return free;
+}
+
+function newMember(state: TableState, rawName: unknown, rng: Rng, arriving: Arriving): Member {
+  // Settled before anything is drawn, so a join the table turns away takes nothing from its randomness
+  const name = joiningName(state, rawName, arriving.keepsName);
 
   const member: Member = {
     id: randomId(rng, PLAYER_ID_LENGTH),
@@ -146,355 +77,73 @@ function newMember(state: TableState, rawName: unknown, rng: Rng): Member {
     token: randomId(rng, TOKEN_LENGTH),
     buyIn: 0,
     cashOut: 0,
+    transferred: 0,
+    identity: arriving.identity,
   };
   state.members.push(member);
 
   return member;
 }
 
-export function createTable(id: string, hostName: unknown, configInput: unknown, ctx: Ctx): { state: TableState; host: Member } {
+export function createTable(id: string, hostName: unknown, configInput: unknown, ctx: Ctx, arriving: Arriving = NOBODY_KNOWN): { state: TableState; host: Member } {
   const state: TableState = {
     schema: STATE_SCHEMA,
     id,
     version: 0,
     createdAt: ctx.now,
-    config: validatedConfig(configInput, DEFAULT_CONFIG),
+    config: newConfig(configInput),
     hostId: '',
+    cohostIds: [],
     members: [],
     seats: Array.from({ length: SEAT_COUNT }, () => null),
     requests: [],
     buttonSeat: null,
+    blinds: null,
     running: false,
     nextHandAt: null,
     handCount: 0,
     turn: 0,
     hand: null,
+    shuffleAfterHand: false,
+    bombPotCalled: false,
+    handsSinceBombPot: 0,
+    lastHand: null,
+    nightEndedAt: null,
+    tonight: newTonight(),
     feed: [],
     feedSeq: 0,
+    reactions: [],
   };
 
-  const host = newMember(state, hostName, ctx.rng);
+  const host = newMember(state, hostName, ctx.rng, arriving);
   state.hostId = host.id;
   addFeed(state, ctx.now, 'system', null, `${host.name} opened the table`);
 
   return { state, host };
 }
 
-export function addMember(state: TableState, name: unknown, ctx: Ctx): Member {
-  const member = newMember(state, name, ctx.rng);
+export function addMember(state: TableState, name: unknown, ctx: Ctx, arriving: Arriving = NOBODY_KNOWN): Member {
+  const member = newMember(state, name, ctx.rng, arriving);
   addFeed(state, ctx.now, 'system', null, `${member.name} joined`);
 
   return member;
 }
 
-function requireHost(state: TableState, playerId: string): void {
-  if (state.hostId !== playerId) {
-    throw new GameError('Only the host can do that');
-  }
-}
-
-function requireSeat(state: TableState, playerId: string): { seat: Seat; index: number } {
-  const index = seatIndexOf(state, playerId);
-  if (index < 0) {
-    throw new GameError('You need a seat for that');
-  }
-
-  return { seat: state.seats[index]!, index };
-}
-
-function isDealtIn(state: TableState, seatIndex: number): boolean {
-  return state.hand?.players.some((p) => p.seat === seatIndex) ?? false;
-}
-
-function grantSeat(state: TableState, ctx: Ctx, request: SeatRequest): void {
-  if (state.seats[request.seat]) {
-    throw new GameError('That seat has been taken, so they need to pick another');
-  }
-
-  const member = memberOf(state, request.playerId);
-  state.seats[request.seat] = {
-    playerId: member.id,
-    stack: request.amount,
-    sittingOut: false,
-    away: false,
-    leaving: false,
-    straddle: false,
-    pendingAdd: 0,
-  };
-
-  recordLedger(state, ctx, member, 'buy-in', request.amount);
-  addFeed(state, ctx.now, 'system', null, `${member.name} sits down with ${formatChips(request.amount)}`);
-}
-
-function grantRebuy(state: TableState, ctx: Ctx, request: SeatRequest): void {
-  const index = seatIndexOf(state, request.playerId);
-  const seat = state.seats[index];
-  if (!seat) {
-    throw new GameError('They no longer have a seat');
-  }
-
-  if (seat.stack + seat.pendingAdd + request.amount > state.config.maxBuyIn) {
-    throw new GameError(`That would put them over the maximum buy-in of ${state.config.maxBuyIn}`);
-  }
-
-  const member = memberOf(state, request.playerId);
-
-  // Chips can't join a hand that is already being played, so they wait for its end and are bought then
-  if (isDealtIn(state, index)) {
-    seat.pendingAdd += request.amount;
-    addFeed(state, ctx.now, 'system', null, `${member.name} adds ${formatChips(request.amount)} after this hand`);
-    return;
-  }
-
-  seat.stack += request.amount;
-  recordLedger(state, ctx, member, 'buy-in', request.amount);
-  addFeed(state, ctx.now, 'system', null, `${member.name} adds ${formatChips(request.amount)}`);
-}
-
-function grant(state: TableState, ctx: Ctx, request: SeatRequest): void {
-  if (request.kind === 'seat') {
-    grantSeat(state, ctx, request);
-  } else {
-    grantRebuy(state, ctx, request);
-  }
-
-  state.requests = state.requests.filter((r) => r.playerId !== request.playerId);
-}
-
-/** Files a request for the host, who doesn't need to approve their own. */
-function submit(state: TableState, ctx: Ctx, request: SeatRequest): void {
-  state.requests = state.requests.filter((r) => r.playerId !== request.playerId);
-
-  if (request.playerId === state.hostId) {
-    grant(state, ctx, request);
-    return;
-  }
-
-  state.requests.push(request);
-}
-
-/** Takes a player out of their seat: now if they have no part in the current hand, otherwise once it ends. */
-function leaveSeat(state: TableState, ctx: Ctx, seatIndex: number): void {
-  const seat = state.seats[seatIndex]!;
-
-  if (!isDealtIn(state, seatIndex)) {
-    vacateSeat(state, ctx, seatIndex);
-    return;
-  }
-
-  seat.leaving = true;
-  state.requests = state.requests.filter((r) => r.playerId !== seat.playerId);
-  foldIfOnTheClock(state, ctx, seatIndex);
-}
-
-function applyTo(state: TableState, ctx: Ctx, playerId: string, command: Command): void {
+/**
+ * Notes which known player a member says they are. It changes nothing else of them: the name they go
+ * by here stays, so when the list has them under another the table is told, as it would have seen had
+ * they joined under it.
+ */
+export function setIdentity(state: TableState, playerId: string, known: KnownPlayer, ctx: Ctx): void {
   const member = memberOf(state, playerId);
+  if (member.identity === known.id) {
+    return;
+  }
 
-  switch (command.type) {
-    case 'requestSeat': {
-      if (seatIndexOf(state, playerId) >= 0) {
-        throw new GameError('You already have a seat');
-      }
+  member.identity = known.id;
 
-      const seat = wholeNumber(command.seat, 'The seat', 0, SEAT_COUNT - 1);
-      if (state.seats[seat]) {
-        throw new GameError('That seat is taken');
-      }
-
-      const { minBuyIn, maxBuyIn } = state.config;
-      const amount = wholeNumber(command.buyIn, 'Your buy-in', minBuyIn, maxBuyIn);
-
-      submit(state, ctx, { playerId, kind: 'seat', seat, amount });
-      return;
-    }
-
-    case 'requestRebuy': {
-      const { seat, index } = requireSeat(state, playerId);
-      if (seat.leaving) {
-        throw new GameError('You are giving up your seat when this hand ends');
-      }
-
-      const room = state.config.maxBuyIn - seat.stack - seat.pendingAdd;
-      if (room < 1) {
-        throw new GameError(`You already have the maximum buy-in of ${state.config.maxBuyIn}`);
-      }
-
-      const amount = wholeNumber(command.amount, 'Your rebuy', 1, room);
-
-      submit(state, ctx, { playerId, kind: 'rebuy', seat: index, amount });
-      return;
-    }
-
-    case 'cancelRequest': {
-      state.requests = state.requests.filter((r) => r.playerId !== playerId);
-      return;
-    }
-
-    case 'standUp': {
-      leaveSeat(state, ctx, requireSeat(state, playerId).index);
-      return;
-    }
-
-    case 'sitOut': {
-      requireSeat(state, playerId).seat.sittingOut = true;
-      return;
-    }
-
-    case 'sitIn': {
-      const { seat } = requireSeat(state, playerId);
-      seat.sittingOut = false;
-      seat.away = false;
-      return;
-    }
-
-    case 'setStraddle': {
-      const { seat } = requireSeat(state, playerId);
-      const on = yesOrNo(command.on, 'Straddle');
-      if (on && !state.config.allowStraddle) {
-        throw new GameError('Straddles are turned off at this table');
-      }
-
-      seat.straddle = on;
-      return;
-    }
-
-    case 'fold':
-    case 'check':
-    case 'call': {
-      act(state, ctx, seatIndexOf(state, playerId), { type: command.type }, turnOf(command.turn));
-      return;
-    }
-
-    case 'raise': {
-      act(state, ctx, seatIndexOf(state, playerId), { type: 'raise', to: command.to }, turnOf(command.turn));
-      return;
-    }
-
-    case 'ritVote': {
-      voteRunItTwice(state, ctx, seatIndexOf(state, playerId), yesOrNo(command.agree, 'Your vote'));
-      return;
-    }
-
-    case 'showCards': {
-      showCards(state, ctx, seatIndexOf(state, playerId));
-      return;
-    }
-
-    case 'chat': {
-      addFeed(state, ctx.now, 'chat', member.name, text(command.text, 'Your message', LIMITS.chatLength));
-      return;
-    }
-
-    case 'start': {
-      requireHost(state, playerId);
-      if (!state.running) {
-        state.running = true;
-        addFeed(state, ctx.now, 'system', null, 'The game is on');
-      }
-
-      return;
-    }
-
-    case 'pause': {
-      requireHost(state, playerId);
-      if (state.running) {
-        state.running = false;
-        addFeed(state, ctx.now, 'system', null, state.hand ? 'The game pauses after this hand' : 'The game is paused');
-      }
-
-      return;
-    }
-
-    case 'approve': {
-      requireHost(state, playerId);
-      const request = state.requests.find((r) => r.playerId === command.playerId);
-      if (!request) {
-        throw new GameError('That request is gone');
-      }
-
-      grant(state, ctx, request);
-      return;
-    }
-
-    case 'deny': {
-      requireHost(state, playerId);
-      state.requests = state.requests.filter((r) => r.playerId !== command.playerId);
-      return;
-    }
-
-    case 'kick': {
-      requireHost(state, playerId);
-      const index = seatIndexOf(state, memberOf(state, command.playerId).id);
-
-      state.requests = state.requests.filter((r) => r.playerId !== command.playerId);
-      if (index >= 0) {
-        leaveSeat(state, ctx, index);
-      }
-
-      return;
-    }
-
-    case 'setStack': {
-      requireHost(state, playerId);
-      const target = memberOf(state, command.playerId);
-      const index = seatIndexOf(state, target.id);
-      const seat = state.seats[index];
-      if (!seat) {
-        throw new GameError(`${target.name} doesn't have a seat`);
-      }
-
-      if (isDealtIn(state, index)) {
-        throw new GameError(`${target.name} is in the current hand, so wait until it is over`);
-      }
-
-      const stack = wholeNumber(command.stack, 'The stack', 0);
-      const change = stack - seat.stack;
-      if (change !== 0) {
-        seat.stack = stack;
-        recordLedger(state, ctx, target, 'adjustment', change);
-        addFeed(state, ctx.now, 'system', null, `The host set ${target.name}'s stack to ${formatChips(stack)}`);
-      }
-
-      return;
-    }
-
-    case 'updateConfig': {
-      requireHost(state, playerId);
-      const before = state.config;
-      state.config = validatedConfig(command.config, before);
-
-      if (state.config.smallBlind !== before.smallBlind || state.config.bigBlind !== before.bigBlind) {
-        const when = state.hand ? ' from the next hand' : '';
-        addFeed(state, ctx.now, 'system', null, `Blinds are ${formatChips(state.config.smallBlind)}/${formatChips(state.config.bigBlind)}${when}`);
-      }
-
-      if (!state.config.allowStraddle) {
-        for (const seat of state.seats) {
-          if (seat) {
-            seat.straddle = false;
-          }
-        }
-      }
-
-      if (state.config.actionSeconds !== before.actionSeconds) {
-        restartActionClock(state, ctx.now);
-      }
-
-      return;
-    }
-
-    case 'transferHost': {
-      requireHost(state, playerId);
-      const target = memberOf(state, command.playerId);
-
-      state.hostId = target.id;
-      addFeed(state, ctx.now, 'system', null, `${target.name} is now the host`);
-      return;
-    }
-
-    default: {
-      throw new GameError('Unknown command');
-    }
+  if (member.name !== known.name) {
+    addFeed(state, ctx.now, 'system', null, `${member.name} is ${known.name} on the list of players`);
   }
 }
 
@@ -518,7 +167,7 @@ export function applyCommand(state: TableState, ctx: Ctx, playerId: string, comm
     throw new GameError('Unknown command');
   }
 
-  applyTo(state, ctx, playerId, command);
+  dispatch(state, ctx, playerId, command);
   scheduleNextHand(state, ctx.now);
 }
 
@@ -538,7 +187,11 @@ export function tick(state: TableState, ctx: Ctx): boolean {
     }
 
     if (state.hand) {
-      stepHand(state, ctx);
+      const ended = stepHand(state, ctx);
+
+      if (ended) {
+        handEnded(ended, state, ctx);
+      }
     } else {
       state.nextHandAt = null;
     }

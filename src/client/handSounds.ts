@@ -1,0 +1,112 @@
+import { boardsDealt } from '../engine/bombPots.ts';
+import type { HandEvent } from '../engine/events.ts';
+import { ASIDE_SOUNDS } from './sound.ts';
+import type { SoundName } from './sound.ts';
+import type { TableChange } from './tableChange.ts';
+
+/**
+ * What one hand event sounds like to the viewer at `viewer`, in a hand dealt on `dealtOn` boards from
+ * its first card: the table of which event makes which sound. `tapping` is the seat whose moves are
+ * the viewer's own taps. A new kind of event takes a case here, a sound or silence, and the build
+ * fails until it has one.
+ */
+function soundOf(event: HandEvent, viewer: number | null, dealtOn: number, tapping: number | null): SoundName | null {
+  const byOther = (seat: number) => seat !== viewer;
+  // A move the player tapped is silent to them: they made it, and the server's answer comes a moment after the tap
+  const heard = (seat: number) => seat !== tapping;
+
+  switch (event[0]) {
+    case 'deal':
+      return 'deal';
+
+    case 'fold':
+      return heard(event[1]) ? 'fold' : null;
+
+    case 'check':
+      return heard(event[1]) ? 'knock' : null;
+
+    case 'call':
+    case 'bet':
+    case 'raise':
+      return heard(event[1]) ? (event[3] === 0 ? 'allIn' : 'chips') : null;
+
+    // Every street sounds the same, and once: boards dealt together, as in a double-board bomb pot, get a street at the
+    // same moment, and the first board's event is the one heard, whether or not the others' arrive with it. A board run
+    // out after another, as when a hand is run more than once, has streets of its own
+    case 'street':
+      return event[1] === 0 || event[1] >= dealtOn ? 'street' : null;
+
+    case 'win':
+      return byOther(event[1]) ? 'win' : 'myWin';
+
+    // The cards that would have come, all boards at once, with a sound beside the game's (`ASIDE_SOUNDS`)
+    case 'hunt':
+      return 'hunt';
+
+    // The bounty's chips changing hands, after the pot it was won with. A chop is the blinds' chips going back
+    case 'bounty':
+    case 'chop':
+      return 'chips';
+
+    // The cards coming out is what announces a new hand, whatever was posted for it (blinds, antes, a bomb pot), and the fold or check made for a player who ran out of time is what is heard of it
+    case 'start':
+    case 'post':
+    case 'timeout':
+    case 'return':
+    case 'vote':
+    case 'runs':
+    case 'show':
+    case 'muck':
+      return null;
+
+    // The big blind hears the offer as their turn coming, and an answer is followed by what it leads to: the chop, or the small blind's turn again
+    case 'chopOffer':
+    case 'chopAnswer':
+      return null;
+
+    default:
+      // An event this page does not know, from a newer server, is silent
+      event satisfies never;
+      return null;
+  }
+}
+
+// The most sounds one view of the table plays: a slow answer that catches up on a whole street plays only how it ended
+export const MOST_PER_VIEW = 3;
+
+/** A sound a view plays, and which of its events it is heard for, counted from the first. */
+export interface Heard {
+  sound: SoundName;
+  event: number;
+}
+
+/**
+ * What the hand's new events sound like to the viewer at `seat`, in order, each with the event it is
+ * heard for. Each sound plays once, where it last came, and only the last few, so a burst of moves
+ * reads as how it ended, not as noise. A sound beside the game (`ASIDE_SOUNDS`) takes none of those
+ * few places. The viewer's own pot needs no second, smaller one for someone else's beside it. `dealtOn`
+ * is how many boards the hand was dealt on from its first card. `tapping` is the seat whose moves the
+ * viewer made by hand, and so does not hear: their own, unless the table made them for the viewer.
+ */
+export function soundsPlaced(events: readonly HandEvent[], seat: number | null, dealtOn = 1, tapping = seat): Heard[] {
+  const heard = events.flatMap((event, nth) => {
+    const sound = soundOf(event, seat, dealtOn, tapping);
+
+    return sound === null ? [] : [{ sound, event: nth }];
+  });
+  const sounds = heard.map(({ sound }) => sound);
+  const once = heard.filter(({ sound }, index) => sounds.lastIndexOf(sound) === index && !(sound === 'win' && sounds.includes('myWin')));
+  const game = once.filter(({ sound }) => !ASIDE_SOUNDS.has(sound)).slice(-MOST_PER_VIEW);
+
+  return once.filter((placed) => ASIDE_SOUNDS.has(placed.sound) || game.includes(placed));
+}
+
+/** The sounds of `soundsPlaced` alone, as whatever plays them needs them. */
+export function soundsHeard(events: readonly HandEvent[], seat: number | null, dealtOn = 1): SoundName[] {
+  return soundsPlaced(events, seat, dealtOn).map(({ sound }) => sound);
+}
+
+/** What a view brought sounds like to the viewer at `seat`, who hears their own move when the table made it for them. */
+export function soundsOf({ events, view, madeAhead }: Pick<TableChange, 'events' | 'view' | 'madeAhead'>, seat: number | null): Heard[] {
+  return soundsPlaced(events, seat, boardsDealt(view.hand?.bombPot ?? null), madeAhead ? null : seat);
+}

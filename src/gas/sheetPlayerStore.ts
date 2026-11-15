@@ -1,0 +1,262 @@
+import { listedLike, playerName } from '../engine/index.ts';
+import type { KnownPlayer, Rng } from '../engine/index.ts';
+import type { ErrorLog } from '../server/errorLog.ts';
+import { dueToBeSeen, inListOrder, isPlayerId, listed, newcomer } from '../server/playerStore.ts';
+import type { KeptPlayer, PlayerStore } from '../server/playerStore.ts';
+import { FIRST_DATA_ROW, freeRow, HeldReports, openTab, TEXT, TIMESTAMP, underLock } from './sheets.ts';
+import type { CacheLike, LockLike, SheetLike, SpreadsheetLike } from './sheets.ts';
+
+export interface SheetPlayerStoreDeps {
+  spreadsheet: () => SpreadsheetLike;
+  cache: CacheLike;
+  lock: LockLike;
+  flush: () => void;
+  rng: Rng;
+  /** Where what goes wrong and is carried on through is reported. */
+  errors?: ErrorLog;
+}
+
+const TAB = 'Players';
+const HEADERS = ['ID (the game knows a player by this, so leave it as it is)', 'Name', 'First seen', 'Last seen'];
+const FORMATS = [TEXT, TEXT, TIMESTAMP, TIMESTAMP];
+const SEEN_COLUMN = 4;
+const BUSY = 'The list of players is busy, try again';
+
+const CACHE_KEY = 'players';
+
+// Whoever runs the game changes the tab by hand, which the cache hears nothing of, so this is how long
+// the game may go on handing out the list as it was before such a change
+const CACHE_SECONDS = 300;
+
+// Who a player is can be said again later, so this does not queue for the lock as long as a move does
+const LOCK_WAIT_MS = 3000;
+
+interface Row {
+  row: number;
+  /** Null when what is in the row can't be read as a player, as after a slip while editing the Sheet by hand. */
+  player: KeptPlayer | null;
+}
+
+/** The tab as it was read: whether it has its headers, every row with anything in it, and the players that could be read, in the order of their rows. */
+interface Tab {
+  headed: boolean;
+  rows: Row[];
+  players: KeptPlayer[];
+}
+
+/**
+ * One row's player, or null: an id the game did not give, a name that is no name, or an id or a name
+ * that a row above already has, which is then the one that counts.
+ */
+function keptOf(cells: unknown[], above: KeptPlayer[]): KeptPlayer | null {
+  try {
+    const id = String(cells[0]).trim();
+    const name = playerName(String(cells[1]));
+    const seen = cells[SEEN_COLUMN - 1] instanceof Date ? (cells[SEEN_COLUMN - 1] as Date).getTime() : NaN;
+
+    return isPlayerId(id) && !above.some((player) => player.id === id) && !listedLike(above, name) ? { id, name, seenAt: Number.isNaN(seen) ? 0 : seen } : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Keeps the known players in a tab of the Sheet, a row each, with the whole list in the script cache
+ * in front, since every join asks for it. The tab is the truth. Every write to it, and every refill of
+ * the cache, happens under the script lock, and a write that fails takes the cache entry with it, so
+ * the cache never holds a list older than the game's own last write. A change made by hand is another
+ * matter: the game hears of it when the cache entry runs out. What goes wrong and is carried on through
+ * is reported as each of the three methods ends, by when the lock has been let go.
+ */
+export class SheetPlayerStore implements PlayerStore {
+  private readonly deps: SheetPlayerStoreDeps;
+  private readonly reports: HeldReports;
+
+  constructor(deps: SheetPlayerStoreDeps) {
+    this.deps = deps;
+    this.reports = new HeldReports(deps.errors);
+  }
+
+  list(): KnownPlayer[] {
+    return this.reports.after(() => inListOrder(this.known()));
+  }
+
+  seen(id: string, at: number): KnownPlayer | null {
+    return this.reports.after(() => {
+      const found = this.known().find((player) => player.id === id);
+      if (!found) {
+        return null;
+      }
+
+      if (dueToBeSeen(found, at)) {
+        this.noteSeen(id, at);
+      }
+
+      return listed(found);
+    });
+  }
+
+  add(name: string, at: number): KnownPlayer {
+    const clean = playerName(name);
+
+    return this.reports.after(() =>
+      this.locked(() => {
+        const sheet = this.tab(true)!;
+        const { headed, rows, players } = this.read(sheet);
+        const added = newcomer(players, rows.length, clean, at, this.deps.rng);
+
+        this.write(() => {
+          // A tab that lost its headers, as when making it failed halfway, gets them back
+          if (!headed) {
+            sheet.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]);
+          }
+
+          const range = sheet.getRange(freeRow(rows), 1, 1, HEADERS.length);
+
+          // Plain text before anything is written: an id like 2E56789234 is not turned into a number, and
+          // nothing a player typed is ever taken for a formula, whatever the rule for names comes to allow
+          range.setNumberFormats([FORMATS]);
+          range.setValues([[added.id, added.name, new Date(at), new Date(at)]]);
+        });
+        this.remember([...players, added]);
+
+        return listed(added);
+      }),
+    );
+  }
+
+  private locked<T>(work: () => T): T {
+    return underLock(this.deps.lock, BUSY, work, LOCK_WAIT_MS);
+  }
+
+  private tab(create: boolean): SheetLike | null {
+    return openTab(this.deps.spreadsheet(), TAB, HEADERS, create);
+  }
+
+  /** The players that can be read, in the order of their rows: from the cache, or from the tab into the cache. */
+  private known(): KeptPlayer[] {
+    const cached = this.cached();
+    if (cached) {
+      return cached;
+    }
+
+    return this.locked(() => {
+      // When the entry runs out, everyone opening the game at that moment arrives here; the first of them refills it
+      const refilled = this.cached();
+      if (refilled) {
+        return refilled;
+      }
+
+      const sheet = this.tab(false);
+      const players = sheet ? this.read(sheet).players : [];
+
+      this.remember(players);
+
+      return players;
+    });
+  }
+
+  /** What the cache has of the list. A cache that can't be asked, or holds something else, has nothing. */
+  private cached(): KeptPlayer[] | null {
+    try {
+      const kept: unknown = JSON.parse(this.deps.cache.get(CACHE_KEY) ?? 'null');
+
+      return Array.isArray(kept) ? (kept as KeptPlayer[]) : null;
+    } catch (error) {
+      this.reports.failed('store read cached players', error);
+
+      return null;
+    }
+  }
+
+  /** The list as just read under the lock goes into the cache. One that can't be put there must not leave an older one behind. */
+  private remember(players: KeptPlayer[]): void {
+    try {
+      this.deps.cache.put(CACHE_KEY, JSON.stringify(players), CACHE_SECONDS);
+    } catch (error) {
+      this.reports.failed('store cache players', error);
+      this.forget();
+    }
+  }
+
+  private forget(): void {
+    try {
+      this.deps.cache.remove(CACHE_KEY);
+    } catch (error) {
+      // Nothing more can be done; the entry runs out by itself
+      this.reports.failed('store forget cached players', error);
+    }
+  }
+
+  /** Makes a change to the tab and pushes it through. Whatever of it did or didn't land when that fails, the cache must not go on answering from before it. */
+  private write(change: () => void): void {
+    try {
+      change();
+      this.deps.flush();
+    } catch (error) {
+      this.forget();
+      throw error;
+    }
+  }
+
+  /**
+   * A row with anything in its four cells is a player or null: one that can't be read still takes a
+   * place, so the list never takes more rows than it may. A row with nothing in them, cleared by hand
+   * or holding only a note to the side, is free.
+   */
+  private read(sheet: SheetLike): Tab {
+    const last = sheet.getLastRow();
+    const values = last < 1 ? [] : sheet.getRange(1, 1, last, HEADERS.length).getValues();
+    const blank = (cells: unknown[]) => cells.every((cell) => String(cell).trim() === '');
+    const rows: Row[] = [];
+    const players: KeptPlayer[] = [];
+
+    // The first row is the headers whatever it says, except a player: deleting the header row by hand
+    // moves one up into its place, and they are on the list still
+    const first = values.length > 0 && keptOf(values[0]!, []) ? 1 : FIRST_DATA_ROW;
+
+    values.slice(first - 1).forEach((cells, index) => {
+      if (blank(cells)) {
+        return;
+      }
+
+      const player = keptOf(cells, players);
+
+      rows.push({ row: first + index, player });
+      if (player) {
+        players.push(player);
+      }
+    });
+
+    return { headed: values.length > 0 && !blank(values[0]!), rows, players };
+  }
+
+  /**
+   * Writes when a player was last seen. It rides on a request made for something else, so it never
+   * throws: whatever it could not do is done the next time they are seen.
+   */
+  private noteSeen(id: string, at: number): void {
+    try {
+      this.locked(() => {
+        const sheet = this.tab(false);
+        const { rows, players } = sheet ? this.read(sheet) : { rows: [], players: [] };
+        const found = rows.find(({ player }) => player?.id === id);
+
+        // Someone else's request may have noted them while this one waited for the lock
+        if (sheet && found?.player && dueToBeSeen(found.player, at)) {
+          const cell = sheet.getRange(found.row, SEEN_COLUMN, 1, 1);
+
+          this.write(() => {
+            cell.setNumberFormats([[TIMESTAMP]]);
+            cell.setValues([[new Date(at)]]);
+          });
+          found.player.seenAt = at;
+        }
+
+        this.remember(players);
+      });
+    } catch (error) {
+      this.reports.failed('store player last seen', error);
+    }
+  }
+}

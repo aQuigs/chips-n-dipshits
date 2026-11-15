@@ -1,0 +1,9 @@
+# Lists that every feature adds one line to. Two branches that each add a line at the same place are
+# not in conflict, so git keeps both lines instead of stopping the merge or the rebase.
+#
+# Only for files whose entries are one line each: a union of entries that span several lines can
+# interleave them. Anything else that conflicts in these files is joined the same way without a word,
+# so they hold little besides their list, and the type check is what catches a bad join.
+src/client/styles/order.ts merge=union
+src/client/render/dialogs/index.ts merge=union
+src/client/effects.ts merge=union

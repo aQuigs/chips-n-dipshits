@@ -1,0 +1,40 @@
+/* ---- The bounty hands in the table settings: a row a hand, with what each player pays for it ---- */
+
+.bounty-list {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.bounty-list legend {
+  margin-bottom: 4px;
+  padding: 0;
+}
+
+.bounty-rows {
+  display: grid;
+  gap: 8px;
+}
+
+/* The hand is never more than three characters, so it takes a narrow column and the amount the rest */
+.bounty-heads,
+.bounty-row {
+  display: grid;
+  grid-template-columns: 5em minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 2px 8px;
+}
+
+.bounty-row .said {
+  grid-column: 1 / -1;
+  min-height: 1.3em;
+}
+
+.bounty-row .said.warn {
+  color: var(--bad);
+}
+
+.bounty-list > .btn {
+  justify-self: start;
+}

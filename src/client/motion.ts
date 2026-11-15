@@ -1,0 +1,157 @@
+import type { Ability, AppPreferences } from './prefs.ts';
+
+/** Somewhere on the table a thing moves from or to. Where each is on the page is the table renderer's to say (`drawnTable`). */
+export type Place =
+  /** The middle of the felt, where cards are dealt from and folded ones go. */
+  | { at: 'deck' }
+  | { at: 'pot' }
+  /** A player's plate, with their name and stack. */
+  | { at: 'seat'; seat: number }
+  /** A player's two cards, or with `card` one of them: 0 for the one on the player's left. */
+  | { at: 'cards'; seat: number; card?: number }
+  /** Where a seat's bet sits, whether or not one is there now. */
+  | { at: 'bet'; seat: number }
+  /** One card's place on a board. */
+  | ({ at: 'board' } & BoardCard);
+
+/** One card's place on a board: which board, and which card of it from the first. */
+export interface BoardCard {
+  board: number;
+  card: number;
+}
+
+/**
+ * Every move there is, by name. How each looks is the page's business (`LOOKS` in pageMotion.ts):
+ *
+ * - `deal`, `board`, `hunt`, `show`, `flip` and `bet` move what the table has standing at `to` once the
+ *   view is drawn: a seat's cards, one card of a board, a card that would have come on a board (rabbit
+ *   hunting), a seat's card turned up by choice once the hand is over, a seat's bet. Where the table
+ *   draws nothing there, nothing moves.
+ * - `chips` and `muck` move a stand-in for what the table no longer draws: a pile of chips, or a
+ *   seat's cards face down. It is drawn at `from`, travels to `to` and is gone when it lands.
+ * - `facedown` is a stand-in for a board card face down, lying at `from` until it turns onto its edge,
+ *   and `reveal` turns the card the table draws at `to` face up from its edge, unseen until it starts:
+ *   one after the other, a card turned over where it lies.
+ * - `confetti` is a burst of pieces thrown from `from`, laid out from `seed`, gone when they land.
+ * - `throw` is something a player throws at another's seat: `mark` drawn at `from`, spinning across to
+ *   `to` and gone when it lands, where whoever threw it shows what landed.
+ */
+export type MoveName = 'deal' | 'board' | 'hunt' | 'show' | 'flip' | 'bet' | 'chips' | 'muck' | 'facedown' | 'reveal' | 'confetti' | 'throw';
+
+export interface Move {
+  name: MoveName;
+  /** Where it leaves from. Left out of a move that happens where it lies: cards turned face up, a card dropped onto the board. */
+  from?: Place;
+  to: Place;
+  /** What a pile of chips says it is worth, in the table's smallest unit. Left out, the pile is a bare chip. */
+  amount?: number;
+  /** What a burst is laid out from, so the same win throws the same one. */
+  seed?: number;
+  /** What is thrown, as the emoji drawn for it. */
+  mark?: string;
+  /**
+   * Milliseconds from now until it starts. Until then what moves waits where it starts from: cards
+   * still to be dealt are not yet seen, and a pile of chips sits where it will leave from.
+   */
+  after: number;
+}
+
+/**
+ * Moves that are decoration beside the game, such as a throw, the cards a rabbit hunt lays out or a card a player turns up after the hand: they play in a lane of their own, which
+ * `idle()` and the stage's `data-moving` leave out, so a held card, a hand's chances or a deal never
+ * wait for one, however many are flying.
+ */
+export const ASIDE_MOVES: ReadonlySet<MoveName> = new Set<MoveName>(['throw', 'hunt', 'flip']);
+
+/** How long each move takes, from leaving to landing. */
+export const MOVE_MS: Record<MoveName, number> = { deal: 260, board: 240, hunt: 280, show: 200, flip: 200, bet: 200, chips: 280, muck: 220, facedown: 150, reveal: 210, confetti: 1100, throw: 550 };
+
+/**
+ * What moves things across the table. Motion is decoration over a table that is already drawn as it
+ * truly is: nothing here changes what is on the table, where it rests or what can be tapped, and when
+ * a move ends or is cancelled the page is exactly as if it had never played.
+ *
+ * An effect reaches it as `context.motion`. The hand's own moves come from `handMoves`, each started
+ * as its sound is and all held to its budgets; anything else may play its own:
+ *
+ * - A bet drawn before the hand's events bring it, as when a player's own move is shown before the
+ *   server has answered, gets the slide a confirmed one gets by playing `betSlide(seat)`
+ *   (handMoves.ts) once it is drawn. The view that confirms it finds the bet lying there and does
+ *   not slide it again.
+ * - A longer, staged piece is one list of moves with later and later `after`s. To hold a card back
+ *   while it plays, give that card a move that starts late: it stays unseen until then. A move for
+ *   something already moving takes the place of the one it had.
+ * - What must wait for the table to be still awaits `idle()`, which is not told of a pause that
+ *   only makes way for the next thing to move.
+ *
+ * Whatever is played ends early when the table under it is drawn again, as every new view of the
+ * hand does, so no move can outlast what it shows.
+ */
+export interface TableMotion {
+  /** Starts every move in the list, each `after` its own wait. Nothing plays for a viewer who has motion off. */
+  play(moves: readonly Move[]): void;
+  /** Ends everything in flight at once, where it was going. */
+  cancel(): void;
+  /** Resolves once nothing of the table is moving: at once when nothing is. What moves beside it (`ASIDE_MOVES`) is not waited for. */
+  idle(): Promise<void>;
+  /** Whether what is played now is seen: not by a viewer who has motion off, or on a page out of sight. */
+  seen(): boolean;
+}
+
+/** What does the moving: the page's own animations in a browser, or nothing where there are none. */
+export interface MotionPlayer extends TableMotion {
+  /** Stops everything and lets go of the page, when the table is left. */
+  dispose(): void;
+}
+
+export const stillMotion: MotionPlayer = { play: () => undefined, cancel: () => undefined, idle: () => Promise.resolve(), seen: () => false, dispose: () => undefined };
+
+/** What the page knows that decides whether anything moves. */
+export interface Watching {
+  /** The device asks for less motion. */
+  reduced(): boolean;
+  /** False while the page is out of sight: another tab, a phone asleep. */
+  inView(): boolean;
+}
+
+/**
+ * The motion one viewer sees on a table. Whatever moves something plays it through here, which is
+ * what holds it to their switch and to a device that asks for less motion, and keeps a page nobody
+ * is looking at from saving motion up for when they come back.
+ */
+export class Motion implements MotionPlayer {
+  private readonly player: MotionPlayer;
+  private readonly prefs: AppPreferences;
+  private readonly watching: Watching;
+
+  constructor(player: MotionPlayer, prefs: AppPreferences, watching: Watching) {
+    this.player = player;
+    this.prefs = prefs;
+    this.watching = watching;
+  }
+
+  play(moves: readonly Move[]): void {
+    if (moves.length > 0 && this.seen()) {
+      this.player.play(moves);
+    }
+  }
+
+  seen(): boolean {
+    return this.prefs.get('motion') && !this.watching.reduced() && this.watching.inView() && this.player.seen();
+  }
+
+  cancel(): void {
+    this.player.cancel();
+  }
+
+  idle(): Promise<void> {
+    return this.player.idle();
+  }
+
+  dispose(): void {
+    this.player.dispose();
+  }
+}
+
+/** Whether the switch in Preferences can turn motion on: not while the device itself asks for less. */
+export const motionAbility = (watching: Watching): Ability => (watching.reduced() ? 'blocked' : 'yes');

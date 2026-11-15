@@ -1,42 +1,27 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { TIMING, viewFor } from '../src/engine/index.ts';
-import type { Command, Rng, TableView } from '../src/engine/index.ts';
+import { STATE_SCHEMA, TIMING, viewFor } from '../src/engine/index.ts';
+import type { Command, Rng } from '../src/engine/index.ts';
 import { SheetStore } from '../src/gas/sheetStore.ts';
-import type { ApiResponse, Auth } from '../src/server/api.ts';
+import type { Auth } from '../src/server/api.ts';
 import { ByteRng } from '../src/server/byteRng.ts';
+import { MemoryErrorLog } from '../src/server/memoryErrorLog.ts';
+import { MemoryPlayerStore } from '../src/server/memoryPlayerStore.ts';
+import { MemoryPresetStore } from '../src/server/memoryPresetStore.ts';
 import { MemoryStore } from '../src/server/memoryStore.ts';
+import { PUT_AWAY_MESSAGE } from '../src/server/putAway.ts';
 import { PokerService } from '../src/server/service.ts';
 import type { TableStore } from '../src/server/store.ts';
 import { FakeCache, FakeLock, FakeSpreadsheet } from './fakes.ts';
-import { seededRng } from './helpers.ts';
+import { DAY_MS, failure, joined, seededRng, sevenDeuceBounty, viewOf } from './helpers.ts';
 
 function setup(store: TableStore = new MemoryStore()) {
   const clock = { time: 1_000_000, now: () => clock.time };
-  const service = new PokerService({ store, clock, rng: seededRng(11) });
+  const presets = new MemoryPresetStore();
+  const service = new PokerService({ store, presets, players: new MemoryPlayerStore(seededRng(12)), clock, rng: seededRng(11) });
 
-  return { service, store, clock };
-}
-
-type Joined = Extract<ApiResponse, { kind: 'joined' }>;
-
-function joined(response: ApiResponse): Joined {
-  assert.ok(response.ok && response.kind === 'joined', JSON.stringify(response));
-
-  return response;
-}
-
-function viewOf(response: ApiResponse): TableView {
-  assert.ok(response.ok && response.kind === 'view', JSON.stringify(response));
-
-  return response.view;
-}
-
-function failure(response: ApiResponse) {
-  assert.equal(response.ok, false, JSON.stringify(response));
-
-  return response as Extract<ApiResponse, { ok: false }>;
+  return { service, store, presets, clock };
 }
 
 /** A table with the host and two more players seated, ready to start. */
@@ -69,7 +54,7 @@ test('creating a table makes the creator its host and hands back their credentia
 
   assert.match(response.view.id, /^[A-Z2-9]{6}$/);
   assert.equal(response.view.version, 1);
-  assert.deepEqual(response.view.you, { id: response.auth.id, name: 'Quigs', isHost: true, seat: null });
+  assert.deepEqual(response.view.you, { id: response.auth.id, name: 'Quigs', role: 'host', seat: null, identity: null });
   assert.equal(response.view.config.bigBlind, 2);
   assert.equal(store.read(response.view.id)!.members[0]!.token, response.auth.token);
 });
@@ -79,10 +64,10 @@ test('anyone with the table id can look it up and join under a free name', () =>
   const tableId = joined(service.handle({ op: 'create', name: 'Quigs' })).view.id;
 
   const info = service.handle({ op: 'info', tableId: tableId.toLowerCase() });
-  assert.deepEqual(info, { ok: true, kind: 'info', table: { id: tableId, name: "Chips n' Dipshits", smallBlind: 10, bigBlind: 20, players: [] } });
+  assert.deepEqual(info, { ok: true, kind: 'info', table: { id: tableId, name: "Chips n' Dipshits", unit: 'chips', smallBlind: 10, bigBlind: 20, ante: 0, anteFrom: 'everyone', bounties: [], players: [] } });
 
   const ann = joined(service.handle({ op: 'join', tableId: ` ${tableId.toLowerCase()} `, name: 'Ann' }));
-  assert.equal(ann.view.you.isHost, false);
+  assert.equal(ann.view.you.role, 'member');
   assert.equal(ann.view.version, 2);
 
   assert.deepEqual(failure(service.handle({ op: 'join', tableId, name: 'ann' })), {
@@ -90,6 +75,34 @@ test('anyone with the table id can look it up and join under a free name', () =>
     code: 'invalid',
     error: 'Someone at this table is already called ann',
   });
+});
+
+test('someone looking a table up is told its ante and who pays it', () => {
+  const { service } = setup();
+  const tableId = joined(service.handle({ op: 'create', name: 'Quigs', config: { ante: 20, anteFrom: 'bigBlind' } })).view.id;
+
+  const info = service.handle({ op: 'info', tableId });
+  assert.ok(info.ok && info.kind === 'info');
+  assert.deepEqual([info.table.ante, info.table.anteFrom], [20, 'bigBlind']);
+});
+
+test('every member sees the voice chat link, and someone who has not joined learns nothing of it', () => {
+  const { service, act, poll, tableId, players } = seatedTable();
+  const link = 'https://meet.google.com/abc-defg-hij';
+
+  viewOf(act(0, { type: 'updateConfig', config: { voiceLink: link } }));
+  const watcher = joined(service.handle({ op: 'join', tableId, name: 'Cat' }));
+
+  assert.deepEqual(
+    [0, 1, 2].map((who) => viewOf(poll(who)).config.voiceLink),
+    [link, link, link],
+  );
+  assert.equal(watcher.view.config.voiceLink, link, 'a member who is only watching');
+  assert.equal(players.length, 3);
+
+  const info = service.handle({ op: 'info', tableId });
+  assert.ok(info.ok && info.kind === 'info');
+  assert.ok(!JSON.stringify(info).includes('meet.google.com'), 'the join screen is not handed the call');
 });
 
 test('bad requests come back as errors, not exceptions', () => {
@@ -131,6 +144,33 @@ test('a wrong token is refused everywhere a token is needed', () => {
   assert.equal(service.handle({ op: 'poll', tableId, auth: host.auth, since: 0 }).ok, true);
 });
 
+test('only a poll from a member of the table is kept waiting for news', () => {
+  const { service } = setup();
+  const host = joined(service.handle({ op: 'create', name: 'Quigs' }));
+  const tableId = host.view.id;
+  const poll = { op: 'poll', tableId, auth: host.auth, since: 1, holdMs: 20_000 };
+
+  assert.deepEqual(service.waitFor(poll), { tableId, since: 1, ms: 20_000 });
+  assert.deepEqual(service.waitFor({ ...poll, tableId: tableId.toLowerCase() })?.tableId, tableId, 'the wait is for the table as it is stored');
+
+  // Each of these gets its answer, or its refusal, at once: holding it would spend a request slot on a stranger
+  for (const [why, request] of Object.entries({
+    'a wrong token': { ...poll, auth: { id: host.auth.id, token: 'WRONGTOKEN' } },
+    'someone who never joined': { ...poll, auth: { id: 'NOBODY12', token: host.auth.token } },
+    'no credentials': { ...poll, auth: undefined },
+    'a table that is not there': { ...poll, tableId: 'NOPE22' },
+    'no table': { ...poll, tableId: undefined },
+    'a poll that does not ask to wait': { ...poll, holdMs: undefined },
+    'a wait of nothing': { ...poll, holdMs: 0 },
+    'a wait that is not a number': { ...poll, holdMs: Number.NaN },
+    'another kind of request': { ...poll, op: 'history' },
+    'nothing at all': null,
+    'a list': [poll],
+  })) {
+    assert.equal(service.waitFor(request), null, why);
+  }
+});
+
 test('a poll returns the table only when it has changed', () => {
   const { service, clock } = setup();
   const host = joined(service.handle({ op: 'create', name: 'Quigs' }));
@@ -152,7 +192,7 @@ test('a command that breaks a rule changes nothing', () => {
   const { tableId, store, act } = seatedTable();
   const before = store.read(tableId)!;
 
-  assert.deepEqual(failure(act(1, { type: 'start' })), { ok: false, code: 'invalid', error: 'Only the host can do that' });
+  assert.deepEqual(failure(act(1, { type: 'start' })), { ok: false, code: 'invalid', error: 'Only the host or a co-host can do that' });
   assert.deepEqual(store.read(tableId), before);
 });
 
@@ -202,6 +242,32 @@ test('polling is what moves time forward: the deal, the clock and the next hand'
   assert.equal(failure(history).code, 'unauthorized');
 });
 
+test('the end of a night reaches the store once each time, whether the last hand ends it as a poll comes in or the host does', () => {
+  const { tableId, store, clock, act, poll } = seatedTable();
+  const memory = store as MemoryStore;
+  viewOf(act(0, { type: 'start' }));
+  viewOf(act(0, { type: 'setLastHands', hands: 1 }));
+
+  // The hand is folded around and its result left up until a poll after the pause finds it over
+  clock.time += TIMING.startDelayMs;
+  let view = viewOf(poll(1));
+  while (view.hand!.stage === 'betting') {
+    view = viewOf(act(view.hand!.toAct!, { type: 'fold' }));
+  }
+  clock.time = view.hand!.deadline!;
+  view = viewOf(poll(2, view.version));
+
+  assert.equal(view.nightEndedAt, clock.time);
+  assert.deepEqual(memory.nightsEnded, [{ at: clock.time, tableId }]);
+
+  // Polls and refusals change nothing, and play started again and ended again is another night
+  viewOf(poll(0));
+  assert.equal(failure(act(0, { type: 'endNight' })).error, 'The night is already over');
+  viewOf(act(0, { type: 'playOn' }));
+  viewOf(act(0, { type: 'endNight' }));
+  assert.equal(memory.nightsEnded.length, 2);
+});
+
 test('history returns the finished hands of the table', () => {
   const { service, tableId, players, clock, act, poll } = seatedTable();
   viewOf(act(0, { type: 'start' }));
@@ -224,7 +290,7 @@ test('history returns the finished hands of the table', () => {
 /** Plays a table through the service with every player polling, the way browsers would. */
 function playThroughService(store: TableStore, steps: number, rng: Rng, beforeStep: () => void = () => {}): number {
   const { service, tableId, players, clock, act } = seatedTable(store);
-  viewOf(act(0, { type: 'updateConfig', config: { actionSeconds: 15, allowRunItTwice: true, sevenDeuceBounty: 20 } }));
+  viewOf(act(0, { type: 'updateConfig', config: { actionSeconds: 15, maxRuns: 2, bounties: sevenDeuceBounty(20) } }));
   viewOf(act(0, { type: 'start' }));
 
   const versions = players.map(() => 0);
@@ -262,7 +328,7 @@ function playThroughService(store: TableStore, steps: number, rng: Rng, beforeSt
       viewOf(act(actor, command));
     } else if (hand?.stage === 'ritVote' && rng.int(10) < 7) {
       const voter = hand.players.find((p) => !p.folded && p.ritVote === null)!;
-      viewOf(act(players.findIndex((auth) => auth.id === voter.playerId), { type: 'ritVote', agree: true }));
+      viewOf(act(players.findIndex((auth) => auth.id === voter.playerId), { type: 'ritVote', runs: 2 }));
     } else {
       // Busted or timed-out players come back so the game keeps going
       saved.seats.forEach((seat, index) => {
@@ -340,3 +406,181 @@ test('integers from random bytes cover the whole range evenly', () => {
     assert.ok(Math.abs(count - draws / 52) < 300, `a value came up ${count} times`);
   }
 });
+
+// ---- Old tables put away ----
+
+// The cache behind each store over a Sheet, for a test that needs it as another version of the game leaves it
+const CACHE_OF = new WeakMap<TableStore, FakeCache>();
+
+function sheetStore(): TableStore {
+  const lock = new FakeLock();
+  const spreadsheet = new FakeSpreadsheet(lock);
+  const cache = new FakeCache();
+  const store = new SheetStore({ spreadsheet: () => spreadsheet, cache, lock, flush: () => {} });
+
+  CACHE_OF.set(store, cache);
+
+  return store;
+}
+
+const EITHER_STORE: [string, () => TableStore][] = [
+  ['in memory', () => new MemoryStore()],
+  ['in the Sheet', sheetStore],
+];
+
+for (const [kind, makeStore] of EITHER_STORE) {
+  test(`tables ${kind}: one left two weeks is put away when the next table is made, and everything asked of it gets one plain answer`, () => {
+    const { service, clock, tableId, players, poll } = seatedTable(makeStore());
+    const spare = joined(service.handle({ op: 'join', tableId, name: 'Cy' })).auth;
+
+    clock.time += 14 * DAY_MS - 1;
+    const young = joined(service.handle({ op: 'create', name: 'Dee' }));
+    assert.equal(viewOf(poll(0)).id, tableId, 'a millisecond short of two weeks, a new table moves nothing');
+
+    clock.time += 1;
+    const next = joined(service.handle({ op: 'create', name: 'Eve' }));
+
+    const asked: [string, unknown][] = [
+      ['info', { op: 'info', tableId }],
+      ['join', { op: 'join', tableId, name: 'Flo' }],
+      ['poll', { op: 'poll', tableId, auth: players[0], since: 3 }],
+      ['poll by another member', { op: 'poll', tableId, auth: spare, since: -1 }],
+      ['poll with a wrong token', { op: 'poll', tableId, auth: { id: players[0]!.id, token: 'WRONG' }, since: -1 }],
+      ['act', { op: 'act', tableId, auth: players[0], command: { type: 'start' } }],
+      ['history', { op: 'history', tableId, auth: players[0] }],
+      ['savePreset', { op: 'savePreset', tableId, auth: players[0], name: 'Fridays', settings: {}, replace: false }],
+      ['deletePreset', { op: 'deletePreset', tableId, auth: players[0], name: 'Fridays' }],
+    ];
+
+    for (const [what, request] of [...asked, ...asked]) {
+      assert.deepEqual(service.handle(request), { ok: false, code: 'not_found', error: PUT_AWAY_MESSAGE, putAway: true }, what);
+    }
+
+    assert.equal(service.hasNews(tableId, 3), true, 'a poll for it is answered at once, not held');
+
+    const never = failure(service.handle({ op: 'info', tableId: 'NEVER2' }));
+    assert.deepEqual([never.code, 'putAway' in never], ['not_found', false], 'a table that never was is still only that');
+
+    for (const other of [young, next]) {
+      assert.equal(viewOf(service.handle({ op: 'poll', tableId: other.view.id, auth: other.auth, since: -1 })).id, other.view.id, 'the tables made since are untouched');
+    }
+  });
+
+  test(`tables ${kind}: a page left open and asking does not keep a table, and a move at it does`, () => {
+    const { service, clock, tableId, act, poll } = seatedTable(makeStore());
+    const played = joined(service.handle({ op: 'create', name: 'Dee' }));
+    const version = viewOf(poll(0)).version;
+
+    // Three weeks of a tab left open on one table, and of a game now and then at the other
+    for (let hour = 0; hour < 21 * 24; hour++) {
+      clock.time += DAY_MS / 24;
+      assert.equal(poll(0, version).ok, true);
+      assert.equal(service.handle({ op: 'info', tableId }).ok, true);
+
+      if (hour % (5 * 24) === 0) {
+        joined(service.handle({ op: 'join', tableId: played.view.id, name: `Guest ${hour}` }));
+      }
+    }
+
+    joined(service.handle({ op: 'create', name: 'Eve' }));
+
+    assert.equal(failure(poll(0, version)).putAway, true);
+    assert.equal(failure(act(0, { type: 'start' })).putAway, true);
+    assert.equal(service.handle({ op: 'poll', tableId: played.view.id, auth: played.auth, since: -1 }).ok, true);
+  });
+}
+
+test('a new table is made and handed back whatever becomes of putting the old ones away', () => {
+  const broken = new MemoryStore();
+  let asked = 0;
+  broken.putAwayOld = () => {
+    asked += 1;
+    throw new Error('a store that breaks its word never to throw');
+  };
+  const { service } = setup(broken);
+
+  const host = joined(service.handle({ op: 'create', name: 'Host' }));
+
+  assert.equal(asked, 1);
+  assert.equal(viewOf(service.handle({ op: 'poll', tableId: host.view.id, auth: host.auth, since: -1 })).id, host.view.id);
+});
+
+test('old tables are seen to when a table is made and at no other time, by the clock the game is played on', () => {
+  const watched = new MemoryStore();
+  const sweeps: number[] = [];
+  const putAwayOld = watched.putAwayOld.bind(watched);
+  watched.putAwayOld = (now, lastWords) => {
+    sweeps.push(now);
+    putAwayOld(now, lastWords);
+  };
+
+  const { service, clock, tableId, players, act, poll } = seatedTable(watched);
+  assert.deepEqual(sweeps, [clock.time], 'once, for the table that was made');
+
+  clock.time += 20 * DAY_MS;
+  poll(0);
+  act(0, { type: 'start' });
+  service.handle({ op: 'info', tableId });
+  service.handle({ op: 'history', tableId, auth: players[0] });
+  service.handle({ op: 'presets' });
+  service.handle({ op: 'join', tableId, name: 'Cy' });
+  service.handle({ op: 'info', tableId: 'NEVER2' });
+  assert.equal(sweeps.length, 1);
+
+  assert.equal(failure(service.handle({ op: 'create', name: '' })).code, 'invalid');
+  assert.equal(sweeps.length, 1, 'a table that was not made sweeps nothing');
+
+  joined(service.handle({ op: 'create', name: 'Dee' }));
+  assert.deepEqual(sweeps, [clock.time - 20 * DAY_MS, clock.time]);
+});
+
+for (const [kind, storeOf] of EITHER_STORE) {
+  test(`${kind}: a table saved by a newer version of the game is not opened, says so in words its players and whoever runs the game can act on, and is left as it was`, () => {
+    const clock = { time: 1_000_000, now: () => clock.time };
+    const errors = new MemoryErrorLog(clock);
+    const store = storeOf();
+    const service = new PokerService({ store, presets: new MemoryPresetStore(), players: new MemoryPlayerStore(seededRng(12)), clock, rng: seededRng(11), errors });
+    const host = joined(service.handle({ op: 'create', name: 'Host' }));
+    const tableId = host.view.id;
+
+    // A later version of the game saved the table, and then this one was put back
+    const newer = STATE_SCHEMA + 1;
+    const savedAs = store.transact(tableId, (state) => ({ save: { ...state!, schema: newer, version: state!.version + 1 }, at: clock.time, effects: [], result: state!.version + 1 }));
+
+    // That version keeps what it caches of a table under names of its own, so this one's cache has nothing of the save
+    CACHE_OF.get(store)?.entries.clear();
+
+    const requests = [
+      { op: 'poll', tableId, auth: host.auth, since: -1 },
+      { op: 'info', tableId },
+      { op: 'join', tableId, name: 'Latecomer' },
+      { op: 'act', tableId, auth: host.auth, command: { type: 'chat', text: 'hello' } },
+    ];
+
+    for (const request of requests) {
+      const answer = failure(service.handle(request));
+
+      // Not a refusal: the seat stays in the address and the browser's memory for when the newer version is back
+      assert.equal(answer.code, 'internal', request.op);
+      assert.equal(answer.error, "This table was saved by a newer version of the game than the one running now, so it can't be opened. Whoever runs the game needs to put the newer version back.", request.op);
+    }
+
+    // A page asks again every few seconds: the log has a row for each kind of request that met it, not one for each time
+    service.handle(requests[0]);
+    assert.deepEqual(errors.rows.map((row) => row.where), ['server poll', 'server info', 'server join', 'server act']);
+
+    for (const row of errors.rows) {
+      assert.equal(row.tableId, tableId);
+      assert.match(row.message, new RegExp(`saved by a newer version of the game \\(schema ${newer}; this version reads up to schema ${STATE_SCHEMA}\\)\\. Deploy that version again, or restore the Sheet to before it was deployed`));
+    }
+
+    // A page's poll asks to be held. The host asks first whether to hold it, and of one it holds, whether there is news:
+    // neither may be what fails, or the page is told "Something went wrong" and never hears what did
+    assert.equal(service.waitFor({ ...requests[0], holdMs: 25_000 }), null, 'the poll is not held, so that it is answered at once');
+    assert.equal(service.hasNews(tableId, savedAs), true, 'and one that was being held is let go to be answered');
+    assert.equal(errors.rows.length, 4, 'neither is a failure of its own');
+
+    // Nothing was saved over it: it is still the newer version's table
+    assert.throws(() => store.transact(tableId, (state) => ({ save: null, effects: [], result: state })), /saved by a newer version/);
+  });
+}

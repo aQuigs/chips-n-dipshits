@@ -1,0 +1,83 @@
+/* ---- The app's box ---- */
+
+/*
+ * The element the app is mounted in, which must be given a height. The layout answers to this box,
+ * not the window, so the app lays itself out correctly wherever it is put; dialogs and toasts stay
+ * inside it for the same reason.
+ */
+.cnd {
+  position: relative;
+  container: app / size;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.4 var(--font-ui);
+  -webkit-text-size-adjust: 100%;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+/*
+ * A control that has just come up where a different one lay takes no tap for a moment (tapGuard.ts):
+ * the finger that lands on it now was on its way to the other. It looks as it will, since the moment
+ * is shorter than it takes to wonder, and a key or a screen reader presses it all the same.
+ */
+.taps-settling {
+  pointer-events: none !important;
+}
+
+/* A dialog's backdrop that takes no tap yet: the dialog on it is judged by its own controls */
+.overlay.taps-settling > * {
+  pointer-events: auto;
+}
+
+/* Words for a screen reader alone */
+.unseen {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* What the page says aloud stands after everything else on it: left there, its one pixel under the screen's bottom edge lets the whole page be dragged by it */
+.cnd > .unseen {
+  top: 0;
+  left: 0;
+}
+
+button,
+input {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+:focus-visible {
+  outline: var(--focus-width) solid var(--focus);
+  outline-offset: 2px;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}

@@ -10,8 +10,15 @@ import { chromium } from 'playwright';
 import type { Browser, Page } from 'playwright';
 
 import { THEMES } from '../src/client/themes.ts';
+import { LIMITS } from '../src/engine/index.ts';
 import { startDevServer } from '../src/dev/server.ts';
+import { MemoryPlayerStore } from '../src/server/memoryPlayerStore.ts';
+import { MemoryPresetStore } from '../src/server/memoryPresetStore.ts';
+import { MemoryStore } from '../src/server/memoryStore.ts';
+import { PokerService } from '../src/server/service.ts';
+import { seededRng } from '../tests/helpers.ts';
 import { clientPage } from './bundle.ts';
+import { STILL } from './pageSpies.ts';
 
 const OUT = fileURLToPath(new URL('../screenshots/', import.meta.url));
 const DESKTOP = { width: 1280, height: 800 };
@@ -28,6 +35,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function open(browser: Browser, phone: boolean): Promise<Page> {
   const context = await browser.newContext(phone ? { viewport: PHONE, deviceScaleFactor: 2, isMobile: true, hasTouch: true } : { viewport: DESKTOP });
+  await context.addInitScript(STILL);
   const page = await context.newPage();
 
   page.setDefaultTimeout(STEP_TIMEOUT_MS);
@@ -60,13 +68,29 @@ async function setTheme(page: Page, id: string): Promise<void> {
   await page.click('[data-action="close"]');
 }
 
+async function setDeck(page: Page, deck: string): Promise<void> {
+  if ((await page.evaluate(`document.querySelector('.cnd').dataset.deck`)) === deck) {
+    return;
+  }
+
+  await openFromMenu(page, 'preferences');
+  await page.click(`#pref-deck .tile:has(input[value="${deck}"])`);
+  await page.click('[data-action="close"]');
+}
+
+/** Each theme with the deck it comes with, then each with the four-color deck a player can choose. */
 async function shotInEveryTheme(page: Page, name: string): Promise<void> {
-  for (const theme of THEMES) {
-    await setTheme(page, theme.id);
-    await shot(page, `${name}-${theme.id}`);
+  for (const deck of ['theme', 'four']) {
+    await setDeck(page, deck);
+
+    for (const theme of THEMES) {
+      await setTheme(page, theme.id);
+      await shot(page, `${name}-${theme.id}${deck === 'four' ? '-four-color' : ''}`);
+    }
   }
 
   await setTheme(page, THEMES[0]!.id);
+  await setDeck(page, 'theme');
 }
 
 async function sit(page: Page, seat: number): Promise<void> {
@@ -122,7 +146,13 @@ async function openFromMenu(page: Page, action: string): Promise<void> {
 await mkdir(OUT, { recursive: true });
 
 const html = await clientPage({});
-const server = await startDevServer({ port: 0, page: async () => html });
+/*
+ * Every run plays the same game: the requests that draw from the rng (creating the table, joining,
+ * dealing) go one at a time in a fixed order. With this seed the first hand has one winner and the
+ * second busts players, which the rebuy pictures need.
+ */
+const service = new PokerService({ store: new MemoryStore(), presets: new MemoryPresetStore(), players: new MemoryPlayerStore(seededRng(2)), clock: { now: () => Date.now() }, rng: seededRng(1) });
+const server = await startDevServer({ port: 0, page: async () => html, service });
 const browser = await chromium.launch();
 const players: Player[] = [];
 
@@ -179,6 +209,13 @@ try {
   const watched = new Set([host, phone]);
 
   await shot(host.page, '06-ready-desktop');
+
+  // Each player's turn waits while their pictures are taken, which on a busy machine outlasts the usual clock and folds them
+  await openFromMenu(host.page, 'settings');
+  await host.page.fill('#table-action-seconds', String(LIMITS.maxActionSeconds));
+  await host.page.click('[data-action="save-settings"]');
+  await host.page.waitForSelector('.dialog', { state: 'detached' });
+
   await host.page.click('.message [data-action="start"]');
 
   // ---- Hand 1: bets on every street, down to a showdown ----
@@ -252,31 +289,32 @@ try {
   await secondDevice.waitForSelector('.seat.me');
   await secondDevice.context().close();
 
-  // ---- Hand 2: everyone all in, run twice ----
+  // ---- Hand 2: everyone all in, run twice: the fewest anyone picks ----
   await openFromMenu(host.page, 'start');
 
-  let first = true;
-  for (let player = await onTheClock(players, '[data-action="rit-yes"]'); player; player = await onTheClock(players, '[data-action="rit-yes"]')) {
+  // Everyone who can raise goes all in: hand 1 can end in a split pot, and two players who only called would bet on after the flop
+  for (let player = await onTheClock(players, '[data-action="rit-2"]'); player; player = await onTheClock(players, '[data-action="rit-2"]')) {
     const page = player.page;
 
-    if (first) {
-      first = false;
+    if (await has(page, '.turn [data-action="raise"]')) {
       await page.click('.presets button:has-text("All in")');
+      await page.waitForSelector('.turn [data-action="raise"]:has-text("All in")');
       await act(page, 'raise');
     } else {
       await act(page, 'call');
     }
   }
 
-  await phone.page.waitForSelector('[data-action="rit-yes"]');
-  await shot(host.page, '11-run-it-twice-vote-desktop');
-  await shot(phone.page, '11-run-it-twice-vote-phone');
+  await phone.page.waitForSelector('[data-action="rit-3"]');
+  await shot(host.page, '11-run-it-vote-desktop');
+  await shot(phone.page, '11-run-it-vote-phone');
 
-  for (const { page } of players) {
-    await act(page, 'rit-yes');
+  // Everyone wants three but the last, who wants two, and two it is
+  for (const [nth, { page }] of players.entries()) {
+    await act(page, nth === players.length - 1 ? 'rit-2' : 'rit-3');
   }
 
-  await host.page.waitForSelector('.boards.twice');
+  await host.page.waitForSelector('.table[data-boards="2"]');
   await host.page.waitForSelector('.message.result');
   await phone.page.waitForSelector('.message.result');
   await shot(host.page, '12-ran-twice-desktop');

@@ -1,10 +1,19 @@
+import { BuildGate } from '../server/build.ts';
 import { ByteRng } from '../server/byteRng.ts';
-import { PokerService } from '../server/service.ts';
-import type { ApiError } from '../server/api.ts';
+import { failureOf, PokerService } from '../server/service.ts';
+import type { ApiError, Built } from '../server/api.ts';
+import { CacheArrivalKeys } from './cacheArrivalKeys.ts';
+import { SheetErrorLog } from './sheetErrorLog.ts';
+import { SheetPlayerStore } from './sheetPlayerStore.ts';
+import { SheetPresetStore } from './sheetPresetStore.ts';
+import { SheetResultStore } from './sheetResultStore.ts';
 import { SheetStore } from './sheetStore.ts';
 
 // Set by the build when the deployed address is known; otherwise the script asks Apps Script for it
 declare const WEB_APP_URL: string;
+
+// Written in by the build: the id the page of the same build carries
+declare const BUILD_ID: string;
 
 const APP_TITLE = "Chips n' Dipshits";
 
@@ -32,19 +41,46 @@ function uuidBytes(): number[] {
   return bytes;
 }
 
-let serviceForThisRun: PokerService | null = null;
+let serviceForThisRun: BuildGate | null = null;
+let errorsForThisRun: SheetErrorLog | null = null;
 
-function service(): PokerService {
-  serviceForThisRun ??= new PokerService({
-    store: new SheetStore({
-      spreadsheet: () => SpreadsheetApp.getActiveSpreadsheet(),
-      cache: CacheService.getScriptCache(),
-      lock: LockService.getScriptLock(),
-      flush: () => SpreadsheetApp.flush(),
-    }),
+function errors(): SheetErrorLog {
+  errorsForThisRun ??= new SheetErrorLog({
+    spreadsheet: () => SpreadsheetApp.getActiveSpreadsheet(),
+    cache: CacheService.getScriptCache(),
     clock: { now: () => Date.now() },
-    rng: new ByteRng(uuidBytes),
+    build: BUILD_ID,
   });
+
+  return errorsForThisRun;
+}
+
+function service(): BuildGate {
+  if (serviceForThisRun) {
+    return serviceForThisRun;
+  }
+
+  const spreadsheet = () => SpreadsheetApp.getActiveSpreadsheet();
+  const cache = CacheService.getScriptCache();
+  const lock = LockService.getScriptLock();
+  const flush = () => SpreadsheetApp.flush();
+  const rng = new ByteRng(uuidBytes);
+  const clock = { now: () => Date.now() };
+  const results = new SheetResultStore({ spreadsheet, cache, lock, flush, clock, errors: errors() });
+
+  serviceForThisRun = new BuildGate(
+    new PokerService({
+      store: new SheetStore({ spreadsheet, cache, lock, flush, errors: errors(), results }),
+      presets: new SheetPresetStore({ spreadsheet, lock, flush }),
+      players: new SheetPlayerStore({ spreadsheet, cache, lock, flush, rng, errors: errors() }),
+      arrivals: new CacheArrivalKeys({ cache }),
+      results,
+      clock,
+      rng,
+      errors: errors(),
+    }),
+    BUILD_ID,
+  );
 
   return serviceForThisRun;
 }
@@ -89,32 +125,45 @@ export function doPost(event: GoogleAppsScript.Events.DoPost): GoogleAppsScript.
 
 /** Keeps a poll open until there is something to send back, so players see changes without hammering the script. */
 function holdUntilNews(request: unknown): void {
-  const poll = request as { op?: unknown; tableId?: unknown; since?: unknown; holdMs?: unknown };
-  if (poll.op !== 'poll' || typeof poll.tableId !== 'string' || typeof poll.since !== 'number' || typeof poll.holdMs !== 'number') {
+  const wait = service().waitFor(request);
+  if (!wait) {
     return;
   }
 
-  const until = Date.now() + Math.min(poll.holdMs, MAX_HOLD_MS);
+  const until = Date.now() + Math.min(wait.ms, MAX_HOLD_MS);
 
-  while (Date.now() < until && !service().hasNews(poll.tableId, poll.since)) {
+  while (Date.now() < until && !service().hasNews(wait.tableId, wait.since)) {
     Utilities.sleep(HOLD_CHECK_MS);
   }
 }
 
 /** Every call the game page makes, as JSON in and JSON out. */
 export function api(body: string): string {
-  try {
-    const request: unknown = JSON.parse(body);
+  let request: unknown;
 
-    if (typeof request === 'object' && request !== null) {
-      holdUntilNews(request);
-    }
+  try {
+    request = JSON.parse(body);
+  } catch {
+    // Not something the page sends: whoever did is told so, and the log is no place for it
+    const refused: ApiError & Built = { ok: false, code: 'invalid', error: 'Malformed request', build: BUILD_ID };
+
+    return JSON.stringify(refused);
+  }
+
+  try {
+    holdUntilNews(request);
 
     return JSON.stringify(service().handle(request));
   } catch (error) {
+    // What the service caught and reported already is left out by the log, which may itself be what failed to start
     console.error(error);
+    try {
+      errors().report(failureOf(request, error));
+    } catch (unreported) {
+      console.error(unreported);
+    }
 
-    const failure: ApiError = { ok: false, code: 'internal', error: 'Something went wrong on the server, try again' };
+    const failure: ApiError & Built = { ok: false, code: 'internal', error: 'Something went wrong on the server, try again', build: BUILD_ID };
 
     return JSON.stringify(failure);
   }

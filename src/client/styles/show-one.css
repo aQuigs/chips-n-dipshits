@@ -1,0 +1,34 @@
+/* ---- Showing one card or both after a hand ---- */
+
+/* Kept together, so under a phone's table the group wraps below the other switches as one */
+.show-cards {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.show-cards .show-label {
+  padding-inline: 2px;
+  color: var(--muted);
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 600;
+}
+
+.show-card {
+  display: inline-grid;
+  place-items: center;
+  padding: 0 8px;
+}
+
+/* The card the button shows, drawn small enough to sit inside it */
+.show-card .card {
+  --card-w: 21px;
+
+  box-shadow: none;
+}
+
+/* The viewer's own cards the table can see once the hand is over */
+.seat.me .hole .card.seen {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}

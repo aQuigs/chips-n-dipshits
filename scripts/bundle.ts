@@ -1,17 +1,27 @@
 import { build } from 'esbuild';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import type { Plugin } from 'esbuild';
+import { createHash } from 'node:crypto';
+import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { STYLESHEETS } from '../src/client/styles/order.ts';
 import { fontsUrl, THEMES } from '../src/client/themes.ts';
+import { UNSTAMPED_BUILD } from '../src/server/build.ts';
 
 const ROOT = new URL('..', import.meta.url);
 const pathOf = (relative: string) => fileURLToPath(new URL(relative, ROOT));
+
+const STYLES_DIR = 'src/client/styles/';
 
 // Marks in the page template that the build, or the server at request time, fills in
 const CSS_SLOT = '/*__CSS__*/';
 const JS_SLOT = '/*__JS__*/';
 const BOOT_SLOT = '"__BOOT__"';
 const FONTS_SLOT = '__FONTS__';
+
+// Enough of the hash that two builds never share an id, and little enough to ride on every request
+const BUILD_ID_LENGTH = 12;
 
 // The functions Apps Script calls by name have to exist at the top level of the script
 const APPS_SCRIPT_ENTRY_POINTS = `
@@ -23,6 +33,9 @@ function api(body) { return CND.api(body); }
 async function bundle(entry: string, options: Parameters<typeof build>[0] = {}): Promise<string> {
   const result = await build({
     entryPoints: [pathOf(entry)],
+    // A script that is not minified names each of its modules by its path from here, and the build's id is a hash of
+    // that text: from the repo's root it is the same id wherever the build is run
+    absWorkingDir: resolve(pathOf('.')),
     bundle: true,
     write: false,
     format: 'iife',
@@ -66,17 +79,38 @@ function withoutCommentOpeners(js: string): string {
   return safe;
 }
 
+/**
+ * The app's stylesheets in the order they are listed. A stylesheet left off the list would be missing
+ * from the page without anything saying so, which is how a feature ships unstyled, and one listed twice
+ * would override whatever stands between its two places. Either stops the build.
+ */
+async function appStyles(): Promise<string[]> {
+  const unlisted = (await readdir(pathOf(STYLES_DIR))).filter((name) => name.endsWith('.css') && !STYLESHEETS.includes(name));
+  const twice = STYLESHEETS.filter((name, index) => STYLESHEETS.indexOf(name) !== index);
+
+  if (unlisted.length > 0) {
+    throw new Error(`${unlisted.join(', ')} in ${STYLES_DIR} is not in the page: add it to STYLESHEETS in ${STYLES_DIR}order.ts`);
+  }
+
+  if (twice.length > 0) {
+    throw new Error(`${twice.join(', ')} is in STYLESHEETS (${STYLES_DIR}order.ts) twice`);
+  }
+
+  return STYLESHEETS.map((name) => `${STYLES_DIR}${name}`);
+}
+
 interface PageParts {
   template: string;
   styles: string[];
   entry: string;
+  plugins?: Plugin[];
 }
 
 /** One HTML file with its styles and script written into it. */
 async function inlinedPage(parts: PageParts): Promise<string> {
   const [template, js, ...css] = await Promise.all([
     readFile(pathOf(parts.template), 'utf8'),
-    bundle(parts.entry, { minify: true, target: 'es2020' }),
+    bundle(parts.entry, { minify: true, target: 'es2020', plugins: parts.plugins }),
     ...parts.styles.map((path) => readFile(pathOf(path), 'utf8')),
   ]);
 
@@ -89,12 +123,14 @@ async function inlinedPage(parts: PageParts): Promise<string> {
 /**
  * The whole game page as one HTML file, since Apps Script serves a single file.
  * Pass the settings the page should start with, or null to leave that slot for the server to fill per request.
+ * The page is unstamped: it says it is build `UNSTAMPED_BUILD` until `stamped` or whoever serves it says otherwise.
  */
-export async function clientPage(boot: object | null): Promise<string> {
+export async function clientPage(boot: object | null, plugins: Plugin[] = []): Promise<string> {
   const page = await inlinedPage({
     template: 'src/client/index.html',
-    styles: ['src/client/page.css', 'src/client/styles.css'],
+    styles: ['src/client/page.css', ...(await appStyles())],
     entry: 'src/client/main.ts',
+    plugins,
   });
 
   return boot === null ? page : fill(page, BOOT_SLOT, JSON.stringify(boot).replace(/</g, '\\u003c'));
@@ -104,42 +140,99 @@ export async function clientPage(boot: object | null): Promise<string> {
 export async function galleryPage(): Promise<string> {
   const page = await inlinedPage({
     template: 'src/client/gallery.html',
-    styles: ['src/client/styles.css', 'src/client/gallery.css'],
+    styles: [...(await appStyles()), 'src/client/gallery.css'],
     entry: 'src/client/gallery.ts',
   });
 
   return fill(page, FONTS_SLOT, fontsUrl(THEMES).replace(/&/g, '&amp;'));
 }
 
-/** The server side as one script for Apps Script, which has no modules. */
-export function appsScriptCode(webAppUrl: string): Promise<string> {
+/** The server side as one script for Apps Script, which has no modules. Unstamped, like the page. */
+function appsScriptCode(webAppUrl: string, plugins: Plugin[] = []): Promise<string> {
   return bundle('src/gas/main.ts', {
     globalName: 'CND',
     // Apps Script's engine is older than a browser's, so newer syntax is rewritten
     target: 'es2019',
-    define: { WEB_APP_URL: JSON.stringify(webAppUrl) },
+    define: { WEB_APP_URL: JSON.stringify(webAppUrl), BUILD_ID: JSON.stringify(UNSTAMPED_BUILD) },
     footer: { js: APPS_SCRIPT_ENTRY_POINTS },
+    plugins,
   });
 }
 
-/**
- * Writes dist/gas (what gets pushed to Apps Script) and dist/web: the same page for any static host,
- * pointed at the deployed script once there is one.
- */
-export async function buildAll(webAppUrl: string): Promise<void> {
-  await Promise.all([mkdir(pathOf('dist/gas'), { recursive: true }), mkdir(pathOf('dist/web'), { recursive: true })]);
+/** A page or a script with the id of its build written in, wherever it says which build it is. */
+function stamped(built: string, id: string): string {
+  if (!built.includes(UNSTAMPED_BUILD)) {
+    throw new Error('What was built has nowhere to say which build it is');
+  }
 
+  return built.replaceAll(UNSTAMPED_BUILD, () => id);
+}
+
+/** Which build a page says it is. */
+export function buildOf(page: string): string | undefined {
+  return /window\.CND_BUILD = "([^"]*)";/.exec(page)?.[1];
+}
+
+/** What a build writes to dist, by path there, and the id all of it carries. */
+export interface Build {
+  id: string;
+  files: Record<string, string>;
+}
+
+/**
+ * Builds dist/gas (what gets pushed to Apps Script) and dist/web: the same page for any static host,
+ * pointed at the deployed script once there is one.
+ *
+ * The id is a hash of the page and the script as built, before it is written into them. So the same
+ * sources give the same id, whenever, wherever and however often they are built, and a deploy that changes
+ * nothing a page or the server runs leaves the pages that are open alone.
+ * `plugins` are esbuild's, for a test to build from sources other than the ones in the tree.
+ */
+export async function buildFiles(webAppUrl: string, plugins: Plugin[] = []): Promise<Build> {
   const [gasPage, webPage, code, manifest] = await Promise.all([
-    clientPage(null),
-    clientPage(webAppUrl ? { api: webAppUrl } : {}),
-    appsScriptCode(webAppUrl),
+    clientPage(null, plugins),
+    clientPage(webAppUrl ? { api: webAppUrl } : {}, plugins),
+    appsScriptCode(webAppUrl, plugins),
     readFile(pathOf('src/gas/appsscript.json'), 'utf8'),
   ]);
 
-  await Promise.all([
-    writeFile(pathOf('dist/gas/index.html'), gasPage),
-    writeFile(pathOf('dist/gas/Code.js'), code),
-    writeFile(pathOf('dist/gas/appsscript.json'), manifest),
-    writeFile(pathOf('dist/web/index.html'), webPage),
-  ]);
+  const id = createHash('sha256').update(gasPage).update(code).digest('hex').slice(0, BUILD_ID_LENGTH);
+
+  return {
+    id,
+    files: {
+      'gas/index.html': stamped(gasPage, id),
+      'gas/Code.js': stamped(code, id),
+      'gas/appsscript.json': manifest,
+      'web/index.html': stamped(webPage, id),
+    },
+  };
+}
+
+/**
+ * A mark of everything in a build that is pushed to Apps Script. It tells two pushes apart where the
+ * build's id cannot: the id leaves out the manifest, which says who may open the game and as whom it runs.
+ */
+export function pushedMark(files: Record<string, string>): string {
+  const mark = createHash('sha256');
+
+  for (const path of Object.keys(files).filter((each) => each.startsWith('gas/')).sort()) {
+    mark.update(path).update('\0').update(files[path]!).update('\0');
+  }
+
+  return mark.digest('hex').slice(0, BUILD_ID_LENGTH);
+}
+
+/** Writes the build to `dist/`, or to the folder given, and gives its id and the mark of what it holds for Apps Script. */
+export async function buildAll(webAppUrl: string, dist: string = pathOf('dist/')): Promise<{ id: string; mark: string }> {
+  const { id, files } = await buildFiles(webAppUrl);
+
+  for (const [path, content] of Object.entries(files)) {
+    const file = join(dist, path);
+
+    await mkdir(dirname(file), { recursive: true });
+    await writeFile(file, content);
+  }
+
+  return { id, mark: pushedMark(files) };
 }

@@ -1,0 +1,96 @@
+/* ---- Naming someone in the chat ---- */
+
+.entries .mention {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+/* The viewer's own name stands out from anyone else's */
+.entries .mention[data-you] {
+  padding: 0 0.2em;
+  border-radius: var(--radius);
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+/* A line that names the viewer is lit along its edge */
+.entries li[data-names-you] {
+  position: relative;
+  padding-left: 8px;
+  box-shadow: inset 3px 0 0 var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+/* On the chat's bar, which is all of the chat in sight while it is shut or down for the viewer's turn: a line named them and they have not had it in sight */
+.feed-toggle .named-you {
+  flex: none;
+  padding: 0 0.45em;
+  border-radius: var(--radius);
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+/* The names offered after an @, over the bottom of the chat, just above the box */
+.say {
+  position: relative;
+}
+
+.mention-list {
+  position: absolute;
+  bottom: 100%;
+  left: 12px;
+  z-index: 3;
+  width: min(260px, calc(100% - 24px));
+  margin: 0 0 4px;
+  padding: 4px 0;
+  overflow: hidden;
+  list-style: none;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-raised);
+  box-shadow: var(--shadow-raised);
+  /* For where the names are one line, swiped along (below) */
+  scrollbar-width: none;
+}
+
+.mention-list li {
+  flex: none;
+  min-height: 36px;
+  /* Larger letters take from the padding what their line gains, so a name is as tall as it was drawn and the list ends where it did, under the bar */
+  padding: calc(8px - 9.8px * (var(--text-scale) - 1)) 12px;
+  overflow: hidden;
+  font-size: calc(14px * var(--text-scale));
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.mention-list li[aria-selected='true'] {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+/*
+ * Where a column of names has no room they go on one line, swiped along for the rest. On a player's own
+ * turn a phone's open chat is down to its box, with the moves close above it: a column would lie over
+ * Fold and Call. Beside a table lying down (sideways.css) the chat is a few lines tall at the least: a
+ * column would run off the top of the screen.
+ */
+@container app ((max-width: 899.98px) and (min-height: 521px)) or (max-width: 559.98px) {
+  .app:has(.turn) .mention-list {
+    display: flex;
+    width: calc(100% - 24px);
+    overflow-x: auto;
+  }
+}
+
+@container app (min-width: 560px) and (max-height: 520px) {
+  .mention-list {
+    display: flex;
+    width: calc(100% - 24px);
+    overflow-x: auto;
+  }
+}

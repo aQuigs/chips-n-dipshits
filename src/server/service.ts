@@ -1,8 +1,20 @@
-import { addMember, applyCommand, createTable, GameError, randomId, tick, viewFor } from '../engine/index.ts';
-import type { Command, Ctx, Rng, TableState } from '../engine/index.ts';
-import type { ApiResponse, Auth, ErrorCode } from './api.ts';
+import { addMember, applyCommand, createTable, GameError, listedLike, NewerTable, playerName, presetName, presetSettings, randomId, requireLevel, setIdentity, sharedPreset, tick, UNITS, viewFor } from '../engine/index.ts';
+import type { Arriving, Command, Ctx, KnownPlayer, Member, Preset, Rng, TableState, Unit } from '../engine/index.ts';
+import { HISTORY_LIMIT } from './api.ts';
+import type { ApiResponse, Auth, ErrorCode, Joined, UnitStandings, Who } from './api.ts';
+import { askingOf, MemoryArrivalKeys } from './arrivalKeys.ts';
+import type { ArrivalKeys, Asking, KeptArrival } from './arrivalKeys.ts';
+import { NOWHERE } from './errorLog.ts';
+import type { ErrorLog, Failure } from './errorLog.ts';
+import { isCheckPlayer, isPlayerId, NameOnList } from './playerStore.ts';
+import type { PlayerStore } from './playerStore.ts';
+import type { PresetStore } from './presetStore.ts';
+import { PUT_AWAY_MESSAGE } from './putAway.ts';
+import type { LastWords } from './putAway.ts';
+import { NO_RESULTS } from './resultStore.ts';
+import type { ResultStore } from './resultStore.ts';
 import { StoreBusyError } from './store.ts';
-import type { TableStore } from './store.ts';
+import type { TableStore, Txn } from './store.ts';
 
 export interface Clock {
   now(): number;
@@ -10,8 +22,16 @@ export interface Clock {
 
 export interface ServiceDeps {
   store: TableStore;
+  presets: PresetStore;
+  players: PlayerStore;
+  /** Where answered arrivals are remembered by their keys. Left out, in memory, which is no memory at all where each request gets a process of its own. */
+  arrivals?: ArrivalKeys;
+  /** Where the players' records over time are read from; the store of tables is what writes them. Left out, nobody's record is kept. */
+  results?: ResultStore;
   clock: Clock;
   rng: Rng;
+  /** Where failures the game carries on through are written down. Left out, only Apps Script's own log hears of them. */
+  errors?: ErrorLog;
 }
 
 const TABLE_ID_LENGTH = 6;
@@ -19,16 +39,25 @@ const TABLE_ID_LENGTH = 6;
 // Checked before an id goes anywhere near storage, which has limits on what a key may be
 const TABLE_ID_PATTERN = new RegExp(`^[A-Z0-9]{${TABLE_ID_LENGTH}}$`);
 const CREATE_ATTEMPTS = 5;
-const HISTORY_LIMIT = 30;
+
+/** A poll that may be kept open: until the table moves on from `since`, or for `ms` at most. */
+export interface PollWait {
+  tableId: string;
+  since: number;
+  ms: number;
+}
 
 /** A request that can't be served, with the code the caller should react to. */
 export class ApiFailure extends Error {
   readonly code: ErrorCode;
+  /** The table asked for was put away, which a page tells its player in its own words. */
+  readonly putAway: boolean;
 
-  constructor(code: ErrorCode, message: string) {
+  constructor(code: ErrorCode, message: string, putAway = false) {
     super(message);
     this.name = 'ApiFailure';
     this.code = code;
+    this.putAway = putAway;
   }
 }
 
@@ -56,7 +85,7 @@ function tableIdOf(request: Fields): string {
 
   const id = wellFormedTableId(request.tableId);
   if (id === null) {
-    throw noSuchTable();
+    throw new ApiFailure('not_found', NO_SUCH_TABLE);
   }
 
   return id;
@@ -71,17 +100,92 @@ function authOf(request: Fields): Auth {
   return { id: auth.id, token: auth.token };
 }
 
-function authenticate(state: TableState, auth: Auth): void {
+function authenticate(state: TableState, auth: Auth): Member {
   const member = state.members.find((m) => m.id === auth.id);
 
   if (!member || member.token !== auth.token) {
     throw new ApiFailure('unauthorized', 'This browser is not a member of the table; join again from the link');
   }
+
+  return member;
 }
 
-function noSuchTable(): ApiFailure {
-  return new ApiFailure('not_found', 'That table does not exist');
+/** What a request says of who its sender is on the list of players, or null when it says nothing. */
+function whoOf(request: Fields): Who | null {
+  if (request.who === undefined || request.who === null) {
+    return null;
+  }
+
+  const who = fieldsOf(request.who);
+
+  if (who.as === 'new') {
+    return { as: 'new' };
+  }
+
+  if (who.as === 'known' && typeof who.id === 'string') {
+    return { as: 'known', id: who.id };
+  }
+
+  throw new ApiFailure('invalid', 'Malformed request');
 }
+
+/** Someone about to become a member of a table: what they are called there, and who the list of players says they are. */
+interface Arrival extends Arriving {
+  name: unknown;
+  /** Someone new, for the list of players to hear of once the table has let them in. */
+  enlist: boolean;
+}
+
+/**
+ * The answer an arrival was given, from the table as it now stands, or null when the table holds no
+ * such member. What is kept under a key is kept before the table is saved, so it may name a member of
+ * a save that failed, or one since removed: neither is anyone to answer with.
+ */
+function arrivedAs(state: TableState | null, kept: KeptArrival, now: number): Joined | null {
+  const member = state?.id === kept.tableId ? state.members.find((m) => m.id === kept.memberId) : undefined;
+
+  return state && member ? { ok: true, kind: 'joined', auth: { id: member.id, token: member.token }, view: viewFor(state, member.id, now) } : null;
+}
+
+/** Anyone with the game's address may list the presets, so they are handed out holding only what presets keep. */
+function presetsAnswer(presets: Preset[]): ApiResponse {
+  return { ok: true, kind: 'presets', presets: presets.map(sharedPreset) };
+}
+
+const NO_SUCH_TABLE = 'That table does not exist';
+
+// What a player is told of a table this code is too old to read. The log is told what to do about it (`NewerTable`)
+const NEWER_TABLE = "This table was saved by a newer version of the game than the one running now, so it can't be opened. Whoever runs the game needs to put the newer version back.";
+
+/** The store has no table under this id. Whether it was put away is found out in one place, `answer`. */
+class NoSuchTable extends ApiFailure {
+  readonly tableId: string;
+
+  constructor(tableId: string) {
+    super('not_found', NO_SUCH_TABLE);
+    this.tableId = tableId;
+  }
+}
+
+/**
+ * A failure in answering a request, for the log: where is the operation, when it is one this code
+ * could have known, and the table is the one the request names, when it is a table's id.
+ */
+export function failureOf(request: unknown, error: unknown): Failure {
+  const { op, tableId } = (typeof request === 'object' && request !== null ? request : {}) as Fields;
+
+  return {
+    where: typeof op === 'string' && /^[A-Za-z]{1,20}$/.test(op) ? `server ${op}` : 'server',
+    error,
+    tableId: typeof tableId === 'string' ? wellFormedTableId(tableId) : null,
+  };
+}
+
+/**
+ * A table that is put away has had its last night, ended or not, and says so: that is what has its
+ * results written as they finally stand, the way the end of a night does.
+ */
+export const LAST_WORDS: LastWords = (state, at) => [{ type: 'nightEnded', night: { at, tableId: state.id } }];
 
 /**
  * Serves every request the game's clients make. It knows nothing about HTTP, Apps Script or Sheets:
@@ -90,30 +194,89 @@ function noSuchTable(): ApiFailure {
  */
 export class PokerService {
   private readonly store: TableStore;
+  private readonly presets: PresetStore;
+  private readonly players: PlayerStore;
+  private readonly arrivals: ArrivalKeys;
+  private readonly results: ResultStore;
   private readonly clock: Clock;
   private readonly rng: Rng;
+  private readonly errors: ErrorLog;
 
   constructor(deps: ServiceDeps) {
     this.store = deps.store;
+    this.presets = deps.presets;
+    this.players = deps.players;
+    this.arrivals = deps.arrivals ?? new MemoryArrivalKeys(deps.clock);
+    this.results = deps.results ?? NO_RESULTS;
     this.clock = deps.clock;
     this.rng = deps.rng;
+    this.errors = deps.errors ?? NOWHERE;
   }
 
   /** Answers one request. Rule violations and bad requests come back as error responses; only bugs and outages throw. */
   handle(request: unknown): ApiResponse {
     try {
-      return this.route(fieldsOf(request));
+      return this.answer(fieldsOf(request));
     } catch (error) {
       if (error instanceof GameError) {
         return { ok: false, code: 'invalid', error: error.message };
       }
 
       if (error instanceof ApiFailure) {
-        return { ok: false, code: error.code, error: error.message };
+        return { ok: false, code: error.code, error: error.message, ...(error.putAway ? { putAway: true } : {}) };
       }
 
+      // The commonest failure of the live game, and the player is asked to try again: the answer stands, and the log hears of it
       if (error instanceof StoreBusyError) {
+        this.failed(failureOf(request, `The lock was not free in time: ${error.message}`));
+
         return { ok: false, code: 'busy', error: error.message };
+      }
+
+      // Not a refusal, which would take the seat out of a player's browser: the table is whole, and opens again under the version that saved it
+      if (error instanceof NewerTable) {
+        this.failed(failureOf(request, error));
+
+        return { ok: false, code: 'internal', error: NEWER_TABLE };
+      }
+
+      this.failed(failureOf(request, error));
+      throw error;
+    }
+  }
+
+  /** Tells Apps Script's own log and the error log of something that went wrong. */
+  private failed(failure: Failure): void {
+    console.error(failure.where, failure.error);
+    this.errors.report(failure);
+  }
+
+  /**
+   * The wait a host may give this request before handing it to `handle`, or null when it gets none.
+   * Only a poll from a member of the table is worth holding. Anyone else is answered at once, so a
+   * stranger who knows a table code can't tie up the few requests a host serves at a time.
+   */
+  waitFor(request: unknown): PollWait | null {
+    try {
+      const fields = fieldsOf(request);
+      const { op, since, holdMs } = fields;
+      if (op !== 'poll' || typeof since !== 'number' || typeof holdMs !== 'number' || !(holdMs > 0)) {
+        return null;
+      }
+
+      const tableId = tableIdOf(fields);
+      const state = this.store.read(tableId);
+      if (!state) {
+        return null;
+      }
+
+      authenticate(state, authOf(fields));
+
+      return { tableId, since, ms: holdMs };
+    } catch (error) {
+      // Not held, and so answered at once by `handle`: with a refusal, or with what became of a table a newer version saved
+      if (error instanceof ApiFailure || error instanceof NewerTable) {
+        return null;
       }
 
       throw error;
@@ -123,9 +286,35 @@ export class PokerService {
   /** Whether a poll that already has version `since` of a table would get anything back. */
   hasNews(tableId: string, since: number): boolean {
     const id = wellFormedTableId(tableId);
-    const peek = id === null ? null : this.store.peek(id);
 
-    return !peek || peek.version !== since || (peek.wakeAt !== null && peek.wakeAt <= this.clock.now());
+    try {
+      const peek = id === null ? null : this.store.peek(id);
+
+      return !peek || peek.version !== since || (peek.wakeAt !== null && peek.wakeAt <= this.clock.now());
+    } catch (error) {
+      // Saved by a newer version while the poll was held: that is news, and `handle` is the one to say it
+      if (error instanceof NewerTable) {
+        return true;
+      }
+
+      throw error;
+    }
+  }
+
+  /**
+   * The answer to a request, with one failure looked into: of a table that isn't there, whether it was
+   * put away. Asked here, when the request holds no lock any more, since the store may take one to find out.
+   */
+  private answer(request: Fields): ApiResponse {
+    try {
+      return this.route(request);
+    } catch (error) {
+      if (error instanceof NoSuchTable && this.store.wasPutAway(error.tableId)) {
+        throw new ApiFailure('not_found', PUT_AWAY_MESSAGE, true);
+      }
+
+      throw error;
+    }
   }
 
   private route(request: Fields): ApiResponse {
@@ -135,13 +324,29 @@ export class PokerService {
       case 'info':
         return this.info(tableIdOf(request));
       case 'join':
-        return this.join(tableIdOf(request), request.name);
+        return this.join(tableIdOf(request), request);
       case 'poll':
         return this.poll(tableIdOf(request), authOf(request), request.since);
       case 'act':
         return this.act(tableIdOf(request), authOf(request), request.command as Command);
       case 'history':
         return this.history(tableIdOf(request), authOf(request));
+      case 'presets':
+        return this.listPresets();
+      case 'savePreset':
+        return this.savePreset(tableIdOf(request), authOf(request), request);
+      case 'deletePreset':
+        return this.deletePreset(tableIdOf(request), authOf(request), request.name);
+      case 'report':
+        return this.reportFromPage(tableIdOf(request), authOf(request), request);
+      case 'players':
+        return { ok: true, kind: 'players', players: this.players.list().filter((player) => !isCheckPlayer(player)) };
+      case 'identify':
+        return this.identify(tableIdOf(request), authOf(request), request);
+      case 'standings':
+        return this.standings();
+      case 'nights':
+        return this.nights(request);
       default:
         throw new ApiFailure('invalid', 'Unknown request');
     }
@@ -155,49 +360,218 @@ export class PokerService {
   private mutate<T>(tableId: string, change: (state: TableState, ctx: Ctx) => T): T {
     return this.store.transact(tableId, (state) => {
       if (!state) {
-        throw noSuchTable();
+        throw new NoSuchTable(tableId);
       }
 
       const ctx = this.ctx();
       tick(state, ctx);
       state.version += 1;
 
-      return { save: state, effects: ctx.effects, result: change(state, ctx) };
+      return { save: state, at: ctx.now, effects: ctx.effects, result: change(state, ctx) };
     });
   }
 
-  private create(request: Fields): ApiResponse {
-    for (let attempt = 0; attempt < CREATE_ATTEMPTS; attempt++) {
-      const tableId = randomId(this.rng, TABLE_ID_LENGTH);
+  /**
+   * Puts away the tables nobody has changed for a long time. The one place it is asked for, so that
+   * whatever else comes to ask does it the same way. It rides on a request a player made for something
+   * else, which nothing that goes wrong here may fail.
+   */
+  private putAwayOldTables(): void {
+    try {
+      this.store.putAwayOld(this.clock.now(), LAST_WORDS);
+    } catch (error) {
+      this.failed({ where: 'server put away', error });
+    }
+  }
 
-      const created = this.store.transact(tableId, (existing) => {
-        if (existing) {
-          return { save: null, effects: [], result: null };
-        }
+  /**
+   * Has the results written of tables whose night nobody ended, before they are read. Like putting
+   * tables away it rides on a request made for something else, which nothing that goes wrong here may fail.
+   */
+  private settleIdleTables(): void {
+    try {
+      this.store.settleIdle(this.clock.now());
+    } catch (error) {
+      this.failed({ where: 'server settle results', error });
+    }
+  }
 
-        const ctx = this.ctx();
-        const { state, host } = createTable(tableId, request.name, request.config, ctx);
-        state.version = 1;
+  /**
+   * Who is arriving at a table, from what their request says of it. Being known is only a label, so
+   * nothing here stops a game: when the list of players can't be asked, or has no such player, they
+   * arrive all the same, as nobody it knows. Only a name is refused: a new one that the list already
+   * has, since its holder may be the one asking. A list that can't be read turns nobody away. The one
+   * name that is not refused is the check's (`CHECK_PLAYER`): whoever comes in under it is that player.
+   */
+  private arrival(request: Fields, tableId: string | null): Arrival {
+    const who = whoOf(request);
 
-        const auth: Auth = { id: host.id, token: host.token };
-
-        return { save: state, effects: ctx.effects, result: { auth, view: viewFor(state, host.id, ctx.now) } };
-      });
-
-      if (created) {
-        return { ok: true, kind: 'joined', ...created };
-      }
+    if (!who) {
+      return { name: request.name, identity: null, keepsName: false, enlist: false };
     }
 
-    throw new Error(`No free table id after ${CREATE_ATTEMPTS} attempts`);
+    if (who.as === 'known') {
+      const known = this.without('server find player', tableId, () => this.players.seen(who.id, this.clock.now()));
+
+      // The name is the list's whether or not the list could say so, and not the player's to change
+      return { name: known?.name ?? request.name, identity: known?.id ?? null, keepsName: true, enlist: false };
+    }
+
+    const name = playerName(request.name);
+    const holder = this.without('server check name', tableId, () => listedLike(this.players.list(), name));
+
+    if (holder && isCheckPlayer(holder)) {
+      return { name: holder.name, identity: holder.id, keepsName: true, enlist: false };
+    }
+
+    // Where both the list and the table have the name, "pick yourself from the list" is the answer that gets its holder in
+    if (holder) {
+      throw new NameOnList(holder.name);
+    }
+
+    return { name, identity: null, keepsName: false, enlist: true };
+  }
+
+  /**
+   * A step an arrival goes ahead without: what it gives, or null when it could not be done. The error
+   * log hears of a failure, and never of an answer, such as a list that is full.
+   */
+  private without<T>(where: string, tableId: string | null, step: () => T): T | null {
+    try {
+      return step();
+    } catch (error) {
+      if (!(error instanceof GameError || error instanceof ApiFailure)) {
+        this.failed({ where, error, tableId });
+      }
+
+      return null;
+    }
+  }
+
+  /**
+   * Puts a member who came in as someone new on the list of players, and has their table say who they
+   * are. The table lets them in first, so that nobody is on the list for an arrival that came to
+   * nothing, and a request sent again after one finds no name of its own in the way. Whatever goes
+   * wrong here, they are in, as nobody the list knows.
+   */
+  private enlisted(tableId: string, joined: Joined): ApiResponse {
+    const { id } = joined.auth;
+
+    const added = this.without('server add player', tableId, () => this.players.add(joined.view.you.name, this.clock.now()));
+    if (!added) {
+      return joined;
+    }
+
+    const told = this.without('server tell table who', tableId, () =>
+      this.mutate(tableId, (state, ctx) => {
+        setIdentity(state, id, added, ctx);
+
+        return { ...joined, view: viewFor(state, id, ctx.now) };
+      }),
+    );
+
+    return told ?? joined;
+  }
+
+  /**
+   * Answers a join or a new table once, however many times it is asked under one key: an asking that
+   * was answered before is given that answer, and `arrive` lets in one that was not. `arrive` looks
+   * for the key again with its table in hand, which is what makes one arrival of two askings that
+   * came together, and keeps it there.
+   */
+  private once(request: Fields, tableId: string | null, arrive: (arriving: Arrival, asking: Asking | null) => ApiResponse): ApiResponse {
+    const asking = askingOf(this.arrivals, request.key, JSON.stringify([request.op, tableId, request.name, whoOf(request), request.config]));
+    if (asking === undefined) {
+      throw new ApiFailure('invalid', 'Malformed request');
+    }
+
+    try {
+      // Before anything is asked of the request itself: by now the list of players may have its name, put there by the first asking
+      const before = this.answeredBefore(asking);
+      if (before) {
+        return before;
+      }
+
+      let arriving: Arrival;
+      try {
+        arriving = this.arrival(request, tableId);
+      } catch (error) {
+        // The list may have the name because this very arrival put it there, let in a moment ago by an asking that came with this one
+        const meanwhile = error instanceof NameOnList ? this.answeredBefore(asking) : null;
+        if (meanwhile) {
+          return meanwhile;
+        }
+
+        throw error;
+      }
+
+      return arrive(arriving, asking);
+    } finally {
+      for (const { where, error } of asking?.failures() ?? []) {
+        this.failed({ where, error, tableId });
+      }
+    }
+  }
+
+  /** What an earlier asking of this request was answered, when the member it made is still at their table. */
+  private answeredBefore(asking: Asking | null): Joined | null {
+    const kept = asking?.kept() ?? null;
+
+    return kept ? arrivedAs(this.store.read(kept.tableId), kept, this.clock.now()) : null;
+  }
+
+  private create(request: Fields): ApiResponse {
+    return this.once(request, null, (arriving, asking) => {
+      // Tables a key named that were never saved, which is what an asking whose save failed leaves under it
+      const neverSaved = new Set<string>();
+
+      for (let attempt = 0; attempt < CREATE_ATTEMPTS; attempt++) {
+        const tableId = randomId(this.rng, TABLE_ID_LENGTH);
+
+        const outcome = this.store.transact(tableId, (existing): Txn<{ created: Pick<Joined, 'auth' | 'view'> } | { elsewhere: KeptArrival } | null> => {
+          if (existing) {
+            return { save: null, effects: [], result: null };
+          }
+
+          // Another table is not read with this one in hand, so one the key names is looked at once this is let go
+          const kept = asking?.kept() ?? null;
+          if (kept && !neverSaved.has(kept.tableId)) {
+            return { save: null, effects: [], result: { elsewhere: kept } };
+          }
+
+          const ctx = this.ctx();
+          const { state, host } = createTable(tableId, arriving.name, request.config, ctx, arriving);
+          state.version = 1;
+          asking?.keep(tableId, host.id);
+
+          const auth: Auth = { id: host.id, token: host.token };
+
+          return { save: state, at: ctx.now, effects: ctx.effects, result: { created: { auth, view: viewFor(state, host.id, ctx.now) } } };
+        });
+
+        if (outcome && 'elsewhere' in outcome) {
+          const made = arrivedAs(this.store.read(outcome.elsewhere.tableId), outcome.elsewhere, this.clock.now());
+          if (made) {
+            return made;
+          }
+
+          neverSaved.add(outcome.elsewhere.tableId);
+        } else if (outcome) {
+          // A new table is rare and already a write to the store, so it is when the old ones are seen to
+          this.putAwayOldTables();
+
+          const joined: Joined = { ok: true, kind: 'joined', ...outcome.created };
+
+          return arriving.enlist ? this.enlisted(tableId, joined) : joined;
+        }
+      }
+
+      throw new Error(`No free table id after ${CREATE_ATTEMPTS} attempts`);
+    });
   }
 
   private info(tableId: string): ApiResponse {
-    const state = this.store.read(tableId);
-    if (!state) {
-      throw noSuchTable();
-    }
-
+    const state = this.tableAt(tableId);
     const players = state.seats.flatMap((seat) => (seat ? [state.members.find((m) => m.id === seat.playerId)!.name] : []));
 
     return {
@@ -206,18 +580,34 @@ export class PokerService {
       table: {
         id: state.id,
         name: state.config.name,
+        unit: state.config.unit,
         smallBlind: state.config.smallBlind,
         bigBlind: state.config.bigBlind,
+        ante: state.config.ante,
+        anteFrom: state.config.anteFrom,
+        bounties: state.config.bounties,
         players,
       },
     };
   }
 
-  private join(tableId: string, name: unknown): ApiResponse {
-    return this.mutate(tableId, (state, ctx) => {
-      const member = addMember(state, name, ctx);
+  private join(tableId: string, request: Fields): ApiResponse {
+    return this.once(request, tableId, (arriving, asking) => {
+      const { joined, anew } = this.mutate(tableId, (state, ctx): { joined: Joined; anew: boolean } => {
+        const kept = asking?.kept() ?? null;
+        const already = kept && arrivedAs(state, kept, ctx.now);
+        if (already) {
+          return { joined: already, anew: false };
+        }
 
-      return { ok: true, kind: 'joined', auth: { id: member.id, token: member.token }, view: viewFor(state, member.id, ctx.now) };
+        const member = addMember(state, arriving.name, ctx, arriving);
+        asking?.keep(tableId, member.id);
+
+        return { joined: { ok: true, kind: 'joined', auth: { id: member.id, token: member.token }, view: viewFor(state, member.id, ctx.now) }, anew: true };
+      });
+
+      // Only the asking that made the member tells the list of players of them
+      return anew && arriving.enlist ? this.enlisted(tableId, joined) : joined;
     });
   }
 
@@ -225,7 +615,7 @@ export class PokerService {
     const now = this.clock.now();
     const peek = this.store.peek(tableId);
     if (!peek) {
-      throw noSuchTable();
+      throw new NoSuchTable(tableId);
     }
 
     // Nothing runs in the background, so whoever polls first after a deadline is the one who applies it
@@ -233,12 +623,7 @@ export class PokerService {
       this.advance(tableId);
     }
 
-    const state = this.store.read(tableId);
-    if (!state) {
-      throw noSuchTable();
-    }
-
-    authenticate(state, auth);
+    const { state } = this.memberOf(tableId, auth);
 
     if (state.version === since) {
       return { ok: true, kind: 'unchanged', now };
@@ -258,7 +643,7 @@ export class PokerService {
 
       state.version += 1;
 
-      return { save: state, effects: ctx.effects, result: null };
+      return { save: state, at: ctx.now, effects: ctx.effects, result: null };
     });
   }
 
@@ -272,13 +657,132 @@ export class PokerService {
   }
 
   private history(tableId: string, auth: Auth): ApiResponse {
-    const state = this.store.read(tableId);
-    if (!state) {
-      throw noSuchTable();
-    }
-
-    authenticate(state, auth);
+    this.memberOf(tableId, auth);
 
     return { ok: true, kind: 'history', hands: this.store.recentHands(tableId, HISTORY_LIMIT) };
+  }
+
+  private listPresets(): ApiResponse {
+    return presetsAnswer(this.presets.list());
+  }
+
+  private savePreset(tableId: string, auth: Auth, request: Fields): ApiResponse {
+    const member = this.hostOrCohost(tableId, auth);
+
+    return presetsAnswer(this.presets.save({ name: presetName(request.name), settings: presetSettings(request.settings), savedAt: this.clock.now(), savedBy: member.name }, request.replace === true));
+  }
+
+  private deletePreset(tableId: string, auth: Auth, name: unknown): ApiResponse {
+    this.hostOrCohost(tableId, auth);
+
+    return presetsAnswer(this.presets.delete(presetName(name)));
+  }
+
+  /**
+   * A failure a member's page saw. Only a member may write to the log, which anyone with the game's
+   * address could otherwise fill; the log holds each to its limits. The answer is the same whatever the
+   * log does with it.
+   */
+  private reportFromPage(tableId: string, auth: Auth, request: Fields): ApiResponse {
+    const { member } = this.memberOf(tableId, auth);
+    const error = { message: request.message, stack: request.trace };
+
+    this.errors.report({ where: 'page', error, tableId, page: { memberId: member.id, build: request.build, browser: request.browser } });
+
+    return { ok: true, kind: 'reported' };
+  }
+
+  /**
+   * A member as someone new under this name: added to the list, unless they are on it. That is so of
+   * the check's player, whom anyone under its name is, and of a member who is the listed player of
+   * that name already: theirs is a request sent again when its answer never came.
+   */
+  private newcomer(member: Member, name: string, now: number): KnownPlayer {
+    const holder = listedLike(this.players.list(), name);
+
+    return holder && (isCheckPlayer(holder) || holder.id === member.identity) ? holder : this.players.add(name, now);
+  }
+
+  /**
+   * A member says who they are on the list of players, after joining: someone on it, or someone new
+   * under the name given or else the one they go by here. It is the whole of what was asked, so unlike
+   * an arrival it is refused when the list can't oblige.
+   */
+  private identify(tableId: string, auth: Auth, request: Fields): ApiResponse {
+    const { member } = this.memberOf(tableId, auth);
+    const who = whoOf(request);
+    const now = this.clock.now();
+
+    if (!who) {
+      throw new ApiFailure('invalid', 'The request does not say who you are');
+    }
+
+    const known = who.as === 'known' ? this.players.seen(who.id, now) : this.newcomer(member, playerName(request.name ?? member.name), now);
+    if (!known) {
+      throw new GameError('That player is no longer on the list. Pick again');
+    }
+
+    return this.mutate(tableId, (state, ctx) => {
+      authenticate(state, auth);
+      setIdentity(state, auth.id, known, ctx);
+
+      return { ok: true, kind: 'view', view: viewFor(state, auth.id, ctx.now) };
+    });
+  }
+
+  /**
+   * Every known player's record. Anyone with the game's address may ask, as for the list of players,
+   * so it holds what the page shows and no more: a player by the id and name the list hands out
+   * anyway, and nothing of a table. Someone taken off the list is in no answer, whatever is kept of them.
+   */
+  private standings(): ApiResponse {
+    this.settleIdleTables();
+
+    const names = new Map(this.players.list().map((player) => [player.id, player.name]));
+    const { asOf, records } = this.results.standings();
+
+    const units = UNITS.flatMap((unit): UnitStandings[] => {
+      const players = records[unit].flatMap((record) => (names.has(record.id) ? [{ ...record, name: names.get(record.id)! }] : []));
+
+      return players.length > 0 ? [{ unit, players }] : [];
+    });
+
+    return { ok: true, kind: 'standings', asOf, units };
+  }
+
+  private nights(request: Fields): ApiResponse {
+    const { playerId, unit } = request;
+
+    if (typeof playerId !== 'string' || !isPlayerId(playerId) || !UNITS.includes(unit as Unit)) {
+      throw new ApiFailure('invalid', 'Malformed request');
+    }
+
+    const listed = this.players.list().some((player) => player.id === playerId);
+
+    return { ok: true, kind: 'nights', nights: listed ? this.results.nights(playerId, unit as Unit) : [] };
+  }
+
+  private tableAt(tableId: string): TableState {
+    const state = this.store.read(tableId);
+    if (!state) {
+      throw new NoSuchTable(tableId);
+    }
+
+    return state;
+  }
+
+  private memberOf(tableId: string, auth: Auth): { state: TableState; member: Member } {
+    const state = this.tableAt(tableId);
+
+    return { state, member: authenticate(state, auth) };
+  }
+
+  /** Presets are the group's, so changing one is for whoever runs a table, as they would run its settings. */
+  private hostOrCohost(tableId: string, auth: Auth): Member {
+    const { state, member } = this.memberOf(tableId, auth);
+
+    requireLevel(state, member.id, 'host or cohost');
+
+    return member;
   }
 }

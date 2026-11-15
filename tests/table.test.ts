@@ -1,17 +1,16 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { addMember, createTable, DEFAULT_CONFIG, ledgerOf, viewFor } from '../src/engine/index.ts';
-import type { Ctx, Effect } from '../src/engine/index.ts';
-import { assertChipsConserved, seededRng, TestTable } from './helpers.ts';
+import { addMember, createTable, DEFAULT_CONFIG, ledgerOf, setIdentity, STATE_SCHEMA, viewFor } from '../src/engine/index.ts';
+import type { Ctx } from '../src/engine/index.ts';
+import { restoreState } from '../src/server/store.ts';
+import { ledgerEntries, seededRng, sevenDeuceBounty, TestTable } from './helpers.ts';
+import { assertChipsConserved, assertViewsKeepSecrets } from './invariants.ts';
 
 function freshCtx(): Ctx {
   return { now: 5000, rng: seededRng(7), effects: [] };
 }
 
-function ledgerEntries(effects: Effect[]) {
-  return effects.flatMap((effect) => (effect.type === 'ledger' ? [effect.entry] : []));
-}
 
 test('a new table fills in default settings and makes its creator the host', () => {
   const { state, host } = createTable('ABC123', '  Quigs  ', { smallBlind: 1, bigBlind: 2 }, freshCtx());
@@ -26,13 +25,13 @@ test('table settings that make no sense are rejected', () => {
   const create = (config: unknown) => () => createTable('ABC123', 'Quigs', config, freshCtx());
 
   assert.throws(create({ smallBlind: 0 }), /small blind/);
-  assert.throws(create({ smallBlind: 20, bigBlind: 10 }), /big blind/);
+  assert.throws(create({ smallBlind: 20, bigBlind: 10 }), /big blind can't be smaller than the small blind/);
   assert.throws(create({ smallBlind: 1.5 }), /whole number/);
-  assert.throws(create({ minBuyIn: 500, maxBuyIn: 100 }), /maximum buy-in/);
+  assert.throws(create({ minBuyIn: 500, maxBuyIn: 100 }), /maximum buy-in can't be smaller than the minimum/);
   assert.throws(create({ actionSeconds: 2 }), /action clock/);
-  assert.throws(create({ allowStraddle: 'yes' }), /Straddles/);
+  assert.throws(create({ allowStraddle: 'yes' }), { message: 'The straddle under the gun must be on or off' });
   assert.throws(create({ name: '' }), /table name/);
-  assert.throws(create({ sevenDeuceBounty: -5 }), /bounty/);
+  assert.throws(create({ bounties: [['72', -5]] }), /The 72 bounty must be a whole number from 1/);
 });
 
 test('names are unique at a table and cannot look like a spreadsheet formula', () => {
@@ -47,6 +46,160 @@ test('names are unique at a table and cannot look like a spreadsheet formula', (
   assert.throws(() => addMember(state, 42, ctx), /missing/);
 
   assert.equal(addMember(state, "Big Al's 2nd", ctx).name, "Big Al's 2nd");
+});
+
+test('a name that reads like one already at the table is refused', () => {
+  const ctx = freshCtx();
+  const { state } = createTable('ABC123', 'Quigs', {}, ctx);
+
+  addMember(state, 'Alice', ctx);
+  addMember(state, 'TOM', ctx);
+  addMember(state, 'Big Al', ctx);
+  addMember(state, 'Bob', ctx);
+
+  assert.throws(() => addMember(state, 'alice', ctx), /already called alice/);
+  assert.throws(() => addMember(state, 'BIG AL', ctx), /already called BIG AL/, 'capitals, whose I would otherwise pass for an l');
+  assert.throws(() => addMember(state, '\u0410lice', ctx), /one alphabet/, 'a Cyrillic A in a Latin name');
+  assert.throws(() => addMember(state, '\u13AAlice', ctx), /one alphabet/, 'a Cherokee letter in a Latin name');
+  assert.throws(() => addMember(state, '\u0422\u041E\u041C', ctx), /reads too much like TOM/, 'TOM written all in Cyrillic');
+  assert.throws(() => addMember(state, '\u03A4\u039F\u039C', ctx), /reads too much like TOM/, 'TOM written all in Greek');
+  assert.throws(() => addMember(state, 'Big AI', ctx), /reads too much like Big Al/, 'a capital I for a small l');
+  assert.throws(() => addMember(state, 'B0b', ctx), /reads too much like Bob/, 'a zero for an o');
+  assert.throws(() => addMember(state, '\uFF22ob', ctx), /reads too much like Bob/, 'a full-width B');
+
+  // Capitals in one place and a look-alike in another, which neither test catches on the whole name
+  assert.throws(() => addMember(state, 'BIG AI', ctx), /reads too much like Big Al/);
+  assert.throws(() => addMember(state, 'B0B', ctx), /reads too much like Bob/);
+  assert.throws(() => addMember(state, 'T0m', ctx), /reads too much like TOM/);
+  assert.throws(() => addMember(state, 'B\u0131g Al', ctx), /reads too much like Big Al/, 'a Turkish i without its dot');
+  assert.throws(() => addMember(state, 'B\u0130G AL', ctx), /reads too much like Big Al/, 'a Turkish capital I with a dot');
+
+  // Names that only share an alphabet with nobody are as welcome as any
+  for (const name of ['\u0410\u043D\u043D\u0430', '\u039D\u03AF\u03BA\u03BF\u03C2', '\u4F60\u597D', 'Zo\u00EB', 'Tim', 'Al']) {
+    assert.equal(addMember(state, name, ctx).name, name);
+  }
+
+  // And an i is not an l, though a capital I passes for either
+  assert.equal(addMember(state, 'Kai', ctx).name, 'Kai');
+  assert.equal(addMember(state, 'Kal', ctx).name, 'Kal');
+  assert.throws(() => addMember(state, 'KAI', ctx), /already called KAI/);
+});
+
+test('a member carries which known player they said they are, or nobody, and everyone at the table is told which', () => {
+  const ctx = freshCtx();
+  const { state, host } = createTable('ABC123', 'Quigs', {}, ctx, { identity: 'QQQQQQQQQQ', keepsName: false });
+  const bob = addMember(state, 'Bob', ctx, { identity: 'BBBBBBBBBB', keepsName: true });
+  const guest = addMember(state, 'Guest', ctx);
+
+  assert.deepEqual([host.identity, bob.identity, guest.identity], ['QQQQQQQQQQ', 'BBBBBBBBBB', null]);
+
+  const view = viewFor(state, guest.id, ctx.now);
+  assert.deepEqual(view.you, { id: guest.id, name: 'Guest', role: 'member', seat: null, identity: null });
+  assert.deepEqual(view.members, [
+    { id: host.id, name: 'Quigs', identity: 'QQQQQQQQQQ' },
+    { id: bob.id, name: 'Bob', identity: 'BBBBBBBBBB' },
+    { id: guest.id, name: 'Guest', identity: null },
+  ]);
+  assert.equal(viewFor(state, bob.id, ctx.now).you.identity, 'BBBBBBBBBB');
+
+  assertViewsKeepSecrets(state, ctx.now);
+  assert.deepEqual(restoreState(JSON.stringify(state)), state, 'the identity is kept with the table');
+});
+
+test('a known player whose name the table already has is given room under a number, as a member of their own', () => {
+  const ctx = freshCtx();
+  const { state } = createTable('ABC123', 'Quigs', {}, ctx);
+  const known = { identity: 'BBBBBBBBBB', keepsName: true };
+  const bob = addMember(state, 'Bob', ctx, known);
+
+  // Someone whose name is theirs to change is told to change it, known or not
+  assert.throws(() => addMember(state, 'bob', ctx), /already called bob/);
+  assert.throws(() => addMember(state, 'Bob', ctx, { identity: 'CCCCCCCCCC', keepsName: false }), /already called Bob/);
+
+  const second = addMember(state, 'Bob', ctx, known);
+  const third = addMember(state, 'Bob', ctx, known);
+
+  assert.deepEqual([second.name, third.name], ['Bob 2', 'Bob 3']);
+  assert.deepEqual([second.identity, third.identity], [bob.identity, bob.identity]);
+  assert.equal(new Set([bob.id, second.id, third.id]).size, 3);
+  assert.equal(new Set([bob.token, second.token, third.token]).size, 3);
+  assert.deepEqual(state.feed.slice(-2).map((entry) => entry.text), ['Bob 2 joined', 'Bob 3 joined']);
+
+  // A number that is taken is passed over, and a long name is cut to make room for one
+  addMember(state, 'Ann 2', ctx);
+  addMember(state, 'Ann', ctx);
+  assert.equal(addMember(state, 'Ann', ctx, known).name, 'Ann 3');
+
+  addMember(state, 'Christopher Wren', ctx);
+  assert.equal(addMember(state, 'Christopher Wren', ctx, known).name, 'Christopher Wr 2');
+  assert.equal(addMember(state, 'Christopher Wren', ctx, known).name, 'Christopher Wr 3');
+
+  addMember(state, 'Exactly 14 long', ctx);
+  assert.equal(addMember(state, 'Exactly 14 long', ctx, known).name, 'Exactly 14 lon 2');
+
+  assert.ok(state.members.every((member) => member.name.length <= 16));
+  assertViewsKeepSecrets(state, ctx.now);
+});
+
+test('a join the table turns away changes nothing and takes nothing from its randomness, so the cards after it are the same', () => {
+  const ctx = freshCtx();
+  const { state } = createTable('ABC123', 'Quigs', {}, ctx);
+  const before = JSON.stringify(state);
+  const drawn = seededRng(1);
+  const untouched = seededRng(1);
+
+  assert.throws(() => addMember(state, 'quigs', { now: ctx.now, rng: drawn, effects: [] }), /already called quigs/);
+  assert.throws(() => addMember(state, '=1', { now: ctx.now, rng: drawn, effects: [] }), /Names start with/);
+
+  assert.equal(JSON.stringify(state), before);
+  assert.equal(drawn.int(1_000_000), untouched.int(1_000_000));
+});
+
+test('a member may say later which known player they are, or change it, and keeps everything else of theirs', () => {
+  const ctx = freshCtx();
+  const { state, host } = createTable('ABC123', 'Quigs', {}, ctx);
+  const bobby = addMember(state, 'Bobby', ctx);
+  const kept = { ...bobby, identity: undefined };
+  const lines = () => state.feed.map((entry) => entry.text);
+
+  setIdentity(state, bobby.id, { id: 'BBBBBBBBBB', name: 'Bob' }, ctx);
+  assert.equal(bobby.identity, 'BBBBBBBBBB');
+  assert.deepEqual({ ...bobby, identity: undefined }, kept, 'the name, the token and the money are as they were');
+  assert.equal(lines().at(-1), 'Bobby is Bob on the list of players');
+
+  // Said again it is not news, and under their own name it needs no saying
+  const told = lines().length;
+  setIdentity(state, bobby.id, { id: 'BBBBBBBBBB', name: 'Bob' }, ctx);
+  setIdentity(state, host.id, { id: 'QQQQQQQQQQ', name: 'Quigs' }, ctx);
+  assert.equal(lines().length, told);
+  assert.equal(host.identity, 'QQQQQQQQQQ');
+
+  // Two members may say they are the same player: it is a label, and nothing is taken from either
+  setIdentity(state, host.id, { id: 'BBBBBBBBBB', name: 'Bob' }, ctx);
+  assert.deepEqual([host.identity, bobby.identity], ['BBBBBBBBBB', 'BBBBBBBBBB']);
+  assert.notEqual(host.token, bobby.token);
+
+  assert.throws(() => setIdentity(state, 'NOBODY', { id: 'BBBBBBBBBB', name: 'Bob' }, ctx));
+  assertViewsKeepSecrets(state, ctx.now);
+});
+
+test('a full table turns a newcomer away until the host takes someone who is only watching off it', () => {
+  const t = new TestTable({ stacks: [1000, 1000] });
+  const watchers: string[] = [];
+
+  while (t.state.members.length < 60) {
+    watchers.push(addMember(t.state, `Watcher ${watchers.length}`, t.ctx()).id);
+  }
+
+  // Nobody already here loses their place to whoever comes next, however often they try
+  assert.throws(() => addMember(t.state, 'Late', t.ctx()), /full.*host can make room/);
+  assert.equal(t.state.members.length, 60);
+
+  t.cmd(0, { type: 'kick', playerId: watchers[0]! });
+  assert.equal(addMember(t.state, 'Late', t.ctx()).name, 'Late');
+
+  // Removed since the host's screen was drawn: the message is about them, not about the host
+  assert.throws(() => t.cmd(0, { type: 'kick', playerId: watchers[0]! }), /no longer at the table/);
 });
 
 test('a seat request waits for the host, who is the only other person to see it', () => {
@@ -86,14 +239,25 @@ test('seat requests are checked against the seat and the buy-in limits', () => {
   assert.throws(() => t.cmd(1, { type: 'requestSeat', seat: 3, buyIn: 99 }), /buy-in/);
   assert.throws(() => t.cmd(1, { type: 'requestSeat', seat: 3, buyIn: 2001 }), /buy-in/);
   assert.throws(() => t.cmd(0, { type: 'requestSeat', seat: 3, buyIn: 500 }), /already have a seat/);
+});
+
+test('a seat given to one player turns away everyone else who had asked for it', () => {
+  const t = new TestTable({ stacks: [1000], config: { minBuyIn: 100, maxBuyIn: 2000 } });
+  t.ids.push(addMember(t.state, 'Ann', t.ctx()).id, addMember(t.state, 'Bob', t.ctx()).id, addMember(t.state, 'Cy', t.ctx()).id);
 
   t.cmd(1, { type: 'requestSeat', seat: 3, buyIn: 500 });
   t.cmd(2, { type: 'requestSeat', seat: 3, buyIn: 500 });
+  t.cmd(3, { type: 'requestSeat', seat: 4, buyIn: 500 });
   t.cmd(0, { type: 'approve', playerId: t.ids[1]! });
 
-  assert.throws(() => t.cmd(0, { type: 'approve', playerId: t.ids[2]! }), /taken/);
-  t.cmd(0, { type: 'deny', playerId: t.ids[2]! });
-  assert.equal(t.state.requests.length, 0);
+  assert.deepEqual(
+    t.state.requests.map((request) => request.playerId),
+    [t.ids[3]],
+    'only the request for another seat is left',
+  );
+  assert.ok(t.feedText().includes('Seat 4 is taken, so Bob needs to pick another'));
+  assert.equal(t.view(2).requests.length, 0, 'Bob is free to ask for another seat');
+  assert.throws(() => t.cmd(0, { type: 'approve', playerId: t.ids[2]! }), /gone/);
 });
 
 test('a player can withdraw their own request', () => {
@@ -134,6 +298,53 @@ test('rebuys respect the maximum buy-in', () => {
 
   assert.equal(t.state.seats[1]!.stack, 1500);
   assert.throws(() => t.cmd(1, { type: 'requestRebuy', amount: 1 }), /maximum buy-in/);
+});
+
+test('a request that stopped fitting is cut down or dropped, never left for the host to fail on', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 1000], config: { minBuyIn: 100, maxBuyIn: 2000 } });
+  t.ids.push(addMember(t.state, 'Ann', t.ctx()).id, addMember(t.state, 'Bob', t.ctx()).id);
+
+  // The maximum came down after these two asked
+  t.cmd(1, { type: 'requestRebuy', amount: 1000 });
+  t.cmd(2, { type: 'requestRebuy', amount: 1000 });
+  t.cmd(0, { type: 'updateConfig', config: { maxBuyIn: 1500 } });
+  t.cmd(0, { type: 'approve', playerId: t.ids[1]! });
+  assert.equal(t.state.seats[1]!.stack, 1500, 'the rebuy is cut down to what still fits');
+
+  t.cmd(0, { type: 'updateConfig', config: { maxBuyIn: 1000 } });
+  t.cmd(0, { type: 'approve', playerId: t.ids[2]! });
+  assert.equal(t.state.seats[2]!.stack, 1000);
+  assert.equal(t.feedText().at(-1), 'P2 is at the table maximum, so no chips are added');
+  assert.equal(t.state.requests.length, 0);
+
+  // A seat request is the player's own money, so one outside the new limits is theirs to make again
+  t.cmd(3, { type: 'requestSeat', seat: 5, buyIn: 600 });
+  t.cmd(4, { type: 'requestSeat', seat: 6, buyIn: 900 });
+  t.cmd(0, { type: 'updateConfig', config: { minBuyIn: 800 } });
+
+  assert.deepEqual(
+    t.state.requests.map((request) => request.playerId),
+    [t.ids[4]],
+  );
+  assert.ok(t.feedText().includes("Ann asked to sit down with 600, which the new buy-in limits don't allow"));
+  assertChipsConserved(t.state);
+});
+
+test('the table is told when the host turns a request down', () => {
+  const t = new TestTable({ stacks: [1000, 1000] });
+  t.ids.push(addMember(t.state, 'Ann', t.ctx()).id);
+
+  t.cmd(2, { type: 'requestSeat', seat: 5, buyIn: 600 });
+  t.cmd(0, { type: 'deny', playerId: t.ids[2]! });
+  assert.equal(t.feedText().at(-1), "The host turned down Ann's request for a seat");
+
+  t.cmd(1, { type: 'requestRebuy', amount: 100 });
+  t.cmd(0, { type: 'deny', playerId: t.ids[1]! });
+  assert.equal(t.feedText().at(-1), "The host turned down P1's request for chips");
+
+  const lines = t.feedText().length;
+  t.cmd(0, { type: 'deny', playerId: t.ids[1]! });
+  assert.equal(t.feedText().length, lines, 'there was nothing left to turn down');
 
   t.cmd(0, { type: 'requestRebuy', amount: 250 });
   assert.equal(t.state.seats[0]!.stack, 1250, "the host's own rebuy needs no approval");
@@ -169,7 +380,32 @@ test('kicking a player cashes them out', () => {
 
   assert.equal(t.state.seats[1], null);
   assert.equal(t.state.members[1]!.cashOut, 1000);
+  assert.ok(t.feedText().includes('The host removed P1 from their seat'));
   assertChipsConserved(t.state);
+
+  t.cmd(0, { type: 'kick', playerId: t.ids[1]! });
+  assert.equal(t.state.members.length, 2, 'someone with a line in the ledger stays a member');
+});
+
+test('removing someone who never played frees their name and their place at the table', () => {
+  const t = new TestTable({ stacks: [1000, 1000] });
+  t.ids.push(addMember(t.state, 'Ann', t.ctx()).id);
+  t.cmd(2, { type: 'requestSeat', seat: 5, buyIn: 600 });
+
+  t.cmd(0, { type: 'kick', playerId: t.ids[2]! });
+
+  assert.deepEqual(
+    t.state.members.map((member) => member.name),
+    ['P0', 'P1'],
+  );
+  assert.equal(t.state.requests.length, 0);
+  assert.throws(() => t.view(2), /not part of this table/);
+  assert.equal(addMember(t.state, 'Ann', t.ctx()).name, 'Ann');
+
+  t.cmd(0, { type: 'standUp' });
+  t.cmd(0, { type: 'kick', playerId: t.ids[0]! });
+  assert.equal(t.state.hostId, t.ids[0], 'the host is never removed from their own table');
+  assert.equal(t.state.members.some((member) => member.id === t.ids[0]), true);
 });
 
 test('new blinds apply from the next hand', () => {
@@ -192,29 +428,184 @@ test('a settings change keeps everything it does not mention and is validated as
   const t = new TestTable({ stacks: [1000, 1000] });
   const before = { ...t.state.config };
 
-  t.cmd(0, { type: 'updateConfig', config: { sevenDeuceBounty: 40 } });
-  assert.deepEqual(t.state.config, { ...before, sevenDeuceBounty: 40 });
+  t.cmd(0, { type: 'updateConfig', config: { bounties: sevenDeuceBounty(40) } });
+  assert.deepEqual(t.state.config, { ...before, bounties: sevenDeuceBounty(40) });
 
   assert.throws(() => t.cmd(0, { type: 'updateConfig', config: { bigBlind: 5 } }), /big blind/);
-  assert.deepEqual(t.state.config, { ...before, sevenDeuceBounty: 40 });
+  assert.deepEqual(t.state.config, { ...before, bounties: sevenDeuceBounty(40) });
+});
+
+test('the voice chat link changes at once, and the chat says who set, changed or removed it without printing it', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 1000] });
+  t.cmd(0, { type: 'setCohost', playerId: t.ids[1]!, on: true });
+  t.deal({ button: 0 });
+  const hand = JSON.stringify(t.state.hand);
+  const lines = () => t.feedText().filter((line) => line.includes('voice chat'));
+
+  t.cmd(0, { type: 'updateConfig', config: { voiceLink: 'https://meet.google.com/abc-defg-hij' } });
+  assert.equal(t.view(2).config.voiceLink, 'https://meet.google.com/abc-defg-hij', 'in the middle of a hand, not from the next one');
+
+  t.cmd(1, { type: 'updateConfig', config: { voiceLink: 'https://discord.gg/abc', bigBlind: 40 } });
+  t.cmd(1, { type: 'updateConfig', config: { voiceLink: '  https://discord.gg/abc ', bigBlind: 40 } });
+  t.cmd(0, { type: 'updateConfig', config: { voiceLink: '' } });
+  t.cmd(0, { type: 'updateConfig', config: { voiceLink: '' } });
+
+  assert.deepEqual(lines(), ['The host set the voice chat link', 'Co-host P1 changed the voice chat link', 'The host removed the voice chat link']);
+  assert.ok(t.feedText().every((line) => !line.includes('https') && !line.includes('discord')), 'the address is kept out of the chat');
+  assert.equal(JSON.stringify(t.state.hand), hand, 'the hand in play is left as it is');
+
+  assert.throws(() => t.cmd(2, { type: 'updateConfig', config: { voiceLink: 'https://evil.example' } }), { name: 'GameError' });
+  assert.throws(() => t.cmd(0, { type: 'updateConfig', config: { voiceLink: 'http://meet.google.com/abc' } }), /must start with https/);
+  assert.equal(t.state.config.voiceLink, '');
+  assert.deepEqual(lines().length, 3);
 });
 
 test('turning straddles off clears everyone who had asked to straddle', () => {
   const t = new TestTable({ stacks: [1000, 1000, 1000] });
-  t.cmd(2, { type: 'setStraddle', on: true });
+  t.cmd(2, { type: 'setStraddle', kind: 'straddle', on: true });
 
   t.cmd(0, { type: 'updateConfig', config: { allowStraddle: false } });
 
-  assert.equal(t.state.seats[2]!.straddle, false);
+  assert.deepEqual(t.state.seats[2]!.straddles, []);
 });
 
-test('the host can hand the table to someone else', () => {
-  const t = new TestTable({ stacks: [1000, 1000] });
+test('the host can hand the table to someone else, and stays on as a co-host', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 1000] });
+  t.cmd(0, { type: 'setCohost', playerId: t.ids[1]!, on: true });
 
   t.cmd(0, { type: 'transferHost', playerId: t.ids[1]! });
 
-  assert.equal(t.view(1).you.isHost, true);
-  assert.throws(() => t.cmd(0, { type: 'start' }), /Only the host/);
+  assert.equal(t.view(1).you.role, 'host');
+  assert.equal(t.view(0).you.role, 'cohost');
+  assert.deepEqual(t.state.cohostIds, [t.ids[0]], 'the new host is no longer listed as a co-host');
+  assert.equal(t.feedText().at(-1), 'P1 is now the host, and P0 a co-host');
+
+  assert.throws(() => t.cmd(0, { type: 'transferHost', playerId: t.ids[2]! }), { message: 'Only the host can do that' });
+  t.cmd(0, { type: 'start' });
+
+  t.cmd(1, { type: 'setCohost', playerId: t.ids[0]!, on: false });
+  assert.equal(t.view(0).you.role, 'member');
+  assert.equal(t.feedText().at(-1), 'P0 is no longer a co-host');
+
+  const before = JSON.stringify(t.state);
+  t.cmd(1, { type: 'transferHost', playerId: t.ids[1]! });
+  assert.equal(JSON.stringify(t.state), before, 'handing the table to yourself changes nothing');
+});
+
+test('the host names co-hosts and takes it back, and the chat says so each time it changes', () => {
+  const t = new TestTable({ stacks: [1000, 1000] });
+  t.ids.push(addMember(t.state, 'Watcher', t.ctx()).id);
+
+  t.cmd(0, { type: 'setCohost', playerId: t.ids[2]!, on: true });
+  t.cmd(0, { type: 'setCohost', playerId: t.ids[2]!, on: true });
+  assert.deepEqual(t.state.cohostIds, [t.ids[2]], 'a co-host need not be seated, and is listed once');
+  assert.equal(t.feedText().filter((line) => line === 'Watcher is now a co-host').length, 1);
+
+  t.cmd(0, { type: 'setCohost', playerId: t.ids[2]!, on: false });
+  t.cmd(0, { type: 'setCohost', playerId: t.ids[1]!, on: false });
+  assert.deepEqual(t.state.cohostIds, []);
+  assert.equal(t.feedText().at(-1), 'Watcher is no longer a co-host');
+
+  assert.throws(() => t.cmd(0, { type: 'setCohost', playerId: t.ids[0]!, on: true }), { message: 'The host has every power a co-host has' });
+  assert.throws(() => t.cmd(0, { type: 'setCohost', playerId: 'NOBODY12', on: true }), { message: 'That player is no longer at the table' });
+  assert.throws(() => t.cmd(0, { type: 'setCohost', playerId: t.ids[1]!, on: 'yes' as unknown as boolean }), { message: 'Co-host must be on or off' });
+});
+
+test('a co-host runs the game but cannot remove the host, from their seat or from the table', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 1000] });
+  t.cmd(0, { type: 'setCohost', playerId: t.ids[1]!, on: true });
+  t.cmd(0, { type: 'setCohost', playerId: t.ids[2]!, on: true });
+
+  assert.throws(() => t.cmd(1, { type: 'kick', playerId: t.ids[0]! }), { message: 'Only the host can remove the host' });
+  t.cmd(0, { type: 'standUp' });
+  assert.throws(() => t.cmd(1, { type: 'kick', playerId: t.ids[0]! }), { message: 'Only the host can remove the host' });
+  assert.throws(() => t.cmd(1, { type: 'setCohost', playerId: t.ids[2]!, on: false }), { message: 'Only the host can do that' });
+
+  // A co-host is the host's equal in everything else, over other co-hosts too
+  t.cmd(1, { type: 'setStack', playerId: t.ids[2]!, stack: 700 });
+  t.cmd(1, { type: 'kick', playerId: t.ids[2]! });
+  assert.equal(t.state.seats[2], null);
+  assert.deepEqual(t.state.cohostIds, [t.ids[1], t.ids[2]], 'losing a seat does not end being a co-host');
+  assert.deepEqual(t.feedText().slice(-3), ["Co-host P1 set P2's stack to 700", 'Co-host P1 removed P2 from their seat', 'P2 leaves the table with 700']);
+});
+
+test('only the host may take a co-host off the table altogether, which ends their role', () => {
+  const t = new TestTable({ stacks: [1000, 1000] });
+  t.cmd(0, { type: 'setCohost', playerId: t.ids[1]!, on: true });
+  t.ids.push(addMember(t.state, 'Ann', t.ctx()).id);
+  t.cmd(0, { type: 'setCohost', playerId: t.ids[2]!, on: true });
+
+  assert.throws(() => t.cmd(1, { type: 'kick', playerId: t.ids[2]! }), { message: 'Only the host can take a co-host off the table' });
+  assert.throws(() => t.cmd(2, { type: 'kick', playerId: t.ids[2]! }), { message: 'Only the host can take a co-host off the table' });
+
+  t.cmd(0, { type: 'kick', playerId: t.ids[2]! });
+  assert.deepEqual(t.state.cohostIds, [t.ids[1]]);
+  assert.equal(t.feedText().at(-1), 'The host removed Ann from the table');
+});
+
+test('the chat names a co-host as one, so no player\'s name can pass for the host', () => {
+  const t = new TestTable({ stacks: [1000, 1000], names: ['Quigs', 'The host'] });
+  t.cmd(0, { type: 'setCohost', playerId: t.ids[1]!, on: true });
+
+  t.cmd(1, { type: 'setStack', playerId: t.ids[0]!, stack: 900 });
+
+  assert.equal(t.feedText().at(-1), "Co-host The host set Quigs's stack to 900");
+});
+
+test('a co-host removed from their seat mid-hand plays out as one who stood up, and keeps the role', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 1000] });
+  t.cmd(0, { type: 'setCohost', playerId: t.ids[2]!, on: true });
+  t.deal({ button: 0 });
+
+  t.cmd(0, { type: 'kick', playerId: t.ids[2]! });
+  assert.equal(t.state.seats[2]!.leaving, true);
+
+  t.cmd(2, { type: 'pause' });
+  while (t.toAct !== null) {
+    t.fold(t.toAct);
+  }
+  t.finishHand();
+
+  assert.equal(t.state.seats[2], null);
+  assert.equal(t.state.running, false);
+  assert.equal(t.view(2).you.role, 'cohost');
+  assertChipsConserved(t.state);
+});
+
+test('a co-host\'s own seat and chips need nobody\'s approval, like the host\'s', () => {
+  const t = new TestTable({ stacks: [1000, 300] });
+  t.ids.push(addMember(t.state, 'Ann', t.ctx()).id);
+  t.cmd(0, { type: 'setCohost', playerId: t.ids[2]!, on: true });
+
+  t.cmd(2, { type: 'requestSeat', seat: 5, buyIn: 500 });
+  assert.equal(t.state.seats[5]!.stack, 500);
+
+  t.cmd(0, { type: 'setCohost', playerId: t.ids[1]!, on: true });
+  t.deal({ button: 0 });
+  t.cmd(1, { type: 'requestRebuy', amount: 200 });
+  assert.equal(t.state.seats[1]!.pendingAdd, 200, 'chips asked for mid-hand still wait for its end');
+  assert.deepEqual(t.state.requests, []);
+});
+
+test('a co-host is told they have the host\'s powers and sees every request; a plain member sees their own, and everyone sees who the co-hosts are', () => {
+  const t = new TestTable({ stacks: [1000, 1000] });
+  t.ids.push(addMember(t.state, 'Ann', t.ctx()).id);
+  t.ids.push(addMember(t.state, 'Bob', t.ctx()).id);
+  t.cmd(0, { type: 'setCohost', playerId: t.ids[1]!, on: true });
+  t.cmd(2, { type: 'requestSeat', seat: 5, buyIn: 500 });
+  t.cmd(3, { type: 'requestSeat', seat: 6, buyIn: 500 });
+
+  const asked = [t.ids[2], t.ids[3]];
+  assert.deepEqual(t.view(0).requests.map((r) => r.playerId), asked);
+  assert.deepEqual(t.view(1).requests.map((r) => r.playerId), asked);
+  assert.deepEqual(t.view(2).requests.map((r) => r.playerId), [t.ids[2]]);
+
+  assert.deepEqual([0, 1, 2].map((player) => t.view(player).you.role), ['host', 'cohost', 'member']);
+  for (const player of [0, 1, 2, 3]) {
+    assert.deepEqual(t.view(player).cohostIds, [t.ids[1]]);
+  }
+
+  assertViewsKeepSecrets(t.state, t.now);
 });
 
 test('chat lands in the feed, which keeps only the latest entries', () => {
@@ -225,6 +616,21 @@ test('chat lands in the feed, which keeps only the latest entries', () => {
     { kind: t.state.feed.at(-1)!.kind, from: t.state.feed.at(-1)!.from, text: t.state.feed.at(-1)!.text },
     { kind: 'chat', from: 'P1', text: 'nice hand' },
   );
+
+  t.cmd(1, { type: 'chat', text: 'a\u0000b \u202Eevil\u2066 \u{1F468}\u200D\u{1F469}\u200D\u{1F467}' });
+  assert.equal(t.state.feed.at(-1)!.text, 'ab evil \u{1F468}\u200D\u{1F469}\u200D\u{1F467}', 'control and text-reversing characters are dropped, joined emoji are kept');
+  assert.throws(() => t.cmd(1, { type: 'chat', text: '\u202E\u0007' }), /message/);
+
+  t.cmd(1, { type: 'chat', text: `Z${'\u0301'.repeat(40)}algo and cafe\u0301` });
+  assert.equal(t.state.feed.at(-1)!.text, 'Z\u0301\u0301\u0301algo and cafe\u0301', 'a tower of accents is cut down to what a language would write');
+
+  // Invisible joiners between the accents would otherwise pass the same tower off as many short ones
+  t.cmd(1, { type: 'chat', text: `a${'\u0301\u0301\u0301\u200D'.repeat(30)}h` });
+  assert.equal(t.state.feed.at(-1)!.text, 'a\u0301\u0301\u0301h');
+
+  // An emoji built from several keeps the joiner that holds it together
+  t.cmd(1, { type: 'chat', text: 'gg \u{1F3F3}\uFE0F\u200D\u{1F308}' });
+  assert.equal(t.state.feed.at(-1)!.text, 'gg \u{1F3F3}\uFE0F\u200D\u{1F308}');
 
   assert.throws(() => t.cmd(1, { type: 'chat', text: '   ' }), /message/);
   assert.throws(() => t.cmd(1, { type: 'chat', text: 'x'.repeat(201) }), /message/);
@@ -276,6 +682,7 @@ test('the ledger always nets to zero, mid-hand included', () => {
     name: 'P2',
     buyIn: 400,
     cashOut: 380,
+    transferred: 0,
     stack: 0,
     net: -20,
   });
@@ -308,4 +715,182 @@ test('only the player on the clock is told their options', () => {
   assert.notEqual(t.view(0).hand!.options, null);
   assert.equal(t.view(1).hand!.options, null);
   assert.equal(t.view(2).hand!.options, null);
+});
+
+test('a table saved by the version before this one is brought up to date, and an unknown version is refused', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 1000], config: { bounties: sevenDeuceBounty(50) } });
+  t.deal({ button: 0, holes: { 0: '7h 2c' } });
+
+  const saved = JSON.parse(JSON.stringify(t.state)) as { schema: number; config: { bounties?: unknown; sevenDeuceBounty?: number }; hand: { bounties?: unknown; players: { shown: boolean | boolean[] }[] } };
+  saved.schema = 2;
+  // As schema 6 and those before it kept the bounty, one amount for seven-deuce, and schema 2 kept none on the hand
+  delete saved.config.bounties;
+  saved.config.sevenDeuceBounty = 50;
+  delete saved.hand.bounties;
+  // As schema 2 kept it, until cards could be shown one at a time
+  for (const player of saved.hand.players) {
+    player.shown = false;
+  }
+
+  assert.deepEqual(restoreState(JSON.stringify(saved)), t.state, 'the hand on the table keeps the bounty it would have paid');
+
+  saved.schema = 1;
+  assert.throws(() => restoreState(JSON.stringify(saved)), /schema 1/);
+
+  saved.schema = STATE_SCHEMA + 1;
+  assert.throws(() => restoreState(JSON.stringify(saved)), new RegExp(`schema ${STATE_SCHEMA + 1}`));
+});
+
+test('a table created to play dollars and cents starts at stakes that suit it, and says everything in dollars', () => {
+  const { state } = createTable('ABC123', 'Quigs', { unit: 'cents' }, freshCtx());
+  assert.deepEqual(state.config, { ...DEFAULT_CONFIG, unit: 'cents', smallBlind: 25, bigBlind: 50, minBuyIn: 2000, maxBuyIn: 10_000, bombPotAmount: 250 });
+
+  const t = new TestTable({ stacks: [10_000, 2000], config: { unit: 'cents', minBuyIn: 2000, maxBuyIn: 10_000 } });
+  const watcher = t.ids.push(addMember(t.state, 'Ann', t.ctx()).id) - 1;
+
+  assert.throws(() => t.cmd(watcher, { type: 'requestSeat', seat: 5, buyIn: 1999 }), { message: 'Your buy-in must be an amount to the cent from 20.00 to 100.00' });
+  assert.throws(() => t.cmd(watcher, { type: 'requestSeat', seat: 5, buyIn: 20.5 }), { message: 'Your buy-in must be an amount to the cent from 20.00 to 100.00' });
+  assert.throws(() => t.cmd(0, { type: 'requestRebuy', amount: 1 }), { message: 'You already have the maximum buy-in of 100.00' });
+  assert.throws(() => t.cmd(1, { type: 'requestRebuy', amount: 8001 }), { message: 'Your rebuy must be an amount to the cent from 0.01 to 80.00' });
+  assert.throws(() => t.cmd(0, { type: 'setStack', playerId: t.ids[1]!, stack: -1 }), { message: 'The stack must be an amount to the cent from 0.00 to 10,000,000.00' });
+
+  t.cmd(1, { type: 'requestRebuy', amount: 2550 });
+  t.cmd(0, { type: 'approve', playerId: t.ids[1]! });
+  t.cmd(0, { type: 'setStack', playerId: t.ids[1]!, stack: 1234 });
+  t.cmd(watcher, { type: 'requestSeat', seat: 5, buyIn: 2000 });
+  t.cmd(0, { type: 'updateConfig', config: { smallBlind: 50, bigBlind: 100, bounties: sevenDeuceBounty(500), minBuyIn: 5000 } });
+  t.cmd(1, { type: 'standUp' });
+
+  const said = t.feedText();
+  for (const line of [
+    'P0 sits down with 100.00',
+    'P1 sits down with 20.00',
+    'P1 adds 25.50',
+    "The host set P1's stack to 12.34",
+    'Blinds are 0.50/1.00',
+    'The bounties are 72 for 5.00',
+    "Ann asked to sit down with 20.00, which the new buy-in limits don't allow",
+    'P1 leaves the table with 12.34',
+  ]) {
+    assert.ok(said.includes(line), `"${line}" is missing from: ${said.join(' / ')}`);
+  }
+
+  // The amounts themselves stay whole numbers of cents, in the state, the view and the ledger
+  assert.equal(t.view(0).seats[0]!.stack, 10_000);
+  assert.deepEqual(
+    ledgerEntries(t.effects).map((entry) => entry.amount),
+    [10_000, 2000, 2550, -3316, -1234],
+  );
+  assertChipsConserved(t.state);
+});
+
+test('whole chips or dollars and cents is chosen when the table is created and never after', () => {
+  for (const [from, to] of [['chips', 'cents'], ['cents', 'chips']] as const) {
+    const t = new TestTable({ stacks: [10_000, 10_000], config: { unit: from } });
+    const refused = { message: "What the table plays with was chosen when the table was created and can't be changed" };
+
+    assert.throws(() => t.cmd(0, { type: 'updateConfig', config: { unit: to } }), refused);
+
+    t.deal({ button: 0 });
+    assert.throws(() => t.cmd(0, { type: 'updateConfig', config: { unit: to, bigBlind: 400 } }), refused, 'nor during a hand');
+    assert.equal(t.state.config.bigBlind, from === 'cents' ? 50 : 20, 'a refused change changes nothing else either');
+
+    // Sent as it is, which is no change, it is no reason to refuse the rest
+    t.cmd(0, { type: 'updateConfig', config: { unit: from, bigBlind: 400 } });
+    assert.deepEqual([t.state.config.unit, t.state.config.bigBlind], [from, 400]);
+  }
+});
+
+test('a player is told what their own cards make, on every street, and nobody else is', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 1000] });
+  t.deal({ button: 0, holes: { 0: 'As Kd', 1: 'Ks Kh', 2: 'Qs Jh' }, board: 'Kc 7d 2s Ad 9h' });
+
+  assert.deepEqual(t.view(0).hand!.holding, { reads: [{ name: 'Ace-king offsuit', plays: [] }], bounty: null });
+  assert.deepEqual(t.view(1).hand!.holding!.reads[0]!.name, 'Pocket kings');
+
+  // Nothing in one player's view says what another holds, not even in words
+  for (const others of ['Pocket kings', 'Queen-jack offsuit']) {
+    assert.ok(!JSON.stringify(t.view(0)).includes(others), `the view tells P0 "${others}"`);
+  }
+
+  const watcher = addMember(t.state, 'Watcher', t.ctx());
+  assert.equal(viewFor(t.state, watcher.id, t.now).hand!.holding, null, 'someone only watching has no cards to read');
+
+  t.fold(0);
+  assert.equal(t.view(0).hand!.holding, null, 'a folded hand is not read');
+
+  t.call(1);
+  t.check(2);
+  const [flop] = t.view(1).hand!.holding!.reads;
+  assert.equal(flop!.name, 'Three kings');
+  assert.deepEqual([...flop!.plays].sort(), ['2s', '7d', 'Kc', 'Kh', 'Ks']);
+  assert.equal(t.view(2).hand!.holding!.reads[0]!.name, 'King high');
+
+  t.check(1);
+  t.check(2);
+  assert.equal(t.view(2).hand!.holding!.reads[0]!.name, 'Ace high');
+  assert.equal(t.view(1).hand!.holding!.reads[0]!.name, 'Three kings');
+
+  t.check(1);
+  t.check(2);
+  assert.equal(t.view(2).hand!.holding!.reads[0]!.name, 'Ace high');
+  assertViewsKeepSecrets(t.state, t.now);
+});
+
+test('a hand run twice is read on each board', () => {
+  const t = new TestTable({ stacks: [500, 500], config: { maxRuns: 2 } });
+  t.deal({ button: 0, holes: { 0: 'As Ah', 1: 'Ks Kh' }, board: '2c 7d 9h Jc 3s', secondBoard: 'Kd Kc' });
+  t.call(0);
+  t.check(1);
+  t.raise(1, 480);
+  t.call(0);
+  t.cmd(0, { type: 'ritVote', runs: 2 });
+  t.cmd(1, { type: 'ritVote', runs: 2 });
+  t.runToResult();
+
+  const reads = t.view(1).hand!.holding!.reads;
+  assert.deepEqual(reads.map((read) => read.name), ['Pair of kings', 'Four kings']);
+  assert.deepEqual([...reads[1]!.plays].sort(), ['9h', 'Kc', 'Kd', 'Kh', 'Ks']);
+  assertViewsKeepSecrets(t.state, t.now);
+});
+
+test('seven-deuce is pointed out at a table that pays the bounty for it, and only there', () => {
+  const withBounty = new TestTable({ stacks: [1000, 1000], config: { bounties: sevenDeuceBounty(50) } });
+  withBounty.deal({ button: 0, holes: { 0: '7h 2c', 1: '7s 3c' } });
+  assert.deepEqual(withBounty.view(0).hand!.holding, { reads: [{ name: 'Seven-deuce offsuit', plays: [] }], bounty: ['72', 50] });
+  assert.equal(withBounty.view(1).hand!.holding!.bounty, null);
+
+  const without = new TestTable({ stacks: [1000, 1000] });
+  without.deal({ button: 0, holes: { 0: '7h 2h' } });
+  assert.deepEqual(without.view(0).hand!.holding, { reads: [{ name: 'Seven-deuce suited', plays: [] }], bounty: null });
+});
+
+test('the chat says what the ante is and who pays it whenever that changes, and nothing while there is none', () => {
+  const t = new TestTable({ stacks: [1000, 1000] });
+  const said = () => t.feedText().filter((line) => line.includes('ante'));
+
+  t.cmd(0, { type: 'updateConfig', config: { anteFrom: 'bigBlind' } });
+  assert.deepEqual(said(), [], 'who would pay an ante is no news while there is none');
+
+  t.cmd(0, { type: 'updateConfig', config: { ante: 20 } });
+  t.cmd(0, { type: 'updateConfig', config: { anteFrom: 'everyone' } });
+  t.cmd(0, { type: 'updateConfig', config: { ante: 5 } });
+  t.cmd(0, { type: 'updateConfig', config: { ante: 5, bigBlind: 40 } });
+  t.cmd(0, { type: 'updateConfig', config: { ante: 0 } });
+
+  assert.deepEqual(said(), ['The ante is 20, paid by the big blind for the table', 'The ante is 20, paid by everyone', 'The ante is 5, paid by everyone', 'The ante is off']);
+});
+
+test('an ante is any amount the table can write, with no tie to the blinds, and who pays it is one of two', () => {
+  const t = new TestTable({ stacks: [1000, 1000] });
+
+  t.cmd(0, { type: 'updateConfig', config: { ante: 500, anteFrom: 'bigBlind' } });
+  assert.deepEqual([t.state.config.ante, t.state.config.anteFrom], [500, 'bigBlind']);
+
+  assert.throws(() => t.cmd(0, { type: 'updateConfig', config: { ante: -1 } }), { name: 'GameError', message: 'The ante must be a whole number from 0 to 1,000,000,000' });
+  assert.throws(() => t.cmd(0, { type: 'updateConfig', config: { ante: 2.5 } }), { message: 'The ante must be a whole number from 0 to 1,000,000,000' });
+  assert.throws(() => t.cmd(0, { type: 'updateConfig', config: { anteFrom: 'button' } as never }), { message: 'Who antes must be one of: Everyone dealt in, The big blind, once for the table' });
+
+  const cents = new TestTable({ stacks: [1000, 1000], config: { unit: 'cents' } });
+  assert.throws(() => cents.cmd(0, { type: 'updateConfig', config: { ante: 0.5 } }), { message: 'The ante must be an amount to the cent from 0.00 to 10,000,000.00' });
 });

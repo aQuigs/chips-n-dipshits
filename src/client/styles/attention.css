@@ -1,0 +1,33 @@
+/* ---- The flash when it becomes your turn ---- */
+
+/*
+ * Behind the table, never over it: the space around the felt lights up and the edges of the table's
+ * part of the screen take a line, twice in about a second. Being the stage's own background and
+ * shadow, it is drawn under every card, bet and button.
+ */
+[data-attention] .stage {
+  animation: attention-flash 1s ease-out;
+}
+
+@keyframes attention-flash {
+  0%,
+  45% {
+    background-color: color-mix(in srgb, var(--accent) 38%, transparent);
+    box-shadow: inset 0 0 0 4px var(--accent);
+  }
+
+  25%,
+  100% {
+    background-color: transparent;
+    box-shadow: inset 0 0 0 4px transparent;
+  }
+}
+
+/* With motion turned down the same light stays on, steady, until the turn is over */
+@media (prefers-reduced-motion: reduce) {
+  [data-attention] .stage {
+    animation: none;
+    background-color: color-mix(in srgb, var(--accent) 22%, transparent);
+    box-shadow: inset 0 0 0 4px var(--accent);
+  }
+}

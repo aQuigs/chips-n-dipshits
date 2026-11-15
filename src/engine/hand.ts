@@ -1,13 +1,30 @@
-import { bettingIsClosed, bettingOptions, owesAction } from './betting.ts';
-import { prettyCards, rankOf, shuffledDeck } from './cards.ts';
+import { formatAmount } from './amounts.ts';
+import { bettingIsClosed, bettingOptions, chipsFor, objectionTo, onTheClock, passesTo } from './betting.ts';
+import type { BettingAction } from './betting.ts';
+import { boardsComplete, dealStreet, dealTheRest, newBoards, potShares, runOut } from './boards.ts';
+import { boardsDealt, bombPotName, claimBombPot } from './bombPots.ts';
+import { bountyFor, bountyWords } from './bounties.ts';
+import { HOLE_CARDS, prettyCards, shuffledDeck } from './cards.ts';
 import type { Card } from './cards.ts';
-import { evaluateHand } from './handRank.ts';
+import { answerUnasked, chopsUnasked, mayOfferChop } from './chop.ts';
+import { takesEvent } from './events.ts';
+import type { ChopUngiven, HandEvent, RunsPicked } from './events.ts';
+import { openingBet } from './forcedBets.ts';
+import type { ForcedBet } from './forcedBets.ts';
+import { madeHandName, midSentence } from './handNames.ts';
+import { BOARD_NAMES, huntedText, potLabel, STREET_TITLES } from './handWords.ts';
+import { planHand, takeUp } from './handPlan.ts';
+import { playerHand } from './handRank.ts';
 import type { HandValue } from './handRank.ts';
 import { buildPots, splitAmount } from './pots.ts';
-import { formatChips } from './format.ts';
-import { addFeed, addPendingChips, clockwiseAfter, clockwiseFrom, eligibleSeats, seatsClockwiseAfter, vacateSeat } from './seats.ts';
+import { facingOf, moveChosen, preActionFor, standsForOnePrice } from './preAction.ts';
+import { timesText, timesToRun, voteStory } from './runVote.ts';
+import type { Unpicked } from './runVote.ts';
+import { addFeed, clockwiseAfter, clockwiseFrom, eligibleSeats, seatsClockwiseAfter } from './seats.ts';
+import { asSeen, fullyShown } from './shown.ts';
+import { stakesText } from './stakes.ts';
 import { GameError } from './types.ts';
-import type { BountyResult, Ctx, Hand, HandPlayer, HandResult, PotAward, PotResult, ShownHand, Street, TableState } from './types.ts';
+import type { AnteFrom, BombPot, BountyResult, Ctx, Hand, HandPlayer, HandRecord, HandResult, PotAward, PotResult, PreAction, PreActionKind, ShownHand, Street, TableState } from './types.ts';
 
 export const TIMING = {
   /** Added to the action clock so a click made at the buzzer still counts after the round trip. */
@@ -17,23 +34,21 @@ export const TIMING = {
   runoutStepMs: 1800,
   uncontestedPauseMs: 3500,
   showdownPauseMs: 7000,
-  runTwicePauseMs: 10000,
+  /** After a showdown on more than one board, which takes longer to read. */
+  boardsPauseMs: 10000,
+  /**
+   * Added to the pause after a hand that can be rabbit hunted, at a table that hunts: an answer takes
+   * a second or two to reach the players, and asking takes as long again.
+   */
+  rabbitOfferMs: 1500,
+  /** The least the table stays on a hand once its rabbit is hunted, so the cards are seen: the most one player can hold the next hand up by. */
+  rabbitShowMs: 3000,
 };
-
-const HOLE_CARDS = 2;
-const BOARD_SIZE = 5;
-const FLOP_SIZE = 3;
-const STRADDLE_BIG_BLINDS = 2;
 
 // A hand's log is saved with the table on every action, so a raising war can't be allowed to grow it without end
 const LOG_LIMIT = 240;
 const LOG_HEAD = 40;
 const LOG_GAP = '… a long stretch of the action is left out …';
-
-const STREET_BY_BOARD_LENGTH: Record<number, Street> = { 3: 'flop', 4: 'turn', 5: 'river' };
-const STREET_TITLES: Record<Street, string> = { preflop: 'Preflop', flop: 'Flop', turn: 'Turn', river: 'River' };
-
-export type BettingAction = { type: 'fold' } | { type: 'check' } | { type: 'call' } | { type: 'raise'; to: number };
 
 function narrate(state: TableState, ctx: Ctx, text: string): void {
   addFeed(state, ctx.now, 'dealer', null, text);
@@ -55,6 +70,15 @@ function narrate(state: TableState, ctx: Ctx, text: string): void {
   }
 }
 
+/** Adds to the hand's events, which are either the whole hand from its start or nothing. */
+function record(hand: Hand, event: HandEvent): void {
+  if (takesEvent(hand.events, event)) {
+    hand.events.push(event);
+  } else {
+    hand.events = [];
+  }
+}
+
 function playerAt(hand: Hand, seat: number): HandPlayer | undefined {
   return hand.players.find((p) => p.seat === seat);
 }
@@ -63,42 +87,126 @@ function livePlayers(hand: Hand): HandPlayer[] {
   return hand.players.filter((p) => !p.folded);
 }
 
-function pay(state: TableState, player: HandPlayer, amount: number): void {
+/**
+ * Turns face up for the table those of a player's cards at `places` (0 for the one on their left) that
+ * are not up already: all of them, unless told which. `made` names the hand they make, where that is known.
+ */
+function show(state: TableState, ctx: Ctx, player: HandPlayer, made = '', places?: readonly number[]): void {
+  const turned = player.cards.map((card, nth) => ((!places || places.includes(nth)) && !player.shown[nth] ? card : null));
+  const cards = turned.filter((card) => card !== null);
+  if (cards.length === 0) {
+    return;
+  }
+
+  player.shown = player.shown.map((shown, nth) => shown || turned[nth] !== null);
+  record(state.hand!, ['show', player.seat, turned]);
+
+  const said = cards.length === turned.length ? 'shows' : fullyShown(player.shown) ? 'shows the other card,' : 'shows one card,';
+  narrate(state, ctx, `${player.name} ${said} ${prettyCards(cards)}${made}`);
+}
+
+/** Takes chips from a player's stack into the hand. `as` says how they count there; a call or a raise is a live bet, like a blind. */
+function pay(state: TableState, player: HandPlayer, amount: number, as: ForcedBet['as'] = 'live'): void {
   const seat = state.seats[player.seat]!;
 
   seat.stack -= amount;
-  player.bet += amount;
-  player.committed += amount;
+
+  if (as === 'live') {
+    player.bet += amount;
+  }
+
+  if (as === 'dead') {
+    player.dead += amount;
+  } else {
+    player.committed += amount;
+  }
 
   if (seat.stack === 0) {
     player.allIn = true;
   }
 }
 
-function postBlind(state: TableState, ctx: Ctx, player: HandPlayer, amount: number, blind: 'small blind' | 'big blind' | 'straddle'): void {
-  const posted = Math.min(amount, state.seats[player.seat]!.stack);
+/** Splits a hand's forced bets where one kind of bet ends and the next begins. */
+function byKind(bets: readonly ForcedBet[]): ForcedBet[][] {
+  const kinds: ForcedBet[][] = [];
 
-  pay(state, player, posted);
-  player.lastAction = blind;
-  narrate(state, ctx, `${player.name} posts ${blind} ${formatChips(posted)}${player.allIn ? ' and is all in' : ''}`);
+  for (const bet of bets) {
+    const kind = kinds[kinds.length - 1];
+
+    if (kind && kind[0]!.what === bet.what && kind[0]!.amount === bet.amount) {
+      kind.push(bet);
+    } else {
+      kinds.push([bet]);
+    }
+  }
+
+  return kinds;
+}
+
+/**
+ * Posts a hand's forced bets in the order they are listed, each as far as its player's stack goes.
+ * A bet the whole table posts is told in one line, and only a player it leaves short or all in gets a
+ * line of their own: an ante apiece on top of every hand would bury the chat.
+ */
+function postForcedBets(state: TableState, ctx: Ctx, bets: readonly ForcedBet[]): void {
+  const hand = state.hand!;
+  const tell = (who: string, bet: ForcedBet, posted: number, allIn: boolean) =>
+    narrate(state, ctx, `${who} posts ${bet.what} ${formatAmount(posted, state.config)}${allIn ? ' and is all in' : ''}`);
+
+  for (const kind of byKind(bets)) {
+    const fromEveryone = kind.length === hand.players.length;
+    const inFull: HandPlayer[] = [];
+
+    for (const bet of kind) {
+      const player = playerAt(hand, bet.seat)!;
+      const seat = state.seats[bet.seat]!;
+      const posted = Math.min(bet.amount, seat.stack);
+
+      // An earlier forced bet took the whole stack, so there is nothing left to post this one with
+      if (posted === 0) {
+        continue;
+      }
+
+      pay(state, player, posted, bet.as);
+      record(hand, bet.as === 'live' ? ['post', bet.seat, bet.what, posted, seat.stack] : ['post', bet.seat, bet.what, posted, seat.stack, bet.as]);
+
+      // The label by a seat names what is in front of it
+      if (bet.as === 'live') {
+        player.lastAction = bet.what;
+      }
+
+      if (fromEveryone && !player.allIn) {
+        inFull.push(player);
+      } else {
+        tell(player.name, bet, posted, player.allIn);
+      }
+    }
+
+    if (inFull.length === 1) {
+      tell(inFull[0]!.name, kind[0]!, kind[0]!.amount, false);
+    } else if (inFull.length > 1) {
+      tell(inFull.length === kind.length ? 'Everyone' : 'Everyone else', kind[0]!, kind[0]!.amount, false);
+    }
+  }
 }
 
 export function startHand(state: TableState, ctx: Ctx): void {
-  const eligible = eligibleSeats(state);
-  if (eligible.length < 2) {
+  if (eligibleSeats(state).length < 2) {
     throw new Error('A hand needs at least two players');
   }
 
-  const { smallBlind, bigBlind, allowStraddle } = state.config;
-  const button = state.buttonSeat === null ? eligible[ctx.rng.int(eligible.length)]! : seatsClockwiseAfter(eligible, state.buttonSeat)[0]!;
+  const { smallBlind, bigBlind, bounties } = state.config;
+  const bombPot = claimBombPot(state);
 
-  // Clockwise from the button's left, so the button comes last
-  const order = seatsClockwiseAfter(eligible, button);
-  const headsUp = eligible.length === 2;
-  const sbSeat = headsUp ? button : order[0]!;
-  const bbSeat = headsUp ? order[0]! : order[1]!;
+  // Worked out while every stack is still whole: what the hand starts with is settled before any of it is posted
+  const plan = planHand(state, bombPot, ctx.rng);
+  const { button, order, sbSeat, bbSeat, bets: forced } = plan;
 
-  const players: HandPlayer[] = eligible.map((seat) => {
+  // A bomb pot has no bet to call before the flop, and no betting there
+  const opening = bombPot ? null : openingBet(forced);
+
+  // Kept in seat order, whatever order they are dealt in
+  const players: HandPlayer[] = [...order].sort((a, b) => a - b).map((seat) => {
     const playerId = state.seats[seat]!.playerId;
 
     return {
@@ -109,10 +217,11 @@ export function startHand(state: TableState, ctx: Ctx): void {
       startStack: state.seats[seat]!.stack,
       bet: 0,
       committed: 0,
+      dead: 0,
       folded: false,
       allIn: false,
       hasActed: false,
-      shown: false,
+      shown: Array<boolean>(HOLE_CARDS).fill(false),
       ritVote: null,
       lastAction: null,
     };
@@ -126,8 +235,8 @@ export function startHand(state: TableState, ctx: Ctx): void {
   }
 
   state.handCount += 1;
-  state.buttonSeat = button;
   state.nextHandAt = null;
+  takeUp(state, plan);
 
   const hand: Hand = {
     number: state.handCount,
@@ -137,46 +246,67 @@ export function startHand(state: TableState, ctx: Ctx): void {
     button,
     sbSeat,
     bbSeat,
-    straddleSeat: null,
+    straddles: plan.straddles,
+    passedOver: plan.passedOver,
+    bounties,
+    maxRuns: state.config.maxRuns,
+    bombPot,
+    chopOffered: false,
     deck,
-    boards: [[]],
-    runs: 1,
-    runIndex: 0,
-    sharedBoardLength: 0,
+    hunted: null,
+    ...newBoards(boardsDealt(bombPot)),
     street: 'preflop',
     stage: 'betting',
     players,
-    currentBet: bigBlind,
-    minRaise: bigBlind,
+    currentBet: opening?.amount ?? 0,
+    minRaise: opening?.amount ?? bigBlind,
     toAct: null,
     lastAggressor: null,
     deadline: null,
     result: null,
     log: [],
+    events: [],
   };
   state.hand = hand;
 
-  narrate(state, ctx, `Hand #${hand.number} · blinds ${formatChips(smallBlind)}/${formatChips(bigBlind)} · ${playerAt(hand, button)!.name} has the button`);
-  postBlind(state, ctx, playerAt(hand, sbSeat)!, smallBlind, 'small blind');
-  postBlind(state, ctx, playerAt(hand, bbSeat)!, bigBlind, 'big blind');
+  const stacks = players.map((p): [number, string, number] => [p.seat, p.name, p.startStack]);
+  const terms = bombPot ? `${bombPotName(bombPot)} ${formatAmount(bombPot.amount, state.config)}` : `blinds ${stakesText(state.config)}`;
 
-  // Under the gun is the seat after the big blind, which three-handed is the button
-  const underTheGun = order[2];
-  const straddle = STRADDLE_BIG_BLINDS * bigBlind;
-  if (allowStraddle && underTheGun !== undefined) {
-    const seat = state.seats[underTheGun]!;
+  const onTheButton = playerAt(hand, button);
 
-    if (seat.straddle && seat.stack >= straddle) {
-      postBlind(state, ctx, playerAt(hand, underTheGun)!, straddle, 'straddle');
-      hand.straddleSeat = underTheGun;
+  record(hand, ['start', hand.number, button, smallBlind, bigBlind, stacks, ...startTerms(state, bombPot)]);
+  narrate(state, ctx, `Hand #${hand.number} · ${terms} · ${onTheButton ? `${onTheButton.name} has the button` : `dead button on seat ${button + 1}`}`);
 
-      // A straddle plays as a third, bigger blind: it is the bet to call and the least a raise can add
-      hand.currentBet = straddle;
-      hand.minRaise = straddle;
-    }
+  // Said, since a hand that starts with one blind looks like a mistake: whoever had the big blind is not in this hand
+  if (!bombPot && !order.includes(sbSeat)) {
+    narrate(state, ctx, 'No small blind this hand');
   }
 
-  advance(state, ctx, hand.straddleSeat ?? bbSeat);
+  postForcedBets(state, ctx, forced);
+
+  record(hand, ['deal']);
+
+  if (opening) {
+    advance(state, ctx, opening.seat);
+    return;
+  }
+
+  // The flop comes whoever is all in, on every board. What nobody could match goes back first, so it is dealt to the pot it is played for
+  refundUncalledBet(state, ctx);
+  dealNextStreet(state, ctx);
+  advance(state, ctx, button);
+}
+
+/** What a hand's first event says beyond the blinds, each part left out of a hand it plays no part in. */
+function startTerms(state: TableState, bombPot: BombPot | null): [ante?: number, anteFrom?: AnteFrom, bombPot?: BombPot] {
+  const { ante, anteFrom } = state.config;
+
+  // A bomb pot is played without the table's ante
+  if (bombPot) {
+    return [0, anteFrom, bombPot];
+  }
+
+  return ante > 0 ? [ante, anteFrom] : [];
 }
 
 function actionDeadline(state: TableState, now: number): number | null {
@@ -189,7 +319,7 @@ function actionDeadline(state: TableState, now: number): number | null {
 export function restartActionClock(state: TableState, now: number): void {
   const hand = state.hand;
 
-  if (hand && hand.stage === 'betting' && hand.toAct !== null) {
+  if (hand && onTheClock(hand) !== null) {
     hand.deadline = actionDeadline(state, now);
   }
 }
@@ -229,11 +359,25 @@ function advance(state: TableState, ctx: Ctx, afterSeat: number): void {
       continue;
     }
 
-    const next = clockwiseAfter(hand.players, from).find((p) => owesAction(hand, p))!;
+    const next = passesTo(hand, from)!;
     const seat = state.seats[next.seat]!;
 
+    if (chopsUnasked(state, hand, next.seat)) {
+      chopTheBlinds(state, ctx);
+      return;
+    }
+
     if (seat.away || seat.leaving) {
-      checkOrFold(state, ctx, next);
+      checkOrFold(state, ctx, next, true);
+      from = next.seat;
+      continue;
+    }
+
+    const chosen = takeChosenAhead(state, hand, next);
+    if (chosen) {
+      // The decision was put to them and answered at once: it takes its number, as one they tapped would
+      state.turn += 1;
+      perform(state, ctx, next, chosen);
       from = next.seat;
       continue;
     }
@@ -242,6 +386,27 @@ function advance(state: TableState, ctx: Ctx, afterSeat: number): void {
     state.turn += 1;
     hand.deadline = actionDeadline(state, ctx.now);
     return;
+  }
+}
+
+/**
+ * The move a player chose ahead for the turn that has now reached them, taken off them either way:
+ * null when they chose none, or none that still stands for what they face.
+ */
+function takeChosenAhead(state: TableState, hand: Hand, player: HandPlayer): BettingAction | null {
+  const chosen = player.pre;
+
+  delete player.pre;
+
+  return chosen ? moveChosen(chosen, bettingOptions(state, hand, player)) : null;
+}
+
+/** Takes off the moves chosen ahead that `gone` picks out: all of them, unless told which. */
+function dropPreActions(hand: Hand, gone: (chosen: PreAction) => boolean = () => true): void {
+  for (const player of hand.players) {
+    if (player.pre && gone(player.pre)) {
+      delete player.pre;
+    }
   }
 }
 
@@ -256,29 +421,36 @@ function refundUncalledBet(state: TableState, ctx: Ctx): void {
     return;
   }
 
+  // More than the bet when part of an ante went unmatched too: an ante is a stake, and no part of the bet
+  const beyondTheBet = excess > top.bet;
+
   top.committed -= excess;
-  top.bet -= excess;
+  top.bet = Math.max(0, top.bet - excess);
   top.allIn = false;
   state.seats[top.seat]!.stack += excess;
 
-  narrate(state, ctx, `Uncalled bet of ${formatChips(excess)} returned to ${top.name}`);
+  record(hand, ['return', top.seat, excess]);
+  narrate(state, ctx, beyondTheBet ? `${formatAmount(excess, state.config)} that nobody could match returned to ${top.name}` : `Uncalled bet of ${formatAmount(excess, state.config)} returned to ${top.name}`);
 }
 
-function dealBoardCards(hand: Hand, board: Card[]): Street {
-  const count = board.length === 0 ? FLOP_SIZE : 1;
+/** Deals the next street, on every board it is due on, and tells the table. */
+function dealAndTell(state: TableState, ctx: Ctx): void {
+  const hand = state.hand!;
 
-  for (let i = 0; i < count; i++) {
-    board.push(hand.deck.pop()!);
+  for (const { board, street, cards } of dealStreet(hand)) {
+    const which = hand.runs > 1 ? `${BOARD_NAMES[board]}, ` : '';
+
+    hand.street = street;
+    record(hand, ['street', board, cards]);
+    narrate(state, ctx, `${which}${STREET_TITLES[street]}: ${prettyCards(hand.boards[board]!)}`);
   }
-
-  return STREET_BY_BOARD_LENGTH[board.length]!;
 }
 
+/** Deals the next street and opens its round of betting. */
 function dealNextStreet(state: TableState, ctx: Ctx): void {
   const hand = state.hand!;
-  const board = hand.boards[0]!;
 
-  hand.street = dealBoardCards(hand, board);
+  dealAndTell(state, ctx);
   hand.currentBet = 0;
   hand.minRaise = hand.bigBlind;
   hand.lastAggressor = null;
@@ -291,8 +463,6 @@ function dealNextStreet(state: TableState, ctx: Ctx): void {
       player.lastAction = null;
     }
   }
-
-  narrate(state, ctx, `${STREET_TITLES[hand.street]}: ${prettyCards(board)}`);
 }
 
 /** Bets leave the front of the players once no more betting can happen. */
@@ -302,53 +472,48 @@ function collectBets(hand: Hand): void {
   }
 }
 
-function perform(state: TableState, ctx: Ctx, player: HandPlayer, action: BettingAction): void {
+/** `unasked` says the move is made for a player who was never on the clock for it, which the hand's events keep. */
+function perform(state: TableState, ctx: Ctx, player: HandPlayer, action: BettingAction, unasked = false): void {
   const hand = state.hand!;
   const options = bettingOptions(state, hand, player);
+  const objection = objectionTo(action, options, hand.currentBet, state.config);
+
+  if (objection) {
+    throw new GameError(objection);
+  }
+
+  const paid = chipsFor(action, options, player.bet);
 
   switch (action.type) {
     case 'fold': {
       player.folded = true;
       player.lastAction = 'fold';
+      record(hand, unasked ? ['fold', player.seat, true] : ['fold', player.seat]);
       narrate(state, ctx, `${player.name} folds`);
       break;
     }
 
     case 'check': {
-      if (!options.canCheck) {
-        throw new GameError(`You can't check, there is a bet of ${hand.currentBet} to you`);
-      }
-
       player.lastAction = 'check';
+      record(hand, unasked ? ['check', player.seat, true] : ['check', player.seat]);
       narrate(state, ctx, `${player.name} checks`);
       break;
     }
 
     case 'call': {
-      if (options.canCheck) {
-        throw new GameError('There is nothing to call');
-      }
-
-      pay(state, player, options.callAmount);
+      pay(state, player, paid);
       player.lastAction = 'call';
-      narrate(state, ctx, `${player.name} calls ${formatChips(options.callAmount)}${player.allIn ? ' and is all in' : ''}`);
+      record(hand, ['call', player.seat, paid, state.seats[player.seat]!.stack]);
+      narrate(state, ctx, `${player.name} calls ${formatAmount(paid, state.config)}${player.allIn ? ' and is all in' : ''}`);
       break;
     }
 
     case 'raise': {
-      if (!options.canRaise) {
-        throw new GameError("You can't raise here");
-      }
-
       const { to } = action;
-      if (!Number.isInteger(to) || to < options.minRaiseTo || to > options.maxRaiseTo) {
-        throw new GameError(`A raise here must be between ${options.minRaiseTo} and ${options.maxRaiseTo}`);
-      }
-
       const opening = hand.currentBet === 0;
       const raisedBy = to - hand.currentBet;
 
-      pay(state, player, to - player.bet);
+      pay(state, player, paid);
 
       // Only a full raise sets the new minimum; a short all-in leaves it where it was
       if (raisedBy >= hand.minRaise) {
@@ -357,8 +522,11 @@ function perform(state: TableState, ctx: Ctx, player: HandPlayer, action: Bettin
 
       hand.currentBet = to;
       hand.lastAggressor = player.seat;
+      // A check or a call chosen ahead was for the price before this one
+      dropPreActions(hand, standsForOnePrice);
       player.lastAction = opening ? 'bet' : 'raise';
-      narrate(state, ctx, `${player.name} ${opening ? 'bets' : 'raises to'} ${formatChips(to)}${player.allIn ? ' and is all in' : ''}`);
+      record(hand, [opening ? 'bet' : 'raise', player.seat, to, state.seats[player.seat]!.stack]);
+      narrate(state, ctx, `${player.name} ${opening ? 'bets' : 'raises to'} ${formatAmount(to, state.config)}${player.allIn ? ' and is all in' : ''}`);
       break;
     }
   }
@@ -366,25 +534,30 @@ function perform(state: TableState, ctx: Ctx, player: HandPlayer, action: Bettin
   player.hasActed = true;
 }
 
-function checkOrFold(state: TableState, ctx: Ctx, player: HandPlayer): void {
+function checkOrFold(state: TableState, ctx: Ctx, player: HandPlayer, unasked = false): void {
   const canCheck = bettingOptions(state, state.hand!, player).canCheck;
 
-  perform(state, ctx, player, { type: canCheck ? 'check' : 'fold' });
+  perform(state, ctx, player, { type: canCheck ? 'check' : 'fold' }, unasked);
 }
 
 /**
- * A player's own decision when the action is on them. `turn` is the decision they were looking at:
- * an answer that was slow to arrive, or sent twice, must not be played on a later one they never saw.
+ * Refuses a decision sent for another than the one open. `turn` is the decision the player was looking
+ * at: an answer that was slow to arrive, or sent twice, must not be played on a later one they never saw.
  */
+function requireTurn(state: TableState, turn: number | undefined): void {
+  if (turn !== undefined && turn !== state.turn) {
+    throw new GameError('The hand moved on before that arrived, so it was not played');
+  }
+}
+
+/** A player's own decision when the action is on them, for the decision `turn` when it is given. */
 export function act(state: TableState, ctx: Ctx, seatIndex: number, action: BettingAction, turn?: number): void {
   const hand = state.hand;
   if (!hand || hand.stage !== 'betting' || hand.toAct !== seatIndex) {
     throw new GameError("It's not your turn");
   }
 
-  if (turn !== undefined && turn !== state.turn) {
-    throw new GameError('The hand moved on before that arrived, so it was not played');
-  }
+  requireTurn(state, turn);
 
   perform(state, ctx, playerAt(hand, seatIndex)!, action);
 
@@ -398,7 +571,151 @@ export function act(state: TableState, ctx: Ctx, seatIndex: number, action: Bett
   advance(state, ctx, seatIndex);
 }
 
-/** The clock ran out on the player to act: they check or fold and sit out until they come back. */
+/** Where a player was when they chose a move ahead: the hand by its number, its street and the bet to match. */
+export interface PreActionSpot {
+  hand: number;
+  street: Street;
+  facing: number;
+}
+
+/** What a player is told whose choice of a move ahead came too late to be set. */
+export const TOO_LATE_TO_SET = 'The hand moved on before that arrived, so nothing is set ahead';
+
+/**
+ * A player chooses the move they make when the action next reaches them, or with `what` null takes
+ * their choice back. It is set only in the `spot` it was chosen in: the same hand and street, the same
+ * bet to match, and the player still waiting for the action there. Any bet or raise since, or a move
+ * of their own, makes it another spot, so a choice that was slow to arrive, or arrives twice, can't
+ * be played against anything they were not looking at.
+ *
+ * Either way the choice they had on that street is off: they have just said they want another, or none.
+ * So one that comes too late is refused only when there was nothing to take off, and otherwise leaves
+ * them with nothing chosen, never with the choice they were replacing.
+ */
+export function choosePreAction(state: TableState, seatIndex: number, what: PreActionKind | null, spot: PreActionSpot): void {
+  const hand = state.hand;
+  const player = hand && hand.number === spot.hand && hand.street === spot.street ? playerAt(hand, seatIndex) : undefined;
+  const facing = hand && player && hand.currentBet === spot.facing ? facingOf(state, hand, player) : null;
+  const chosen = what !== null && facing ? preActionFor(what, facing) : null;
+
+  if (what !== null && facing && !chosen) {
+    // Not on offer at this price, a call with nothing bet or a check with a bet to them: refused in the words the tapped move is
+    throw new GameError(objectionTo({ type: what === 'call' ? 'call' : 'check' }, bettingOptions(state, hand!, player!), hand!.currentBet, state.config)!);
+  }
+
+  if (what !== null && !facing && !player?.pre) {
+    throw new GameError(TOO_LATE_TO_SET);
+  }
+
+  if (!player) {
+    return;
+  }
+
+  delete player.pre;
+
+  if (chosen) {
+    player.pre = chosen;
+  }
+}
+
+/**
+ * The small blind offers to chop the blinds instead of a move, on their turn (`turn`, when given). The
+ * big blind is asked, unless what they would say is already known (`answerUnasked`).
+ */
+export function offerChop(state: TableState, ctx: Ctx, seatIndex: number, turn?: number): void {
+  const hand = state.hand;
+  if (!hand || hand.stage !== 'betting' || hand.toAct !== seatIndex) {
+    throw new GameError("It's not your turn");
+  }
+
+  requireTurn(state, turn);
+
+  if (!state.config.allowChop) {
+    throw new GameError("This table doesn't chop the blinds");
+  }
+
+  if (hand.chopOffered) {
+    throw new GameError('You already offered to chop in this hand');
+  }
+
+  if (!mayOfferChop(state, seatIndex)) {
+    throw new GameError('Only the small blind can offer to chop, when everyone else has folded and the pot is just the blinds');
+  }
+
+  const big = playerAt(hand, hand.bbSeat)!;
+
+  hand.chopOffered = true;
+  record(hand, ['chopOffer', seatIndex]);
+  narrate(state, ctx, `${playerAt(hand, seatIndex)!.name} offers to chop the blinds`);
+
+  const unasked = answerUnasked(state.seats[big.seat]!);
+  if (unasked !== null) {
+    settleChop(state, ctx, big, unasked, 'unasked');
+    return;
+  }
+
+  // The big blind is asked something they chose no answer to
+  dropPreActions(hand);
+  hand.stage = 'chop';
+  hand.toAct = big.seat;
+  state.turn += 1;
+  hand.deadline = actionDeadline(state, ctx.now);
+}
+
+/** The big blind answers the offer to chop, for the decision `turn` when it is given. */
+export function answerChop(state: TableState, ctx: Ctx, seatIndex: number, agree: boolean, turn?: number): void {
+  const hand = state.hand;
+  if (!hand || hand.stage !== 'chop' || hand.toAct !== seatIndex) {
+    throw new GameError('There is no chop for you to answer');
+  }
+
+  requireTurn(state, turn);
+  settleChop(state, ctx, playerAt(hand, seatIndex)!, agree);
+}
+
+/**
+ * The offer to chop is answered: by the big blind, or for them (`ungiven`) by their standing choice,
+ * the clock or their leaving. Yes chops the blinds. No takes the offer off for the hand and puts the
+ * small blind back on a fresh clock with the usual choices, or folds for them if they are away or leaving.
+ */
+function settleChop(state: TableState, ctx: Ctx, big: HandPlayer, agree: boolean, ungiven?: ChopUngiven): void {
+  const hand = state.hand!;
+
+  record(hand, ungiven ? ['chopAnswer', big.seat, agree, ungiven] : ['chopAnswer', big.seat, agree]);
+
+  if (agree) {
+    narrate(state, ctx, `${big.name} agrees to chop`);
+    chopTheBlinds(state, ctx);
+    return;
+  }
+
+  narrate(state, ctx, ungiven ? `${big.name} did not answer, so there is no chop` : `${big.name} says no to the chop`);
+  hand.stage = 'betting';
+
+  // The small blind is the one player after the big blind still to act
+  advance(state, ctx, big.seat);
+}
+
+/** Each blind goes back to the seat that posted it, and the hand is over with no winner and nothing shown. */
+function chopTheBlinds(state: TableState, ctx: Ctx): void {
+  const hand = state.hand!;
+  const blinds = [playerAt(hand, hand.sbSeat)!, playerAt(hand, hand.bbSeat)!];
+
+  record(hand, ['chop', blinds.map((player): [number, number] => [player.seat, player.committed])]);
+
+  for (const player of blinds) {
+    state.seats[player.seat]!.stack += player.committed;
+    player.bet = 0;
+    player.committed = 0;
+    player.allIn = false;
+  }
+
+  narrate(state, ctx, `${blinds[0]!.name} and ${blinds[1]!.name} chop the blinds: each takes back their own`);
+
+  finishHand(state, ctx, { uncontested: true, chopped: [hand.sbSeat, hand.bbSeat], pots: [], winnings: [], hands: [], bounty: null });
+}
+
+/** The clock ran out on the player it was on: they check or fold, or say no to a chop, and sit out until they come back. */
 function timeOut(state: TableState, ctx: Ctx): void {
   const hand = state.hand!;
   const player = playerAt(hand, hand.toAct!)!;
@@ -406,21 +723,37 @@ function timeOut(state: TableState, ctx: Ctx): void {
 
   seat.away = true;
   seat.sittingOut = true;
+  record(hand, ['timeout', player.seat]);
   narrate(state, ctx, `${player.name} ran out of time`);
+
+  if (hand.stage === 'chop') {
+    settleChop(state, ctx, player, seat.alwaysChop, 'unanswered');
+    return;
+  }
 
   checkOrFold(state, ctx, player);
   advance(state, ctx, player.seat);
 }
 
-/** A player gave up their seat mid-hand; if the action is on them it can't wait. */
-export function foldIfOnTheClock(state: TableState, ctx: Ctx, seatIndex: number): void {
+/** A player gave up their seat mid-hand, so nothing in the hand may wait for them. */
+export function stopWaitingFor(state: TableState, ctx: Ctx, seatIndex: number): void {
   const hand = state.hand;
-  if (!hand || hand.stage !== 'betting' || hand.toAct !== seatIndex) {
+  const player = hand ? playerAt(hand, seatIndex) : undefined;
+  if (!hand || !player) {
     return;
   }
 
-  checkOrFold(state, ctx, playerAt(hand, seatIndex)!);
-  advance(state, ctx, seatIndex);
+  // From here the table checks or folds for them, whatever they chose ahead
+  delete player.pre;
+
+  if (hand.stage === 'betting' && hand.toAct === seatIndex) {
+    checkOrFold(state, ctx, player);
+    advance(state, ctx, seatIndex);
+  } else if (hand.stage === 'chop' && hand.toAct === seatIndex) {
+    settleChop(state, ctx, player, state.seats[seatIndex]!.alwaysChop, 'unanswered');
+  } else if (hand.stage === 'ritVote' && !player.folded && player.ritVote === null) {
+    endVote(state, ctx, { why: 'left', name: player.name }, player.seat);
+  }
 }
 
 function beginRunout(state: TableState, ctx: Ctx): void {
@@ -428,130 +761,130 @@ function beginRunout(state: TableState, ctx: Ctx): void {
   const live = livePlayers(hand);
 
   collectBets(hand);
-  hand.sharedBoardLength = hand.boards[0]!.length;
+  // The one player with chips left may never have been asked: the bets against them were all in for less
+  dropPreActions(hand);
 
   for (const player of live) {
-    if (!player.shown) {
-      player.shown = true;
-      narrate(state, ctx, `${player.name} shows ${prettyCards(player.cards)}`);
-    }
+    show(state, ctx, player);
   }
 
+  // Running it more than once is offered only to a hand on one board: boards dealt apart from the start are simply dealt out
   const everyoneCanVote = live.every((p) => !state.seats[p.seat]!.away && !state.seats[p.seat]!.leaving);
-  if (state.config.allowRunItTwice && everyoneCanVote) {
+  if (hand.runs === 1 && hand.maxRuns > 1 && everyoneCanVote) {
     hand.stage = 'ritVote';
     hand.deadline = ctx.now + TIMING.ritVoteMs;
     return;
   }
 
-  startRunout(state, ctx, 1);
+  startRunout(state, ctx, hand.runs);
 }
 
-function startRunout(state: TableState, ctx: Ctx, runs: number): void {
+/** `picked` is how the picking ended and, when a player left without picking, their seat; nothing when nobody was asked. */
+function startRunout(state: TableState, ctx: Ctx, runs: number, picked: [how?: RunsPicked, leaver?: number] = []): void {
   const hand = state.hand!;
 
   hand.stage = 'runout';
-  hand.runs = runs;
-  hand.runIndex = 0;
+  runOut(hand, runs);
   hand.deadline = ctx.now + TIMING.runoutStepMs;
-
-  if (runs > 1) {
-    narrate(state, ctx, 'Everyone agreed to run it twice');
-  }
+  record(hand, ['runs', runs, ...picked]);
 }
 
-export function voteRunItTwice(state: TableState, ctx: Ctx, seatIndex: number, agree: boolean): void {
+/** A player still in picks how many times the rest is run, which settles it once nobody can pick fewer. */
+export function pickRuns(state: TableState, ctx: Ctx, seatIndex: number, runs: number): void {
   const hand = state.hand;
   const player = hand ? playerAt(hand, seatIndex) : undefined;
 
   if (!hand || hand.stage !== 'ritVote' || !player || player.folded) {
-    throw new GameError('There is no run-it-twice vote for you right now');
+    throw new GameError('There is nothing to pick for you right now');
   }
+
+  const cap = hand.maxRuns;
 
   if (player.ritVote !== null) {
-    throw new GameError('You already voted');
+    throw new GameError('You already picked');
   }
 
-  player.ritVote = agree;
-
-  if (!agree) {
-    narrate(state, ctx, `${player.name} wants to run it once`);
-    startRunout(state, ctx, 1);
-    return;
+  if (runs > cap) {
+    throw new GameError(`This table runs it ${timesText(cap)} at most`);
   }
 
-  if (livePlayers(hand).every((p) => p.ritVote === true)) {
-    startRunout(state, ctx, 2);
+  player.ritVote = runs;
+  record(hand, ['vote', seatIndex, runs]);
+
+  if (timesToRun(livePlayers(hand).map((p) => p.ritVote), cap) !== null) {
+    endVote(state, ctx);
   }
+}
+
+/** The picking is over: the rest is run as many times as the picks come to, a player who never picked having picked once. */
+function endVote(state: TableState, ctx: Ctx, unpicked?: Unpicked, leaver?: number): void {
+  const live = livePlayers(state.hand!);
+  const runs = timesToRun(live.map((p) => p.ritVote ?? 1), state.hand!.maxRuns)!;
+
+  narrate(state, ctx, voteStory(live, runs, unpicked));
+  startRunout(state, ctx, runs, leaver === undefined ? [unpicked?.why ?? 'settled'] : ['left', leaver]);
 }
 
 /** Deals the next street of an all-in runout, and settles the hand once every board is complete. */
 function runoutStep(state: TableState, ctx: Ctx): void {
   const hand = state.hand!;
-  const board = hand.boards[hand.runIndex]!;
 
-  hand.street = dealBoardCards(hand, board);
+  dealAndTell(state, ctx);
 
-  const boardLabel = hand.runs > 1 ? (hand.runIndex === 0 ? 'First board, ' : 'Second board, ') : '';
-  narrate(state, ctx, `${boardLabel}${STREET_TITLES[hand.street]}: ${prettyCards(board)}`);
-
-  if (board.length < BOARD_SIZE) {
-    hand.deadline = ctx.now + TIMING.runoutStepMs;
+  if (boardsComplete(hand)) {
+    settleShowdown(state, ctx);
     return;
   }
 
-  if (hand.runIndex + 1 < hand.runs) {
-    hand.runIndex += 1;
-    hand.boards.push(hand.boards[0]!.slice(0, hand.sharedBoardLength));
-    hand.deadline = ctx.now + TIMING.runoutStepMs;
-    return;
-  }
+  hand.deadline = ctx.now + TIMING.runoutStepMs;
+}
 
-  settleShowdown(state, ctx);
+/** What every player still in makes on each of the hand's boards, by seat. */
+function handsByBoard(hand: Hand): Map<number, HandValue>[] {
+  const live = livePlayers(hand);
+
+  return hand.boards.map((board) => new Map(live.map((p) => [p.seat, playerHand(p.cards, board)])));
 }
 
 /**
  * Turns hands face up in showdown order: the last player to bet or raise on the river goes first, or
  * the first player left of the button if the river was checked around. After that a player shows only
- * if they can still win a pot, and mucks otherwise.
+ * if they can still win a pot on some board, and otherwise mucks, unless they chose to show a hand
+ * that lost.
  */
 function revealAtShowdown(state: TableState, ctx: Ctx): void {
   const hand = state.hand!;
   const live = livePlayers(hand);
-  const board = hand.boards[0]!;
   const pots = buildPots(hand.players);
-  const values = new Map(live.map((p) => [p.seat, evaluateHand([...p.cards, ...board])]));
+  const values = handsByBoard(hand);
 
   const aggressor = live.find((p) => p.seat === hand.lastAggressor);
   const order = aggressor ? clockwiseFrom(live, aggressor.seat) : clockwiseAfter(live, hand.button);
-  const shown: number[] = [];
+  // The hands those after them have to beat. A loser shown by choice is not one: a hand among these already beats it
+  const contenders: number[] = [];
 
   for (const player of order) {
-    const mine = values.get(player.seat)!;
     const canStillWin = pots.some((pot) => {
       if (!pot.eligible.includes(player.seat)) {
         return false;
       }
 
-      return shown.filter((seat) => pot.eligible.includes(seat)).every((seat) => mine.score >= values.get(seat)!.score);
+      const against = contenders.filter((seat) => pot.eligible.includes(seat));
+
+      return values.some((onBoard) => against.every((seat) => onBoard.get(player.seat)!.score >= onBoard.get(seat)!.score));
     });
 
     if (canStillWin) {
-      player.shown = true;
-      shown.push(player.seat);
-      narrate(state, ctx, `${player.name} shows ${prettyCards(player.cards)} (${mine.name})`);
+      contenders.push(player.seat);
+    }
+
+    if (canStillWin || state.seats[player.seat]!.autoShow.includes('lost')) {
+      show(state, ctx, player, ` (${values.map((onBoard) => madeHandName(onBoard.get(player.seat)!)).join(' / ')})`);
     } else {
+      record(hand, ['muck', player.seat]);
       narrate(state, ctx, `${player.name} mucks`);
     }
   }
-}
-
-function potLabel(index: number, count: number): string {
-  if (count === 1) {
-    return '';
-  }
-
-  return index === 0 ? ' from the main pot' : ` from side pot ${index}`;
 }
 
 function settleShowdown(state: TableState, ctx: Ctx): void {
@@ -561,9 +894,7 @@ function settleShowdown(state: TableState, ctx: Ctx): void {
   collectBets(hand);
 
   const pots = buildPots(hand.players);
-  const values: Map<number, HandValue>[] = hand.boards.map(
-    (board) => new Map(live.map((p) => [p.seat, evaluateHand([...p.cards, ...board])])),
-  );
+  const values = handsByBoard(hand);
 
   const potResults: PotResult[] = [];
   const winnings = new Map<number, number>();
@@ -572,24 +903,20 @@ function settleShowdown(state: TableState, ctx: Ctx): void {
   pots.forEach((pot, potIndex) => {
     const awards: PotAward[] = [];
 
-    // Run twice, each board plays for half the pot and the first board gets the odd chip
-    const firstHalf = Math.ceil(pot.amount / hand.runs);
-    const amounts = hand.runs === 1 ? [pot.amount] : [firstHalf, pot.amount - firstHalf];
-
-    amounts.forEach((amount, run) => {
-      if (amount === 0) {
-        return;
-      }
-
+    potShares(hand, pot.amount).forEach((amount, run) => {
       const best = Math.max(...pot.eligible.map((seat) => values[run]!.get(seat)!.score));
       const winners = pot.eligible.filter((seat) => values[run]!.get(seat)!.score === best);
 
-      // Taken from the hands, not the payouts: in a tie over a single chip only one player is paid
+      // Taken from the hands, not the payouts: a board whose share is nothing, or a tie over a single chip, still names who won it
       if (potIndex === 0) {
         winners.forEach((seat) => mainPotWinners.add(seat));
       }
 
-      const runLabel = hand.runs > 1 ? (run === 0 ? ' on the first board' : ' on the second board') : '';
+      if (amount === 0) {
+        return;
+      }
+
+      const runLabel = hand.runs > 1 ? ` on the ${midSentence(BOARD_NAMES[run]!)}` : '';
 
       for (const [seat, share] of splitAmount(amount, seatsClockwiseAfter(winners, hand.button))) {
         if (share === 0) {
@@ -598,10 +925,11 @@ function settleShowdown(state: TableState, ctx: Ctx): void {
 
         awards.push({ seat, amount: share, run });
         winnings.set(seat, (winnings.get(seat) ?? 0) + share);
+        record(hand, ['win', seat, share, potIndex, run]);
 
         const winner = playerAt(hand, seat)!;
-        const handName = values[run]!.get(seat)!.name;
-        narrate(state, ctx, `${winner.name} wins ${formatChips(share)}${potLabel(potIndex, pots.length)}${runLabel} with ${handName}`);
+        const handName = midSentence(madeHandName(values[run]!.get(seat)!));
+        narrate(state, ctx, `${winner.name} wins ${formatAmount(share, state.config)}${potLabel(potIndex, pots.length)}${runLabel} with ${handName}`);
       }
     });
 
@@ -615,9 +943,9 @@ function settleShowdown(state: TableState, ctx: Ctx): void {
   const hands: ShownHand[] = [];
   hand.boards.forEach((_board, run) => {
     for (const player of live) {
-      if (player.shown) {
+      if (fullyShown(player.shown)) {
         const value = values[run]!.get(player.seat)!;
-        hands.push({ seat: player.seat, run, name: value.name, cards: value.cards });
+        hands.push({ seat: player.seat, run, name: madeHandName(value), cards: value.cards });
       }
     }
   });
@@ -645,7 +973,10 @@ function finishUncontested(state: TableState, ctx: Ctx, winner: HandPlayer): voi
   const total = pots.reduce((sum, pot) => sum + pot.amount, 0);
 
   state.seats[winner.seat]!.stack += total;
-  narrate(state, ctx, `${winner.name} wins ${formatChips(total)}`);
+  pots.forEach((pot, potIndex) => record(hand, ['win', winner.seat, pot.amount, potIndex, 0]));
+
+  // A big blind posted with no small blind and no ante, and folded to, went back as an uncalled bet: nothing is left to win
+  narrate(state, ctx, total > 0 ? `${winner.name} wins ${formatAmount(total, state.config)}` : `Everyone folded to ${winner.name}`);
 
   finishHand(state, ctx, {
     uncontested: true,
@@ -658,28 +989,24 @@ function finishUncontested(state: TableState, ctx: Ctx, winner: HandPlayer): voi
     hands: [],
     bounty: payBounty(state, ctx, winner.seat),
   });
+
+  // As if they pressed to show both the moment the hand ended: a show by choice, not a showdown
+  if (state.seats[winner.seat]!.autoShow.includes('foldedTo')) {
+    show(state, ctx, winner);
+  }
 }
 
-function isSevenDeuce(cards: readonly Card[]): boolean {
-  const ranks = cards.map(rankOf).sort((a, b) => a - b);
-
-  return ranks[0] === 2 && ranks[1] === 7;
-}
-
-/** Whoever wins a hand holding seven-deuce collects the bounty from everyone else who was dealt in. */
+/** Whoever wins a hand holding a bounty hand collects its bounty from everyone else who was dealt in. */
 function payBounty(state: TableState, ctx: Ctx, winnerSeat: number): BountyResult | null {
   const hand = state.hand!;
-  const bounty = state.config.sevenDeuceBounty;
   const winner = playerAt(hand, winnerSeat)!;
+  const bounty = bountyFor(winner.cards, hand.bounties);
 
-  if (bounty <= 0 || !isSevenDeuce(winner.cards)) {
+  if (!bounty) {
     return null;
   }
 
-  if (!winner.shown) {
-    winner.shown = true;
-    narrate(state, ctx, `${winner.name} shows ${prettyCards(winner.cards)}`);
-  }
+  const [bountyHand, each] = bounty;
 
   const payments: BountyResult['payments'] = [];
   let total = 0;
@@ -690,7 +1017,7 @@ function payBounty(state: TableState, ctx: Ctx, winnerSeat: number): BountyResul
     }
 
     const seat = state.seats[player.seat]!;
-    const amount = Math.min(bounty, seat.stack);
+    const amount = Math.min(each, seat.stack);
 
     if (amount > 0) {
       seat.stack -= amount;
@@ -699,10 +1026,18 @@ function payBounty(state: TableState, ctx: Ctx, winnerSeat: number): BountyResul
     }
   }
 
-  state.seats[winnerSeat]!.stack += total;
-  narrate(state, ctx, `${winner.name} won with seven-deuce and collects a bounty of ${formatChips(total)}`);
+  // Everyone who owes it lost their last chip in the hand, so there is no bounty to announce
+  if (total === 0) {
+    return null;
+  }
 
-  return { seat: winnerSeat, payments };
+  show(state, ctx, winner);
+
+  state.seats[winnerSeat]!.stack += total;
+  record(hand, ['bounty', winnerSeat, payments.map((payment): [number, number] => [payment.seat, payment.amount]), bountyHand]);
+  narrate(state, ctx, bountyWords(winner.name, bountyHand, formatAmount(total, state.config)));
+
+  return { seat: winnerSeat, hand: bountyHand, payments };
 }
 
 function finishHand(state: TableState, ctx: Ctx, result: HandResult): void {
@@ -712,86 +1047,178 @@ function finishHand(state: TableState, ctx: Ctx, result: HandResult): void {
   if (result.uncontested) {
     pause = TIMING.uncontestedPauseMs;
   } else if (hand.runs > 1) {
-    pause = TIMING.runTwicePauseMs;
+    pause = TIMING.boardsPauseMs;
   }
 
   hand.result = result;
   hand.stage = 'done';
   hand.toAct = null;
+  dropPreActions(hand);
+
+  if (rabbitToHunt(state, hand)) {
+    pause += TIMING.rabbitOfferMs;
+  }
+
   hand.deadline = ctx.now + pause;
 }
 
-/** After a hand is over, anyone who was dealt in may turn their cards face up. */
-export function showCards(state: TableState, ctx: Ctx, seatIndex: number): void {
-  const hand = state.hand;
-  const player = hand ? playerAt(hand, seatIndex) : undefined;
+/** Whether somebody won the hand: took chips from its pots, or the bounty. Nobody did in a hand the blinds chopped, or one with nothing in it. */
+function wonBySomebody(result: HandResult): boolean {
+  return result.winnings.some((win) => win.amount > 0) || result.bounty !== null;
+}
 
-  if (!hand || hand.stage !== 'done' || !player) {
+/**
+ * Whether the hand on the table has a rabbit to hunt: the table hunts, the hand is over with a board
+ * still short of its cards, and nobody has hunted it yet. A hand nobody won, such as one the blinds
+ * chopped, has none.
+ */
+export function rabbitToHunt(state: TableState, hand: Hand): boolean {
+  return state.config.rabbitHunting && rabbitLeft(hand);
+}
+
+function rabbitLeft(hand: Hand): boolean {
+  return hand.stage === 'done' && hand.hunted === null && !boardsComplete(hand) && wonBySomebody(hand.result!);
+}
+
+/** Rabbit hunting was switched while a hand that has a rabbit is up: its pause becomes what it would have been had the table been set so when it ended. */
+export function retimeRabbitOffer(state: TableState, now: number): void {
+  const hand = state.hand;
+
+  if (hand?.deadline != null && rabbitLeft(hand)) {
+    hand.deadline = Math.max(now, hand.deadline + (state.config.rabbitHunting ? TIMING.rabbitOfferMs : -TIMING.rabbitOfferMs));
+  }
+}
+
+/** Who in a seat may hunt a hand's rabbit: the player dealt into it, folded or not, unless they have left the table. */
+function hunterAt(state: TableState, hand: Hand, seatIndex: number): HandPlayer | undefined {
+  return state.seats[seatIndex]?.leaving ? undefined : playerAt(hand, seatIndex);
+}
+
+export function mayHunt(state: TableState, seatIndex: number): boolean {
+  const hand = state.hand;
+
+  return hand !== null && hunterAt(state, hand, seatIndex) !== undefined && rabbitToHunt(state, hand);
+}
+
+/**
+ * Lays out for everyone, at the asking of the player in `seatIndex`, the cards hand number `number`
+ * would have dealt next on each board: the deck's next cards, dealt by the hand's own rules. They go
+ * nowhere near the boards and count for nothing. Asking again does nothing, so a request that got no
+ * answer can be sent again.
+ */
+export function huntRabbit(state: TableState, ctx: Ctx, seatIndex: number, number: number): void {
+  const hand = state.hand;
+
+  if (!hand || hand.number !== number) {
+    throw new GameError('That hand is over, so its rabbit is gone');
+  }
+
+  const player = hunterAt(state, hand, seatIndex);
+
+  if (player && hand.hunted !== null) {
+    return;
+  }
+
+  if (!player || !rabbitToHunt(state, hand)) {
+    throw new GameError(huntRefusal(state, hand, player !== undefined));
+  }
+
+  hand.hunted = dealTheRest(hand);
+  record(hand, ['hunt', hand.hunted]);
+  narrate(state, ctx, `${player.name} hunts the rabbit, cards that did not count: ${huntedText(hand.hunted)}`);
+  hand.deadline = Math.max(hand.deadline!, ctx.now + TIMING.rabbitShowMs);
+}
+
+function huntRefusal(state: TableState, hand: Hand, dealtIn: boolean): string {
+  if (!state.config.rabbitHunting) {
+    return "This table doesn't hunt the rabbit";
+  }
+
+  if (!dealtIn) {
+    return 'Only a player dealt into the hand can hunt the rabbit';
+  }
+
+  if (hand.stage !== 'done') {
+    return 'The rabbit can be hunted once the hand is over';
+  }
+
+  return boardsComplete(hand) ? 'Every card of that hand is already out' : 'Nobody won that hand, so there is no rabbit to hunt';
+}
+
+/**
+ * Once hand number `number` is over, anyone who was dealt into it may turn face up their cards at
+ * `places`, 0 for the one on their left: either one, or both, and the other one later. A card already
+ * face up stays as it is, so a request that got no answer can be sent again; naming the hand keeps one
+ * that arrives late from showing the cards of the next.
+ */
+export function showCards(state: TableState, ctx: Ctx, seatIndex: number, number: number, places: readonly number[]): void {
+  const hand = state.hand;
+
+  if (!hand || hand.number !== number) {
+    throw new GameError('That hand is gone, so its cards can no longer be shown');
+  }
+
+  const player = playerAt(hand, seatIndex);
+
+  if (!player) {
+    throw new GameError('Only a player dealt into the hand can show cards');
+  }
+
+  if (hand.stage !== 'done') {
     throw new GameError('You can show your cards once the hand is over');
   }
 
-  if (player.shown) {
-    throw new GameError('Your cards are already showing');
-  }
-
-  player.shown = true;
-  narrate(state, ctx, `${player.name} shows ${prettyCards(player.cards)}`);
+  show(state, ctx, player, '', places);
 }
 
-/** Takes the finished hand off the table, writes it to the record and applies everything that was waiting for it. */
-function clearHand(state: TableState, ctx: Ctx): void {
+/** Takes the finished hand off the table and writes it to the record, which is all that is kept of it. */
+function clearHand(state: TableState, ctx: Ctx): HandRecord {
   const hand = state.hand!;
+  const record: HandRecord = {
+    at: ctx.now,
+    tableId: state.id,
+    number: hand.number,
+    summary: hand.log.join('\n'),
+    boards: hand.boards,
+    bigBlind: hand.bigBlind,
+    bombPot: hand.bombPot,
+    players: hand.players.map((p) => ({
+      seat: p.seat,
+      playerId: p.playerId,
+      name: p.name,
+      startStack: p.startStack,
+      endStack: state.seats[p.seat]!.stack,
+      cards: asSeen(p.cards, p.shown),
+    })),
+    result: hand.result!,
+    events: hand.events,
+  };
 
-  ctx.effects.push({
-    type: 'hand',
-    record: {
-      at: ctx.now,
-      tableId: state.id,
-      number: hand.number,
-      summary: hand.log.join('\n'),
-      boards: hand.boards,
-      players: hand.players.map((p) => ({
-        seat: p.seat,
-        name: p.name,
-        startStack: p.startStack,
-        endStack: state.seats[p.seat]!.stack,
-        cards: p.shown ? p.cards : null,
-      })),
-      result: hand.result!,
-    },
-  });
-
+  ctx.effects.push({ type: 'hand', record });
   state.hand = null;
 
-  state.seats.forEach((seat, index) => {
-    if (!seat) {
-      return;
-    }
-
-    if (seat.leaving) {
-      vacateSeat(state, ctx, index);
-    } else {
-      addPendingChips(state, ctx, index);
-    }
-  });
+  return record;
 }
 
-/** Does whatever the hand's deadline was waiting for. Only call once the deadline has passed. */
-export function stepHand(state: TableState, ctx: Ctx): void {
+/**
+ * Does whatever the hand's deadline was waiting for. Only call once the deadline has passed. A step
+ * that ends the hand gives back its record, for `handEnded` to be called with; any other gives null.
+ */
+export function stepHand(state: TableState, ctx: Ctx): HandRecord | null {
   const hand = state.hand!;
 
   switch (hand.stage) {
     case 'betting':
+    case 'chop':
       timeOut(state, ctx);
-      break;
+      return null;
     case 'ritVote':
-      startRunout(state, ctx, 1);
-      break;
+      endVote(state, ctx, { why: 'time' });
+      return null;
     case 'runout':
       runoutStep(state, ctx);
-      break;
+      return null;
     case 'done':
-      clearHand(state, ctx);
-      break;
+      return clearHand(state, ctx);
   }
 }

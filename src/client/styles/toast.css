@@ -1,0 +1,40 @@
+/* ---- Toast ---- */
+
+/*
+ * Word of something, for a few seconds, over the top bar and no lower: under the bar are the cards of
+ * the seats along the top of the table. Two lines of it fit the bar, and taps go through it to the
+ * menu and the buttons it lies on.
+ */
+.toast {
+  position: fixed;
+  top: 5px;
+  left: 50%;
+  z-index: 30;
+  width: max-content;
+  max-width: calc(100% - 24px);
+  padding: 4px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-raised);
+  box-shadow: var(--shadow-raised);
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.25;
+  text-align: center;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+/* On a phone the words are many for the width, so the toast is the bar's whole width, where three lines fit its height */
+@container app (max-width: 559.98px) {
+  .toast {
+    top: 0;
+    width: 100%;
+    max-width: none;
+    padding: 3px 12px;
+    border-width: 0 0 1px;
+    border-radius: 0;
+    font-size: 13px;
+  }
+}

@@ -1,0 +1,106 @@
+/* ---- The hand hint: what the viewer's own cards make and which cards make it, shown on the app as data-hand-hint ---- */
+
+[data-hand-hint='off'] .hint {
+  display: none;
+}
+
+/* The hint already names the viewer's hand, so the name it showed down is not said twice */
+[data-hand-hint='on'] .seat.me .hint ~ .tag {
+  display: none;
+}
+
+.hint {
+  display: grid;
+  justify-items: center;
+  gap: 0.1em;
+}
+
+/*
+ * Lying down, the seats either side of the viewer's sit 23% of the table's width away at the same
+ * height, so a name wider than the room between them wraps instead of running under them. Standing
+ * up, nothing else is that low.
+ */
+.table.wide .seat.me .hint {
+  /* As wide as its name, up to that room, not as narrow as the seat it hangs from */
+  width: max-content;
+  max-width: max(var(--seat-w), 46cqw - var(--seat-w-other));
+  white-space: normal;
+}
+
+.hint .read {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 0 0.4em;
+}
+
+/* A board's mark stays on the line of its name, however narrow the seat the hint hangs from */
+.seat.me .hint.per-board {
+  width: max-content;
+}
+
+/*
+ * Under a lying table this short there is room for a line a board and no more: another would lift the
+ * viewer's cards onto the pot, which two boards bring nearer. So each hand is named by its kind alone,
+ * its ranks left to the cards that are picked out, and the word that the hand carries a bounty goes
+ * unsaid, since it would take a line of its own.
+ */
+@container (max-height: 350px) {
+  .table.wide .hint.per-board .read {
+    flex-wrap: nowrap;
+    white-space: nowrap;
+  }
+
+  .table.wide .hint.per-board .detail,
+  .table.wide .hint.per-board .bounty {
+    display: none;
+  }
+}
+
+.hint .name {
+  text-wrap-style: balance;
+}
+
+.hint .run {
+  display: grid;
+  place-items: center;
+  width: 1.4em;
+  height: 1.4em;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font-size: 0.8em;
+}
+
+.hint .bounty {
+  color: var(--accent);
+  font-size: 0.8em;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/*
+ * Set apart by place, not color, so the marking reads the same in every theme and deck, and the rest
+ * fade. On the board the cards that play rise; in the viewer's hand the ones that don't sink behind the
+ * seat, so the seat reaches no nearer the middle than it does without the hint.
+ */
+[data-hand-hint='on'] .board .card.plays {
+  transform: translateY(calc(var(--card-w) * -0.16));
+}
+
+[data-hand-hint='on'] .hole .card.idle {
+  transform: translateY(calc(var(--card-w) * 0.24));
+}
+
+[data-hand-hint='on'] .card.idle {
+  opacity: calc(1 - 0.5 * var(--dim));
+}
+
+/* A line a board would lift the viewer's cards onto the middle of three boards, so their hands share lines as they fit */
+.table[data-boards='3'] .seat.me .hint.per-board {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.1em 0.8em;
+}

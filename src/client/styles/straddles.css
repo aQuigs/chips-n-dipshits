@@ -1,0 +1,6 @@
+/* ---- Straddles: a player's own choice of them ---- */
+
+.straddle-kinds {
+  display: grid;
+  gap: 8px;
+}

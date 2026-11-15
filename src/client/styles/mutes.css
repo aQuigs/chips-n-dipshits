@@ -1,0 +1,13 @@
+/* ---- Muting a player, on the muter's screen alone ---- */
+
+/* Beside the name on the seat, which gives way to it as to the host's mark */
+.muted-mark {
+  flex: none;
+  margin-left: 0.3em;
+  font-size: 0.85em;
+}
+
+.mute-note {
+  margin-left: 0.5em;
+  color: var(--muted);
+}

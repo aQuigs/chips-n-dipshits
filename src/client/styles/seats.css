@@ -1,0 +1,360 @@
+/* ---- Seats ---- */
+
+/* The width of every seat but the viewer's, set on the table so the viewer's seat can measure its room by it */
+.table {
+  --seat-w-other: clamp(66px, 20cqmin, 128px);
+  /* The cards of the viewer's own seat, wider than the rest, set here for what is placed by that seat's height */
+  --own-card-w: clamp(32px, 9cqmin, 62px);
+  /* How near the bottom of the table the middle of a bet from a seat along it may come: the viewer's seat at
+     its fullest (the cards down to the plate, a plate of three lines, the line under it), half a bet, and
+     the felt between the two with the little the seat stands off the edge. The last is what the line of the
+     viewer's own stack has grown by, where larger text grows it alone (accessibility.css) */
+  --bottom-seat-reach: calc(var(--own-card-w) * 1.008 + 4.275em + 1.445em + 0.8em + 6px + (var(--own-text-scale, 1) - 1) * 1.25em);
+}
+
+/* A column that centers its children, so a label wider than the seat spills evenly to both sides */
+.seat {
+  --seat-w: var(--seat-w-other);
+
+  position: absolute;
+  top: var(--y);
+  /* A seat near the side of a narrow table would otherwise hang off the screen and lose part of its stack */
+  left: clamp(var(--seat-w) / 2 + 6px, var(--x), 100% - var(--seat-w) / 2 - 6px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: var(--seat-w);
+  transform: translate(-50%, -50%);
+}
+
+.seat.at-top {
+  transform: translate(-50%, 0);
+}
+
+.seat.at-bottom {
+  transform: translate(-50%, -100%);
+}
+
+/* A seat's two cards, or a stand-in for them (motion.css), which so starts exactly over the place the seat keeps for them */
+.hole {
+  display: flex;
+  gap: 2px;
+  height: calc(var(--card-w) * 1.4 * 0.72);
+  margin-bottom: -2px;
+}
+
+.seat .hole.none {
+  visibility: hidden;
+}
+
+/* The stack alone, not the whole plate: a taller plate rises over the bottom of the viewer's own cards */
+.seat.me .plate .stack {
+  font-size: calc(1em * var(--own-text-scale));
+}
+
+.seat.me {
+  --seat-w: clamp(84px, 24cqmin, 150px);
+}
+
+/*
+ * Down the sides of a standing table a seat has the room out to the edge of the screen, and is that
+ * much wider on a phone: enough for a few letters of a long name beside a star and a trophy.
+ */
+.table.tall .seat.at-middle {
+  --seat-w: max(var(--seat-w-other), 80px);
+}
+
+.seat.me .hole {
+  --card-w: var(--own-card-w);
+}
+
+.plate {
+  /* The least of a long name that is left to read beside the marks after it */
+  --least-name: 3em;
+
+  position: relative;
+  z-index: 1;
+  display: grid;
+  align-self: stretch;
+  padding: 0.35em 0.6em 0.4em;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--plate-radius);
+  background: var(--panel);
+  color: var(--text);
+  text-align: center;
+  line-height: 1.25;
+}
+
+.plate .name {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  overflow: hidden;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+/*
+ * The name gives way to the marks beside it, which stay whole, but only down to the room of a few
+ * letters: a seat with the host's star and the high hand's trophy would otherwise be down to one. Marks
+ * with no room left beside that much of the name go on a line under it.
+ */
+.plate .name > span:first-child {
+  flex: 1 1 var(--least-name);
+  max-width: max-content;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.host,
+.cohost {
+  flex: none;
+  margin-left: 0.3em;
+}
+
+.host {
+  color: var(--accent);
+}
+
+.cohost {
+  color: var(--muted);
+}
+
+/*
+ * A stack has most of the plate's side padding to itself as well: the longest one written out, nine
+ * characters, fits the narrowest plate in the page's own font with a pixel to spare, and in a wider font
+ * lost its cents to the three dots.
+ */
+.plate .stack {
+  margin-inline: -0.35em;
+  overflow: hidden;
+  color: var(--accent);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plate .status.clock::after {
+  content: 's';
+}
+
+.plate .status.clock:empty {
+  display: none;
+}
+
+.plate .pending {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.plate .status {
+  color: var(--muted);
+  font-size: 0.82em;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.plate .status[data-status='All in'] {
+  color: var(--bad);
+}
+
+.plate .status.won {
+  color: var(--win);
+  font-size: 1em;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.seat.acting .plate {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.seat.folded .hole,
+.seat.folded .plate,
+.seat.out .plate {
+  opacity: calc(1 - 0.5 * var(--dim));
+}
+
+.seat.winner .plate {
+  border-color: var(--win);
+  box-shadow:
+    0 0 0 2px var(--win),
+    0 0 18px color-mix(in srgb, var(--win) 60%, transparent);
+}
+
+.timer {
+  position: absolute;
+  inset: auto 0 0;
+  height: 3px;
+  background: var(--line);
+}
+
+.timer i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transform: scaleX(var(--from));
+  transform-origin: left;
+  animation: drain linear forwards;
+}
+
+@keyframes drain {
+  to {
+    transform: scaleX(0);
+  }
+}
+
+.dealer-button {
+  position: absolute;
+  top: calc(var(--card-w) * 0.55);
+  right: -0.35em;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: 1.7em;
+  height: 1.7em;
+  border-radius: 50%;
+  background: var(--card);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 40%);
+  color: var(--suit-s);
+  font-size: 0.85em;
+  font-weight: 800;
+}
+
+/* The line under a seat: a made hand, or how many times its player picked to run it */
+.tag {
+  flex: none;
+  max-width: 140%;
+  margin-top: 0.25em;
+  padding: 0.1em 0.7em;
+  border-radius: 0.9em;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 0.85em;
+  font-weight: 600;
+  /* Set here, so a tag is as tall in every font and the seats down the side of a phone's table can count on it */
+  line-height: 1.25;
+  text-align: center;
+  text-wrap: balance;
+}
+
+/*
+ * Where the seats stand one under another with no room between them, a hand is named on one line: all
+ * of it when that fits, and otherwise its kind alone, "Straight" for "Straight, ace high", with the rest
+ * in the cards beside it and the whole name in the tag's title. What follows the kind wraps to a
+ * second line, which the tag is not tall enough to show. A standing table tall enough for its side
+ * seats with two lines under each names every hand in full.
+ */
+@container not ((min-height: 400px) and (max-aspect-ratio: 1 / 1)) {
+  .table.tall .seat.at-middle .tag.shown .name {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    max-height: 1.25em;
+    overflow: hidden;
+    white-space: pre;
+  }
+}
+
+/*
+ * A standing table with no height to spare has a quarter of it for each seat down its sides, with the
+ * line under it: the plates and the lines sit closer, and a name stays on the line of its marks.
+ */
+@container (max-height: 350px) {
+  /*
+   * Lying down, a seat at the side shares the edge of its room with the seat in the corner beside it.
+   * A line under either is kept to its own seat's width, on two lines when it must be, and a side seat
+   * is held by its top, so the line under it grows down into room that is its own and its cards stay put.
+   */
+  .table.wide .seat:not(.me) .tag {
+    max-width: 100%;
+  }
+
+  .table.wide .seat.at-middle {
+    top: calc(var(--y) * var(--side-spread) + var(--side-shift));
+    transform: translateX(-50%);
+  }
+
+  .table.tall .seat.at-middle .plate .name {
+    flex-wrap: nowrap;
+  }
+
+  .table.tall .seat.at-middle .tag {
+    margin-top: 0;
+  }
+}
+
+.seat.me .tag {
+  max-width: none;
+  white-space: nowrap;
+}
+
+.tag.vote.picked {
+  color: var(--good);
+}
+
+.seat.open .plate {
+  padding: 0.7em 0.4em;
+  border-style: dashed;
+  background: color-mix(in srgb, var(--panel) 55%, transparent);
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.seat.open button.plate {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Under a finger, the things tapped most get the height a fingertip needs */
+@media (pointer: coarse) {
+  .seat.open button.plate,
+  .chip-btn,
+  .toggle {
+    min-height: 40px;
+  }
+}
+
+.seat.open.idle .plate {
+  opacity: calc(1 - 0.6 * var(--dim));
+}
+
+.bet {
+  position: absolute;
+  top: var(--y);
+  left: var(--x);
+  display: flex;
+  align-items: center;
+  gap: 0.4em;
+  padding: 0.1em 0.65em 0.1em 0.3em;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg) 78%, transparent);
+  color: var(--text);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  transform: translate(-50%, -50%);
+}
+
+/*
+ * A seat is as tall as its lines, which stop shrinking with the table once its letters are as small as
+ * they get. On a standing table a little too tall to be laid out as a short one (table.css), a share
+ * of the height alone puts the viewer's bet on the ranks of their own cards.
+ */
+.bet.from-bottom {
+  top: min(var(--y), 100% - var(--bottom-seat-reach));
+}
+
+.bet .chip {
+  width: 1.05em;
+  height: 1.05em;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle, var(--chip) 0 42%, transparent 46%),
+    repeating-conic-gradient(var(--chip) 0 30deg, var(--card) 30deg 60deg);
+}

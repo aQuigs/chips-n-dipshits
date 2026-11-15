@@ -1,0 +1,807 @@
+/*
+ * What must be true of a table at every moment, whatever was done to it. The simulation checks these
+ * after every random move, and any other test, or a browser check through the rig, can call them too.
+ */
+import assert from 'node:assert/strict';
+
+import { badgeOf, blindsOnly, BOARD_SIZE, boardsDealt, evaluateHand, FEED_LIMIT, FLOP_SIZE, handFacts, isStraddle, LIMITS, MENTIONS_PER_LINE, MOST_RUNS, nextHighHand, nightIsOver, owes, owesAction, PLAYING_THE_BOARD, REACTION_GAP_MS, reactionKind, reaches, REACTIONS_LIVE, replayHand, roleOf, STRADDLES, STRADDLES_IN_A_ROW, straddlesAllowed, viewFor, wonAPot } from '../src/engine/index.ts';
+import type { Card, Effect, FeedEntry, HandPlayer, Mention, HandRecord, TableState } from '../src/engine/index.ts';
+import { CACHE_VALUE_BYTES, utf8Bytes } from '../src/gas/sheetStore.ts';
+import { restoreState } from '../src/server/store.ts';
+import { faceDownCards, handRecords, ledgerEntries } from './helpers.ts';
+
+/**
+ * Everywhere a chip that has been bought can be. A feature that gives chips somewhere new to sit adds
+ * it here, and from then on every random game holds it to the ledger. Chips waiting to be added to a
+ * stack are not listed: they are bought only when they arrive.
+ */
+export const CHIP_PLACES: { where: string; count(state: TableState): number }[] = [
+  { where: 'in stacks', count: (state) => state.seats.reduce((sum, seat) => sum + (seat ? seat.stack : 0), 0) },
+  { where: 'bet in the hand', count: (state) => stillInThePot(state).reduce((sum, p) => sum + p.committed, 0) },
+  { where: 'dead money in the hand', count: (state) => stillInThePot(state).reduce((sum, p) => sum + p.dead, 0) },
+];
+
+/** The players whose chips are still in the middle: once the hand is done, the pots have been paid out to the stacks. */
+function stillInThePot(state: TableState): HandPlayer[] {
+  return state.hand && state.hand.stage !== 'done' ? state.hand.players : [];
+}
+
+/** No chip is created or lost: the chips on the table are the chips the ledger says were bought, less those cashed out. */
+export function assertChipsConserved(state: TableState): void {
+  const places = CHIP_PLACES.map((place) => ({ where: place.where, chips: place.count(state) }));
+  const onTable = places.reduce((sum, place) => sum + place.chips, 0);
+  const bought = state.members.reduce((sum, m) => sum + m.buyIn - m.cashOut, 0);
+
+  assert.equal(onTable, bought, `chips on the table (${places.map((place) => `${place.chips} ${place.where}`).join(', ')}) should equal chips bought minus chips cashed out`);
+  assert.equal(state.members.reduce((sum, m) => sum + m.transferred, 0), 0, 'chips moved between players were given and taken in different amounts');
+
+  for (const seat of state.seats) {
+    if (seat) {
+      assert.ok(Number.isInteger(seat.stack) && seat.stack >= 0, 'a stack went negative or stopped being a whole number');
+      assert.ok(Number.isInteger(seat.pendingAdd) && seat.pendingAdd >= 0, 'chips waiting to be added are out of range');
+    }
+  }
+
+  for (const player of state.hand?.players ?? []) {
+    assert.ok(player.bet >= 0 && player.committed >= player.bet, 'a bet is out of range');
+    assert.ok(Number.isInteger(player.dead) && player.dead >= 0, 'dead money is out of range');
+  }
+}
+
+/** The host is a member and never a co-host, and every co-host is a member, listed once. */
+export function assertRolesHold(state: TableState): void {
+  const members = new Set(state.members.map((member) => member.id));
+
+  assert.ok(members.has(state.hostId), 'the host is not at the table');
+  assert.ok(!state.cohostIds.includes(state.hostId), 'the host is listed as a co-host');
+  assert.equal(new Set(state.cohostIds).size, state.cohostIds.length, 'a co-host is listed twice');
+  assert.ok(state.cohostIds.every((id) => members.has(id)), 'a co-host is no longer at the table');
+}
+
+/** Nobody sits in two seats, and a move or shuffle waits only while there is a hand for it to wait for. */
+export function assertSeatingHolds(state: TableState): void {
+  const seated = state.seats.flatMap((seat) => (seat ? [seat.playerId] : []));
+
+  assert.equal(new Set(seated).size, seated.length, 'a player sits in two seats');
+  assert.ok(seated.every((id) => state.members.some((member) => member.id === id)), 'a seat belongs to nobody at the table');
+
+  state.seats.forEach((seat, index) => {
+    if (seat?.moveTo === null || !seat) {
+      return;
+    }
+
+    assert.ok(state.hand, 'a move is still waiting with no hand on the table');
+    assert.ok(Number.isInteger(seat.moveTo) && seat.moveTo >= 0 && seat.moveTo < state.seats.length && seat.moveTo !== index, 'a move waits for a seat that makes no sense');
+    assert.ok(!seat.leaving && !state.shuffleAfterHand, 'a move waits for a player who is leaving, or alongside a shuffle');
+  });
+
+  assert.ok(state.hand || !state.shuffleAfterHand, 'a shuffle is still waiting with no hand on the table');
+
+  for (const player of state.hand?.players ?? []) {
+    assert.equal(state.seats[player.seat]?.playerId, player.playerId, 'a player dealt into the hand is no longer in the seat the hand knows them by');
+  }
+}
+
+/**
+ * What players owe for blinds they missed is owed only where the table says it is and while there is a
+ * game for it to be owed in, a choice to post is about something owed, and nobody plays a hand with
+ * blinds while they owe: they posted, the big blind settled it, or they were not dealt in.
+ */
+export function assertBlindsHold(state: TableState): void {
+  const seated = state.seats.flatMap((seat, index) => (seat ? [{ seat, index }] : []));
+  const owing = seated.filter(({ seat }) => owes(seat));
+  const inSeatRange = (index: number) => Number.isInteger(index) && index >= 0 && index < state.seats.length;
+
+  assert.ok(state.config.missedBlinds === 'owed' || owing.length === 0, 'a player owes a blind at a table that forgives them');
+  assert.ok(state.blinds !== null || owing.length === 0, 'a player owes a blind with no game going');
+  assert.ok(seated.every(({ seat }) => !seat.postsOwed || owes(seat)), 'a player is set to post with nothing owed');
+  assert.ok(state.blinds === null || (inSeatRange(state.blinds.small) && inSeatRange(state.blinds.big)), 'the blinds are on a seat that is not there');
+  assert.ok(state.blinds === null || state.blinds.small !== state.blinds.big, 'the small blind and the big blind are on one seat');
+
+  if (state.hand && !state.hand.bombPot) {
+    const dealtIn = new Set(state.hand.players.map((player) => player.seat));
+
+    assert.ok(owing.every(({ index }) => !dealtIn.has(index)), 'a player is in a hand with blinds while owing one');
+    assert.ok(dealtIn.has(state.hand.bbSeat), 'a hand with blinds has nobody on the big blind');
+  }
+}
+
+/**
+ * A player's standing choice of straddles is of kinds the table allows, each once. A hand has one line
+ * of them at most: a first straddle of twice the big blind, then only ones that double the one before,
+ * each from another player dealt in and none from a seat that posted a blind. A bomb pot has none.
+ */
+export function assertStraddlesHold(state: TableState): void {
+  const allowed = straddlesAllowed(state.config).map((kind) => kind.what);
+  const listed = STRADDLES.map((kind) => kind.what);
+
+  for (const seat of state.seats) {
+    if (seat) {
+      assert.ok(seat.straddles.every((what) => allowed.includes(what)), `a player asks for a straddle the table does not allow: ${seat.straddles.join(', ')}`);
+      assert.deepEqual(seat.straddles, listed.filter((what) => seat.straddles.includes(what)), 'a player asks for a kind of straddle twice, or out of order');
+    }
+  }
+
+  const hand = state.hand;
+  if (!hand) {
+    return;
+  }
+
+  const { straddles, passedOver } = hand;
+  const dealtIn = hand.players.map((player) => player.seat);
+  const told = JSON.stringify(straddles);
+
+  assert.ok(!hand.bombPot || straddles.length + passedOver.length === 0, 'a bomb pot has a straddle in it');
+  assert.ok(dealtIn.length > 2 || straddles.length === 0, 'a hand dealt to two has a straddle in it');
+  assert.ok(straddles.length <= STRADDLES_IN_A_ROW, `more straddles in a row than a hand may have: ${told}`);
+  assert.equal(new Set(straddles.map((straddle) => straddle.seat)).size, straddles.length, `a player straddles twice in one hand: ${told}`);
+
+  straddles.forEach(({ seat, what, amount }, nth) => {
+    const before = straddles[nth - 1];
+
+    assert.ok(dealtIn.includes(seat) && seat !== hand.sbSeat && seat !== hand.bbSeat, `seat ${seat} straddles from a blind or without being dealt in`);
+    assert.equal(what === 'double straddle', nth > 0, `a hand's straddles are not one line: ${told}`);
+    assert.equal(amount, 2 * (before ? before.amount : hand.bigBlind), `a straddle is not twice what it is posted on top of: ${told}`);
+  });
+
+  const straddlers = new Set(straddles.map((straddle) => straddle.seat));
+  assert.ok(passedOver.every((passed) => dealtIn.includes(passed.seat) && !straddlers.has(passed.seat)), 'a player who straddles, or is not in the hand, is told they were passed over');
+  assert.equal(new Set(passedOver.map((passed) => passed.seat)).size, passedOver.length, 'a player is told twice that they were passed over');
+
+  // A hand saved before hands kept their events has none to go by
+  const posts = hand.events.flatMap((event) => (event[0] === 'post' ? [event] : []));
+  if (posts.length === 0) {
+    return;
+  }
+
+  // Posted whole, after every other forced bet, in the order of the line, and by nobody with a blind in front of them
+  assert.deepEqual(posts.slice(posts.length - straddles.length).map((post) => ({ seat: post[1], what: post[2], amount: post[3] })), straddles, 'the straddles posted are not the hand\'s line of them, posted last');
+  assert.ok(posts.slice(0, posts.length - straddles.length).every((post) => !isStraddle(post[2])), 'a straddle was posted before another forced bet');
+  assert.ok(posts.every((post) => !straddlers.has(post[1]) || isStraddle(post[2]) || post[2] === 'ante'), 'a player straddles on top of a blind');
+}
+
+/**
+ * A bomb pot has its flop out from the first moment anyone sees it, on each board it was dealt on,
+ * which a finished hand's record cannot show. One dealt on several boards stays on those: only a hand
+ * on one board is ever run twice.
+ */
+export function assertBombPotsHold(state: TableState): void {
+  const hand = state.hand;
+  if (!hand?.bombPot) {
+    return;
+  }
+
+  const dealtOn = boardsDealt(hand.bombPot);
+
+  assert.ok(hand.street !== 'preflop' && hand.boards.length >= dealtOn, 'a bomb pot is on the table without a board it was dealt on');
+  assert.ok(hand.boards.slice(0, dealtOn).every((board) => board.length >= FLOP_SIZE), 'a bomb pot is on the table without its flop');
+  assert.ok(dealtOn === 1 || hand.runs === dealtOn, 'a bomb pot dealt on several boards was put on more');
+}
+
+/**
+ * The boards on the table are the ones the hand says it is played on: no more of them than that, alike
+ * in the cards it says they have in common and in no other, and while there is betting, all out and
+ * all at the same street.
+ */
+export function assertBoardsHold(state: TableState): void {
+  const hand = state.hand;
+  if (!hand) {
+    return;
+  }
+
+  const { boards, runs, runIndex, sharedBoardLength: shared } = hand;
+  const dealt = boards.flat();
+
+  assert.ok(boards.length >= 1 && boards.length <= runs, `${boards.length} boards are out in a hand played on ${runs}`);
+  assert.ok(boards.every((board) => board.length === 0 || (board.length >= FLOP_SIZE && board.length <= BOARD_SIZE)), 'a board stopped between streets');
+  assert.ok(boards.slice(0, runIndex).every((board) => board.length === BOARD_SIZE), 'a board was left short when the dealing moved on');
+
+  for (const board of boards.slice(1)) {
+    assert.deepEqual(board.slice(0, shared), boards[0]!.slice(0, shared), 'two boards differ in the cards they are said to have in common');
+  }
+  assert.equal(new Set(dealt).size, dealt.length - (boards.length - 1) * (boards.length > 1 ? shared : 0), 'two boards hold the same card beyond those they have in common');
+
+  // The cards that would have come were dealt from the deck too, so no card is anywhere twice: in a hand, on a board, hunted or still in the deck
+  const everywhere = [...hand.players.flatMap((player) => player.cards), ...new Set(dealt), ...(hand.hunted ?? []).flat(), ...hand.deck];
+  assert.equal(new Set(everywhere).size, everywhere.length, 'a card is in two places at once among the hands, the boards, the hunted cards and the deck');
+  assert.ok(hand.hunted === null || (hand.stage === 'done' && hand.hunted.length === runs && hand.hunted.every((cards, board) => (boards[board]?.length ?? shared) + cards.length === BOARD_SIZE)), 'the hunted cards are not the rest of each board, once the hand was over');
+
+  if (hand.stage === 'betting') {
+    assert.equal(boards.length, runs, 'a board is still to come while there is betting');
+    assert.ok(boards.every((board) => board.length === boards[0]!.length), 'the boards are at different streets while there is betting');
+  }
+}
+
+/**
+ * A pick of how many times to run it is a number the game offers, made only by a player still in once
+ * the betting is over, and only in a hand on one board that nobody has yet decided to run out.
+ */
+export function assertPicksHold(state: TableState): void {
+  const hand = state.hand;
+  if (!hand) {
+    return;
+  }
+
+  for (const player of hand.players) {
+    const pick = player.ritVote;
+
+    assert.ok(pick === null || (Number.isInteger(pick) && pick >= 1 && pick <= MOST_RUNS), `${player.name} picked ${pick}`);
+    assert.ok(pick === null || (!player.folded && hand.stage !== 'betting' && hand.stage !== 'chop'), `${player.name} picked while the hand could not ask them`);
+  }
+
+  if (hand.stage === 'ritVote') {
+    assert.ok(hand.runs === 1 && hand.maxRuns > 1, `a hand on ${hand.runs} boards dealt to be run ${hand.maxRuns} times at most is asking how many times to run it`);
+  }
+}
+
+/**
+ * An offer to chop stands only in a hand the blinds could chop, with the big blind on the clock to
+ * answer it, and only once a hand. Nobody always chops at a table that doesn't chop.
+ */
+export function assertChopHolds(state: TableState): void {
+  const hand = state.hand;
+
+  if (hand?.stage === 'chop') {
+    assert.ok(hand.chopOffered && blindsOnly(hand), 'an offer to chop stands in a hand the blinds could not chop');
+    assert.equal(hand.toAct, hand.bbSeat, 'someone other than the big blind is answering a chop');
+  }
+
+  if (!state.config.allowChop) {
+    assert.ok(state.seats.every((seat) => !seat?.alwaysChop), 'a player always chops at a table that does not');
+  }
+}
+
+/**
+ * A move chosen ahead is kept only for a player the action is still to reach in this round of betting,
+ * who is there to be asked, and only as one they could have chosen facing what they face now: a check
+ * while checking is free, a call for exactly the chips a call puts in.
+ */
+export function assertPreActionsHold(state: TableState): void {
+  const hand = state.hand;
+
+  for (const player of hand?.players ?? []) {
+    if (!('pre' in player)) {
+      continue;
+    }
+
+    const seat = state.seats[player.seat]!;
+    const [what, amount] = player.pre!;
+    const owed = hand!.currentBet - player.bet;
+    const kept = `${player.name} is kept ${JSON.stringify(player.pre)}`;
+
+    assert.ok(hand!.stage === 'betting' && hand!.toAct !== player.seat && owesAction(hand!, player), `${kept} with no turn to come on this street`);
+    assert.ok(!seat.away && !seat.leaving, `${kept} while the table plays their turns for them`);
+    assert.ok(what !== 'check' || owed === 0, `${kept} with a bet to them`);
+    assert.ok(what !== 'call' || (owed > 0 && amount === Math.min(owed, seat.stack)), `${kept}, which is not what a call puts in now`);
+    assert.equal(player.pre!.length, what === 'call' ? 2 : 1, `${kept}, which holds more or less than it needs`);
+  }
+}
+
+/**
+ * Once the night is over nothing is dealt or bought until play starts again, and while the last hands
+ * are called there is always a hand still to finish before the night ends.
+ */
+export function assertNightHolds(state: TableState): void {
+  if (nightIsOver(state)) {
+    assert.ok(!state.hand && !state.running && state.nextHandAt === null, 'a hand is dealt, or due, after the night is over');
+    assert.deepEqual(state.requests, [], 'a request for chips waits after the night is over');
+    assert.ok(state.lastHand === null && !state.bombPotCalled, 'the last hands or a bomb pot are still called after the night is over');
+  }
+
+  if (state.lastHand !== null) {
+    assert.ok(state.lastHand >= state.handCount + (state.hand ? 0 : 1), 'the last hand called has already been played');
+  }
+}
+
+/**
+ * The night's numbers count only hands that have ended, only members, and for each of them nothing
+ * they could not have done in the hands they played. Members are the bound on how many are kept.
+ */
+export function assertNumbersHold(state: TableState): void {
+  const { tonight } = state;
+  const members = new Set(state.members.map((member) => member.id));
+
+  assert.ok(tonight.hands <= state.handCount - (state.hand ? 1 : 0), 'the night counts a hand that has not ended');
+
+  for (const [id, numbers] of Object.entries(tonight.players)) {
+    assert.ok(members.has(id), 'the night keeps numbers for someone who is not a member');
+    assert.ok(numbers.hands <= tonight.hands && numbers.won <= numbers.hands, 'a player has more hands than the night, or more pots than hands');
+    assert.equal(numbers.biggest > 0, numbers.won > 0, 'a biggest pot without a pot won, or a pot won of nothing');
+    assert.ok(numbers.best === null || numbers.best.length === 5, 'a best hand that is not five cards');
+    // A run of hands won counts a bounty collected with nothing in the pot, as a big blind walked to holding seven-deuce does, which is no pot won
+    assert.ok(numbers.busts <= numbers.hands && numbers.streak <= numbers.hands, 'more busts or a longer streak than hands');
+    assert.ok(Object.entries(numbers.badges).every(([badge, times]) => badgeOf(badge) && Number.isInteger(times) && times >= 1 && times <= numbers.hands), 'a badge this code does not know, or earned more times than hands played');
+  }
+
+  assertHighHandHolds(state);
+}
+
+/**
+ * The high hand is the best hand the night's numbers have anyone showing, and each of its holders
+ * has it as their own best. The one the bonus is paid for next is the night's own until that is paid,
+ * and never better than it.
+ */
+export function assertHighHandHolds(state: TableState): void {
+  const { players, highHand } = state.tonight;
+  const { best, sincePaid } = highHand;
+  const rank = (cards: Card[] | null) => (cards ? evaluateHand(cards).score : -1);
+  const bestShown = Math.max(-1, ...Object.values(players).map((numbers) => rank(numbers.best)));
+
+  assert.equal(best ? rank(best.cards) : -1, bestShown, 'the high hand is not the best hand the night has anyone showing');
+  if (!best) {
+    assert.deepEqual(sincePaid, {}, 'a hand shown down since the bonus was paid, and no high hand');
+    return;
+  }
+
+  assert.ok(best.playerIds.length > 0 && best.playerIds.every((id) => rank(players[id]?.best ?? null) === bestShown), 'a holder of the high hand whose own best hand is another');
+  assert.ok(Object.entries(highHand.paid).every(([id, amount]) => amount > 0 && players[id]), 'a bonus paid of nothing, or to someone the night has no numbers for');
+  assert.ok(Object.entries(sincePaid).every(([id, shown]) => players[id] && rank(shown.cards) <= rank(players[id]!.best) && shown.hand <= state.handCount), 'a hand shown since the bonus was paid that is better than the player ever showed');
+
+  const next = nextHighHand(highHand);
+  assert.ok(!next || rank(next.hand.cards) <= bestShown, 'the high hand paid for next is better than the night\'s');
+  if (Object.keys(highHand.paid).length === 0) {
+    assert.ok(next && next.hand.hand === best.hand && rank(next.hand.cards) === bestShown && [...next.playerIds].sort().join() === [...best.playerIds].sort().join(), 'nothing has been paid, and the high hand is not the one the bonus is paid for next');
+  }
+}
+
+/** The table keeps no more reactions than its cap, each a kind this code knows, thrown only at someone else, and none sooner than its sender's gap allows. */
+export function assertReactionsHold(state: TableState): void {
+  const { reactions } = state;
+
+  assert.ok(reactions.length <= REACTIONS_LIVE, `the table keeps ${reactions.length} reactions`);
+
+  reactions.forEach((reaction, index) => {
+    const kind = reactionKind(reaction.kind);
+
+    assert.ok(kind, `a reaction of a kind this code does not know: ${reaction.kind}`);
+    assert.equal(reaction.to !== undefined, kind.thrown, 'a throw with nobody to land on, or a reaction thrown');
+    assert.notEqual(reaction.to, reaction.from, 'a throw at its own thrower');
+
+    const sooner = reactions.slice(0, index).some((earlier) => earlier.from === reaction.from && reaction.at - earlier.at < REACTION_GAP_MS);
+    assert.ok(!sooner, 'a player reacted again sooner than the gap allows');
+    assert.ok(index === 0 || reactions[index - 1]!.at <= reaction.at, 'reactions out of order');
+  });
+}
+
+/** The table comes back from being saved exactly as it was. */
+export function assertSurvivesSaving(state: TableState): void {
+  const json = JSON.stringify(state);
+
+  assert.deepEqual(JSON.parse(json), state, 'the table holds something JSON does not keep');
+  assert.deepEqual(restoreState(json), state, 'reading the table back changed it');
+}
+
+/** The first text anywhere inside `value` that is one of `secrets`. */
+function secretIn(value: unknown, secrets: Set<string>): string | undefined {
+  if (typeof value === 'string') {
+    return secrets.has(value) ? value : undefined;
+  }
+
+  if (typeof value !== 'object' || value === null) {
+    return undefined;
+  }
+
+  for (const inner of Object.values(value)) {
+    const found = secretIn(inner, secrets);
+    if (found !== undefined) {
+      return found;
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * What each member's view shows is exactly what that member may know: no deck, nobody's token, and no
+ * card that is face down for them, wherever in the view it might turn up. Players must not be named
+ * like a card ("As") for this to tell the two apart.
+ */
+export function assertViewsKeepSecrets(state: TableState, now: number): void {
+  const hand = state.hand;
+
+  // A token is looked for inside longer text too, such as a link
+  const anyToken = new RegExp(state.members.map((member) => member.token.replace(/[^A-Za-z0-9]/g, '\\$&')).join('|'));
+
+  const tonight = state.members[0] ? viewFor(state, state.members[0].id, now).tonight : null;
+
+  for (const viewer of state.members) {
+    const view = viewFor(state, viewer.id, now);
+    const json = JSON.stringify(view);
+
+    assert.ok(!json.includes('"deck"') && !json.includes('"token"'), 'a view leaked the deck or a token');
+    assert.ok(!anyToken.test(json), 'a view carries a token');
+
+    // The night's numbers hold cards of hands that are over, the best hand each player has shown, and such a card
+    // can be face down again in the hand on the table without being a secret. So they are looked at apart: they are
+    // the same whoever asks, and tests/tonight.test.ts holds them at every step to what the hand records say
+    const faceDown = new Set([...(hand?.deck ?? []), ...(hand?.players ?? []).filter((p) => p.playerId !== viewer.id).flatMap(faceDownCards)]);
+    const leaked = secretIn({ ...view, tonight: null }, faceDown);
+    assert.equal(leaked, undefined, `${viewer.name}'s view holds a card that is face down for them`);
+    assert.deepEqual(view.tonight, tonight, `${viewer.name} is shown other numbers for the night than the rest of the table`);
+
+    // When a player shows without being asked is theirs alone to know: the view holds the viewer's own and nobody else's
+    const own = state.seats.find((seat) => seat?.playerId === viewer.id);
+    assert.deepEqual(view.autoShow, own?.autoShow ?? [], `${viewer.name} is told other choices to show than their own`);
+    assert.equal(json.split('"autoShow"').length, 2, `${viewer.name}'s view tells someone's choices to show`);
+
+    // So is the move a player chose ahead of their turn: the view holds the viewer's own, and is otherwise, to the
+    // last character, the view of a table where nobody else has chosen one
+    const chosen = hand?.players.find((p) => p.playerId === viewer.id)?.pre ?? null;
+    assert.deepEqual(view.preAction, chosen, `${viewer.name} is told another move chosen ahead than their own`);
+
+    if (hand?.players.some((p) => p.pre && p.playerId !== viewer.id)) {
+      const others: TableState = structuredClone(state);
+      others.hand!.players.filter((p) => p.playerId !== viewer.id).forEach((p) => delete p.pre);
+
+      assert.equal(json, JSON.stringify(viewFor(others, viewer.id, now)), `${viewer.name}'s view tells what another player chose ahead`);
+    }
+
+    for (const player of hand?.players ?? []) {
+      const seen = view.seats[player.seat]!.cards!;
+      const mine = viewer.id === player.playerId;
+
+      assert.deepEqual(seen, player.cards.map((card, nth) => (mine || player.shown[nth] ? card : null)), 'a view shows the wrong cards');
+      assert.deepEqual(view.seats[player.seat]!.shown, player.shown, 'a view says other cards are face up than are');
+    }
+
+    // The hint reads the viewer's own cards and the board, and is there only while those cards are live
+    const mine = hand?.players.find((p) => p.playerId === viewer.id);
+    const holding = view.hand?.holding ?? null;
+    assert.equal(holding !== null, mine !== undefined && !mine.folded, `${viewer.name} has a hint that is not theirs to have, or lacks their own`);
+    holding?.reads.forEach((read, run) => {
+      const own = new Set([...mine!.cards, ...hand!.boards[run]!]);
+      assert.ok(read.plays.every((card) => own.has(card)), `${viewer.name}'s hint plays a card that is not theirs or the board's`);
+
+      // The view reads the player's own seat and the right board: whether the hand is right is checked over random deals in handNames.test.ts
+      const shown = hand!.result?.hands.find((entry) => entry.seat === mine!.seat && entry.run === run);
+      if (shown && hand!.boards[run]!.length === 5) {
+        assert.equal(evaluateHand(read.plays).score, evaluateHand(shown.cards).score, `${viewer.name}'s hint makes a different hand from the one shown`);
+        assert.ok(read.name === shown.name || read.name === PLAYING_THE_BOARD, `${viewer.name}'s hint says ${read.name} and the showdown ${shown.name}`);
+      }
+    });
+
+    // Requests waiting on the host are for the host and co-hosts to see; anyone else sees only their own
+    assert.equal(view.you.role, roleOf(state, viewer.id));
+    const approves = reaches(view.you.role, 'host or cohost');
+    assert.deepEqual(
+      view.requests.map((request) => request.playerId),
+      state.requests.filter((request) => approves || request.playerId === viewer.id).map((request) => request.playerId),
+      `${viewer.name} sees the wrong requests`,
+    );
+
+    const options = view.hand?.options;
+    if (options) {
+      assert.equal(hand!.toAct, view.you.seat);
+      assert.ok(options.callAmount >= 0 && options.callCost <= options.callAmount);
+      if (options.canRaise) {
+        assert.ok(options.minRaiseTo > hand!.currentBet && options.minRaiseTo <= options.maxRaiseTo, 'raise bounds are inverted');
+      }
+    }
+  }
+}
+
+/** The chat when every line is as long as it may be, in characters that take three bytes each, and names as many people as a line can, each quiet. */
+export function fullestChat(): FeedEntry[] {
+  const line = (length: number) => '好'.repeat(length);
+  const id = 'x'.repeat(8);
+
+  return Array.from({ length: FEED_LIMIT }, (_entry, index) => ({
+    seq: 1_000_000 + index,
+    at: 1_700_000_000_000,
+    kind: 'chat',
+    from: line(LIMITS.nameLength),
+    text: line(LIMITS.chatLength),
+    by: id,
+    mentions: Array.from({ length: MENTIONS_PER_LINE }, (_mention, at): Mention => [id, LIMITS.chatLength - 1 - at, LIMITS.nameLength + 1, true]),
+  }));
+}
+
+const FULLEST_CHAT_BYTES = utf8Bytes(JSON.stringify(fullestChat()));
+
+/**
+ * The table stays small enough for the store's cache. Above that size the Sheet store still saves it,
+ * but no longer caches it, and then every poll from every player reads the Sheet under the lock. Chat
+ * is the one part of a table that players fill at will, so the table is measured with the chat at its
+ * fullest: whatever else it holds has to fit beside that.
+ */
+export function assertFitsTheStore(state: TableState): void {
+  const withoutChat = utf8Bytes(JSON.stringify({ ...state, feed: [] }));
+  const bytes = withoutChat - utf8Bytes('[]') + FULLEST_CHAT_BYTES;
+
+  assert.ok(bytes <= CACHE_VALUE_BYTES, `with a full chat the table comes to ${bytes} bytes, and the cache takes ${CACHE_VALUE_BYTES}`);
+}
+
+/**
+ * Which known player a member says they are is a label on that member and nothing more: it is one or
+ * it is nobody, two members may carry the same one, and whatever it is, each member is told apart by
+ * an id, a token and a name of their own.
+ */
+export function assertMembersAreTheirOwn(state: TableState): void {
+  for (const member of state.members) {
+    assert.ok(member.identity === null || (typeof member.identity === 'string' && member.identity.length > 0), `${member.name} is known as ${JSON.stringify(member.identity)}`);
+  }
+
+  for (const what of ['id', 'token', 'name'] as const) {
+    assert.equal(new Set(state.members.map((member) => member[what])).size, state.members.length, `two members share one ${what}`);
+  }
+}
+
+/** Everything above, for a table as it stands at `now`. */
+export function assertInvariants(state: TableState, now: number): void {
+  assertChipsConserved(state);
+  assertMembersAreTheirOwn(state);
+  assertRolesHold(state);
+  assertSeatingHolds(state);
+  assertBlindsHold(state);
+  assertStraddlesHold(state);
+  assertBombPotsHold(state);
+  assertBoardsHold(state);
+  assertPicksHold(state);
+  assertNightHolds(state);
+  assertNumbersHold(state);
+  assertChopHolds(state);
+  assertPreActionsHold(state);
+  assertReactionsHold(state);
+  assertSurvivesSaving(state);
+  assertViewsKeepSecrets(state, now);
+  assertFitsTheStore(state);
+}
+
+/** A finished hand moved chips between its players only, and awarded every pot in full. */
+export function assertRecordBalances(record: HandRecord): void {
+  const moved = record.players.reduce((sum, p) => sum + p.endStack - p.startStack, 0);
+  const pots = record.result.pots.reduce((sum, pot) => sum + pot.amount, 0);
+  const awarded = record.result.pots.reduce((sum, pot) => sum + pot.awards.reduce((s, award) => s + award.amount, 0), 0);
+  const won = record.result.winnings.reduce((sum, w) => sum + w.amount, 0);
+
+  assert.equal(moved, 0, `hand ${record.number} created or destroyed chips`);
+  assert.equal(awarded, pots, `hand ${record.number} did not award every pot in full`);
+  assert.equal(won, pots);
+  assert.ok(record.boards.every((board) => board.length === 0 || board.length >= 3));
+  assert.equal(new Set([...record.boards.flat(), ...record.players.flatMap((p) => p.cards.filter((card) => card !== null))]).size >= record.boards[0]!.length, true);
+}
+
+/**
+ * Every board of a hand that was shown down played for an equal share of each pot, the chips that do
+ * not divide going to the first boards, and a board's share went, in equal parts but for its odd chips,
+ * to exactly the best hands shown there by players in for that pot. A hand won without a showdown went
+ * whole to its winner.
+ */
+export function assertBoardsShareThePots(record: HandRecord): void {
+  const { result, boards } = record;
+  const where = `hand ${record.number}`;
+
+  if (result.uncontested) {
+    assert.ok(result.pots.every((pot) => pot.awards.length === 1 && pot.awards[0]!.amount === pot.amount && pot.awards[0]!.run === 0), `${where}: a pot nobody contested was not paid whole`);
+    return;
+  }
+
+  assert.ok(boards.every((board) => board.length === BOARD_SIZE), `${where} was shown down on a board short of its cards`);
+
+  for (const pot of result.pots) {
+    assert.ok(pot.awards.every((award) => award.run < boards.length), `${where}: a pot was paid on a board that was never dealt`);
+
+    boards.forEach((_board, run) => {
+      const on = `${where}, board ${run + 1} of ${boards.length}, a pot of ${pot.amount}`;
+      const share = Math.floor(pot.amount / boards.length) + (run < pot.amount % boards.length ? 1 : 0);
+      const paid = pot.awards.filter((award) => award.run === run);
+      const shown = result.hands.filter((hand) => hand.run === run && pot.eligible.includes(hand.seat)).map((hand) => ({ seat: hand.seat, score: evaluateHand(hand.cards).score }));
+      const best = Math.max(...shown.map((hand) => hand.score));
+      const winners = shown.filter((hand) => hand.score === best).map((hand) => hand.seat);
+
+      assert.equal(paid.reduce((sum, award) => sum + award.amount, 0), share, `${on}: the board did not play for its share`);
+      assert.ok(paid.every((award) => winners.includes(award.seat)), `${on}: paid to ${paid.map((award) => award.seat)}, with the best hands shown by ${winners}`);
+      assert.ok(paid.every((award) => award.amount === Math.floor(share / winners.length) || award.amount === Math.ceil(share / winners.length)), `${on}: not split evenly`);
+
+      // A winner goes unpaid only when the share has fewer chips than winners
+      assert.ok(paid.length === winners.length || share < winners.length, `${on}: a best hand got nothing`);
+    });
+  }
+}
+
+/**
+ * A finished hand's events tell the whole of it: played back from the first event alone they end on
+ * the stacks, boards, awards and shown cards of the record, and after every bet they agree with what
+ * the event says the player had left. They hold no card that stayed face down.
+ */
+export function assertEventsRetellTheHand(record: HandRecord): void {
+  const { events } = record;
+  const end = replayHand(events);
+
+  // A hand that was already under way when events began, or outgrew what is kept, has none at all
+  if (!end) {
+    assert.deepEqual(events, [], `hand ${record.number} has events that do not start with the hand`);
+    return;
+  }
+
+  assert.deepEqual(
+    end.seats.map(({ seat, name, stack }) => ({ seat, name, stack })),
+    record.players.map((p) => ({ seat: p.seat, name: p.name, stack: p.endStack })),
+    `hand ${record.number}: the events end on different stacks`,
+  );
+  assert.deepEqual(end.seats.map((seat) => seat.cards), record.players.map((p) => p.cards), `hand ${record.number}: the events show different cards`);
+  assert.deepEqual(end.boards, record.boards, `hand ${record.number}: the events deal different boards`);
+  assert.deepEqual(
+    end.awards,
+    record.result.pots.flatMap((pot, index) => pot.awards.map((award) => ({ seat: award.seat, amount: award.amount, pot: index, board: award.run }))),
+    `hand ${record.number}: the events award the pots differently`,
+  );
+  assert.equal(end.pot, 0, `hand ${record.number}: the events leave chips in the middle`);
+  assert.ok(end.seats.every((seat) => seat.bet === 0), `hand ${record.number}: the events leave a bet out`);
+
+  const faceUp = new Set([...record.boards.flat(), ...record.players.flatMap((p) => p.cards).filter((card) => card !== null)]);
+
+  events.forEach((event, index) => {
+    if (event[0] === 'post' || event[0] === 'call' || event[0] === 'bet' || event[0] === 'raise') {
+      const stackLeft = event[0] === 'post' ? event[4] : event[3];
+      const stack = replayHand(events, index + 1)!.seats.find((seat) => seat.seat === event[1])!.stack;
+
+      assert.equal(stack, stackLeft, `hand ${record.number}: event ${index} leaves the player with a different stack than it says`);
+    }
+
+    if (event[0] === 'street' || event[0] === 'show') {
+      assert.ok(event[2].every((card) => card === null || faceUp.has(card)), `hand ${record.number}: event ${index} holds a card nobody was shown`);
+    }
+  });
+
+  // The cards hunted after the hand are no part of what it was played with, and none of them is there twice
+  const hunted = (end.hunted ?? []).flat();
+  assert.ok(hunted.every((card) => !faceUp.has(card)) && new Set(hunted).size === hunted.length, `hand ${record.number}: a hunted card is also on a board, in a hand shown or hunted twice`);
+}
+
+/**
+ * A hand recorded as a bomb pot was played as one: everyone dealt in posted the amount, or all they
+ * had, as their stake; nobody posted anything else; and nothing was done before the flop. A hand that
+ * is not one has no such post.
+ */
+export function assertBombPotIsPlayedAsOne(record: HandRecord): void {
+  const { events, bombPot } = record;
+  const posts = events.flatMap((event) => (event[0] === 'post' ? [{ seat: event[1], what: event[2], amount: event[3], as: event[5] }] : []));
+
+  if (!bombPot) {
+    assert.ok(posts.every((post) => post.what !== 'bomb pot'), `hand ${record.number} is no bomb pot, and someone posted one`);
+    assert.ok(events[0]?.[8] === undefined, `hand ${record.number} is no bomb pot, and starts as one`);
+    return;
+  }
+
+  // A hand that outgrew what is recorded has no events to go by
+  if (events.length === 0) {
+    return;
+  }
+
+  const [start] = events;
+  assert.ok(start?.[0] === 'start' && start[6] === 0, `hand ${record.number}: a bomb pot starts with an ante`);
+  assert.deepEqual(start[8], bombPot, `hand ${record.number}: the first event does not say what bomb pot it is`);
+  assert.deepEqual(
+    posts.sort((a, b) => a.seat - b.seat),
+    record.players.map((p) => ({ seat: p.seat, what: 'bomb pot', amount: Math.min(bombPot.amount, p.startStack), as: 'contribution' })),
+    `hand ${record.number}: not everyone posted the bomb pot, or someone posted something else`,
+  );
+
+  const flop = events.findIndex((event) => event[0] === 'street');
+  const dealt = events[flop];
+  assert.ok(dealt?.[0] === 'street' && dealt[2].length === 3, `hand ${record.number}: a bomb pot without a flop`);
+  assert.ok(events.slice(1, flop).every((event) => event[0] === 'post' || event[0] === 'deal' || event[0] === 'return'), `hand ${record.number}: something was done before the flop of a bomb pot`);
+
+  // Every board it is dealt on gets its flop before anything else happens, and no board comes later
+  const boards = boardsDealt(bombPot);
+  assert.deepEqual(
+    events.slice(flop, flop + boards).map((event) => (event[0] === 'street' ? [event[1], event[2].length] : event[0])),
+    Array.from({ length: boards }, (_board, index) => [index, FLOP_SIZE]),
+    `hand ${record.number}: a bomb pot on ${boards} boards did not start with a flop on each`,
+  );
+  assert.ok(record.boards.length === boards || (boards === 1 && events.some((event) => event[0] === 'runs' && event[1] > 1)), `hand ${record.number}: a bomb pot dealt on ${boards} boards ended on ${record.boards.length}`);
+}
+
+/**
+ * A hand run out after players picked was run no more times than any of them picked, each picked at
+ * most once, and it ended on that many boards.
+ */
+export function assertRunAsPicked(record: HandRecord): void {
+  const picks = record.events.flatMap((event) => (event[0] === 'vote' ? [event] : []));
+  const runs = record.events.find((event) => event[0] === 'runs');
+  if (picks.length === 0 || !runs) {
+    return;
+  }
+
+  const where = `hand ${record.number}`;
+
+  assert.equal(new Set(picks.map((pick) => pick[1])).size, picks.length, `${where}: a player picked twice`);
+  assert.ok(picks.every((pick) => runs[1] <= pick[2]), `${where} was run ${runs[1]} times with picks of ${picks.map((pick) => pick[2])}`);
+  assert.equal(record.boards.length, runs[1], `${where} was run ${runs[1]} times and ended on ${record.boards.length} boards`);
+}
+
+/**
+ * A chopped hand gave each blind back to the seat that posted it, the small blind and the big blind
+ * and nothing else, and ended there: every stack as it was dealt, no pot, no winner, no bounty, nothing
+ * shown but by choice afterwards, no flop. Only a chopped hand has a chop among its events.
+ */
+export function assertChopIsWhole(record: HandRecord): void {
+  const { events, result } = record;
+  const chop = events.find((event) => event[0] === 'chop');
+  const where = `hand ${record.number}`;
+
+  if (!result.chopped) {
+    assert.equal(chop, undefined, `${where} has a chop among its events and was not chopped`);
+    return;
+  }
+
+  assert.ok(result.uncontested && result.pots.length === 0 && result.winnings.length === 0 && result.hands.length === 0 && result.bounty === null, `${where} was chopped and has a result`);
+  assert.ok(record.players.length >= 3 && record.players.every((player) => player.endStack === player.startStack), `${where} was chopped and moved chips`);
+  assert.deepEqual(record.boards, [[]], `${where} was chopped after the flop`);
+
+  // A hand that outgrew what is recorded has no events to go by, which a chopped hand never does
+  const posts = events.flatMap((event) => (event[0] === 'post' ? [[event[1], event[3], event[2]]] : []));
+  assert.ok(chop?.[0] === 'chop', `${where} was chopped and its events do not say so`);
+  assert.deepEqual(chop[1].map(([seat, amount], nth) => [seat, amount, nth === 0 ? 'small blind' : 'big blind']), posts, `${where} chopped other chips than the two blinds`);
+  // Nothing comes after it but cards shown by choice, which anyone dealt in may do once the hand is over
+  assert.ok(
+    events.slice(events.indexOf(chop) + 1).every((event) => event[0] === 'show'),
+    `${where} went on after the chop`,
+  );
+  assert.ok(!events.slice(0, events.indexOf(chop)).some((event) => event[0] === 'show'), `${where} was chopped and showed cards`);
+  assert.deepEqual(result.chopped, chop[1].map(([seat]) => seat), `${where} names other seats as the blinds than the chop`);
+
+  // In the facts, a hand played by everyone, which both blinds were still in and nobody won
+  const facts = handFacts(record);
+  assert.equal(facts.ended, 'chop', `${where} was chopped and its facts say it ended otherwise`);
+  assert.equal(facts.pot, 0, `${where} was chopped and its facts have a pot`);
+  for (const player of facts.players) {
+    const blind = result.chopped.includes(player.seat);
+    assert.deepEqual([player.folded, player.net, player.putIn, wonAPot(player)], [!blind, 0, 0, false], `${where}: the facts of seat ${player.seat} are not those of a chop`);
+  }
+}
+
+/** Each answer to an offer to chop in a hand, and whether it was the clock that gave it. */
+export const chopAnswers = (record: HandRecord) =>
+  record.events.flatMap((event, nth) => (event[0] === 'chopAnswer' ? [{ agree: event[2], timedOut: record.events[nth - 1]?.[0] === 'timeout' }] : []));
+
+/** Checks every finished hand among the effects, and says how many there were. */
+
+export function assertHandRecordsHold(effects: Effect[]): number {
+  const records = handRecords(effects);
+
+  for (const record of records) {
+    assertRecordBalances(record);
+    assertEventsRetellTheHand(record);
+    assertBombPotIsPlayedAsOne(record);
+    assertBoardsShareThePots(record);
+    assertRunAsPicked(record);
+    assertChopIsWhole(record);
+  }
+
+  return records.length;
+}
+
+/**
+ * The ledger's entries add up, member by member, to what the table says each bought and cashed out and
+ * had transferred to them. Chips moved between players, a transfer or the high-hand bonus, always come
+ * as a pair of lines of one kind that gives and takes the same chips, so they leave the chips bought alone.
+ */
+export function assertLedgerAgrees(state: TableState, effects: Effect[]): void {
+  const entries = ledgerEntries(effects);
+
+  for (const member of state.members) {
+    const totals = { paid: 0, transfer: 0, 'high hand': 0, collected: 0 };
+    for (const entry of entries.filter((e) => e.playerId === member.id)) {
+      totals['otherId' in entry ? entry.kind : 'paid'] += entry.amount;
+      totals.collected += entry.kind === 'high hand' && entry.amount > 0 ? entry.amount : 0;
+    }
+
+    assert.equal(totals.paid, member.buyIn - member.cashOut, `the ledger entries and ${member.name}'s chips bought and cashed out disagree`);
+    assert.equal(totals.transfer, member.transferred, `the ledger entries and the chips moved to ${member.name} disagree`);
+    assert.equal(totals.collected, state.tonight.highHand.paid[member.id] ?? 0, `the ledger entries and the bonus ${member.name} collected disagree`);
+  }
+
+  entries.forEach((entry, index) => {
+    if (!('otherId' in entry)) {
+      return;
+    }
+
+    const pair = entry.amount < 0 ? entries[index + 1] : entries[index - 1];
+    assert.ok(
+      pair?.kind === entry.kind && pair.amount === -entry.amount && entry.amount !== 0 && pair.playerId === entry.otherId && pair.otherId === entry.playerId,
+      `chips moved as ${entry.kind} are booked without their other half`,
+    );
+  });
+}

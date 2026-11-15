@@ -1,0 +1,6 @@
+/* ---- Missed blinds: what a player owes, under the table and in the list of players ---- */
+
+.dialog .owes-note {
+  display: block;
+  color: var(--muted);
+}

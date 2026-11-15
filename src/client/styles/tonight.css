@@ -1,0 +1,61 @@
+/* ---- Tonight: the night in numbers, and its dipshit ---- */
+
+.tonight-crown {
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--panel-raised);
+  text-align: center;
+}
+
+.tonight-crown h3 {
+  color: var(--accent);
+}
+
+/* Any name wraps rather than run out of the box: two long ones can share a crown */
+.tonight-crown strong {
+  font: var(--display-weight) calc(26px * var(--display-scale) * var(--text-scale)) / 1.15 var(--font-display);
+  letter-spacing: var(--display-spacing);
+  text-transform: var(--display-case);
+  overflow-wrap: anywhere;
+}
+
+/* Who leads sits beside what they lead in while both fit on a line, and under it when a long name needs the room */
+.tonight-leaders div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0 12px;
+}
+
+/* A player's line, as player-lines.css draws it: the name, the money and the fold mark, with what the player did under all three */
+.tonight-players summary {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.tonight-players .dipshit .who {
+  color: var(--accent);
+}
+
+.tonight-players .counts {
+  grid-column: 1 / -1;
+}
+
+.tonight-copy {
+  display: grid;
+  gap: 8px;
+}
+
+.tonight-copy textarea {
+  width: 100%;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+  color: inherit;
+  font: inherit;
+  resize: vertical;
+}

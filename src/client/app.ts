@@ -1,63 +1,77 @@
+import { liveReactions, REACTION_TOO_SOON, reactionRefusal } from '../engine/reactions.ts';
+import { replaySteps } from '../engine/replay.ts';
+import { anteText, blindsText } from '../engine/stakes.ts';
+import type { Preset } from '../engine/presets.ts';
 import type { Command, HandRecord, TableConfig } from '../engine/types.ts';
 import type { TableView } from '../engine/view.ts';
 import type { ApiError, ApiRequest, ApiResponse, Auth } from '../server/api.ts';
+import { PageAnnouncer } from './announcer.ts';
+import { isRefusal, nextRetry, ServerClock, ServerLine, sleep, TableConnection } from './connection.ts';
+import type { SendOutcome, Session } from './connection.ts';
+import { TableEffects } from './effects.ts';
+import { lastOnRecord } from './handRecords.ts';
+import { HotkeyPresser } from './hotkeyPresser.ts';
+import { playerFor, RememberedPlayer } from './knownPlayers.ts';
+import type { Answer } from './knownPlayers.ts';
+import { Modal } from './modal.ts';
+import { browserOf } from './pageErrors.ts';
+import type { PageFailure } from './pageErrors.ts';
+import { DealtCards, forgetDealt } from './dealtCards.ts';
+import { forgetMutes, Mutes } from './mutes.ts';
+import { pageWishes } from './pageWishes.ts';
+import { sendersShown } from './senders.ts';
+import { Motion, motionAbility } from './motion.ts';
+import { pageMotion, pageWatching } from './pageMotion.ts';
+import { pagePace } from './pagePace.ts';
+import { TapGuard } from './pageTapGuard.ts';
+import { noReplayLine, pageTicker } from './replayPlayer.ts';
+import { ReplayScreen } from './replayScreen.ts';
+import { neededBy } from './replayTurn.ts';
+import { ReactionMarks } from './reactionMarks.ts';
+import { ReactionPicker } from './render/reactionPicker.ts';
 import type { Platform } from './platform.ts';
-import { controlsEl, controlsSignature, lockTurn } from './render/controls.ts';
-import { dialogEl, dialogShows } from './render/dialogs.ts';
-import type { Dialog, DialogHandlers } from './render/dialogs.ts';
+import { PREFERENCES, Preferences } from './prefs.ts';
+import { movePromptEl, SeatMoves } from './seatMoves.ts';
+import type { Abilities, AppPreferences } from './prefs.ts';
+import { controlsEl, controlsSignature, lockTurn, sizingMemory } from './render/controls.ts';
+import type { Sizing } from './render/controls.ts';
+import { frame } from './render/dialogs/dialog.ts';
+import { dialogAllowed, dialogEl, dialogShows } from './render/dialogs/index.ts';
+import type { Dialog, DialogHandlers } from './render/dialogs/index.ts';
 import { createFeed } from './render/feed.ts';
 import type { Feed } from './render/feed.ts';
-import { joinScreen, lobbyEl, noticeEl, welcomeBackEl } from './render/lobby.ts';
-import { tableEl } from './render/table.ts';
+import { joinScreen, lobbyEl, noticeEl, putAwayEl, welcomeBackEl } from './render/lobby.ts';
+import type { AsksWho, LobbyScreen, Visitor } from './render/lobby.ts';
+import { nightOver } from './render/night.ts';
+import { outdatedEl } from './render/outdated.ts';
+import { hostOrCohost } from './render/roles.ts';
+import { standingsEl } from './render/standings.ts';
+import type { StandingsHandlers } from './render/standings.ts';
+import { handDrawn, shapeFor, tableEl } from './render/table.ts';
 import { createThemePicker } from './render/themePicker.ts';
+import { voiceLinkEl } from './render/voiceLink.ts';
+import type { Listed } from './render/whoField.ts';
 import type { Shape } from './render/table.ts';
-import { allowSound, playTurnChime } from './sound.ts';
-import { DEFAULT_THEME, fontsUrl, themeById } from './themes.ts';
-import { chips, h, holdWhile, secondsUntil, Slot } from './ui.ts';
+import { Arrivals } from './arrivals.ts';
+import { Attention } from './attention.ts';
+import { pageWays } from './pageAttention.ts';
+import { showStillOffered } from './showing.ts';
+import { ShownTable } from './shownTable.ts';
+import { Sounds } from './sound.ts';
+import { LABELS, menuLabel, replayOpenedSaid, requestText, timeSaid } from './spoken.ts';
+import { fontsUrl, themeById } from './themes.ts';
+import { TimeWarning } from './timeWarning.ts';
+import { pageTouch } from './pageTouch.ts';
+import { h, holdWhile, secondsUntil, Slot } from './ui.ts';
+import { pageSounds } from './webAudioSounds.ts';
 
-// How long the server may sit on a poll before answering "nothing new"
-const HOLD_MS = 20_000;
-
-// A server that can't hold a poll answers at once, so those are spaced out instead
-const QUICK_POLL_GAP_MS = 1200;
-
-// Longer than any answer takes. Past this a request is taken for lost, as happens when a phone sleeps mid-request
-const REQUEST_TIMEOUT_MS = 30_000;
-
-const FIRST_RETRY_MS = 1000;
-const MAX_RETRY_MS = 10_000;
-
-// How many of the latest answers the server's clock is judged from
-const CLOCK_SAMPLES = 8;
-
-// A move in the hand. Only one may be on its way at a time, and it must not be repeated on a guess
-const MOVES = new Set<Command['type']>(['fold', 'check', 'call', 'raise', 'ritVote']);
-
-/** Why the table isn't being heard from: no answer at all, or an answer saying the server couldn't cope. */
-type Trouble = 'unreachable' | 'struggling';
-
-/**
- * Whether the buttons that play a move can be pressed. `sent` is a move on its way. `unanswered` is a
- * move that got no answer, so nobody knows yet whether it was played; the table has to be heard from first.
- */
-type TurnLock = 'open' | 'sent' | 'unanswered';
 const COUNTDOWN_TICK_MS = 250;
 const TOAST_MS = 4500;
 
-// Wider than this and the table lies down; narrower and it stands up, as on a phone
-const WIDE_ASPECT = 1.15;
-
 const NAME_KEY = 'cnd.name';
-const THEME_KEY = 'cnd.theme';
-const SOUND_KEY = 'cnd.sound';
 const seatKey = (tableId: string) => `cnd.seat.${tableId}`;
 
 const FONTS_LINK_ID = 'theme-fonts';
-
-interface Session {
-  tableId: string;
-  auth: Auth;
-}
 
 /** The parts of the table screen that are built once and then filled in as views arrive. */
 interface TableScreen {
@@ -65,24 +79,30 @@ interface TableScreen {
   banners: Slot;
   stage: Slot;
   controls: Slot;
+  /** Holds back a tap on a control of the bar that came up where another lay a moment before. */
+  taps: TapGuard;
   overlay: Slot;
+  modal: Modal;
   feed: Feed;
+  /** Who the viewer has muted at this table, and the way to stop following it. */
+  mutes: Mutes;
+  stopMutes: () => void;
+  /** A finished hand played back, lying over everything else of the table. */
+  replay: ReplayScreen;
+  dealt: DealtCards;
+  motion: Motion;
+  /** Reactions over the seats, and the picker for them, on a layer over the table that drawing the table leaves alone. */
+  marks: ReactionMarks;
+  picker: ReactionPicker;
+  effects: TableEffects;
+  /** What the screen shows of the table, which every view passes through on its way here. */
+  shown: ShownTable;
+  sizing: Sizing;
+  seatMoves: SeatMoves;
   shape: Shape;
-  seenCards: Set<string>;
   resizeObserver: ResizeObserver;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function nextRetry(last: number): number {
-  return Math.min(MAX_RETRY_MS, last ? last * 2 : FIRST_RETRY_MS);
-}
-
-/** The server has said this member or table isn't there, as opposed to not having managed to answer. */
-function isRefusal(response: ApiResponse | null): response is ApiError {
-  return response !== null && !response.ok && (response.code === 'unauthorized' || response.code === 'not_found');
+  /** The trouble with the connection that a screen reader was last told of, which is told once and not with every redraw. */
+  troubleSaid: 'unreachable' | 'struggling' | null;
 }
 
 function parseMember(value: string | null | undefined): Auth | null {
@@ -91,24 +111,66 @@ function parseMember(value: string | null | undefined): Auth | null {
   return id && token ? { id, token } : null;
 }
 
-/** Runs the whole page: which screen is up, the conversation with the server, and keeping the table drawn. */
+/** Runs the whole page: which screen is up, and keeping the table drawn from what its connection brings. */
 export class App {
+  /** What this viewer has chosen for themselves. */
+  readonly prefs: AppPreferences;
+  private readonly sounds: Sounds;
+  private readonly attention: Attention;
+  private readonly watching = pageWatching();
+  /** What this device can do of what Preferences switches on, each switch asked of the part of the page that knows. */
+  private readonly abilities: Abilities;
+
   private readonly root: HTMLElement;
   private readonly platform: Platform;
   private readonly themeHost: HTMLElement;
-  private readonly toastEl = h('div.toast', { role: 'status', hidden: true });
+  // For the eye: its words are said through the announcer, which a screen reader hears whether or not the line is still up
+  private readonly toastEl = h('div.toast', { hidden: true, 'aria-hidden': 'true' });
+  /** What a screen reader is told, kept on the page through every screen and every redraw so that each line is heard once. */
+  private readonly announcer = new PageAnnouncer(LABELS.spoken);
+  private readonly timeWarning = new TimeWarning();
 
-  private session: Session | null = null;
-  private view: TableView | null = null;
+  private readonly clock = new ServerClock();
+  private readonly server: ServerLine;
+
+  /** Where a join or a new table is asked for, so that one whose answer is lost can be tried again without arriving twice. */
+  private readonly arrivals = new Arrivals(
+    (bytes) => crypto.getRandomValues(new Uint8Array(bytes)),
+    (request) => this.request(request),
+  );
+
+  /** Which of the players the game knows this browser was last used as. */
+  private readonly me: RememberedPlayer;
+
+  /** Counts the times the list of players was asked for a screen, so that only the latest goes on trying. */
+  private playersAsked = 0;
+  private readonly hotkeys: HotkeyPresser;
+
+  /** The table this page is at, from sitting down at its screen until that screen is left. */
+  private table: TableConnection | null = null;
   private screen: TableScreen | null = null;
+  /** Takes the standings off a screen that has no table, while they are up over one. */
+  private closeStandings: (() => void) | null = null;
   private dialog: Dialog | null = null;
+
+  /** Whether the page put the dialog on screen in front of the viewer by itself, which is what lets it take that dialog away again. */
+  private dialogOpenedItself = false;
   private dialogOpens = 0;
 
-  /** Server time minus this device's time, so countdowns agree with the server's clock. */
-  private clockOffset = 0;
-  private clockSamples: number[] = [];
-  private turnLock: TurnLock = 'open';
-  private trouble: Trouble | null = null;
+  /** The opening that the dialog on screen was drawn for. */
+  private dialogDrawn = 0;
+
+  /** A dialog the page means to open by itself, waiting for the viewer to be free for it. */
+  private offered: { dialog: Dialog; still(view: TableView): boolean } | null = null;
+
+  /** How many commands are on their way to the table with no answer yet. */
+  private sending = 0;
+
+  /** Whether the hand the bar's button asked to see again is still being fetched. */
+  private fetchingReplay = false;
+
+  /** The hand the bar's button asked to see again before it was on record, played back as soon as it is. */
+  private replayWanted: number | null = null;
 
   /**
    * A member the address names whom this browser hasn't taken up as its own. The address may be the
@@ -116,8 +178,8 @@ export class App {
    */
   private linked: Session | null = null;
 
-  /** Bumped to retire the running poll loop when the table changes or is left. */
-  private pollRun = 0;
+  /** Bumped whenever the screen is changed, to retire a wait for a linked member that began before. */
+  private leaves = 0;
   private toastTimer = 0;
 
   /**
@@ -128,6 +190,22 @@ export class App {
     this.root = root;
     this.platform = platform;
     this.themeHost = themeHost;
+
+    const device = pageWishes();
+
+    this.prefs = new Preferences(PREFERENCES, platform.memory, root, device.wished);
+    device.onChange(() => this.applyTheme(this.prefs.get('theme')));
+
+    this.me = new RememberedPlayer(platform.memory);
+    this.prefs.watch('theme', (id) => this.applyTheme(id));
+    for (const key of ['deck', 'gifs'] as const) {
+      this.prefs.watch(key, () => this.screen?.feed.redraw());
+    }
+    this.sounds = new Sounds(pageSounds(), this.prefs, { inView: this.watching.inView });
+    this.attention = new Attention(this.prefs, pageWays({ sounds: this.sounds, touch: pageTouch(), root, ownsTab: platform.ownsTab }));
+    this.abilities = { of: (key) => (key === 'motion' ? motionAbility(this.watching) : this.attention.of(key)), ask: (key) => this.attention.ask(key) };
+    this.server = new ServerLine(platform.transport, platform.build, () => this.showOutdated());
+    this.hotkeys = new HotkeyPresser(this.prefs, { root, controls: () => this.screen?.controls.element ?? null, dialogOpen: () => this.tableCovered() });
 
     root.classList.add('cnd');
   }
@@ -153,6 +231,17 @@ export class App {
     }
   }
 
+  /**
+   * What tells the server's error log of a failure the page saw, as the member of the table it is at, or
+   * null before the page is at a table, when there is nobody to send it as. Like a reaction a report is
+   * sent once and whatever comes back, or doesn't, is left alone: nothing of the seat or the screen hangs on it.
+   */
+  failureReporter(): ((failure: PageFailure) => void) | null {
+    const session = this.table?.session;
+
+    return session ? (failure) => void this.server.ask({ op: 'report', tableId: session.tableId, auth: session.auth, ...failure, browser: browserOf(navigator.userAgent) }) : null;
+  }
+
   /** Starts seated at a table as a member who is already known, skipping the lobby. */
   startAt(tableId: string, auth: Auth): void {
     this.begin();
@@ -161,36 +250,58 @@ export class App {
   }
 
   private begin(): void {
-    this.applyTheme(this.theme());
-    setInterval(() => this.tickCountdowns(), COUNTDOWN_TICK_MS);
+    // Whoever serves the page may write its outer markup themselves, as Apps Script does, and a page that
+    // names no language is read out in the screen reader's own, whatever that is
+    document.documentElement.lang ||= 'en';
+    this.applyTheme(this.prefs.get('theme'));
+    setInterval(() => {
+      this.tickCountdowns();
+      this.showOffered();
+    }, COUNTDOWN_TICK_MS);
+
+    // Ahead of the listeners below: while a hand is played back the keys are its own, and neither the dialog under it nor the turn hears them
+    document.addEventListener('keydown', (event) => {
+      const replay = this.screen?.replay;
+      if (!replay?.isOpen) {
+        return;
+      }
+
+      replay.key(event);
+      event.stopImmediatePropagation();
+    });
 
     document.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape' && this.dialog) {
+      if (event.key !== 'Escape' || this.server.outdated) {
+        return;
+      }
+
+      if (this.closeStandings) {
+        this.closeStandings();
+      } else if (this.dialog) {
         this.closeDialog();
+      } else if (this.screen?.picker.isOpen) {
+        this.screen.picker.close();
+      } else if (this.screen?.seatMoves.active) {
+        this.screen.seatMoves.cancel();
+
+        // Spent on backing out of the move, so the keys of the turn don't also act on it
+        event.stopImmediatePropagation();
       }
     });
+    document.addEventListener('keydown', (event) => this.hotkeys.handle(event));
 
     // A phone that was asleep comes back with a request that may never be answered
     document.addEventListener('visibilitychange', () => {
-      if (!document.hidden && this.session) {
-        this.restartPolling();
+      if (!document.hidden) {
+        this.table?.refresh();
+        this.hotkeys.shown();
       }
     });
-
-    // A touch only counts as the visitor's own gesture once the finger lifts, which is the click
-    for (const gesture of ['pointerdown', 'click', 'keydown']) {
-      document.addEventListener(gesture, allowSound);
-    }
   }
 
   /** Switches the theme and remembers it for this browser. */
   setTheme(id: string): void {
-    this.platform.memory.set(THEME_KEY, themeById(id).id);
-    this.applyTheme(id);
-  }
-
-  setSound(on: boolean): void {
-    this.platform.memory.set(SOUND_KEY, on ? 'on' : 'off');
+    this.prefs.set('theme', themeById(id).id);
   }
 
   // ---- Screens ----
@@ -206,17 +317,61 @@ export class App {
       this.pointAddress(null);
     }
 
-    this.mount(
-      lobbyEl(this.rememberedName(), this.themePicker(), {
-        create: (name, config) => this.createTable(name, config),
-        openTable: (code) => this.openTable(code.trim().toUpperCase()),
-      }),
-    );
+    const lobby = lobbyEl(this.visitor(), this.themePicker(), {
+      create: async (as, config) => {
+        if (!(await this.createTable(as, config))) {
+          void this.offerPlayers(lobby);
+        }
+      },
+      openTable: (code) => this.openTable(code.trim().toUpperCase()),
+      standings: () => this.showStandings(),
+    });
+
+    this.mount(lobby.element);
+    void this.offerPresets(lobby);
+    void this.offerPlayers(lobby);
+  }
+
+  /**
+   * Brings a screen something it works without, as soon as it is up: a failure is tried again quietly
+   * for as long as the screen shows and the help is still `wanted`.
+   */
+  private async offerWhileShown<T>(screen: HTMLElement, load: () => Promise<T>, offer: (loaded: T) => void, wanted: () => boolean = () => true): Promise<void> {
+    for (let retryIn = 0; this.root.contains(screen) && wanted(); ) {
+      try {
+        const loaded = await load();
+
+        if (this.root.contains(screen)) {
+          offer(loaded);
+        }
+
+        return;
+      } catch {
+        retryIn = nextRetry(retryIn);
+        await sleep(retryIn);
+      }
+    }
+  }
+
+  /**
+   * The players the game knows, for a screen that asks "who are you?". Asked for again when an attempt
+   * from the screen came to nothing, since the usual reason is a name the list turned out to have; only
+   * the latest asking goes on trying.
+   */
+  private offerPlayers(screen: AsksWho): Promise<void> {
+    const asked = ++this.playersAsked;
+
+    return this.offerWhileShown(screen.element, () => this.listPlayers(), (listed) => screen.offerPlayers(listed), () => asked === this.playersAsked);
+  }
+
+  /** The group's presets, so that they are there by the time the host has typed their name. */
+  private offerPresets(lobby: LobbyScreen): Promise<void> {
+    return this.offerWhileShown(lobby.element, () => this.listPresets(), (presets) => lobby.offerPresets(presets));
   }
 
   /** The compact theme picker for the screens before the table. */
   private themePicker(): HTMLElement {
-    return createThemePicker(this.theme(), (id) => this.setTheme(id), true).element;
+    return createThemePicker(this.prefs.get('theme'), (id) => this.setTheme(id), true).element;
   }
 
   private openTable(tableId: string): void {
@@ -251,19 +406,29 @@ export class App {
     this.linked = { tableId, auth };
     this.mount(noticeEl('Looking for your seat…', wayOut));
 
-    const run = this.pollRun;
+    const run = this.leaves;
     let view: TableView | null = null;
 
     for (let retryIn = 0; !view; ) {
       const response = await this.request({ op: 'poll', tableId, auth, since: -1 });
 
-      if (run !== this.pollRun) {
+      if (run !== this.leaves) {
         return;
       }
 
       if (isRefusal(response)) {
+        if (response.putAway) {
+          this.showPutAway(tableId, response);
+          return;
+        }
+
         // A personal link that no longer works is still a link to the table
         void this.showJoin(tableId);
+
+        if (response.code === 'unauthorized') {
+          this.fail('That personal link no longer works here. Join again to play.');
+        }
+
         return;
       }
 
@@ -274,7 +439,7 @@ export class App {
         this.mount(noticeEl('Could not reach the table. Trying again…', wayOut));
         await sleep(retryIn);
 
-        if (run !== this.pollRun) {
+        if (run !== this.leaves) {
           return;
         }
       }
@@ -300,12 +465,17 @@ export class App {
     this.leaveTableScreen();
     this.pointAddress(tableId);
 
-    const screen = joinScreen(tableId, this.rememberedName(), this.themePicker(), {
-      join: (name) => this.joinTable(tableId, name),
+    const screen = joinScreen(tableId, this.visitor(), this.themePicker(), {
+      join: async (as) => {
+        if (!(await this.joinTable(tableId, as))) {
+          void this.offerPlayers(screen);
+        }
+      },
       toLobby: () => this.showLobby(),
     });
 
     this.mount(screen.element);
+    void this.offerPlayers(screen);
 
     for (let retryIn = 0; ; ) {
       const response = await this.request({ op: 'info', tableId });
@@ -321,60 +491,185 @@ export class App {
       }
 
       if (isRefusal(response)) {
-        this.showLobby();
-        this.toast(`There is no table with the code ${tableId}.`);
+        if (response.putAway) {
+          this.showPutAway(tableId, response);
+        } else {
+          this.showLobby();
+          this.fail(`There is no table with the code ${tableId}.`);
+        }
+
         return;
       }
 
       // The link stays in the address, so a reload is another try
       retryIn = nextRetry(retryIn);
-      this.toast('Could not reach the table. Trying again…');
+      this.fail('Could not reach the table. Trying again…');
       await sleep(retryIn);
     }
   }
 
-  private async createTable(name: string, config: Partial<TableConfig>): Promise<void> {
-    const response = await this.request({ op: 'create', name, config });
+  /** Resolves to whether the table was made. */
+  private async createTable(as: Answer, config: Partial<TableConfig>): Promise<boolean> {
+    const response = await this.arrivals.ask({ op: 'create', ...as, config });
     if (response?.ok && response.kind === 'joined') {
-      this.platform.memory.set(NAME_KEY, response.view.you.name);
       this.remember(response.view.id, response.auth);
       this.enterTable({ tableId: response.view.id, auth: response.auth }, response.view);
       this.openDialog({ kind: 'invite' });
-      return;
+      this.noteWho(as, response.view);
+      return true;
     }
 
-    this.toast(response && !response.ok ? response.error : 'Could not create the table. Check your connection and try again.');
+    this.fail(response && !response.ok ? response.error : 'Could not create the table. Check your connection and try again.');
+    return false;
   }
 
-  private async joinTable(tableId: string, name: string): Promise<void> {
-    const response = await this.request({ op: 'join', tableId, name });
+  /** Resolves to whether the visitor is now somewhere other than the form they joined from. */
+  private async joinTable(tableId: string, as: Answer): Promise<boolean> {
+    const response = await this.arrivals.ask({ op: 'join', tableId, ...as });
     if (response?.ok && response.kind === 'joined') {
-      this.platform.memory.set(NAME_KEY, response.view.you.name);
       this.remember(tableId, response.auth);
       this.enterTable({ tableId, auth: response.auth }, response.view);
-      return;
+      this.noteWho(as, response.view);
+      return true;
     }
 
-    this.toast(response && !response.ok ? response.error : 'Could not join the table. Check your connection and try again.');
+    if (response && !response.ok && response.putAway) {
+      this.showPutAway(tableId, response);
+      return true;
+    }
+
+    this.fail(response && !response.ok ? response.error : 'Could not join the table. Check your connection and try again.');
+    return false;
+  }
+
+  /**
+   * One the table has down as nobody got in while the list of players could not be asked or had no
+   * room. Whoever the browser remembered before is kept then, since only a list that loaded says a
+   * player is gone.
+   */
+  private noteWho(as: Answer, view: TableView): void {
+    if (as.who.as === 'new') {
+      this.platform.memory.set(NAME_KEY, view.you.name);
+    }
+
+    if (view.you.identity !== null) {
+      this.me.set(playerFor(view.you.identity, as));
+    } else {
+      this.toast('You’re in, though not on the list of players. You can say who you are from the menu.');
+    }
+  }
+
+  /**
+   * The server has said the table was put away. Nothing of it is kept here, neither in the address nor
+   * in the browser's memory, mutes included, and the visitor is told why and offered a new one.
+   */
+  private showPutAway(tableId: string, error: ApiError): void {
+    this.leaveTableScreen();
+    this.platform.memory.remove(seatKey(tableId));
+    forgetMutes(this.platform.memory, tableId);
+    forgetDealt(this.platform.memory, tableId);
+    this.pointAddress(null);
+    this.mount(putAwayEl(tableId, error.error, () => this.showLobby()));
   }
 
   private enterTable(session: Session, view: TableView | null): void {
     this.leaveTableScreen();
-    this.session = session;
     this.pointAddress(session.tableId, session.auth);
 
-    const feed = createFeed((text) => void this.send({ type: 'chat', text }));
-    const stage = new Slot(h('div.stage'));
+    const table = new TableConnection(this.server, session, this.clock, {
+      view: (shown, wentBack) => this.showView(shown, wentBack),
+      move: (lock, sent) => this.screen?.shown.moveIs(lock, sent),
+      chose: (sent) => this.screen?.shown.choiceIs(sent),
+      status: () => this.showStatus(),
+      refused: (error) => this.dropSession(error),
+      notice: (message) => this.fail(message),
+    });
+    this.table = table;
+
+    const picker = new ReactionPicker({ react: (kind, to) => this.react(kind, to), refusal: (view) => this.reactionRefusal(view) });
+    const mutes = new Mutes(this.platform.memory, session.tableId);
+    const dealt = new DealtCards(this.platform.memory, session.tableId);
+    const page = h('div.app');
+    const replay = new ReplayScreen({
+      under: page,
+      ticker: pageTicker,
+      pace: pagePace(),
+      deck: () => this.prefs.get('deck'),
+      // The buttons the replay covered are new to the player again
+      closed: () => this.hotkeys.shown(),
+      toTable: () => void this.setReplayAside(),
+    });
+    const feed = createFeed(
+      (text) => void this.send({ type: 'chat', text }),
+      () => ({ deck: this.prefs.get('deck'), pictures: this.prefs.get('gifs'), shown: sendersShown(this.prefs, mutes, table.session.auth.id, 'chat') }),
+      picker.toggleElement,
+    );
+    const stage = new Slot(h('main.stage', { 'aria-label': LABELS.table, tabindex: -1 }));
+    const bar = h('section.controls-slot', { 'aria-label': LABELS.bar, tabindex: -1 });
+    // The parts whose controls come up by themselves have the guard. Not the table, drawn anew with every move and with none of its controls moving
+    const taps = new TapGuard();
+    taps.watchShape(bar);
+    const overlay = new Slot(h('div.overlay', { hidden: true }), taps);
+    const motion = new Motion(pageMotion(stage.element), this.prefs, this.watching);
+    const above = h('div.above');
+    const marks = new ReactionMarks(above, stage.element);
+    above.append(picker.panelElement);
+    const effects = new TableEffects({
+      prefs: this.prefs,
+      mutes,
+      stage: stage.element,
+      sounds: this.sounds,
+      attention: this.attention,
+      motion,
+      marks,
+      dialogs: { offer: (dialog, still) => this.offerDialog(dialog, still), withdraw: (kind) => this.withdrawDialog(kind) },
+      dealt,
+      replay: { setAside: () => this.setReplayAside(), turn: (mine) => replay.turn(mine) },
+      toast: (message) => this.toast(message),
+      say: this.announcer,
+    });
+    const controls = new Slot(bar, taps);
+    // The first thing a keyboard reaches: the table is a long way to tab through to a turn that is on the clock
+    const skip = h('button.skip', { type: 'button', onclick: () => controls.element.focus() }, LABELS.skip);
     const screen: TableScreen = {
-      topbar: new Slot(h('header.topbar')),
-      banners: new Slot(h('div.banners')),
+      topbar: new Slot(h('header.topbar', { tabindex: -1 })),
+      // A landmark only while it has something in it (`drawBanners`)
+      // Takes the keyboard itself when the button that had it is gone with its notice, as the table and the bar do
+      banners: new Slot(h('section.banners', { 'aria-label': LABELS.notices, tabindex: -1, hidden: true }), taps),
       stage,
-      controls: new Slot(h('div.controls-slot')),
-      overlay: new Slot(h('div.overlay', { hidden: true })),
+      controls,
+      taps,
+      overlay,
+      modal: new Modal(overlay.element),
       feed,
+      mutes,
+      stopMutes: mutes.watch(() => {
+        feed.redraw();
+        this.drawTable();
+      }),
+      replay,
+      dealt,
+      motion,
+      marks,
+      picker,
+      effects,
+      shown: new ShownTable(motion, () => this.clock.now(), () => Date.now(), pagePace(), {
+        draw: () => this.drawShown(),
+        tell: (change) => {
+          effects.run(change);
+          this.replayOnceRecorded(change.view);
+        },
+        say: (message) => this.fail(message),
+      }),
+      sizing: sizingMemory(),
+      seatMoves: new SeatMoves(stage.element, {
+        view: () => this.screen?.shown.heard ?? null,
+        send: (command) => void this.send(command),
+        changed: () => this.drawTable(),
+      }),
       shape: 'wide',
-      seenCards: new Set(),
       resizeObserver: new ResizeObserver(() => this.reshape()),
+      troubleSaid: null,
     };
 
     screen.overlay.element.addEventListener('click', (event) => {
@@ -384,117 +679,181 @@ export class App {
     });
 
     this.screen = screen;
-    this.mount(h('div.app', null, screen.topbar.element, screen.banners.element, stage.element, screen.controls.element, feed.element, screen.overlay.element));
+    page.append(skip, screen.topbar.element, screen.banners.element, stage.element, above, screen.controls.element, feed.element, screen.overlay.element);
+    this.mount(page);
+    // Beside the page, not in it: a dialog shuts everything else in the page off from the keyboard, and a replay opens over one
+    page.after(replay.element);
     screen.resizeObserver.observe(stage.element);
 
     if (view) {
-      this.applyView(view);
+      table.take(view);
     } else {
       stage.element.appendChild(h('div.loading', null, 'Finding your seat…'));
     }
 
-    this.restartPolling();
-  }
-
-  /**
-   * Retires the request that is waiting on the server and asks afresh, so the table is current right
-   * away. `whole` asks for the table whether or not it has changed, for when what is on screen is in doubt.
-   */
-  private restartPolling(whole = false): void {
-    this.pollRun += 1;
-    void this.poll(this.pollRun, whole);
+    table.refresh();
   }
 
   private leaveTableScreen(): void {
-    this.pollRun += 1;
+    this.leaves += 1;
+    this.replayWanted = null;
+    this.table?.close();
+    this.table = null;
     this.screen?.resizeObserver.disconnect();
+    this.screen?.effects.dispose();
+    this.screen?.shown.end();
+    this.screen?.motion.dispose();
+    this.screen?.marks.dispose();
+    this.screen?.picker.dispose();
+    this.screen?.seatMoves.dispose();
+    this.screen?.taps.dispose();
+    this.screen?.stopMutes();
+    this.screen?.replay.close();
     this.screen = null;
-    this.session = null;
-    this.view = null;
     this.dialog = null;
-    this.trouble = null;
-    this.turnLock = 'open';
+    this.offered = null;
+    this.announcer.forget();
   }
 
   private mount(content: HTMLElement): void {
-    this.root.replaceChildren(content, this.toastEl);
+    // Whatever was up over the screen before goes with it, and lets go of what it held back
+    this.closeStandings?.();
+
+    const kept = [this.toastEl, ...this.announcer.elements];
+
+    // What speaks stays where it is: a region taken off the page and put back may be read out again
+    for (const child of [...this.root.children]) {
+      if (!kept.includes(child as HTMLElement)) {
+        child.remove();
+      }
+    }
+
+    this.root.prepend(content);
+    this.root.append(...kept.filter((element) => !element.isConnected));
+  }
+
+  /**
+   * The standings over a screen that has no table, which stays as it is underneath: a name half typed
+   * on the first screen is still there when they are closed. At a table they are a dialog like any other.
+   */
+  private showStandings(): void {
+    const close = (): void => {
+      modal.update(false);
+      overlay.remove();
+      this.closeStandings = null;
+    };
+
+    const overlay = h(
+      'div.overlay',
+      { 'data-screen': 'standings', onclick: (event: Event) => event.target === overlay && close() },
+      frame('Standings', { close }, standingsEl(this.standingsHandlers(this.me.get()?.id ?? null))),
+    );
+    const modal = new Modal(overlay);
+
+    this.closeStandings?.();
+    this.closeStandings = close;
+    this.root.appendChild(overlay);
+    modal.update(true);
+  }
+
+  private standingsHandlers(you: string | null): StandingsHandlers {
+    return {
+      load: async () => {
+        const response = await this.request({ op: 'standings' });
+
+        if (response?.ok && response.kind === 'standings') {
+          return response;
+        }
+
+        throw new Error('The standings could not be loaded');
+      },
+      nights: async (playerId, unit) => {
+        const response = await this.request({ op: 'nights', playerId, unit });
+
+        if (response?.ok && response.kind === 'nights') {
+          return response.nights;
+        }
+
+        throw new Error('The nights could not be loaded');
+      },
+      you,
+      deck: this.prefs.get('deck'),
+    };
   }
 
   // ---- Talking to the server ----
 
-  /** One request; null when the server could not be reached, or took so long that the request must be lost. */
-  private async request(request: ApiRequest): Promise<ApiResponse | null> {
-    const patience = REQUEST_TIMEOUT_MS + (request.op === 'poll' ? (request.holdMs ?? 0) : 0);
-    let timer = 0;
-    const lost = new Promise<null>((resolve) => {
-      timer = setTimeout(() => resolve(null), patience);
-    });
+  private request(request: ApiRequest): Promise<ApiResponse | null> {
+    return this.server.ask(request);
+  }
+
+  /**
+   * The server is another build of the game than this page. Whatever was on screen stays there, out of
+   * reach behind the notice: it is the last thing this page was sure to understand, and it shows the
+   * player what a reload brings them back to.
+   */
+  private showOutdated(): void {
+    this.screen?.replay.close();
+    this.closeDialog(true);
+
+    // A move this page was showing as made may never be played, or was and its answer is now left unread:
+    // the page cannot tell, so what stays behind the notice is the server's last word, and the reload shows the truth
+    this.screen?.shown.forget();
+
+    // Like the countdowns: a clock still running down would say the table behind the notice is the table as it is now
+    for (const animation of this.root.getAnimations({ subtree: true })) {
+      animation.pause();
+    }
+
+    const notice = outdatedEl(this.platform.links.reloadLink(), this.table !== null);
+
+    this.root.appendChild(notice);
+    new Modal(notice).update(true);
+  }
+
+  private async send(command: Command): Promise<SendOutcome> {
+    this.sending += 1;
 
     try {
-      return await Promise.race([this.platform.transport.send(request), lost]);
-    } catch {
-      return null;
+      return (await this.table?.send(command)) ?? 'refused';
     } finally {
-      clearTimeout(timer);
+      this.sending -= 1;
     }
   }
 
-  private async send(command: Command): Promise<void> {
-    const session = this.session;
-    if (!session) {
-      return;
-    }
-
-    const move = MOVES.has(command.type);
-
-    if (move) {
-      // A second tap while the first move is on its way would be a second move
-      if (this.turnLock !== 'open') {
-        return;
-      }
-
-      this.setTurnLock('sent');
-    }
-
-    const response = await this.request({ op: 'act', tableId: session.tableId, auth: session.auth, command });
-
-    if (session !== this.session) {
-      return;
-    }
-
-    if (!response) {
-      // It may have been played all the same. Rather than invite a second try on a guess, ask the table what happened
-      if (move) {
-        this.setTurnLock('unanswered');
-      }
-
-      this.toast(move ? 'No answer from the table. Checking whether that was played…' : 'No answer from the table. Check your connection.');
-      this.restartPolling(true);
-      return;
-    }
-
-    if (move) {
-      this.setTurnLock('open');
-    }
-
-    if (!response.ok) {
-      this.fail(response);
-    } else if (response.kind === 'view') {
-      this.applyView(response.view);
+  /**
+   * Sends a request that does the same however often it arrives, such as a rabbit hunt or a show of
+   * cards. Unlike a move, one that got no answer is sent once more, since the hand is off the table within
+   * seconds; but only while the page still offers it, as one that went through shows with the next poll.
+   */
+  private async sendAgainWhileOffered(command: Command, offered: () => boolean): Promise<void> {
+    if ((await this.send(command)) === 'unanswered' && offered()) {
+      await this.send(command);
     }
   }
 
-  private fail(error: ApiError): void {
-    if (error.code === 'unauthorized' || error.code === 'not_found') {
-      this.dropSession(error);
-    } else {
-      this.toast(error.error);
-    }
+  private hunt(hand: number): Promise<void> {
+    return this.sendAgainWhileOffered({ type: 'huntRabbit', hand }, () => this.offersHunt(hand));
+  }
+
+  private showCards(hand: number, places: number[]): Promise<void> {
+    return this.sendAgainWhileOffered({ type: 'showCards', hand, cards: places }, () => showStillOffered(this.shownView(), hand, places));
+  }
+
+  private offersHunt(hand: number): boolean {
+    const shown = this.shownView()?.hand;
+
+    return shown?.number === hand && shown.canHunt;
   }
 
   /** The server no longer knows this browser at the table, so start over from the join screen or the lobby. */
   private dropSession(error: ApiError): void {
-    const tableId = this.session?.tableId;
+    const tableId = this.table?.session.tableId;
+
+    if (tableId && error.putAway) {
+      this.showPutAway(tableId, error);
+      return;
+    }
 
     if (tableId) {
       this.platform.memory.remove(seatKey(tableId));
@@ -506,93 +865,16 @@ export class App {
       this.showLobby();
     }
 
-    this.toast(error.code === 'not_found' ? 'That table no longer exists.' : 'This browser is not at the table anymore. Join again to keep playing.');
+    this.fail(error.code === 'not_found' ? 'That table no longer exists.' : 'This browser is not at the table anymore. Join again to keep playing.');
   }
 
-  private async poll(run: number, whole: boolean): Promise<void> {
-    let retryIn = 0;
-
-    while (run === this.pollRun && this.session) {
-      const { tableId, auth } = this.session;
-      const asked = Date.now();
-      const held = this.view?.version ?? -1;
-      const response = await this.request({ op: 'poll', tableId, auth, since: whole ? -1 : held, holdMs: HOLD_MS });
-
-      if (run !== this.pollRun) {
-        return;
-      }
-
-      if (isRefusal(response)) {
-        this.dropSession(response);
-        return;
-      }
-
-      if (!response || !response.ok) {
-        retryIn = nextRetry(retryIn);
-        this.setTrouble(response ? 'struggling' : 'unreachable');
-        await sleep(retryIn);
-        continue;
-      }
-
-      retryIn = 0;
-      whole = false;
-      this.setTrouble(null);
-
-      // The table has been heard from since the move that got no answer, so the screen can be trusted again
-      if (this.turnLock === 'unanswered') {
-        this.setTurnLock('open');
-      }
-
-      if (response.kind === 'view') {
-        // The server answered after this page already held `held`, so a version below that is no late
-        // arrival: the table itself has gone back, as after a restore of the Sheet, and the server is right.
-        // Anything from `held` up to what is showing was only overtaken by the answer to a move or a chat line
-        this.applyView(response.view, response.view.version < held);
-      } else if (response.kind === 'unchanged') {
-        this.noteServerTime(response.now);
-
-        if (Date.now() - asked < QUICK_POLL_GAP_MS) {
-          await sleep(QUICK_POLL_GAP_MS);
-        }
-      }
-    }
+  /** Puts on screen a view the connection has taken up: only such a one, so nothing happens twice for a view that was dropped. */
+  private showView(view: TableView, wentBack: boolean): void {
+    this.screen?.seatMoves.follow(view);
+    this.screen?.shown.take(view, wentBack);
   }
 
-  /**
-   * An answer's time is already old by however long it took to arrive, so every sample puts the
-   * server's clock a little behind. The largest of the recent ones traveled fastest and is closest,
-   * which also errs toward showing a player less time than they have, never more.
-   */
-  private noteServerTime(serverNow: number): void {
-    this.clockSamples.push(serverNow - Date.now());
-
-    if (this.clockSamples.length > CLOCK_SAMPLES) {
-      this.clockSamples.shift();
-    }
-
-    this.clockOffset = Math.max(...this.clockSamples);
-  }
-
-  /** Puts a view on screen, unless it is no newer than what is showing and the table hasn't `wentBack`. */
-  private applyView(view: TableView, wentBack = false): void {
-    const previous = this.view;
-
-    // An action's answer and a poll can cross; the older picture doesn't replace the newer one
-    if (previous && view.version <= previous.version && !wentBack) {
-      return;
-    }
-
-    this.noteServerTime(view.now);
-    this.view = view;
-
-    const mySeat = view.you.seat;
-    const myTurn = mySeat !== null && view.hand?.stage === 'betting' && view.hand.toAct === mySeat;
-    const wasMyTurn = previous?.hand?.stage === 'betting' && previous.hand.toAct === previous.you.seat && previous.hand.number === view.hand?.number && previous.hand.street === view.hand?.street;
-
-    if (myTurn && !wasMyTurn && this.soundOn()) {
-      playTurnChime();
-    }
-
+  private drawShown(): void {
     // A table that can't be drawn must not be what stops it from updating
     try {
       this.drawTable();
@@ -601,11 +883,38 @@ export class App {
     }
   }
 
+  /** Whether a move can be made, or whether the table is being heard from, has changed. */
+  private showStatus(): void {
+    if (!this.screen) {
+      return;
+    }
+
+    lockTurn(this.screen.controls.element, this.turnLocked());
+
+    const view = this.shownView();
+    if (view) {
+      this.drawBanners(this.screen, view);
+      this.screen.picker.draw(view);
+    }
+  }
+
+  private turnLocked(): boolean {
+    return this.table?.turnLocked ?? false;
+  }
+
   // ---- Drawing the table screen ----
+
+  /**
+   * The table as the screen shows it: with the viewer's own move on it before the server has answered,
+   * and while the last cards of a runout are turned, as it stood before its hand was settled.
+   */
+  private shownView(): TableView | null {
+    return this.screen?.shown.view() ?? null;
+  }
 
   private drawTable(): void {
     const screen = this.screen;
-    const view = this.view;
+    const view = this.shownView();
     if (!screen || !view) {
       return;
     }
@@ -613,55 +922,120 @@ export class App {
     this.drawTopbar(screen, view);
     this.drawBanners(screen, view);
     this.drawStage(screen, view);
+    screen.picker.draw(view);
     this.drawControls(screen, view);
-    screen.feed.update(view.feed);
+
+    screen.feed.update(view);
 
     this.drawDialog();
   }
 
   private drawControls(screen: TableScreen, view: TableView): void {
-    screen.controls.draw(controlsSignature(view), () =>
-      controlsEl(view, {
-        send: (command) => this.send(command),
-        openRebuy: () => this.openDialog({ kind: 'rebuy' }),
-      }),
+    const waiting = screen.shown.waiting;
+    // A choice of a move ahead draws the bar again the moment it is pressed, and whoever pressed it with a key is still on it:
+    // the slot finds that button again. It finds no other, so no key press lands on a button of the turn that came up in its place
+    const redrawn = screen.controls.draw([controlsSignature(view), waiting], () =>
+      controlsEl(
+        view,
+        {
+          send: (command) => this.send(command),
+          showCards: (hand, places) => this.showCards(hand, places),
+          openRebuy: () => this.openDialog({ kind: 'rebuy' }),
+          openStraddles: () => this.openDialog({ kind: 'straddles' }),
+          replay: (hand) => this.replayHand(hand),
+          sizing: screen.sizing,
+          say: (message) => this.announcer.status(message),
+        },
+        waiting,
+      ),
     );
 
+    if (redrawn) {
+      this.hotkeys.shown();
+      this.keyboardOffTheChat(screen);
+    }
+
     // Freshly built buttons are free; a move still on its way keeps them locked
-    lockTurn(screen.controls.element, this.turnLock !== 'open');
+    lockTurn(screen.controls.element, this.turnLocked());
+  }
+
+  /**
+   * A lying phone's open chat goes down to its bar for the viewer's turn, by the stylesheet alone
+   * (sideways.css), and the box in it with it. The keyboard that was in the box goes to the bar under the
+   * table, where the turn is, and not to nothing, which is the top of the page.
+   */
+  private keyboardOffTheChat(screen: TableScreen): void {
+    const held = document.activeElement;
+
+    if (held instanceof HTMLElement && screen.feed.element.contains(held) && held.getClientRects().length === 0) {
+      screen.controls.element.focus({ preventScroll: true });
+    }
+  }
+
+  /** Why a reaction now would be refused, as the table would say it, or null when one would go: the same rule, by the page's reckoning of the table's clock. */
+  private reactionRefusal(view: TableView): string | null {
+    const now = this.clock.now();
+
+    return this.table?.reacting ? REACTION_TOO_SOON : reactionRefusal(liveReactions(view.reactions, now), view.you.id, now);
+  }
+
+  /** The player's own reaction shows at once, and is sent; one that gets no answer is simply gone. */
+  private react(kind: string, to?: string): void {
+    const view = this.shownView();
+    if (!this.screen || !view || this.reactionRefusal(view) !== null) {
+      return;
+    }
+
+    this.screen.shown.react({ from: view.you.id, kind, at: this.clock.now(), to });
+    void this.send({ type: 'react', kind, to });
   }
 
   private drawTopbar(screen: TableScreen, view: TableView): void {
-    const waiting = view.you.isHost ? view.requests.length : 0;
+    const waiting = hostOrCohost(view) ? view.requests.length : 0;
     let state = '';
 
     if (view.hand) {
       state = `Hand #${view.hand.number}`;
+    } else if (nightOver(view)) {
+      state = 'Night over';
     } else if (!view.running) {
       state = view.handCount === 0 ? 'Not started' : 'Paused';
     }
 
-    const stakes = `${chips(view.config.smallBlind)}/${chips(view.config.bigBlind)} hold’em`;
+    const blinds = blindsText(view.config);
+    const ante = anteText(view.config);
 
-    screen.topbar.draw([waiting, state, view.config.name, stakes], () => [
-      h('button.icon.menu-button', { type: 'button', 'aria-label': 'Menu', 'data-action': 'menu', onclick: () => this.openDialog({ kind: 'menu' }) }, '☰', waiting > 0 ? h('span.dot', null, String(waiting)) : null),
-      h('div.title', null, h('b', null, view.config.name), h('span', null, stakes)),
+    screen.topbar.draw([waiting, state, view.config.name, blinds, ante, view.config.voiceLink], () => [
+      h('button.icon.menu-button', { type: 'button', 'aria-label': menuLabel(waiting), 'data-action': 'menu', onclick: () => this.openDialog({ kind: 'menu' }) }, '☰', waiting > 0 ? h('span.dot', null, String(waiting)) : null),
+      // The ante takes the place of the word: a small phone has no room for both beside the hand's number.
+      // It is a piece of its own, so where there is no room for it either it moves to the next line whole
+      h('div.title', null, h('b', { role: 'heading', 'aria-level': '1', title: view.config.name }, view.config.name), ante ? h('span', null, `${blinds} `, h('span.ante', null, `· ${ante}`)) : h('span', null, `${blinds} hold’em`)),
       state ? h('span.pill', null, state) : null,
+      voiceLinkEl(view.config.voiceLink),
       h('button.btn.small', { type: 'button', 'data-action': 'invite', onclick: () => this.openDialog({ kind: 'invite' }) }, 'Invite'),
     ]);
   }
 
   private drawBanners(screen: TableScreen, view: TableView): void {
-    const requests = view.you.isHost ? view.requests : [];
+    const requests = hostOrCohost(view) ? view.requests : [];
+
+    const trouble = this.table?.trouble ?? null;
+    const picking = screen.seatMoves.picking;
 
     const troubleText = { unreachable: 'Lost the connection to the table. Trying again…', struggling: 'The table is slow to answer. Trying again…' };
 
-    screen.banners.draw([this.trouble, requests], () => [
-      this.trouble ? h('div.banner.warn', null, troubleText[this.trouble]) : null,
+    const pickingFor = picking === null ? null : view.seats.find((seat) => seat?.playerId === picking);
+
+    screen.banners.draw([trouble, requests, picking, pickingFor?.name, pickingFor?.inHand], () => [
+      trouble ? h('div.banner.warn', null, troubleText[trouble]) : null,
+      picking === null ? null : movePromptEl(view, picking, () => screen.seatMoves.cancel()),
       requests.map((request) => {
-        const what = request.kind === 'seat' ? `wants seat ${request.seat + 1} with ${chips(request.amount)}` : `wants to add ${chips(request.amount)}`;
-        const approve = h('button.btn.small.primary', { type: 'button', 'data-action': 'approve' }, 'Approve');
-        const deny = h('button.btn.small', { type: 'button', 'data-action': 'deny' }, 'Deny');
+        const what = requestText(request, view.config);
+        // Each says whose request it answers: several can be up at once, and a screen reader lands on a button without its line.
+        // And each carries whose it is: the next row's buttons moving up into this one's place are other buttons, to the tap
+        // guard and to the keyboard alike
+        const approve = h('button.btn.small.primary', { type: 'button', 'data-action': 'approve', 'data-player': request.playerId, 'aria-label': `Approve ${request.name}` }, 'Approve');
+        const deny = h('button.btn.small', { type: 'button', 'data-action': 'deny', 'data-player': request.playerId, 'aria-label': `Deny ${request.name}` }, 'Deny');
 
         approve.addEventListener('click', () => holdWhile(approve, () => this.send({ type: 'approve', playerId: request.playerId })));
         deny.addEventListener('click', () => holdWhile(deny, () => this.send({ type: 'deny', playerId: request.playerId })));
@@ -669,34 +1043,51 @@ export class App {
         return h('div.banner', null, h('span', null, h('b', null, request.name), ` ${what}`), approve, deny);
       }),
     ]);
+
+    screen.banners.element.hidden = screen.banners.element.childElementCount === 0;
+
+    if (trouble !== screen.troubleSaid) {
+      screen.troubleSaid = trouble;
+
+      if (trouble) {
+        this.announcer.alert(troubleText[trouble]);
+      }
+    }
   }
 
   private drawStage(screen: TableScreen, view: TableView): void {
     const myRequest = view.requests.find((request) => request.playerId === view.you.id);
-    const shows = [screen.shape, view.you, view.hostId, view.running, view.nextHandAt, view.config.actionSeconds, view.seats, view.hand, myRequest];
+    const picking = screen.seatMoves.picking;
+    const turning = screen.shown.turning;
+    const chances = screen.shown.chances;
+    const muted = screen.mutes.ids();
+    const shows = [screen.shape, view.you, view.hostId, view.cohostIds, view.running, view.nextHandAt, view.nightEndedAt, view.config.actionSeconds, view.seats, handDrawn(view.hand), view.tonight.highHand.next, myRequest, picking, turning, chances, muted];
 
     screen.stage.draw(shows, () => {
-      const table = tableEl(view, screen.shape, this.clockOffset, {
-        onSit: (seat) => this.openDialog({ kind: 'sit', seat }),
-        onStart: () => void this.send({ type: 'start' }),
-      });
-
-      // Only cards that were not on the table a moment ago get the dealing animation
-      const visible = new Set<string>();
-      for (const card of table.querySelectorAll<HTMLElement>('.card[data-card]')) {
-        const owner = card.closest<HTMLElement>('[data-seat]')?.dataset.seat ?? `board${card.closest<HTMLElement>('[data-run]')?.dataset.run ?? ''}`;
-        const key = `${view.hand?.number}:${owner}:${card.dataset.card}`;
-
-        visible.add(key);
-        if (!screen.seenCards.has(key)) {
-          card.classList.add('fresh');
-        }
-      }
-
-      screen.seenCards = visible;
-
-      return table;
+      return tableEl(
+        view,
+        screen.shape,
+        this.clock.offset,
+        {
+          onSit: (seat) => this.openDialog({ kind: 'sit', seat }),
+          onStart: () => void this.send({ type: 'start' }),
+          onPlayOn: () => void this.send({ type: 'playOn' }),
+          onHunt: (hand) => void this.hunt(hand),
+          moving: screen.seatMoves.tableHandlers(),
+          muted: new Set(muted),
+        },
+        turning,
+        chances,
+      );
     });
+
+    screen.seatMoves.redrawn();
+
+    // On the part of the screen itself, not on what is drawn in it: marking a move must not draw the table again
+    screen.stage.element.toggleAttribute('data-unconfirmed', screen.shown.waiting === 'unconfirmed');
+
+    // For as long as the hands' chances are not those of the cards now on the table, which is what a browser check waits out
+    screen.stage.element.toggleAttribute('data-chances-pending', screen.shown.chancesPending);
 
     this.tickCountdowns();
   }
@@ -707,53 +1098,128 @@ export class App {
       return;
     }
 
-    const { width, height } = screen.stage.element.getBoundingClientRect();
-    const shape: Shape = height > 0 && width / height >= WIDE_ASPECT ? 'wide' : 'tall';
+    const shape = shapeFor(screen.stage.element.getBoundingClientRect());
 
     if (shape !== screen.shape) {
       screen.shape = shape;
 
-      if (this.view) {
-        this.drawStage(screen, this.view);
+      const view = this.shownView();
+      if (view) {
+        this.drawStage(screen, view);
       }
     }
+
+    // Once the table is drawn for the room it now has, never before: a new shape puts every seat a mark stands over somewhere else
+    screen.marks.follow();
   }
 
   private tickCountdowns(): void {
+    if (this.server.outdated) {
+      return;
+    }
+
     for (const element of this.root.querySelectorAll<HTMLElement>('[data-countdown]')) {
-      element.textContent = String(secondsUntil(Number(element.dataset.countdown), this.clockOffset));
+      element.textContent = String(secondsUntil(Number(element.dataset.countdown), this.clock.offset));
     }
-  }
 
-  private setTurnLock(lock: TurnLock): void {
-    this.turnLock = lock;
+    const screen = this.screen;
+    const view = this.shownView();
 
-    if (this.screen) {
-      lockTurn(this.screen.controls.element, lock !== 'open');
+    // The wait before the next reaction ends by the clock, with no view to draw it
+    if (screen?.picker.isOpen && view) {
+      screen.picker.draw(view);
     }
-  }
 
-  private setTrouble(trouble: Trouble | null): void {
-    if (trouble !== this.trouble) {
-      this.trouble = trouble;
+    // A move that has waited too long for its answer says so by the clock, with no view to draw it
+    if (screen && (screen.shown.waiting === 'unconfirmed') !== screen.stage.element.hasAttribute('data-unconfirmed')) {
+      this.drawShown();
+    }
 
-      if (this.screen && this.view) {
-        this.drawBanners(this.screen, this.view);
-      }
+    const left = view && this.timeWarning.due(view, this.clock.now());
+    if (left) {
+      this.announcer.alert(timeSaid(left));
     }
   }
 
   // ---- Dialogs ----
 
-  private openDialog(dialog: Dialog): void {
+  /** `byItself` is for a dialog the game opens or closes, not the player: what that brings up under a finger takes no tap for a moment (`TapGuard`). */
+  private openDialog(dialog: Dialog, byItself = false): void {
     this.dialog = dialog;
+    this.dialogOpenedItself = byItself;
     this.dialogOpens += 1;
-    this.drawDialog();
+    this.drawDialogAs(byItself);
   }
 
-  private closeDialog(): void {
+  private closeDialog(byItself = false): void {
     this.dialog = null;
-    this.drawDialog();
+    this.drawDialogAs(byItself);
+  }
+
+  private drawDialogAs(byItself: boolean): void {
+    const taps = this.screen?.taps;
+
+    if (byItself || !taps) {
+      this.drawDialog();
+    } else {
+      taps.byThePlayer(() => this.drawDialog());
+    }
+  }
+
+  private offerDialog(dialog: Dialog, still: (view: TableView) => boolean): void {
+    // Open already, it is in front of them, and offering it would bring it back when they close it
+    if (this.dialog?.kind === dialog.kind) {
+      return;
+    }
+
+    this.offered = { dialog, still };
+    this.showOffered();
+  }
+
+  /**
+   * Takes away a dialog the page opened by itself (`DialogOffers.withdraw`). A dialog that closes hands
+   * the keyboard back to where it was, or to the menu: here it goes to the bar, since the table is
+   * what the viewer is being given back.
+   */
+  private withdrawDialog(kind: Dialog['kind']): boolean {
+    if (this.dialog?.kind !== kind || !this.dialogOpenedItself) {
+      return false;
+    }
+
+    this.closeDialog(true);
+    this.screen?.controls.element.focus({ preventScroll: true });
+
+    return true;
+  }
+
+  /** Whether something is in front of the table: a dialog, a seat being picked, or word that the page is out of date. */
+  private tableCovered(): boolean {
+    return this.server.outdated || this.dialog !== null || (this.screen?.seatMoves.active ?? false) || (this.screen?.replay.isOpen ?? false);
+  }
+
+  /** Whether the viewer is part way through typing a line, which anything that opens by itself would take the keyboard from. */
+  private midLine(): boolean {
+    const field = document.activeElement;
+
+    return field instanceof HTMLInputElement && field.type === 'text' && field.value !== '';
+  }
+
+  /**
+   * Opens the dialog that is waiting, once the viewer is free for it (`DialogOffers`). An answer the
+   * table still owes them counts as busy: it may be what makes the dialog moot. Tried on every tick.
+   */
+  private showOffered(): void {
+    const offered = this.offered;
+    const view = this.shownView();
+    if (!offered || !view || this.tableCovered() || this.sending > 0 || this.midLine()) {
+      return;
+    }
+
+    this.offered = null;
+
+    if (offered.still(view)) {
+      this.openDialog(offered.dialog, true);
+    }
   }
 
   private drawDialog(): void {
@@ -762,42 +1228,214 @@ export class App {
       return;
     }
 
-    const dialog = this.dialog;
-    const view = this.view;
+    const view = this.shownView();
+    if (this.dialog && view && !dialogAllowed(this.dialog, view)) {
+      this.dialog = null;
+    }
 
-    screen.overlay.element.hidden = !dialog || !view;
+    const dialog = this.dialog;
+    const covered = dialog !== null && view !== null;
+
+    // The buttons the dialog covered are new to the player again
+    if (!covered && !screen.overlay.element.hidden) {
+      this.hotkeys.shown();
+    }
+
+    // The page under a dialog is covered and uncovered as the dialog is drawn or emptied, not before: whoever is told of the redraw sees the page as it was, and then as it is
+    const cover = (covers: boolean) => {
+      screen.overlay.element.hidden = !covers;
+      screen.modal.update(covers);
+    };
 
     if (!dialog || !view) {
-      screen.overlay.draw(null, () => null);
+      screen.overlay.draw(null, () => {
+        cover(false);
+
+        return null;
+      });
+
       return;
     }
 
     // Opening a dialog always draws it; after that only a change in what it shows does
     const handlers = this.dialogHandlers();
-    screen.overlay.draw([this.dialogOpens, dialogShows(dialog, view, handlers)], () => dialogEl(dialog, view, handlers));
+    const body = () => screen.overlay.element.querySelector('.dialog-body');
+    const scrolled = this.dialogDrawn === this.dialogOpens ? (body()?.scrollTop ?? 0) : 0;
+
+    // Drawn again for what changed at the table, a dialog stays where its reader had scrolled to. Put back before the
+    // tap guard looks at the dialog: it is the rows the reader has in sight that a finger may be on its way to
+    screen.overlay.draw(
+      [this.dialogOpens, dialogShows(dialog, view, handlers)],
+      () => {
+        screen.overlay.element.hidden = false;
+
+        return dialogEl(dialog, view, handlers);
+      },
+      () => {
+        if (scrolled > 0) {
+          body()!.scrollTop = scrolled;
+        }
+      },
+    );
+
+    this.dialogDrawn = this.dialogOpens;
+    screen.modal.update(true);
   }
 
   private dialogHandlers(): DialogHandlers {
-    const session = this.session!;
+    const { session } = this.table!;
 
     return {
-      send: (command) => void this.send(command),
+      send: (command) => this.send(command),
       open: (dialog) => this.openDialog(dialog),
       close: () => this.closeDialog(),
       copy: (text) => this.copy(text),
       loadHistory: () => this.loadHistory(),
+      replay: (record) => this.openReplay(record),
+      presets: {
+        list: () => this.listPresets(),
+        save: (name, settings, replace) => this.changePresets({ op: 'savePreset', tableId: session.tableId, auth: session.auth, name, settings, replace }),
+        remove: (name) => this.changePresets({ op: 'deletePreset', tableId: session.tableId, auth: session.auth, name }),
+      },
+      players: {
+        list: () => this.listPlayers(),
+        remembered: () => this.me.get(),
+        identify: (as) => this.identify(session, as),
+      },
+      standings: (you) => this.standingsHandlers(you),
       tableLink: () => this.platform.links.tableLink(session.tableId),
       memberLink: () => this.platform.links.memberLink(session.tableId, session.auth),
-      theme: () => this.theme(),
-      setTheme: (id) => this.setTheme(id),
-      soundOn: () => this.soundOn(),
-      setSound: (on) => this.setSound(on),
+      prefs: this.prefs,
+      mutes: this.screen!.mutes,
+      abilities: this.abilities,
       toLobby: () => this.showLobby(true),
+      pickSeat: (playerId) => {
+        this.closeDialog();
+        this.screen?.seatMoves.pick(playerId);
+      },
     };
   }
 
+  // ---- A hand played back ----
+
+  /** Plays a finished hand back over the table. `byItself` when it comes seconds after it was asked for, under a finger that may be on its way to the bar by then. */
+  private openReplay(record: HandRecord, byItself = false): void {
+    const screen = this.screen;
+    const view = this.shownView();
+    const steps = view && replaySteps(record, view.config);
+    if (!screen || !view || !steps) {
+      return;
+    }
+
+    const show = () => screen.replay.show({ record, steps, table: view, kept: screen.dealt.of(view.you.id, record.number) });
+
+    if (byItself) {
+      screen.taps.byItself(show);
+    } else {
+      show();
+    }
+  }
+
+  /**
+   * Plays hand number `number` back from the history, as the bar under the table asks for the hand just
+   * played, or says why it can't. A hand whose result is still up is not on record yet: it is played
+   * back as soon as a view says it is, some seconds on, and the viewer is told so meanwhile. The hand
+   * before it is on record, and is not the one they asked for. `unasked` is that later playing back,
+   * which no tap of this moment asks for.
+   */
+  private async replayHand(number: number, unasked = false): Promise<void> {
+    const asked = this.shownView();
+
+    if (asked && number > lastOnRecord(asked)) {
+      this.replayWanted = number;
+      this.toast(`Hand #${number} plays back as soon as it is cleared from the table.`);
+
+      return;
+    }
+
+    // The bar can be drawn again while the hand is fetched, with its button live: a second tap adds nothing to the first
+    if (this.fetchingReplay) {
+      return;
+    }
+
+    const leaves = this.leaves;
+
+    this.fetchingReplay = true;
+    const hands = await this.loadHistory().catch(() => null);
+    this.fetchingReplay = false;
+
+    const view = this.shownView();
+
+    // They left the table meanwhile, perhaps for another, whose hands have the same numbers
+    if (!view || leaves !== this.leaves) {
+      return;
+    }
+
+    // The game came to wait on them meanwhile: a replay they asked for while free is not put over their move
+    if (neededBy(view)) {
+      this.toast(`Your turn. Hand #${number} is in the hand history.`);
+
+      return;
+    }
+
+    // Seconds after the tap that asked for it, it takes the place of nothing they have opened since, nor the keyboard from a line half typed
+    if (unasked && (this.tableCovered() || this.midLine())) {
+      this.toast(`Hand #${number} is in the hand history.`);
+
+      return;
+    }
+
+    const record = hands?.find((hand) => hand.number === number);
+
+    if (!record) {
+      this.toast(hands ? `Hand #${number} is not in the history yet. Try again in a moment.` : 'Could not load the hand. Try again, or open the hand history from the menu.');
+
+      return;
+    }
+
+    // The same line the history has in place of its button, for a hand whose record does not tell it
+    const refusal = noReplayLine(record, view.config);
+
+    if (refusal === null) {
+      this.openReplay(record, unasked);
+
+      if (unasked) {
+        this.announcer.status(replayOpenedSaid(number));
+      }
+    } else {
+      this.toast(refusal);
+    }
+  }
+
+  /** Plays back the hand that was asked for before it was on record, once a view put on screen says it is there. */
+  private replayOnceRecorded(view: TableView): void {
+    const wanted = this.replayWanted;
+
+    if (wanted !== null && lastOnRecord(view) >= wanted) {
+      this.replayWanted = null;
+      void this.replayHand(wanted, true);
+    }
+  }
+
+  /** Takes a hand being played back off the table, and the history it was opened from, for the game to have the viewer (`ReplaySetAside`). */
+  private setReplayAside(): boolean {
+    const screen = this.screen;
+
+    if (!screen?.replay.isOpen) {
+      return false;
+    }
+
+    // The replay is no slot's to draw, so the guard is told here: the turn's buttons come up where the replay's lay
+    screen.taps.byItself(() => {
+      screen.replay.setAside();
+      this.closeDialog(true);
+    });
+
+    return true;
+  }
+
   private async loadHistory(): Promise<HandRecord[]> {
-    const session = this.session;
+    const session = this.table?.session;
     const response = session ? await this.request({ op: 'history', tableId: session.tableId, auth: session.auth }) : null;
 
     if (response?.ok && response.kind === 'history') {
@@ -805,6 +1443,59 @@ export class App {
     }
 
     throw new Error('The hand history could not be loaded');
+  }
+
+  private async listPresets(): Promise<Preset[]> {
+    const response = await this.request({ op: 'presets' });
+
+    if (response?.ok && response.kind === 'presets') {
+      return response.presets;
+    }
+
+    throw new Error('The presets could not be loaded');
+  }
+
+  /** The players the game knows. What the browser remembers of who it is, is held to them on the way. */
+  private async listPlayers(): Promise<Listed> {
+    const response = await this.request({ op: 'players' });
+
+    if (response?.ok && response.kind === 'players') {
+      return { players: response.players, remembered: this.me.heldTo(response.players) };
+    }
+
+    throw new Error('The list of players could not be loaded');
+  }
+
+  /** Tells the table which known player this member is. Resolves to whether it took that; if not, the player is told why. */
+  private async identify(session: Session, as: Answer): Promise<boolean> {
+    const response = await this.request({ op: 'identify', tableId: session.tableId, auth: session.auth, ...as });
+
+    if (response?.ok && response.kind === 'view' && response.view.you.identity !== null) {
+      const now = playerFor(response.view.you.identity, as);
+
+      this.me.set(now);
+      this.toast(`Noted: on the list of players you are ${now.name}.`);
+      return true;
+    }
+
+    // A refusal here says nothing about the player's seat, so it never takes them from the table
+    this.fail(response && !response.ok ? response.error : 'No answer from the server. Try again in a moment.');
+
+    return false;
+  }
+
+  /** The presets after a change, or null when it was refused or got no answer, which the player is told. */
+  private async changePresets(request: ApiRequest): Promise<Preset[] | null> {
+    const response = await this.request(request);
+
+    if (response?.ok && response.kind === 'presets') {
+      return response.presets;
+    }
+
+    // A refusal here says nothing about the player's seat, so it never takes them from the table
+    this.fail(response && !response.ok ? response.error : 'No answer from the server. Checking the presets…');
+
+    return null;
   }
 
   // ---- Small things ----
@@ -818,7 +1509,19 @@ export class App {
     }
   }
 
+  /** A passing word at the top of the screen, said to a screen reader when it is free. */
   private toast(message: string): void {
+    this.showToast(message);
+    this.announcer.toast(message);
+  }
+
+  /** Word that something did not go as asked: shown like any other, and said to a screen reader at once. */
+  private fail(message: string): void {
+    this.showToast(message);
+    this.announcer.alert(message);
+  }
+
+  private showToast(message: string): void {
     this.toastEl.textContent = message;
     this.toastEl.hidden = false;
 
@@ -834,16 +1537,8 @@ export class App {
     return parseMember(this.platform.memory.get(seatKey(tableId)));
   }
 
-  private rememberedName(): string {
-    return this.platform.memory.get(NAME_KEY) ?? '';
-  }
-
-  private theme(): string {
-    return themeById(this.platform.memory.get(THEME_KEY) ?? DEFAULT_THEME).id;
-  }
-
-  private soundOn(): boolean {
-    return this.platform.memory.get(SOUND_KEY) !== 'off';
+  private visitor(): Visitor {
+    return { name: this.platform.memory.get(NAME_KEY) ?? '', player: this.me.get() };
   }
 
   private applyTheme(id: string): void {

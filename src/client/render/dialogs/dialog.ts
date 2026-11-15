@@ -1,0 +1,149 @@
+import type { Command, HandRecord } from '../../../engine/types.ts';
+import type { TableView } from '../../../engine/view.ts';
+import type { SendOutcome } from '../../connection.ts';
+import type { MuteList } from '../../mutes.ts';
+import type { Abilities, AppPreferences } from '../../prefs.ts';
+import type { PresetHandlers } from '../presets.ts';
+import type { StandingsHandlers } from '../standings.ts';
+import type { PlayerHandlers } from '../whoField.ts';
+import { h, holdWhile } from '../../ui.ts';
+import type { Child } from '../../ui.ts';
+import type { Dialog } from './index.ts';
+
+export interface DialogHandlers {
+  /** Resolves to whether the table took the command. */
+  send(command: Command): Promise<SendOutcome>;
+  open(dialog: Dialog): void;
+  close(): void;
+  copy(text: string): Promise<boolean>;
+  loadHistory(): Promise<HandRecord[]>;
+  /** Plays a finished hand back, over the table and whatever is open on it. */
+  replay(record: HandRecord): void;
+  presets: PresetHandlers;
+  players: PlayerHandlers;
+  /** What the standings ask with, for a viewer who is the known player `you`, or null for nobody the list knows. */
+  standings(you: string | null): StandingsHandlers;
+  tableLink(): string;
+  memberLink(): string;
+  prefs: AppPreferences;
+  /** Who the viewer has muted at this table. */
+  mutes: MuteList;
+  /** What this device can do of what the preferences switch on. */
+  abilities: Abilities;
+  toLobby(): void;
+  /** Leaves the dialog for the table, where an open seat is picked for the player. */
+  pickSeat(playerId: string): void;
+}
+
+/** A dialog's line in the menu. */
+export interface MenuEntry {
+  label: string;
+  /** Who gets to see it: `everyone`, `seated`, `hostOrCohost` or `hostAlone` (`roles.ts`), or a rule of its own. */
+  who(view: TableView): boolean;
+  /** The small print under the label. */
+  note?(view: TableView, handlers: DialogHandlers): string;
+}
+
+export const everyone = (): boolean => true;
+export const seated = (view: TableView): boolean => view.you.seat !== null;
+
+/**
+ * One kind of dialog. `P` is what it has to be told when it is opened, such as which seat; the
+ * dialog that is open is handed to it as that.
+ */
+export interface DialogKind<K extends string = string, P = unknown> {
+  /** The name it is opened by, and that its menu entry carries on the page. */
+  kind: K;
+  /**
+   * Left out, the dialog is not in the menu and is opened from somewhere else. Only for a dialog that
+   * has to be told nothing, since the menu opens it by its kind alone.
+   */
+  menu?: MenuEntry;
+  /**
+   * Who may keep it open, checked with every view so a dialog closes when, say, a co-host stops being
+   * one. Left out, it is whoever its menu entry is for, or anyone.
+   */
+  who?(view: TableView): boolean;
+  /**
+   * What its content depends on. A dialog showing live table data is redrawn when this changes; one
+   * that leaves it out holds a form someone may be filling in, and is drawn once.
+   */
+  shows?(view: TableView, handlers: DialogHandlers, params: P): unknown;
+  draw(view: TableView, handlers: DialogHandlers, params: P): HTMLElement;
+}
+
+export function frame(title: string, handlers: Pick<DialogHandlers, 'close'>, ...body: (HTMLElement | null)[]): HTMLElement {
+  return h(
+    'div.dialog',
+    // Focusable by script only: opening a dialog puts the keyboard here, not on the page behind it
+    { role: 'dialog', 'aria-modal': 'true', 'aria-label': title, tabindex: -1 },
+    // The dialog's own heading, not the page's banner, which is what a header outside any section is taken for
+    h('header', { role: 'none' }, h('h2', null, title), h('button.icon', { type: 'button', 'aria-label': 'Close', 'data-action': 'close', onclick: handlers.close }, '✕')),
+    h('div.dialog-body', null, body),
+  );
+}
+
+/**
+ * The buttons at the end of a player's row in a list, each marked as that player's and named with their
+ * name. A dialog drawn again puts the keyboard back on the button that had it, found by its marks
+ * (`Slot`): found by its place among its like, it would be the same button on another player's row once
+ * the rows had changed. And a row of buttons heard one after another says whose each is.
+ */
+export function rowActions(player: { id: string; name: string }, ...buttons: Child[]): HTMLElement {
+  const actions = h('span.row-actions', null, buttons);
+
+  for (const button of actions.querySelectorAll('button')) {
+    button.dataset.player = player.id;
+
+    if (!button.hasAttribute('aria-label')) {
+      button.setAttribute('aria-label', `${button.textContent}, ${player.name}`);
+    }
+  }
+
+  return actions;
+}
+
+/**
+ * Makes `button` copy `text`, and say how that went. A page inside someone else's frame is often
+ * refused the clipboard: there the text is put in `field` and selected, where copying the selection
+ * still works in most browsers, and where the viewer can copy it by hand in the rest.
+ */
+export function copyOnClick(button: HTMLButtonElement, field: HTMLInputElement | HTMLTextAreaElement, text: () => string, handlers: DialogHandlers): void {
+  button.addEventListener('click', async () => {
+    const value = text();
+    let copied = await handlers.copy(value);
+
+    if (!copied) {
+      field.value = value;
+      field.hidden = false;
+      field.focus();
+      field.select();
+
+      try {
+        copied = document.execCommand('copy');
+      } catch {
+        copied = false;
+      }
+    }
+
+    button.textContent = copied ? 'Copied' : 'Copy it from the box';
+  });
+}
+
+/**
+ * Sends what a form asks for. A refusal leaves the form as it was typed, with the reason in a toast,
+ * instead of costing the player their entries. With no answer the table may have taken it all the
+ * same, so the form moves on rather than invite a second try: the host adding chips twice would get them twice.
+ */
+export function submit(event: Event, handlers: DialogHandlers, command: Command, then: () => void): void {
+  event.preventDefault();
+
+  const button = (event.target as HTMLFormElement).querySelector<HTMLButtonElement>('button[type="submit"]')!;
+
+  holdWhile(button, async () => {
+    // If the dialog was closed while the answer was on its way, there is nothing left to move on from
+    if ((await handlers.send(command)) !== 'refused' && button.isConnected) {
+      then();
+    }
+  });
+}

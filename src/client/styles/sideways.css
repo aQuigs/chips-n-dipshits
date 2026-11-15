@@ -1,0 +1,97 @@
+/* ---- A wide, short box, as on a phone held sideways: the controls stand beside the table ---- */
+
+@container app (min-width: 560px) and (max-height: 520px) {
+  .app {
+    grid-template:
+      'top top' auto
+      'banners banners' auto
+      'stage controls' minmax(0, 1fr)
+      'feed controls' auto / minmax(0, 1fr) minmax(240px, 32%);
+  }
+
+  /*
+   * An open chat stands beside the table, under what the bar says while the viewer waits: under the table
+   * it would take a third of the screen's height from a table with none to give, and leave a strip with
+   * its seats on its cards. The bar keeps what it needs, and the chat has the rest, never under a few lines.
+   * The bar stays on top, so the moves chosen ahead lie where they do with the chat shut: over the bet
+   * sizes of the turn to come, never where one of its buttons comes up (pre-action.css).
+   *
+   * On the viewer's own turn the moves need that side to themselves, or they are scrolled out of sight
+   * with the clock running: until the move is made the chat is its bar under the table, as when it is
+   * shut, with its newest line in it, and it opens again by itself once the move is made. Someone with a
+   * line half typed keeps it open until the line is sent or they leave the box. The box here is the box
+   * and its Send: a press on Send takes the keyboard from the box before it sends, and a chat that went
+   * down in between would take the button from under the press.
+   */
+  .app {
+    --chat-beside: 'top top' auto 'banners banners' auto 'stage controls' minmax(0, auto) 'stage feed' minmax(8.5em, 1fr) / minmax(0, 1fr) minmax(240px, 32%);
+  }
+
+  .app:has(.feed.open):is(:not(:has(.turn)), :has(.say:focus-within #chat-input:not(:placeholder-shown))) {
+    grid-template: var(--chat-beside);
+  }
+
+  .app:is(:not(:has(.turn)), :has(.say:focus-within #chat-input:not(:placeholder-shown))) .feed.open {
+    border-left: 1px solid var(--line);
+  }
+
+  /* No heavier than the rule that opens a chat, so the one below for a keyboard can keep it open */
+  .app:has(.turn):where(:not(:has(.say:focus-within #chat-input:not(:placeholder-shown)))) .feed.open .feed-body {
+    display: none;
+  }
+
+  /*
+   * Where keys play the moves (hotkeys.css) the keyboard in the box keeps the chat open by itself, line
+   * or no line: with the box taken from under it, the next letter typed would be a move's key.
+   */
+  @media (hover: hover) and (pointer: fine) {
+    .app:has(.feed.open):has(.say:focus-within) {
+      grid-template: var(--chat-beside);
+    }
+
+    .app:has(.say:focus-within) .feed.open {
+      border-left: 1px solid var(--line);
+    }
+
+    .app:has(.turn):has(.say:focus-within) .feed.open .feed-body {
+      display: grid;
+    }
+  }
+
+  /*
+   * Over the open chat the bar shows the moves to choose ahead and ends under them: the line that says
+   * who the table waits for would be cut through its letters by the chat's edge. It is a scroll away,
+   * with the rest of the bar.
+   */
+  .app:has(.feed.open) .controls-slot:has(.waiting.choosing) {
+    max-height: calc(var(--ahead-height) + 20px);
+  }
+
+  .topbar {
+    padding-block: 4px;
+  }
+
+  .controls-slot {
+    border-top: 0;
+    border-left: 1px solid var(--line);
+    overflow-y: auto;
+  }
+
+  /* Beside the table, the bar's height no longer moves it, so nothing needs reserving */
+  .controls {
+    --turn-height: 0px;
+  }
+
+  .turn .buttons {
+    grid-auto-flow: row;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .turn .buttons .raise {
+    grid-column: 1 / -1;
+  }
+
+  .turn .btn {
+    min-height: 44px;
+  }
+}

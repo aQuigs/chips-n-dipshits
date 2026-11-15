@@ -8,6 +8,7 @@ import { App } from './app.ts';
 import type { Links, Memory, Platform } from './platform.ts';
 import { createThemePicker } from './render/themePicker.ts';
 import { DEFAULT_THEME } from './themes.ts';
+import type { Transport } from './transport.ts';
 import { h } from './ui.ts';
 
 interface Size {
@@ -36,9 +37,14 @@ function demoPlatform(demo: DemoTable): Platform {
     tableLink: (tableId) => `${SAMPLE_ADDRESS}?table=${tableId}`,
     memberLink: (tableId, auth) => `${SAMPLE_ADDRESS}?table=${tableId}&me=${auth.id}.${auth.token}`,
     showTable: () => undefined,
+    reloadLink: () => null,
   };
 
-  return { transport: demo, links, memory: sessionMemory(), boot: {} };
+  // The table lives in the page, so it is the page's own build by definition
+  const transport: Transport = { send: async (request) => ({ ...(await demo.send(request)), build: request.build }) };
+
+  // The bots' game is a showcase, never a reason to call the visitor back to the tab
+  return { transport, links, memory: sessionMemory(), boot: {}, build: 'demo', ownsTab: false };
 }
 
 /** A box of a fixed device size that shrinks, as a picture would, to the room it is given. */
@@ -59,7 +65,26 @@ function start(root: HTMLElement): void {
 
   // Both screens are the same player, as when someone carries on from their phone
   const apps = [laptop.screen, phone.screen].map((screen) => new App(screen, demoPlatform(demo), preview));
-  apps[1]!.setSound(false);
+  // Two screens playing the bots' hands aloud is noise, so the showcase is silent until the visitor switches sound on in one,
+  // and a phone showing it never buzzes for the bots' game
+  for (const app of apps) {
+    app.prefs.set('sound', false);
+    app.prefs.set('buzz', false);
+  }
+
+  // Both hear every key, and one move is enough
+  apps[1]!.prefs.set('hotkeys', false);
+
+  // And so they hold the same cards: a deck or a back chosen on one screen is on the other too
+  for (const key of ['deck', 'cardBack'] as const) {
+    for (const [from, to] of [apps, [...apps].reverse()] as [App, App][]) {
+      from.prefs.watch(key, (value) => {
+        if (to.prefs.get(key) !== value) {
+          to.prefs.set(key, value);
+        }
+      });
+    }
+  }
 
   const picker = createThemePicker(DEFAULT_THEME, (id) => choose(id));
   let chosen = '';

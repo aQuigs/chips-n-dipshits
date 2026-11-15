@@ -1,40 +1,59 @@
-import type { TableConfig } from '../../engine/types.ts';
+import { bountiesText } from '../../engine/bounties.ts';
+import { CONFIG_SPECS, sameSetting, settingText, startingConfig } from '../../engine/config.ts';
+import type { ConfigKey } from '../../engine/config.ts';
+import { fromPreset, PRESET_KEYS } from '../../engine/presets.ts';
+import type { Preset } from '../../engine/presets.ts';
+import { stakesText } from '../../engine/stakes.ts';
+import type { KnownPlayer, TableConfig } from '../../engine/types.ts';
 import type { TableInfo } from '../../server/api.ts';
-import { chips, h } from '../ui.ts';
-import { inputOf, numberField, numberOf } from './forms.ts';
+import type { Answer } from '../knownPlayers.ts';
+import { h } from '../ui.ts';
+import { configForm } from './configForm.ts';
+import { inputOf } from './forms.ts';
+import { whoField } from './whoField.ts';
+import type { WhoField } from './whoField.ts';
 
-const NAME_LENGTH = 16;
 const CODE_LENGTH = 12;
+
+/** What the browser remembers of whoever last used it: the name they last typed, and the known player they said they were. */
+export interface Visitor {
+  name: string;
+  player: KnownPlayer | null;
+}
+
+/** A screen that asks its visitor who they are before they are at a table. */
+export interface AsksWho {
+  element: HTMLElement;
+  /** Offers the known players to pick from, once they have been heard from. As `WhoField.offer`. */
+  offerPlayers: WhoField['offer'];
+}
 
 export interface LobbyHandlers {
   /** Resolves when the attempt is over, whichever way it went. */
-  create(name: string, config: Partial<TableConfig>): Promise<void>;
+  create(as: Answer, config: Partial<TableConfig>): Promise<void>;
   openTable(code: string): void;
+  /** Shows the standings over this screen, which stays as it is underneath. */
+  standings(): void;
+}
+
+export interface LobbyScreen extends AsksWho {
+  /** Offers the group's presets in the form for a new table, once they have been heard from. */
+  offerPresets(presets: Preset[]): void;
 }
 
 export interface JoinHandlers {
   /** Resolves when the attempt is over, whichever way it went. */
-  join(name: string): Promise<void>;
+  join(as: Answer): Promise<void>;
   toLobby(): void;
 }
 
-export interface JoinScreen {
-  element: HTMLElement;
+export interface JoinScreen extends AsksWho {
   /** Fills in what the table is once the server has said, and lets the visitor join. */
   showTable(info: TableInfo): void;
 }
 
 function brand(): HTMLElement {
   return h('div.brand', null, h('h1', null, 'Chips n’ ', h('em', null, 'Dipshits')), h('p', null, 'No-limit hold’em for people who should know better.'));
-}
-
-function nameField(id: string, value: string): HTMLElement {
-  return h(
-    'label.field',
-    { for: id },
-    h('span', null, 'Your name'),
-    h('input', { type: 'text', id, name: id, value, maxlength: NAME_LENGTH, required: true, autocomplete: 'nickname', placeholder: 'What the table calls you' }),
-  );
 }
 
 function themeSection(themePicker: HTMLElement): HTMLElement {
@@ -60,38 +79,62 @@ async function whilePending(button: HTMLButtonElement, label: string, action: ()
 }
 
 /** The front door: start a table, or go to one with its code. */
-export function lobbyEl(rememberedName: string, themePicker: HTMLElement, handlers: LobbyHandlers): HTMLElement {
+export function lobbyEl(visitor: Visitor, themePicker: HTMLElement, handlers: LobbyHandlers): LobbyScreen {
+  const who = whoField('host-name', visitor.name, visitor.player);
   const createButton = h('button.btn.primary', { type: 'submit', 'data-action': 'create-table' }, 'Create table');
 
-  const create = h(
+  // The table's name starts out with the apostrophe the page's own title has
+  const usual: TableConfig = { ...startingConfig(), name: 'Chips n’ Dipshits' };
+
+  // A preset's settings that the form has no field for, which the table is created with all the same
+  let unseen: Partial<TableConfig> = {};
+  const presetPick = h('div.preset-pick', { hidden: true });
+  const notes = h('div.preset-notes', { 'aria-live': 'polite' });
+
+  const alsoSet = (table: TableConfig): HTMLElement[] => {
+    const start = startingConfig(table);
+    const differ = (Object.keys(unseen) as ConfigKey[]).filter((key) => !sameSetting(table[key], start[key]));
+
+    return differ.length > 0 ? [h('p.note', null, `Also set, in the table settings: ${differ.map((key) => `${CONFIG_SPECS[key].label} ${settingText(key, table)}`).join(', ')}.`)] : [];
+  };
+
+  // An amount means something else once what the table plays with changes, so the preset's unseen ones start over too
+  const startedOver = (start: TableConfig): void => {
+    const amounts = (Object.keys(unseen) as ConfigKey[]).filter((key) => CONFIG_SPECS[key].kind === 'chips');
+
+    unseen = { ...unseen, ...Object.fromEntries(amounts.map((key) => [key, start[key]])) };
+    notes.replaceChildren(...alsoSet({ ...start, ...unseen }));
+  };
+
+  const settings = configForm(usual, 'new-table-', true, startedOver);
+
+  const pick = (chosen: Preset | null): void => {
+    const current = { ...usual, ...settings.read(create) };
+    const used = fromPreset(chosen ? chosen.settings : usual, current);
+    const changed = settings.fill(create, used.config);
+
+    unseen = Object.fromEntries(PRESET_KEYS.filter((key) => !settings.shown.includes(key)).map((key) => [key, used.config[key]]));
+
+    notes.replaceChildren(
+      h('p.note', null, changed.length > 0 ? `Changed here: ${changed.map((key) => CONFIG_SPECS[key].label).join(', ')}.` : 'The form already held these settings.'),
+      ...alsoSet(used.config),
+      ...used.notes.map((note) => h('p.note.warn', null, note)),
+    );
+  };
+
+  const create: HTMLFormElement = h(
     'form.card-panel',
     {
       onsubmit: (event: Event) => {
         event.preventDefault();
-        const form = event.target as HTMLFormElement;
-
-        void whilePending(createButton, 'Setting up…', () =>
-          handlers.create(inputOf(form, 'host-name').value, {
-            name: inputOf(form, 'new-table-name').value,
-            smallBlind: numberOf(form, 'new-small-blind'),
-            bigBlind: numberOf(form, 'new-big-blind'),
-            minBuyIn: numberOf(form, 'new-min-buy-in'),
-            maxBuyIn: numberOf(form, 'new-max-buy-in'),
-          }),
-        );
+        void whilePending(createButton, 'Setting up…', () => handlers.create(who.answer(), { ...unseen, ...settings.read(create) }));
       },
     },
     h('h2', null, 'Start a table'),
-    nameField('host-name', rememberedName),
-    h(
-      'label.field',
-      { for: 'new-table-name' },
-      h('span', null, 'Table name'),
-      h('input', { type: 'text', id: 'new-table-name', name: 'new-table-name', value: 'Chips n’ Dipshits', maxlength: 40, required: true }),
-    ),
-    h('div.pair', null, numberField('new-small-blind', 'Small blind', 10, 1), numberField('new-big-blind', 'Big blind', 20, 1)),
-    h('div.pair', null, numberField('new-min-buy-in', 'Minimum buy-in', 400, 1), numberField('new-max-buy-in', 'Maximum buy-in', 2000, 1)),
-    h('p.note', null, 'You become the host. Clock, straddles, run it twice and the 7-2 bounty are in the table settings.'),
+    who.element,
+    presetPick,
+    settings.rows,
+    h('p.note', null, 'You become the host. Clock, straddles and running it more than once are in the table settings.'),
     createButton,
   );
 
@@ -114,11 +157,38 @@ export function lobbyEl(rememberedName: string, themePicker: HTMLElement, handle
     h('button.btn', { type: 'submit' }, 'Find table'),
   );
 
-  return h('main.lobby', null, brand(), h('div.panels', null, create, join), themeSection(themePicker));
+  const standings = h(
+    'section.standings-door',
+    null,
+    h('button.btn', { type: 'button', 'data-action': 'standings', onclick: handlers.standings }, 'Standings'),
+    h('p.note', null, 'Who is up and who is down, over every night.'),
+  );
+
+  return {
+    element: h('main.lobby', null, brand(), standings, h('div.panels', null, create, join), themeSection(themePicker)),
+    offerPlayers: who.offer,
+
+    offerPresets(presets) {
+      if (presets.length === 0) {
+        return;
+      }
+
+      const select = h(
+        'select',
+        { id: 'new-table-preset', name: 'new-table-preset', onchange: () => pick(select.value === '' ? null : presets[Number(select.value)]!) },
+        h('option', { value: '' }, 'The usual settings'),
+        presets.map((preset, index) => h('option', { value: String(index) }, preset.name)),
+      );
+
+      presetPick.replaceChildren(h('label.field', { for: 'new-table-preset' }, h('span', null, 'Start from'), select), notes);
+      presetPick.hidden = false;
+    },
+  };
 }
 
 /** Shown to someone who opened a table link but has not picked a name there yet. */
-export function joinScreen(tableId: string, rememberedName: string, themePicker: HTMLElement, handlers: JoinHandlers): JoinScreen {
+export function joinScreen(tableId: string, visitor: Visitor, themePicker: HTMLElement, handlers: JoinHandlers): JoinScreen {
+  const who = whoField('join-name', visitor.name, visitor.player);
   const about = h('div.about', null, h('h2', null, `Table ${tableId}`), h('p.note', null, 'Looking for the table…'));
   const joinButton = h('button.btn.primary', { type: 'submit', disabled: true, 'data-action': 'join-table' }, 'Join table');
 
@@ -127,22 +197,24 @@ export function joinScreen(tableId: string, rememberedName: string, themePicker:
     {
       onsubmit: (event: Event) => {
         event.preventDefault();
-        void whilePending(joinButton, 'Joining…', () => handlers.join(inputOf(event.target as HTMLFormElement, 'join-name').value));
+        void whilePending(joinButton, 'Joining…', () => handlers.join(who.answer()));
       },
     },
     about,
-    nameField('join-name', rememberedName),
+    who.element,
     joinButton,
     h('button.link', { type: 'button', onclick: handlers.toLobby }, 'Start my own table instead'),
   );
 
   return {
     element: h('main.lobby', null, brand(), h('div.panels.single', null, form, themeSection(themePicker))),
+    offerPlayers: who.offer,
 
     showTable(info) {
       about.replaceChildren(
         h('h2', null, info.name),
-        h('p', null, `Blinds ${chips(info.smallBlind)}/${chips(info.bigBlind)}`),
+        h('p', null, `Blinds ${stakesText(info)}`),
+        ...(info.bounties.length > 0 ? [h('p', null, `Bounties: ${bountiesText(info.bounties, info)}`)] : []),
         h('p.note', null, info.players.length > 0 ? `At the table: ${info.players.join(', ')}` : 'Nobody is seated yet.'),
       );
       joinButton.disabled = false;
@@ -159,6 +231,22 @@ export function noticeEl(text: string, wayOut?: { label: string; action(): void 
     h('p.note', null, text),
     wayOut ? h('button.btn', { type: 'button', 'data-action': 'leave-notice', onclick: wayOut.action }, wayOut.label) : null,
   );
+}
+
+/**
+ * Shown to someone who asked for a table that was put away. `said` is the server's sentence, which
+ * says how long a table may go without play. It stays up until they leave it: someone coming back to
+ * a tab after weeks should not find the reason gone with a toast.
+ */
+export function putAwayEl(tableId: string, said: string, startNew: () => void): HTMLElement {
+  const panel = h(
+    'div.card-panel',
+    { 'data-screen': 'put-away' },
+    h('div.about', null, h('h2', null, `Table ${tableId}`), h('p', null, said), h('p.note', null, 'Whoever runs the game can still find its ledger and its hands in the game’s Sheet.')),
+    h('button.btn.primary', { type: 'button', 'data-action': 'start-new-table', onclick: startNew }, 'Start a new table'),
+  );
+
+  return h('main.lobby', null, brand(), h('div.panels.single', null, panel));
 }
 
 /**

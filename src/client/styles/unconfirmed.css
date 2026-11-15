@@ -1,0 +1,11 @@
+/* ---- A move of the viewer's own that the server has been slow to confirm ---- */
+
+/*
+ * A move is drawn as made the moment it is tapped. When no answer has come for a while, what says so
+ * on the table goes faint: the label of the move on the viewer's plate and the chips in front of them.
+ * Nothing moves or changes size, so the table is otherwise the very table a confirmed move leaves.
+ */
+.stage[data-unconfirmed] .seat.me .status,
+.stage[data-unconfirmed] .seat.me + .bet {
+  opacity: 0.45;
+}

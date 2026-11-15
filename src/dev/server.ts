@@ -3,7 +3,12 @@ import { createServer } from 'node:http';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
+import { BuildGate, UNSTAMPED_BUILD } from '../server/build.ts';
 import { ByteRng } from '../server/byteRng.ts';
+import type { ErrorLog } from '../server/errorLog.ts';
+import { MemoryPlayerStore } from '../server/memoryPlayerStore.ts';
+import { MemoryPresetStore } from '../server/memoryPresetStore.ts';
+import { MemoryResultStore } from '../server/memoryResultStore.ts';
 import { MemoryStore } from '../server/memoryStore.ts';
 import { PokerService } from '../server/service.ts';
 
@@ -17,10 +22,34 @@ export interface DevServerOptions {
   port: number;
   /** Produces the game page. Called for every page load, so edits show up on refresh. */
   page: () => Promise<string>;
+  /** The game to serve. Left out, it is a fresh one on the real clock; a check passes its own to fix the cards and move time. */
+  service?: PokerService;
+  /** Where the fresh game writes its failures, when one is not passed. */
+  errors?: ErrorLog;
+  /**
+   * Answers each request to the game in the server's place, given the server's own way of answering:
+   * a check passes one to hear and answer as late as a busy machine would.
+   */
+  answer?: (body: unknown, request: IncomingMessage, server: Answering) => Promise<unknown>;
+}
+
+/** What the server does with a request to the game, for whoever answers in its place. */
+export interface Answering {
+  /** Whether a poll that already has version `since` of a table would get anything back. */
+  hasNews(tableId: string, since: number): boolean;
+  /** Resolves when a poll's wait for news is over, and at once for anything else. */
+  untilNews(body: unknown): Promise<void>;
+  /** The game's answer, as the table stands when it is asked. */
+  handle(body: unknown): unknown;
 }
 
 export interface DevServer {
   url: string;
+  /**
+   * From here on the server is another build of the game, as the deployed one is after a deploy: its
+   * answers say so, and the page it serves is that build's. Pages already open are left as they are.
+   */
+  deploy(build: string): void;
   close(): Promise<void>;
 }
 
@@ -54,26 +83,46 @@ function sleep(ms: number): Promise<void> {
  * instead of a Sheet. For trying changes and for the browser tests.
  */
 export async function startDevServer(options: DevServerOptions): Promise<DevServer> {
-  const service = new PokerService({
-    store: new MemoryStore(),
-    clock: { now: () => Date.now() },
-    rng: new ByteRng(() => [...randomBytes(RANDOM_BATCH_BYTES)]),
-  });
+  const rng = new ByteRng(() => [...randomBytes(RANDOM_BATCH_BYTES)]);
+  const results = new MemoryResultStore(() => Date.now());
+  const game =
+    options.service ??
+    new PokerService({
+      store: new MemoryStore(results),
+      presets: new MemoryPresetStore(),
+      players: new MemoryPlayerStore(rng),
+      results,
+      clock: { now: () => Date.now() },
+      rng,
+      errors: options.errors,
+    });
+  let service = new BuildGate(game, UNSTAMPED_BUILD);
   let closing = false;
 
   /** Holds a poll open until there is news, like the deployed script does. */
   const holdUntilNews = async (request: unknown): Promise<void> => {
-    const poll = request as { op?: unknown; tableId?: unknown; since?: unknown; holdMs?: unknown };
-    if (poll.op !== 'poll' || typeof poll.tableId !== 'string' || typeof poll.since !== 'number' || typeof poll.holdMs !== 'number') {
+    const wait = service.waitFor(request);
+    if (!wait) {
       return;
     }
 
-    const until = Date.now() + Math.min(poll.holdMs, MAX_HOLD_MS);
+    const until = Date.now() + Math.min(wait.ms, MAX_HOLD_MS);
 
-    while (!closing && Date.now() < until && !service.hasNews(poll.tableId, poll.since)) {
+    while (!closing && Date.now() < until && !service.hasNews(wait.tableId, wait.since)) {
       await sleep(HOLD_CHECK_MS);
     }
   };
+
+  // Whichever build the server is when it is asked, which a deploy may change while a request is held
+  const answering: Answering = { hasNews: (tableId, since) => service.hasNews(tableId, since), untilNews: holdUntilNews, handle: (body) => service.handle(body) };
+
+  const answer =
+    options.answer ??
+    (async (body, _request, server) => {
+      await server.untilNews(body);
+
+      return server.handle(body);
+    });
 
   const respond = (response: ServerResponse, status: number, type: string, body: string): void => {
     response.writeHead(status, { 'Content-Type': `${type}; charset=utf-8`, 'Cache-Control': 'no-store' });
@@ -84,15 +133,15 @@ export async function startDevServer(options: DevServerOptions): Promise<DevServ
     const path = new URL(request.url ?? '/', 'http://localhost').pathname;
 
     if (request.method === 'GET' && (path === '/' || path === '/index.html')) {
-      respond(response, 200, 'text/html', await options.page());
+      // The page is built unstamped, and says it is whichever build the server is when it is served
+      respond(response, 200, 'text/html', (await options.page()).replaceAll(UNSTAMPED_BUILD, () => service.build));
       return;
     }
 
     if (request.method === 'POST' && path === '/api') {
       const body: unknown = JSON.parse(await readBody(request));
 
-      await holdUntilNews(body);
-      respond(response, 200, 'application/json', JSON.stringify(service.handle(body)));
+      respond(response, 200, 'application/json', JSON.stringify(await answer(body, request, answering)));
       return;
     }
 
@@ -104,7 +153,7 @@ export async function startDevServer(options: DevServerOptions): Promise<DevServ
       console.error(error);
 
       if (!response.headersSent) {
-        respond(response, 500, 'application/json', JSON.stringify({ ok: false, code: 'internal', error: 'Something went wrong on the server, try again' }));
+        respond(response, 500, 'application/json', JSON.stringify({ ok: false, code: 'internal', error: 'Something went wrong on the server, try again', build: service.build }));
       }
     });
   });
@@ -115,6 +164,9 @@ export async function startDevServer(options: DevServerOptions): Promise<DevServ
 
   return {
     url: `http://127.0.0.1:${port}/`,
+    deploy: (build) => {
+      service = new BuildGate(game, build);
+    },
     close: () => {
       closing = true;
       server.closeAllConnections();

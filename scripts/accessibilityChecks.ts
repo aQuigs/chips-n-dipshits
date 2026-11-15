@@ -12,7 +12,7 @@ import type { Command, TableConfig } from '../src/engine/index.ts';
 import { alike, controls, findings, focused, focusIn, heard, SPOKEN, spoken, tree } from './a11y.ts';
 import type { Check } from './checkRunner.ts';
 import { MOTION, movesSent } from './pageSpies.ts';
-import { Gate } from './rig.ts';
+import { Gate, SCREENS, setStageHeight } from './rig.ts';
 import { tapsLive } from './underTheFinger.ts';
 import type { PageOptions, Rig, RigPlayer, RigTable, ScreenName } from './rig.ts';
 
@@ -1091,6 +1091,43 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
       await page.waitForSelector('#app[data-text-size="largest"]');
       assert.equal(await focused(page), '#pref-textSize', 'the choice was made and the keyboard is no longer on it');
       assert.equal(await page.evaluate(`localStorage.getItem('cnd.textSize')`), 'largest');
+    },
+  ],
+  [
+    'at every text size the viewer’s own bet stays clear of their cards on a standing table of every height from 330 to 400 pixels, on a 360 and a 375 phone: a text size changes how tall the bar is, and with it the table, and makes the viewer’s own seat taller',
+    async (rig) => {
+      const table = threeHanded(rig);
+      // Nearer than a pixel is touching, to the eye
+      const CLEAR = 1;
+      // How far the viewer's bet, which follows their seat in the list, ends above their cards
+      const ROOM = `document.querySelector('.seat.me .hole').getBoundingClientRect().top - document.querySelector('.seat.me + .bet').getBoundingClientRect().bottom`;
+      const near: string[] = [];
+
+      // Pam is the small blind, so her bet is out from the deal
+      table.deal(ACES_OVER_KINGS);
+
+      for (const screen of ['smallPhone', 'phone'] as const) {
+        for (const step of ['standard', 'large', 'largest']) {
+          const page = await table.open('Pam', screen, `localStorage.setItem('cnd.textSize', '${step}')`);
+
+          await page.waitForSelector(`#app[data-text-size="${step}"] .seat.me + .bet`);
+
+          for (let height = 330; height <= 400; height++) {
+            await setStageHeight(page, height);
+
+            const room = (await page.evaluate(ROOM)) as number;
+
+            if (room < CLEAR) {
+              near.push(`${SCREENS[screen].width} wide, ${step}, a table ${height}px high: ${room.toFixed(1)}px`);
+            }
+          }
+
+          assert.ok(await page.locator('.table.tall').isVisible(), 'the table lay down, where a bet from the bottom is placed another way');
+          await page.context().close();
+        }
+      }
+
+      assert.deepEqual(near, [], 'the viewer’s bet is on their cards, or touches them');
     },
   ],
 ];

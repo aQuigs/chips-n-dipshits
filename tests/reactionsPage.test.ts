@@ -296,6 +296,7 @@ function connected(): { line: Line; connection: TableConnection; said: string[];
   const connection = new TableConnection(new ServerLine(line, 'b', () => undefined), { tableId: 'TEST01', auth: { id: 'A', token: 'T' } }, new ServerClock(), {
     view: () => undefined,
     move: () => assert.fail('a reaction is not a move'),
+    chose: () => assert.fail('a reaction is no choice of a move'),
     status: () => undefined,
     refused: (error) => void refused.push(error.code),
     notice: (message) => void said.push(message),

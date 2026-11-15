@@ -6,9 +6,10 @@ import { eligibleSeats, fullyShown, handFacts, isStraddle, playerHand, nightIsOv
 import type { CommandType } from '../src/engine/commands/handler.ts';
 import type { AutoShow, Command, Rng, Straddle, TableConfig, TableState } from '../src/engine/index.ts';
 import { handRecords, ledgerEntries, seededRng, TestTable } from './helpers.ts';
-import { assertChipsConserved, assertHandRecordsHold, chopAnswers, assertInvariants, assertLedgerAgrees } from './invariants.ts';
+import { assertChipsConserved, assertHandRecordsHold, chopAnswers, assertInvariants, assertLedgerAgrees, assertPreActionsHold } from './invariants.ts';
+import { holdToWhatWasChosen, nonePlayedAhead } from './preActionCheck.ts';
 import { fixedSettings, randomConfig } from './randomConfig.ts';
-import { chance, randomStep } from './randomPlay.ts';
+import { chance, chooseAhead, randomStep } from './randomPlay.ts';
 
 // SIM_TABLES=2000 npm test runs a much longer soak than the default
 const TABLES = Number(process.env.SIM_TABLES ?? 60);
@@ -136,13 +137,17 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
   const identities = { known: 0, nobody: 0, shared: 0 };
 
   const sent = new Set<CommandType>();
+  // Moves the table played for a player who had chosen them ahead, each held to `preActionCheck.ts`
+  const playedAhead = nonePlayedAhead();
 
   for (let seed = 1; seed <= TABLES; seed++) {
     const { t, rng, config } = randomTable(seed);
     tablesPlaying[config.unit] += 1;
+    holdToWhatWasChosen(t, playedAhead);
 
     for (let step = 0; step < STEPS_PER_TABLE; step++) {
       assertChipsConserved(t.state);
+      assertPreActionsHold(t.state);
       if (chance(rng, SLOW_CHECK_PERCENT)) {
         assertInvariants(t.state, t.now);
       }
@@ -327,10 +332,50 @@ test('random play never breaks the rules of chip accounting, secrecy or turn ord
   const known = `members by who they said they are: ${JSON.stringify(identities)}`;
   assert.ok(identities.known >= TABLES / 4 && identities.nobody === TABLES && identities.shared >= TABLES / 20, known);
 
+  // Random play comes to choose ahead about once a table, seldom with a hand there for it, so few of the choices are
+  // ever played: the test below is where players choose at every turn
+  const ahead = `moves played for a player who chose ahead: ${JSON.stringify(playedAhead)}`;
+  assert.ok(Object.values(playedAhead).reduce((sum, count) => sum + count, 0) >= TABLES / 20, ahead);
+
   // Every command the table takes is sent, as part of the game or beside it, but those named as not yet
   const unsent = Object.keys(HANDLERS).filter((type) => !sent.has(type as CommandType) && !NOT_SENT_AT_RANDOM.has(type as CommandType));
   assert.deepEqual(unsent, [], 'commands random play never sends: add each to FUZZ_COMMANDS, or ASIDE_COMMANDS if it touches nothing of the game');
   assert.deepEqual([...NOT_SENT_AT_RANDOM].filter((type) => sent.has(type)), [], 'a command named as not sent at random now is: take it off the list');
+});
+
+test('random games where players choose their moves ahead all the time: each move the table plays for one is the move they chose, legal for them then, and makes the same hand as that move tapped, with no chip made or lost', () => {
+  const played = nonePlayedAhead();
+  let hands = 0;
+
+  for (let seed = 1; seed <= TABLES / 2; seed++) {
+    const { t, rng } = randomTable(seed);
+    // Drawn apart from the game, which goes its own way from the first move a choice makes
+    const choosing = seededRng(seed * 6007);
+    holdToWhatWasChosen(t, played);
+
+    for (let step = 0; step < STEPS_PER_TABLE; step++) {
+      assertChipsConserved(t.state);
+      assertPreActionsHold(t.state);
+      if (chance(choosing, SLOW_CHECK_PERCENT)) {
+        assertInvariants(t.state, t.now);
+      }
+
+      if (t.state.hand?.stage === 'betting' && chance(choosing, 60)) {
+        chooseAhead(t, choosing, 50);
+        assertPreActionsHold(t.state);
+      }
+
+      randomStep(t, rng);
+    }
+
+    assertLedgerAgrees(t.state, t.effects);
+    hands += assertHandRecordsHold(t.effects);
+  }
+
+  const reached = `${hands} hands, and moves played for a player who chose ahead: ${JSON.stringify(played)}`;
+  assert.ok(hands >= TABLES * 10, reached);
+  // A call is the rarest: it is on offer only with a bet to the player, and any raise before their turn takes it off
+  assert.ok(Object.values(played).every((count) => count >= TABLES / 3) && played.fold + played.callAny + played.checkFold >= TABLES * 5, reached);
 });
 
 test('the commands sent beside the game leave it as it was: the same tables played with them and without make the same game, step for step', () => {

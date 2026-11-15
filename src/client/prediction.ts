@@ -32,7 +32,7 @@ function bettorsOf(seats: readonly (SeatView | null)[]): Bettor[] {
  * - the viewer's own seat: their bet, their stack, whether they folded or are all in, and the move's label;
  * - the pot's total;
  * - the move as the hand's next event, which is all the effects hear of it;
- * - that the decision is made: no options, no offer to chop, no clock running, no hint under cards that were folded;
+ * - that the decision is made: no options, no offer to chop, no move to choose ahead, no clock running, no hint under cards that were folded;
  * - who the action passes to, with the next decision's number, when it simply passes on.
  *
  * What it does not know it leaves empty or as the view had it. Nobody is to act (`toAct` null) when
@@ -41,6 +41,10 @@ function bettorsOf(seats: readonly (SeatView | null)[]): Bettor[] {
  * what comes then is for the cards and the server to say. No clock is given, since
  * the next one starts when the server hears the move. The side pots (`pots`), the play-by-play and
  * everything about anyone else are untouched.
+ *
+ * One thing it claims it cannot know: a player the action passes to may have chosen their move ahead
+ * (`preAction.ts`), which is theirs alone to see. The server then plays it with this move, and its
+ * answer shows the action further on than here, as it does when a street ends.
  */
 export function predict(view: TableView, move: TurnMove): TableView | null {
   const hand = view.hand;
@@ -97,6 +101,8 @@ export function predict(view: TableView, move: TurnMove): TableView | null {
       turn: waitedFor === null ? hand.turn : hand.turn + 1,
       deadline: null,
       options: null,
+      // Their move is made, and whether another turn comes on this street is for the server to say
+      ahead: null,
       canOfferChop: false,
       foldChops: false,
       holding: action.type === 'fold' ? null : hand.holding,

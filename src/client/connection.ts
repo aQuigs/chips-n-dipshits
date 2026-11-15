@@ -32,6 +32,19 @@ export const MOVES = new Set<Command['type']>(['fold', 'check', 'call', 'raise',
  */
 export const FLEETING = new Set<Command['type']>(['react']);
 
+/**
+ * A move chosen ahead of a turn, or one taken back. One is out at a time, and of those made while it is
+ * out only the last goes after it: the latest choice is the one that counts. One that got no answer is
+ * never sent again, since the table sets a choice in the spot it was made in however late it arrives.
+ * The table is asked what became of it, and the choice is not accounted for until it has answered.
+ */
+export const CHOICES = new Set<Command['type']>(['preAct']);
+
+/** A move chosen ahead of a turn, or with `what` null one taken back, as it is sent: with the spot it was chosen in. */
+export type Choice = Extract<Command, { type: 'preAct' }>;
+
+const isChoice = (command: Command): command is Choice => CHOICES.has(command.type);
+
 /** Why the table isn't being heard from: no answer at all, or an answer saying the server couldn't cope. */
 export type Trouble = 'unreachable' | 'struggling';
 
@@ -157,6 +170,12 @@ export interface TableListener {
    * taken up: whoever is told can go by the view that is showing to know whether the move was played.
    */
   move(lock: TurnLock, sent?: Command): void;
+  /**
+   * The move the player chose ahead of their turn, the moment before it goes out, or null once every
+   * such choice is accounted for: answered, or looked up after no answer came, with whatever view that
+   * brought taken up first.
+   */
+  chose(sent: Choice | null): void;
   /** Whether a move can be made, or whether the table is being heard from, has changed. */
   status(): void;
   /** The server has said this member or this table is not there. */
@@ -182,6 +201,11 @@ export class TableConnection {
   private view: TableView | null = null;
   private turnLock: TurnLock = 'open';
   private fleetingOut = false;
+  /** The choice ahead that goes out next, and the sending of them all while any is out or waiting. */
+  private choiceNext: Choice | null = null;
+  private choosing: Promise<SendOutcome> | null = null;
+  /** Whoever is waiting for the table to be heard from by a fresh poll. */
+  private readonly awaitingWord: (() => void)[] = [];
 
   /** Bumped to retire the running poll loop, when a fresh one starts or the table is left. */
   private pollRun = 0;
@@ -231,13 +255,50 @@ export class TableConnection {
   close(): void {
     this.closed = true;
     this.pollRun += 1;
+    this.awaitingWord.splice(0).forEach((heard) => heard());
   }
 
-  async send(command: Command): Promise<SendOutcome> {
+  /** How the command fared. For a choice ahead (`CHOICES`), how the latest of them did, once all are accounted for. */
+  send(command: Command): Promise<SendOutcome> {
     if (FLEETING.has(command.type)) {
       return this.sendFleeting(command);
     }
 
+    if (isChoice(command)) {
+      this.listener.chose(command);
+      this.choiceNext = command;
+      this.choosing ??= this.sendChoices();
+
+      return this.choosing;
+    }
+
+    return this.carry(command);
+  }
+
+  private async sendChoices(): Promise<SendOutcome> {
+    let outcome: SendOutcome = 'refused';
+
+    while (this.choiceNext && !this.closed) {
+      const command = this.choiceNext;
+      this.choiceNext = null;
+
+      outcome = await this.carry(command);
+
+      if (outcome === 'unanswered' && !this.closed) {
+        await new Promise<void>((heard) => this.awaitingWord.push(heard));
+      }
+    }
+
+    this.choosing = null;
+
+    if (!this.closed) {
+      this.listener.chose(null);
+    }
+
+    return outcome;
+  }
+
+  private async carry(command: Command): Promise<SendOutcome> {
     const { tableId, auth } = this.session;
     const move = MOVES.has(command.type);
 
@@ -362,6 +423,9 @@ export class TableConnection {
       if (this.turnLock === 'unanswered') {
         this.setTurnLock('open');
       }
+
+      // Whoever waits was told of no answer by a request that also asked afresh, which retired every poll sent before it
+      this.awaitingWord.splice(0).forEach((heard) => heard());
 
       if (response.kind === 'unchanged') {
         this.clock.note(response.now);

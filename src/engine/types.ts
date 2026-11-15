@@ -145,6 +145,8 @@ export interface SeatRequest {
 
 export type Street = 'preflop' | 'flop' | 'turn' | 'river';
 
+export const STREETS: readonly Street[] = ['preflop', 'flop', 'turn', 'river'];
+
 /**
  * betting: someone is on the clock.
  * ritVote: everyone is all in and picking how many times to run the rest of the board.
@@ -193,6 +195,12 @@ export interface BombPot {
 
 export type PlayerAction = Post | 'fold' | 'check' | 'call' | 'bet' | 'raise';
 
+/** A move a player chooses ahead of their turn, played for them the moment the action reaches them. `moveChosen` (`preAction.ts`) says what each comes to. */
+export type PreActionKind = 'checkFold' | 'check' | 'call' | 'callAny' | 'fold';
+
+/** A pre-action as a hand keeps it: its kind and, for a call, the chips it puts in, which is the one call it stands for. */
+export type PreAction = [what: PreActionKind, amount?: number];
+
 export interface HandPlayer {
   seat: number;
   playerId: string;
@@ -214,6 +222,8 @@ export interface HandPlayer {
   /** How many times they picked to run the rest when everyone is all in; null until they pick. */
   ritVote: number | null;
   lastAction: PlayerAction | null;
+  /** The move they chose ahead of their turn on this street. Left out while they have chosen none, and theirs alone to see. Only `hand.ts` changes it. */
+  pre?: PreAction;
 }
 
 export interface PotAward {
@@ -533,6 +543,12 @@ export type Command =
   | { type: 'setAlwaysChop'; on: boolean }
   /** Says whether the player's cards are shown at `when` without their asking: see `AutoShow`. */
   | { type: 'setAutoShow'; when: AutoShow; on: boolean }
+  /**
+   * Chooses the move the sender makes when the action next reaches them, or with `what` null takes their
+   * choice back. `hand`, `street` and `facing` say what they were looking at as they chose, the hand's
+   * number, its street and the bet to match, so one that arrives after any of them changed sets nothing.
+   */
+  | { type: 'preAct'; what: PreActionKind | null; hand: number; street: Street; facing: number }
   /** How many times the player wants the rest of an all-in hand run: see `runVote.ts`. */
   | { type: 'ritVote'; runs: number }
   /** Turns face up, once hand number `hand` is over, the sender's hole cards at these places: 0 for the one on their left, 1 for the other. */

@@ -8,9 +8,11 @@ import { celebrationMoves } from '../src/client/celebrations.ts';
 import { MOVES, ServerClock, ServerLine, TableConnection } from '../src/client/connection.ts';
 import type { SendOutcome } from '../src/client/connection.ts';
 import { betSlide, followHand } from '../src/client/handMoves.ts';
-import { soundsHeard } from '../src/client/handSounds.ts';
+import { soundsOf } from '../src/client/handSounds.ts';
 import type { Move } from '../src/client/motion.ts';
+import { choiceOn, PendingChoice } from '../src/client/pendingChoice.ts';
 import { PendingMove, UNCONFIRMED_AFTER_MS } from '../src/client/pendingMove.ts';
+import { AHEAD_ORDER, aheadLabel, aheadLines } from '../src/client/preActions.ts';
 import { isTurnMove } from '../src/client/prediction.ts';
 import { PREFERENCES, Preferences } from '../src/client/prefs.ts';
 import type { Ability } from '../src/client/prefs.ts';
@@ -20,8 +22,8 @@ import type { SoundName } from '../src/client/sound.ts';
 import type { TableChange } from '../src/client/tableChange.ts';
 import type { Transport } from '../src/client/transport.ts';
 import { YourTurn } from '../src/client/yourTurn.ts';
-import { boardsDealt } from '../src/engine/index.ts';
-import type { Command, HandEvent, TableConfig, TableState, TableView } from '../src/engine/index.ts';
+import { boardsDealt, TOO_LATE_TO_SET } from '../src/engine/index.ts';
+import type { Command, HandEvent, PreActionKind, TableConfig, TableState, TableView } from '../src/engine/index.ts';
 import type { ApiRequest, ApiResponse, Auth, Built } from '../src/server/api.ts';
 import { BuildGate } from '../src/server/build.ts';
 import { MemoryPlayerStore } from '../src/server/memoryPlayerStore.ts';
@@ -287,7 +289,8 @@ class Page {
         const seat = change.view.you.seat;
 
         this.told.push(change);
-        soundsHeard(change.events, seat, boardsDealt(change.view.hand?.bombPot ?? null)).forEach((sound) => sounds.play(sound));
+        soundsOf(change, seat).forEach(({ sound }) => sounds.play(sound));
+        this.said.push(...[aheadLines(change).shown].filter((line) => line !== null));
         followHand(change, seat, motion);
         motion.play(celebrationMoves(change, seat));
         turns.see(change);
@@ -297,6 +300,7 @@ class Page {
     this.connection = new TableConnection(new ServerLine(this.wire, BUILD, () => this.outOfDate()), server.session(name), clock, {
       view: (view, wentBack) => this.shown.take(view, wentBack),
       move: (lock, sent) => this.shown.moveIs(lock, sent),
+      chose: (sent) => this.shown.choiceIs(sent),
       status: () => undefined,
       refused: () => assert.fail('the page was told its seat is gone'),
       notice: (message) => void this.said.push(message),
@@ -323,6 +327,19 @@ class Page {
 
   raise(to: number): Promise<SendOutcome> {
     return this.tap({ type: 'raise', to, turn: this.view.hand!.turn });
+  }
+
+  /** A choice of a move ahead as its button sends it: for the spot on screen. With null, the one that is set is pressed again. */
+  choose(what: PreActionKind | null): Promise<SendOutcome> {
+    const choice = choiceOn(this.view, what);
+    assert.ok(choice, 'the page offers no choice ahead');
+
+    return this.tap(choice);
+  }
+
+  /** The choices ahead sent so far, by what was chosen. */
+  get choices(): (PreActionKind | null)[] {
+    return this.wire.sent.flatMap((request) => (request.op === 'act' && request.command.type === 'preAct' ? [request.command.what] : []));
   }
 
   /** Everything that was moving has landed. */
@@ -1052,4 +1069,412 @@ test('a pick that ends the picking tells no badge: the hand it runs out comes fr
   }
 
   assert.deepEqual(told(), [{ id: 'bigPot', times: 1 }, { id: 'felted', times: 1 }, { id: 'scoop', times: 1 }]);
+});
+
+// ---- A move chosen ahead of a turn ----
+
+/** Three-handed with the button on Quigs, who is on the clock before the flop, and the page of one of the blinds open on it. */
+async function waitingFor(t: TestContext, name: 'Stu' | 'Pam', config: Partial<TableConfig> = {}): Promise<{ server: Server; page: Page }> {
+  const server = new Server(THREE, config);
+  server.deal({ button: 0, holes: { 0: ACES, 1: KINGS }, board: '2c 7d 9h Jc 3s' });
+
+  const page = await pageOf(t, server, name);
+  assert.notEqual(page.view.hand!.ahead, null, 'the page offers a choice ahead');
+
+  return { server, page };
+}
+
+const TOO_LATE_FOLD = 'That came too late: your fold was already made.';
+
+/** The player has made no move in the hand, as far as the server knows. */
+const untouched = (server: Server, name: string, seat: number) => ['small blind', 'big blind'].includes(server.view(name).seats[seat]!.lastAction ?? '');
+
+test('a move chosen ahead shows as chosen at the tap, a poll from before the table heard of it leaves it showing, and the answer changes nothing', async (t) => {
+  const { server, page } = await waitingFor(t, 'Pam');
+  const told = page.told.length;
+
+  const sending = page.choose('checkFold');
+  assert.deepEqual(page.view.preAction, ['checkFold'], 'before anything came back from the server');
+  assert.deepEqual(page.wire.sent.at(-1), { op: 'act', ...server.session('Pam'), build: BUILD, command: { type: 'preAct', what: 'checkFold', hand: 1, street: 'preflop', facing: 20 } });
+  assert.equal(page.told.length, told, 'nothing happened in the hand, so the effects hear nothing');
+
+  // Someone says something, and the poll that brings it was answered before the table heard of the choice
+  server.act('Stu', { type: 'chat', text: 'hi' });
+  await page.wire.answer('poll');
+  assert.equal(page.shown.heard!.preAction, null, 'the table has not heard of it');
+  assert.deepEqual(page.view.preAction, ['checkFold'], 'and the page shows it all the same');
+
+  await page.wire.answer('act');
+  assert.equal(await sending, 'taken');
+  assert.deepEqual(page.view.preAction, ['checkFold']);
+  assert.deepEqual(page.shown.heard!.preAction, ['checkFold']);
+  assert.deepEqual(page.said, []);
+  assert.deepEqual(page.heard, []);
+  assert.equal(page.connection.turnLocked, false, 'a choice ahead never holds the buttons of a turn');
+});
+
+test('the move chosen ahead is made for the player with no turn announced, and they hear it as they hear anyone\'s', async (t) => {
+  const { server, page } = await waitingFor(t, 'Stu');
+
+  const sending = page.choose('call');
+  await page.wire.answer('act');
+  await sending;
+  assert.deepEqual(page.view.preAction, ['call', 10]);
+
+  server.act('Quigs', { type: 'call' });
+  await page.wire.answer('poll');
+
+  assert.equal(page.table, 'call, 20 in front, 980 behind, pot 60, waiting for Pam');
+  assert.equal(page.view.preAction, null);
+  assert.equal(page.view.hand!.ahead, null);
+  assert.deepEqual(page.events(-1), [['call', 0, 20, 980], ['call', 1, 10, 980]]);
+  assert.equal(page.flash.calls.length, 0, 'it was never their turn');
+  assert.deepEqual(page.heard, ['chips'], 'one sound for the two calls, the last of which was their own');
+  assert.equal(aheadLines(page.told.at(-1)!).spoken, null, 'a move that was made did not come off');
+
+  // Another player hears the same two calls, and sees the action where it now is
+  const pam = await pageOf(t, server, 'Pam');
+  assert.equal(pam.view.hand!.options !== null, true);
+});
+
+test('a raise takes a call chosen ahead off just before the turn: the turn is announced, its buttons are there and nothing shows as chosen', async (t) => {
+  const { server, page } = await waitingFor(t, 'Stu');
+
+  const sending = page.choose('call');
+  await page.wire.answer('act');
+  await sending;
+
+  server.act('Quigs', { type: 'raise', to: 60 });
+  await page.wire.answer('poll');
+
+  assert.equal(page.table, 'small blind, 10 in front, 990 behind, pot 90, my turn');
+  assert.equal(page.view.preAction, null);
+  assert.equal(page.flash.calls.length, 1);
+  assert.equal(aheadLines(page.told.at(-1)!).spoken, 'Call 10 is no longer set for your turn.');
+  assert.deepEqual(page.said, []);
+});
+
+test('a choice still on its way when the action arrives is refused: the player is asked, and the page shows their turn with nothing chosen', async (t) => {
+  const { server, page } = await waitingFor(t, 'Stu');
+
+  // Held on the way: the table has not heard it when Quigs calls
+  const sending = page.choose('fold');
+  assert.deepEqual(page.view.preAction, ['fold']);
+
+  server.act('Quigs', { type: 'call' });
+  await page.wire.answer('poll');
+  assert.equal(page.table, 'small blind, 10 in front, 990 behind, pot 50, my turn');
+  assert.equal(page.view.preAction, null, 'on their turn nothing shows as chosen, whatever is still on its way');
+  assert.equal(page.flash.calls.length, 1);
+
+  await page.wire.answer('act');
+  assert.equal(await sending, 'refused');
+  assert.deepEqual(page.said, [TOO_LATE_TO_SET]);
+  assert.equal(page.table, 'small blind, 10 in front, 990 behind, pot 50, my turn');
+  assert.ok(untouched(server, 'Stu', 1), 'the table made no move for them');
+  assert.deepEqual(page.choices, ['fold'], 'and it was not sent again');
+});
+
+test('a choice that gets no answer is looked up and never sent again: it shows until the table has been heard from, and then the table\'s word shows', async (t) => {
+  // Lost on the way there: the table never heard it
+  const lost = await waitingFor(t, 'Stu');
+  const sending = lost.page.choose('fold');
+
+  await lost.page.wire.lose('act');
+  assert.deepEqual(lost.page.said, ['No answer from the table. Checking whether that went through…']);
+  assert.deepEqual(lost.page.view.preAction, ['fold'], 'nobody knows yet, and the page goes on showing what the player chose');
+
+  await lost.page.wire.answer('poll');
+  assert.equal(await sending, 'unanswered');
+  assert.equal(lost.page.view.preAction, null, 'the table has no such choice');
+  assert.deepEqual(lost.page.choices, ['fold']);
+
+  // The player sees that, and chooses again
+  const again = lost.page.choose('fold');
+  await lost.page.wire.answer('act');
+  assert.equal(await again, 'taken');
+  assert.deepEqual(lost.page.view.preAction, ['fold']);
+
+  // Lost on the way back: the table set it
+  const kept = await waitingFor(t, 'Stu');
+  const unanswered = kept.page.choose('callAny');
+
+  kept.page.wire.hear('act');
+  await kept.page.wire.lose('act');
+  await kept.page.wire.answer('poll');
+  assert.equal(await unanswered, 'unanswered');
+  assert.deepEqual(kept.page.view.preAction, ['callAny']);
+  assert.deepEqual(kept.page.choices, ['callAny']);
+});
+
+test('a choice the table could not take up leaves nothing chosen on the page, with the table\'s reason', async (t) => {
+  const { server, page } = await waitingFor(t, 'Stu');
+
+  const sending = page.choose('callAny');
+  await page.wire.answer('act', BUSY);
+
+  assert.equal(await sending, 'refused');
+  assert.equal(page.view.preAction, null);
+  assert.deepEqual(page.said, ['The table is busy, try again']);
+  assert.deepEqual(page.choices, ['callAny']);
+
+  server.act('Quigs', { type: 'call' });
+  await page.wire.answer('poll');
+  assert.equal(page.table, 'small blind, 10 in front, 990 behind, pot 50, my turn');
+});
+
+test('the latest choice is the one that counts: made while another is on its way, it shows at once, goes after it, and takes the place of any that was waiting', async (t) => {
+  const { page } = await waitingFor(t, 'Stu');
+
+  const first = page.choose('fold');
+  void page.choose('call');
+  const last = page.choose('callAny');
+  assert.deepEqual(page.view.preAction, ['callAny']);
+  assert.deepEqual(page.choices, ['fold'], 'one is out at a time');
+
+  // The answer to the first says Fold is set, which is not what the player last chose
+  await page.wire.answer('act');
+  assert.deepEqual(page.shown.heard!.preAction, ['fold']);
+  assert.deepEqual(page.view.preAction, ['callAny']);
+  assert.deepEqual(page.choices, ['fold', 'callAny'], 'the call that was waiting was never sent');
+
+  await page.wire.answer('act');
+  assert.deepEqual([await first, await last], ['taken', 'taken']);
+  assert.deepEqual(page.shown.heard!.preAction, ['callAny']);
+  assert.deepEqual(page.view.preAction, ['callAny']);
+  assert.deepEqual(page.said, []);
+});
+
+test('taking a choice back shows at once, and one that reaches the table after the move was made is answered with the table as it is, and a line saying so', async (t) => {
+  const taken = await waitingFor(t, 'Stu');
+  await Promise.all([taken.page.choose('fold'), taken.page.wire.answer('act')]);
+
+  const back = taken.page.choose(null);
+  assert.equal(taken.page.view.preAction, null, 'before anything came back from the server');
+  await taken.page.wire.answer('act');
+  assert.equal(await back, 'taken');
+  assert.equal(taken.page.view.preAction, null);
+  assert.deepEqual(taken.page.said, []);
+
+  // Here the take-back is still on its way when Quigs calls, and the table folds for Stu as he had chosen
+  const { server, page } = await waitingFor(t, 'Stu');
+  await Promise.all([page.choose('fold'), page.wire.answer('act')]);
+
+  const late = page.choose(null);
+  assert.equal(page.view.preAction, null);
+
+  server.act('Quigs', { type: 'call' });
+  await page.wire.answer('poll');
+  assert.equal(page.view.seats[1]!.folded, true);
+  assert.deepEqual(page.said, [TOO_LATE_FOLD]);
+  assert.deepEqual(page.heard, ['chips', 'fold'], 'a fold they did not tap is heard');
+
+  await page.wire.answer('act');
+  assert.equal(await late, 'taken', 'no refusal: the table answers with what happened');
+  assert.deepEqual(page.said.length, 1);
+  assert.equal(page.view.seats[1]!.folded, true);
+});
+
+test('a choice taken back before its own answer came, and made by the table all the same, is told and heard: the news of it overtook the answer that would have shown it set', async (t) => {
+  const { server, page } = await waitingFor(t, 'Stu');
+
+  // The fold is out and the take-back waits behind it. The table hears the fold, and Quigs calls before its answer is back
+  const first = page.choose('fold');
+  const back = page.choose(null);
+  assert.equal(page.view.preAction, null);
+
+  page.wire.hear('act');
+  server.act('Quigs', { type: 'call' });
+  await page.wire.answer('poll');
+
+  assert.equal(page.view.seats[1]!.folded, true);
+  assert.deepEqual(page.said, [TOO_LATE_FOLD], 'the page never saw the fold set, and still says what became of it');
+  assert.deepEqual(page.heard, ['chips', 'fold']);
+  assert.equal(page.flash.calls.length, 0, 'it was never their turn');
+
+  await page.wire.answer('act');
+  await page.wire.answer('act');
+  assert.deepEqual([await first, await back], ['taken', 'taken']);
+  assert.deepEqual(page.said, [TOO_LATE_FOLD]);
+});
+
+test('a choice changed too late is told as one taken back too late is: the screen showed Call any, and the fold it replaced was made', async (t) => {
+  const { server, page } = await waitingFor(t, 'Stu');
+  await Promise.all([page.choose('fold'), page.wire.answer('act')]);
+
+  const change = page.choose('callAny');
+  assert.deepEqual(page.view.preAction, ['callAny']);
+
+  server.act('Quigs', { type: 'call' });
+  await page.wire.answer('poll');
+  assert.equal(page.view.seats[1]!.folded, true);
+  assert.deepEqual(page.said, [TOO_LATE_FOLD]);
+  assert.deepEqual(page.heard, ['chips', 'fold']);
+
+  // The change gets there after the fold, and the table's refusal says the same thing its own way
+  await page.wire.answer('act');
+  assert.equal(await change, 'refused');
+  assert.deepEqual(page.said, [TOO_LATE_FOLD, TOO_LATE_TO_SET]);
+});
+
+test('a fold made where the screen showed Check/Fold is told only when checking was free: a fold to a bet is what the screen said', async (t) => {
+  const asShown = await waitingFor(t, 'Pam');
+  await Promise.all([asShown.page.choose('checkFold'), asShown.page.wire.answer('act')]);
+
+  asShown.server.act('Quigs', { type: 'raise', to: 60 });
+  asShown.server.act('Stu', { type: 'call' });
+  await asShown.page.wire.answer('poll');
+  assert.equal(asShown.page.view.seats[2]!.folded, true);
+  assert.deepEqual(asShown.page.said, []);
+
+  // Here Fold is set and the change to Check/Fold is still on its way when the action comes around unraised
+  const { server, page } = await waitingFor(t, 'Pam');
+  await Promise.all([page.choose('fold'), page.wire.answer('act')]);
+
+  const change = page.choose('checkFold');
+  assert.deepEqual(page.view.preAction, ['checkFold']);
+
+  server.act('Quigs', { type: 'call' });
+  server.act('Stu', { type: 'call' });
+  await page.wire.answer('poll');
+  assert.equal(page.view.seats[2]!.folded, true, 'the fold that was set, with a check free');
+  assert.deepEqual(page.said, [TOO_LATE_FOLD]);
+
+  await page.wire.answer('act');
+  assert.equal(await change, 'refused');
+});
+
+test('a call made at another price than the screen showed is told: Call any was set, and the change to a call of 10 was still on its way when a raise came', async (t) => {
+  const asShown = await waitingFor(t, 'Stu');
+  await Promise.all([asShown.page.choose('callAny'), asShown.page.wire.answer('act')]);
+
+  asShown.server.act('Quigs', { type: 'raise', to: 60 });
+  await asShown.page.wire.answer('poll');
+  assert.deepEqual(asShown.page.events(-1).at(-1), ['call', 1, 50, 940]);
+  assert.deepEqual(asShown.page.said, []);
+
+  const { server, page } = await waitingFor(t, 'Stu');
+  await Promise.all([page.choose('callAny'), page.wire.answer('act')]);
+
+  const change = page.choose('call');
+  assert.deepEqual(page.view.preAction, ['call', 10]);
+
+  server.act('Quigs', { type: 'raise', to: 60 });
+  await page.wire.answer('poll');
+  assert.deepEqual(page.events(-1).at(-1), ['call', 1, 50, 940]);
+  assert.deepEqual(page.said, ['That came too late: your call was already made.']);
+
+  await page.wire.answer('act');
+  assert.equal(await change, 'refused');
+});
+
+test('a choice the table has that the screen did not show is told in a sentence: one made on another device, never one tapped here', async (t) => {
+  const { server, page } = await waitingFor(t, 'Stu');
+  const hand = page.view.hand!;
+
+  await Promise.all([page.choose('call'), page.wire.answer('act')]);
+  assert.deepEqual(page.said, [], 'a choice tapped on this page is not told to it');
+
+  server.act('Stu', { type: 'preAct', what: 'fold', hand: hand.number, street: hand.street, facing: hand.currentBet });
+  await page.wire.answer('poll');
+  assert.deepEqual(page.view.preAction, ['fold']);
+  assert.deepEqual(page.said, ['Fold is set for your turn.']);
+
+  server.act('Stu', { type: 'preAct', what: 'call', hand: hand.number, street: hand.street, facing: hand.currentBet });
+  await page.wire.answer('poll');
+  assert.deepEqual(page.said, ['Fold is set for your turn.', 'Call 10 is set for your turn.']);
+});
+
+test('a choice taken back stays off the screen while the take-back is on its way, whatever news of the table comes first: a raise does not bring it back, and nothing is said', async (t) => {
+  const { server, page } = await waitingFor(t, 'Pam');
+  await Promise.all([page.choose('fold'), page.wire.answer('act')]);
+
+  const back = page.choose(null);
+  server.act('Quigs', { type: 'raise', to: 60 });
+  await page.wire.answer('poll');
+
+  assert.deepEqual(server.view('Pam').preAction, ['fold'], 'the table has not heard of the take-back yet');
+  assert.equal(page.view.preAction, null);
+  assert.deepEqual(page.said, []);
+
+  await page.wire.answer('act');
+  assert.equal(await back, 'taken');
+  assert.equal(page.view.preAction, null);
+
+  server.act('Stu', { type: 'call' });
+  await page.wire.answer('poll');
+  assert.equal(page.view.hand!.options !== null, true, 'she is asked');
+  assert.deepEqual(page.said, []);
+});
+
+test('a change of choice that arrives after a raise takes the old one off: the page never goes back to showing a choice the player had replaced', async (t) => {
+  const { server, page } = await waitingFor(t, 'Pam');
+  await Promise.all([page.choose('checkFold'), page.wire.answer('act')]);
+
+  // Pam changes her mind as Quigs raises: her new choice was made for the bet as it was
+  const sending = page.choose('callAny');
+  server.act('Quigs', { type: 'raise', to: 60 });
+  page.wire.hear('act');
+  await page.wire.answer('act');
+
+  assert.equal(await sending, 'taken');
+  assert.equal(page.view.preAction, null, 'neither the old choice nor the new one');
+
+  server.act('Stu', { type: 'fold' });
+  await page.wire.answer('poll');
+  assert.equal(page.view.hand!.options !== null, true, 'she is asked');
+  assert.ok(untouched(server, 'Pam', 2));
+});
+
+test('each choice says what it does for what the player faces, and all five have a place in one order', () => {
+  const free = { canCheck: true, callAmount: 0, callCost: 0 };
+  const bet = { canCheck: false, callAmount: 40, callCost: 40 };
+
+  assert.deepEqual(AHEAD_ORDER, ['fold', 'checkFold', 'check', 'call', 'callAny']);
+
+  // The ones not on offer are drawn too, dimmed: a call names no amount while there is nothing to call
+  assert.deepEqual(AHEAD_ORDER.map((what) => aheadLabel(what, free, 1000)), [
+    { move: 'Fold', amount: null },
+    { move: 'Check/Fold', amount: null },
+    { move: 'Check', amount: null },
+    { move: 'Call', amount: null },
+    { move: 'Check/Call any', amount: null },
+  ]);
+  assert.deepEqual(AHEAD_ORDER.map((what) => aheadLabel(what, bet, 1000)), [
+    { move: 'Fold', amount: null },
+    { move: 'Check/Fold', amount: null },
+    { move: 'Check', amount: null },
+    { move: 'Call', amount: 40 },
+    { move: 'Call any', amount: null },
+  ]);
+  // A call that takes the whole stack says so, and names what it ends up costing
+  assert.deepEqual(aheadLabel('call', { canCheck: false, callAmount: 25, callCost: 20 }, 25), { move: 'Call all in', amount: 20 });
+});
+
+test('until the table has answered, a choice shows on views of the spot it was made in and nothing shows as set on any other; the view offers none to a player with no turn to come', async (t) => {
+  const { server, page } = await waitingFor(t, 'Stu');
+  const view = structuredClone(page.view);
+  const pending = new PendingChoice();
+
+  pending.begin(choiceOn(view, 'fold')!);
+  assert.deepEqual(pending.shown(view).preAction, ['fold']);
+  assert.deepEqual(pending.shown({ ...view, hand: { ...view.hand!, currentBet: 60 } }).preAction, null, 'the bet changed');
+  assert.deepEqual(pending.shown({ ...view, hand: { ...view.hand!, street: 'flop' } }).preAction, null, 'the street moved on');
+  assert.deepEqual(pending.shown({ ...view, hand: { ...view.hand!, number: 2 } }).preAction, null, 'another hand');
+  assert.deepEqual(pending.shown({ ...view, hand: { ...view.hand!, ahead: null } }).preAction, null, 'the action reached them');
+
+  // Out of its spot the table sets nothing, and takes off the choice it was to replace: nothing shows as set meanwhile
+  assert.equal(pending.shown({ ...view, preAction: ['checkFold'], hand: { ...view.hand!, currentBet: 60 } }).preAction, null);
+
+  // Taking back shows on a view that has the choice set, in its spot or out of it
+  pending.begin(choiceOn(view, null)!);
+  assert.equal(pending.shown({ ...view, preAction: ['fold'] }).preAction, null);
+  assert.equal(pending.shown({ ...view, preAction: ['fold'], hand: { ...view.hand!, currentBet: 60 } }).preAction, null);
+  assert.equal(pending.settle(), true);
+  assert.deepEqual(pending.shown({ ...view, preAction: ['fold'] }).preAction, ['fold']);
+
+  // On their own turn, and once they are out of the hand, there is nothing to choose
+  server.act('Quigs', { type: 'call' });
+  await page.wire.answer('poll');
+  assert.equal(choiceOn(page.view, 'fold'), null);
 });

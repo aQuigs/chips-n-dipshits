@@ -3,11 +3,14 @@ import type { Denominated } from '../../engine/amounts.ts';
 import type { BettingAction } from '../../engine/betting.ts';
 import { bombPotName } from '../../engine/bombPots.ts';
 import { capitalized, cardWords } from '../../engine/handNames.ts';
+import { preActionFor } from '../../engine/preAction.ts';
 import { timesText } from '../../engine/runVote.ts';
 import { straddlesAllowed } from '../../engine/straddles.ts';
 import type { Command, PassedOver } from '../../engine/types.ts';
 import type { HandView, SeatView, TableView } from '../../engine/view.ts';
 import { HOTKEYS } from '../hotkeys.ts';
+import { choiceOn } from '../pendingChoice.ts';
+import { AHEAD_ORDER, aheadLabel } from '../preActions.ts';
 import { showOffer } from '../showing.ts';
 import type { Waiting } from '../shownTable.ts';
 import { cardEl, h, holdWhile } from '../ui.ts';
@@ -365,10 +368,59 @@ interface OwnNote {
   text: string;
 }
 
-function waitingEl(text: string, view: TableView, own: OwnNote | null = null): HTMLElement {
+/** What tells the choices of a move ahead apart from the buttons of a turn, wherever one is looked for by its action. */
+export const AHEAD_ACTION = 'ahead-';
+
+/**
+ * The moves a player waiting for the action can choose ahead of their turn, as buttons that stay
+ * pressed: one at most, so pressing another takes its place and pressing the one that is set takes it
+ * back. Null when the table offers them none. All five are always drawn, each in its place, and the
+ * ones not on offer are dimmed; the one that is set can be taken back whatever is on offer by now, as
+ * a Check/Fold that a bet has turned into a fold. A press says which spot it was made in, as shown,
+ * and the bar is drawn again at once with the choice on it. None has a key: the keys of a turn pressed
+ * a moment early must not choose anything.
+ */
+function aheadEl(view: TableView, hand: HandView, stack: number, handlers: ControlHandlers): HTMLElement | null {
+  const facing = hand.ahead;
+
+  if (!facing) {
+    return null;
+  }
+
+  const buttons = AHEAD_ORDER.map((what) => {
+    const on = view.preAction?.[0] === what;
+    const { move, amount } = aheadLabel(what, facing, stack);
+    // A narrow button breaks its words after the stroke, as it breaks a call before its amount
+    const words = amount === null ? move.split('/').flatMap((part, nth) => (nth === 0 ? [part] : ['/', h('wbr'), part])) : moveLabel(move, amount, view.config);
+    const press = (): void => {
+      const choice = choiceOn(view, on ? null : what);
+
+      if (choice) {
+        void handlers.send(choice);
+      }
+    };
+
+    return h(
+      `button.chip-btn.ahead-btn.ahead-${what}`,
+      { type: 'button', 'aria-pressed': String(on), 'data-action': `${AHEAD_ACTION}${what}`, disabled: !on && preActionFor(what, facing) === null, onclick: press },
+      h('span', null, words),
+    );
+  });
+
+  return h('div.ahead', { role: 'group', 'aria-label': 'Your move when the action reaches you' }, h('span.ahead-title', null, 'On your turn'), buttons);
+}
+
+function waitingEl(text: string, view: TableView, own: OwnNote | null = null, ahead: HTMLElement | null = null): HTMLElement {
   const note = nextHandNote(view);
 
-  return h('div.waiting', null, text, note.length > 0 ? h('div.next-hand', null, note.map((part) => h('span', null, part))) : null, own ? h(`div.own-note.${own.about}-note`, null, own.text) : null);
+  return h(
+    'div.waiting',
+    { class: ahead ? 'choosing' : '' },
+    ahead,
+    text,
+    note.length > 0 ? h('div.next-hand', null, note.map((part) => h('span', null, part))) : null,
+    own ? h(`div.own-note.${own.about}-note`, null, own.text) : null,
+  );
 }
 
 /** The viewer's own line: a player in a hand owes nothing, so there is never more than one thing to say. */
@@ -399,7 +451,9 @@ function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandle
   } else if (hand?.canVote) {
     main = runsQuestion(hand, handlers);
   } else {
-    main = waitingEl(waiting === 'unconfirmed' ? `Waiting for the table to confirm your ${seat.lastAction ?? 'move'}…` : waitingText(view, hand), view, ownNote(settling.note, hand, view));
+    const text = waiting === 'unconfirmed' ? `Waiting for the table to confirm your ${seat.lastAction ?? 'move'}…` : waitingText(view, hand);
+
+    main = waitingEl(text, view, ownNote(settling.note, hand, view), hand && aheadEl(view, hand, seat.stack, handlers));
   }
 
   const showCards = showCardsEl(view, seat, handlers);
@@ -534,6 +588,7 @@ export function controlsSignature(view: TableView): string {
   return JSON.stringify([
     seat && [seat.stack, seat.pendingAdd, seat.sittingOut, seat.away, seat.straddles, seat.alwaysChop, seat.leaving, seat.owesBigBlind, seat.owesSmallBlind, seat.comesIn, seat.shown],
     hand && [hand.number, hand.stage, hand.street, hand.toAct, hand.turn, hand.currentBet, hand.pot, hand.options, hand.canOfferChop, hand.canAnswerChop, hand.canVote, hand.canShow, hand.passedOver],
+    [hand?.ahead, view.preAction],
     [view.running, view.nextHandAt !== null, view.handCount === 0, nightOver(view), hand?.stage === 'done' && onLastHand(view)],
     view.requests.filter((request) => request.playerId === view.you.id),
     [straddlesAllowed(view.config).map((kind) => kind.what), view.config.allowChop, view.config.maxBuyIn, view.config.smallBlind, view.config.bigBlind],

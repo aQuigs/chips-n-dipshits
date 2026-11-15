@@ -4,7 +4,7 @@
  */
 import assert from 'node:assert/strict';
 
-import { badgeOf, blindsOnly, BOARD_SIZE, boardsDealt, evaluateHand, FEED_LIMIT, FLOP_SIZE, handFacts, isStraddle, LIMITS, MENTIONS_PER_LINE, MOST_RUNS, nextHighHand, nightIsOver, owes, PLAYING_THE_BOARD, REACTION_GAP_MS, reactionKind, reaches, REACTIONS_LIVE, replayHand, roleOf, STRADDLES, STRADDLES_IN_A_ROW, straddlesAllowed, viewFor, wonAPot } from '../src/engine/index.ts';
+import { badgeOf, blindsOnly, BOARD_SIZE, boardsDealt, evaluateHand, FEED_LIMIT, FLOP_SIZE, handFacts, isStraddle, LIMITS, MENTIONS_PER_LINE, MOST_RUNS, nextHighHand, nightIsOver, owes, owesAction, PLAYING_THE_BOARD, REACTION_GAP_MS, reactionKind, reaches, REACTIONS_LIVE, replayHand, roleOf, STRADDLES, STRADDLES_IN_A_ROW, straddlesAllowed, viewFor, wonAPot } from '../src/engine/index.ts';
 import type { Card, Effect, FeedEntry, HandPlayer, Mention, HandRecord, TableState } from '../src/engine/index.ts';
 import { CACHE_VALUE_BYTES, utf8Bytes } from '../src/gas/sheetStore.ts';
 import { restoreState } from '../src/server/store.ts';
@@ -252,6 +252,32 @@ export function assertChopHolds(state: TableState): void {
 }
 
 /**
+ * A move chosen ahead is kept only for a player the action is still to reach in this round of betting,
+ * who is there to be asked, and only as one they could have chosen facing what they face now: a check
+ * while checking is free, a call for exactly the chips a call puts in.
+ */
+export function assertPreActionsHold(state: TableState): void {
+  const hand = state.hand;
+
+  for (const player of hand?.players ?? []) {
+    if (!('pre' in player)) {
+      continue;
+    }
+
+    const seat = state.seats[player.seat]!;
+    const [what, amount] = player.pre!;
+    const owed = hand!.currentBet - player.bet;
+    const kept = `${player.name} is kept ${JSON.stringify(player.pre)}`;
+
+    assert.ok(hand!.stage === 'betting' && hand!.toAct !== player.seat && owesAction(hand!, player), `${kept} with no turn to come on this street`);
+    assert.ok(!seat.away && !seat.leaving, `${kept} while the table plays their turns for them`);
+    assert.ok(what !== 'check' || owed === 0, `${kept} with a bet to them`);
+    assert.ok(what !== 'call' || (owed > 0 && amount === Math.min(owed, seat.stack)), `${kept}, which is not what a call puts in now`);
+    assert.equal(player.pre!.length, what === 'call' ? 2 : 1, `${kept}, which holds more or less than it needs`);
+  }
+}
+
+/**
  * Once the night is over nothing is dealt or bought until play starts again, and while the last hands
  * are called there is always a hand still to finish before the night ends.
  */
@@ -398,6 +424,18 @@ export function assertViewsKeepSecrets(state: TableState, now: number): void {
     assert.deepEqual(view.autoShow, own?.autoShow ?? [], `${viewer.name} is told other choices to show than their own`);
     assert.equal(json.split('"autoShow"').length, 2, `${viewer.name}'s view tells someone's choices to show`);
 
+    // So is the move a player chose ahead of their turn: the view holds the viewer's own, and is otherwise, to the
+    // last character, the view of a table where nobody else has chosen one
+    const chosen = hand?.players.find((p) => p.playerId === viewer.id)?.pre ?? null;
+    assert.deepEqual(view.preAction, chosen, `${viewer.name} is told another move chosen ahead than their own`);
+
+    if (hand?.players.some((p) => p.pre && p.playerId !== viewer.id)) {
+      const others: TableState = structuredClone(state);
+      others.hand!.players.filter((p) => p.playerId !== viewer.id).forEach((p) => delete p.pre);
+
+      assert.equal(json, JSON.stringify(viewFor(others, viewer.id, now)), `${viewer.name}'s view tells what another player chose ahead`);
+    }
+
     for (const player of hand?.players ?? []) {
       const seen = view.seats[player.seat]!.cards!;
       const mine = viewer.id === player.playerId;
@@ -502,6 +540,7 @@ export function assertInvariants(state: TableState, now: number): void {
   assertNightHolds(state);
   assertNumbersHold(state);
   assertChopHolds(state);
+  assertPreActionsHold(state);
   assertReactionsHold(state);
   assertSurvivesSaving(state);
   assertViewsKeepSecrets(state, now);

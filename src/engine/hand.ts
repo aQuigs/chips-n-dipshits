@@ -17,13 +17,14 @@ import { planHand, takeUp } from './handPlan.ts';
 import { playerHand } from './handRank.ts';
 import type { HandValue } from './handRank.ts';
 import { buildPots, splitAmount } from './pots.ts';
+import { facingOf, moveChosen, preActionFor, standsForOnePrice } from './preAction.ts';
 import { timesText, timesToRun, voteStory } from './runVote.ts';
 import type { Unpicked } from './runVote.ts';
 import { addFeed, clockwiseAfter, clockwiseFrom, eligibleSeats, seatsClockwiseAfter } from './seats.ts';
 import { asSeen, fullyShown } from './shown.ts';
 import { stakesText } from './stakes.ts';
 import { GameError } from './types.ts';
-import type { AnteFrom, BombPot, BountyResult, Ctx, Hand, HandPlayer, HandRecord, HandResult, PotAward, PotResult, ShownHand, Street, TableState } from './types.ts';
+import type { AnteFrom, BombPot, BountyResult, Ctx, Hand, HandPlayer, HandRecord, HandResult, PotAward, PotResult, PreAction, PreActionKind, ShownHand, Street, TableState } from './types.ts';
 
 export const TIMING = {
   /** Added to the action clock so a click made at the buzzer still counts after the round trip. */
@@ -372,10 +373,40 @@ function advance(state: TableState, ctx: Ctx, afterSeat: number): void {
       continue;
     }
 
+    const chosen = takeChosenAhead(state, hand, next);
+    if (chosen) {
+      // The decision was put to them and answered at once: it takes its number, as one they tapped would
+      state.turn += 1;
+      perform(state, ctx, next, chosen);
+      from = next.seat;
+      continue;
+    }
+
     hand.toAct = next.seat;
     state.turn += 1;
     hand.deadline = actionDeadline(state, ctx.now);
     return;
+  }
+}
+
+/**
+ * The move a player chose ahead for the turn that has now reached them, taken off them either way:
+ * null when they chose none, or none that still stands for what they face.
+ */
+function takeChosenAhead(state: TableState, hand: Hand, player: HandPlayer): BettingAction | null {
+  const chosen = player.pre;
+
+  delete player.pre;
+
+  return chosen ? moveChosen(chosen, bettingOptions(state, hand, player)) : null;
+}
+
+/** Takes off the moves chosen ahead that `gone` picks out: all of them, unless told which. */
+function dropPreActions(hand: Hand, gone: (chosen: PreAction) => boolean = () => true): void {
+  for (const player of hand.players) {
+    if (player.pre && gone(player.pre)) {
+      delete player.pre;
+    }
   }
 }
 
@@ -491,6 +522,8 @@ function perform(state: TableState, ctx: Ctx, player: HandPlayer, action: Bettin
 
       hand.currentBet = to;
       hand.lastAggressor = player.seat;
+      // A check or a call chosen ahead was for the price before this one
+      dropPreActions(hand, standsForOnePrice);
       player.lastAction = opening ? 'bet' : 'raise';
       record(hand, [opening ? 'bet' : 'raise', player.seat, to, state.seats[player.seat]!.stack]);
       narrate(state, ctx, `${player.name} ${opening ? 'bets' : 'raises to'} ${formatAmount(to, state.config)}${player.allIn ? ' and is all in' : ''}`);
@@ -538,6 +571,53 @@ export function act(state: TableState, ctx: Ctx, seatIndex: number, action: Bett
   advance(state, ctx, seatIndex);
 }
 
+/** Where a player was when they chose a move ahead: the hand by its number, its street and the bet to match. */
+export interface PreActionSpot {
+  hand: number;
+  street: Street;
+  facing: number;
+}
+
+/** What a player is told whose choice of a move ahead came too late to be set. */
+export const TOO_LATE_TO_SET = 'The hand moved on before that arrived, so nothing is set ahead';
+
+/**
+ * A player chooses the move they make when the action next reaches them, or with `what` null takes
+ * their choice back. It is set only in the `spot` it was chosen in: the same hand and street, the same
+ * bet to match, and the player still waiting for the action there. Any bet or raise since, or a move
+ * of their own, makes it another spot, so a choice that was slow to arrive, or arrives twice, can't
+ * be played against anything they were not looking at.
+ *
+ * Either way the choice they had on that street is off: they have just said they want another, or none.
+ * So one that comes too late is refused only when there was nothing to take off, and otherwise leaves
+ * them with nothing chosen, never with the choice they were replacing.
+ */
+export function choosePreAction(state: TableState, seatIndex: number, what: PreActionKind | null, spot: PreActionSpot): void {
+  const hand = state.hand;
+  const player = hand && hand.number === spot.hand && hand.street === spot.street ? playerAt(hand, seatIndex) : undefined;
+  const facing = hand && player && hand.currentBet === spot.facing ? facingOf(state, hand, player) : null;
+  const chosen = what !== null && facing ? preActionFor(what, facing) : null;
+
+  if (what !== null && facing && !chosen) {
+    // Not on offer at this price, a call with nothing bet or a check with a bet to them: refused in the words the tapped move is
+    throw new GameError(objectionTo({ type: what === 'call' ? 'call' : 'check' }, bettingOptions(state, hand!, player!), hand!.currentBet, state.config)!);
+  }
+
+  if (what !== null && !facing && !player?.pre) {
+    throw new GameError(TOO_LATE_TO_SET);
+  }
+
+  if (!player) {
+    return;
+  }
+
+  delete player.pre;
+
+  if (chosen) {
+    player.pre = chosen;
+  }
+}
+
 /**
  * The small blind offers to chop the blinds instead of a move, on their turn (`turn`, when given). The
  * big blind is asked, unless what they would say is already known (`answerUnasked`).
@@ -574,6 +654,8 @@ export function offerChop(state: TableState, ctx: Ctx, seatIndex: number, turn?:
     return;
   }
 
+  // The big blind is asked something they chose no answer to
+  dropPreActions(hand);
   hand.stage = 'chop';
   hand.toAct = big.seat;
   state.turn += 1;
@@ -661,6 +743,9 @@ export function stopWaitingFor(state: TableState, ctx: Ctx, seatIndex: number): 
     return;
   }
 
+  // From here the table checks or folds for them, whatever they chose ahead
+  delete player.pre;
+
   if (hand.stage === 'betting' && hand.toAct === seatIndex) {
     checkOrFold(state, ctx, player);
     advance(state, ctx, seatIndex);
@@ -676,6 +761,8 @@ function beginRunout(state: TableState, ctx: Ctx): void {
   const live = livePlayers(hand);
 
   collectBets(hand);
+  // The one player with chips left may never have been asked: the bets against them were all in for less
+  dropPreActions(hand);
 
   for (const player of live) {
     show(state, ctx, player);
@@ -966,6 +1053,7 @@ function finishHand(state: TableState, ctx: Ctx, result: HandResult): void {
   hand.result = result;
   hand.stage = 'done';
   hand.toAct = null;
+  dropPreActions(hand);
 
   if (rabbitToHunt(state, hand)) {
     pause += TIMING.rabbitOfferMs;

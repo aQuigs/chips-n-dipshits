@@ -3,7 +3,7 @@ import { replayHand } from '../engine/events.ts';
 import type { HandEvent, ReplayPosition, ReplaySeat } from '../engine/events.ts';
 import { clockwiseAfter } from '../engine/seats.ts';
 import type { TableView } from '../engine/view.ts';
-import { soundsPlaced } from './handSounds.ts';
+import { soundsOf } from './handSounds.ts';
 import type { Move, Place, TableMotion } from './motion.ts';
 import { SOUND_GAP_MS } from './sound.ts';
 import type { TableChange } from './tableChange.ts';
@@ -200,7 +200,9 @@ function add(moves: Move[], move: Move): void {
  * after the view is shown it starts. Nothing for a view that is catching the viewer up, which has no
  * new events.
  */
-export function movesSeen({ before: shown, view, events }: TableChange, viewer: number | null): Move[] {
+export function movesSeen(change: TableChange, viewer: number | null): Move[] {
+  const { before: shown, view, events } = change;
+
   // Whatever else differs in a view with no news of the hand is something the viewer missed
   if (events.length === 0) {
     return [];
@@ -235,7 +237,7 @@ export function movesSeen({ before: shown, view, events }: TableChange, viewer: 
 
   // The sounds of a view play a beat apart, the first at once. An event is seen on the beat of its own
   // sound, and one that makes none on the beat of the last sound before it
-  const heard = soundsPlaced(events, viewer, boardsDealt(view.hand?.bombPot ?? null)).map((sound) => sound.event);
+  const heard = soundsOf(change, viewer).map((sound) => sound.event);
   const beatOf = (event: number) => Math.max(0, heard.filter((at) => at <= event).length - 1);
   const lastOf = (kind: Step['kind']) => steps.filter((step) => step.kind === kind).at(-1)!.event;
   const seenWith = ({ kind, event }: (typeof steps)[number]) => (kind === 'gathered' ? event - 1 : kind ? lastOf(kind) : event);

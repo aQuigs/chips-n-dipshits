@@ -1,13 +1,15 @@
 /*
  * What a player does in the hand on the table. Any member may send these: whether it is their turn,
  * their pick of how many times to run it or their cards to show is for the hand to say, in its own words.
+ * Only a move chosen ahead takes a seat, since it is kept for the seat until the action reaches it.
  */
 import type { BettingAction } from '../betting.ts';
 import { HOLE_CARDS } from '../cards.ts';
-import { act, answerChop as answerChopIn, huntRabbit as huntRabbitIn, offerChop as offerChopIn, pickRuns, showCards as showCardsOf } from '../hand.ts';
+import { act, answerChop as answerChopIn, choosePreAction, huntRabbit as huntRabbitIn, offerChop as offerChopIn, pickRuns, showCards as showCardsOf } from '../hand.ts';
+import { isPreAction } from '../preAction.ts';
 import { MOST_RUNS } from '../runVote.ts';
 import { seatIndexOf } from '../seats.ts';
-import { GameError } from '../types.ts';
+import { GameError, STREETS } from '../types.ts';
 import type { Ctx, Member, TableState } from '../types.ts';
 import { wholeNumber, yesOrNo } from '../validate.ts';
 import type { Handler } from './handler.ts';
@@ -45,6 +47,23 @@ export const offerChop: Handler<'offerChop'> = {
 export const answerChop: Handler<'answerChop'> = {
   by: 'member',
   run: ({ state, ctx, member, command }) => answerChopIn(state, ctx, seatIndexOf(state, member.id), yesOrNo(command.agree, 'Your answer'), turnOf(command.turn)),
+};
+
+export const preAct: Handler<'preAct'> = {
+  by: 'seat',
+  run: ({ state, seatIndex, command }) => {
+    const { what, street } = command;
+
+    if (what !== null && !isPreAction(what)) {
+      throw new GameError('That is no move to choose ahead');
+    }
+
+    if (!STREETS.includes(street)) {
+      throw new GameError('Say which street the move is for');
+    }
+
+    choosePreAction(state, seatIndex, what, { hand: wholeNumber(command.hand, 'The hand', 1), street, facing: wholeNumber(command.facing, 'The bet', 0) });
+  },
 };
 
 export const ritVote: Handler<'ritVote'> = {

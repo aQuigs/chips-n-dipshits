@@ -982,6 +982,17 @@ test('after the longest night the fullest table still fits its row and the cache
     t.call(t.playerIn(t.toAct!));
   }
 
+  // And a move chosen ahead by everyone the table could be keeping one for at once, of the longest kind: a call, which
+  // is kept with its amount. The big blind, who has yet to act, raises the most the stacks allow, and the other nine call it
+  const stake = LIMITS.chips - 1;
+  t.raise(t.playerIn(t.toAct!), stake);
+  const withoutChoices = JSON.stringify(t.state).length;
+  for (const player of t.state.hand!.players.filter((p) => p.seat !== t.state.hand!.bbSeat && p.seat !== t.toAct)) {
+    t.cmd(t.playerIn(player.seat), { type: 'preAct', what: 'call', hand: 1, street: 'preflop', facing: stake });
+  }
+  assert.equal(t.state.hand!.players.filter((p) => p.pre?.[0] === 'call').length, 8, 'everyone but the raiser and the player on the clock has a call chosen');
+  assert.ok(JSON.stringify(t.state).length - withoutChoices <= 250, `the moves chosen ahead take ${JSON.stringify(t.state).length - withoutChoices} characters`);
+
   // More hands than any night has, a pot of every chip ten players can hold, a best hand and every badge for everyone
   const everyBadge = Object.fromEntries(BADGES.map((badge) => [badge.id, 9_999]));
   for (const member of t.state.members) {

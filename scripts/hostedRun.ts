@@ -652,7 +652,47 @@ try {
       await lost.second.open();
     }
 
-    assert.deepEqual(sent, [['raise', 'check', 'raise', 'check'], ['call', 'check', 'check']], 'each move was sent once: the refused bet and the lost check were tapped again by the player');
+    console.log('A move chosen ahead shows at the tap, is looked up and not sent again when its answer is lost, and the table makes it when the action arrives, with nothing for the player to tap');
+    {
+      const chosen: unknown[] = [];
+      first.on('request', (request) => {
+        const body = JSON.parse(request.postData() ?? '{}') as { op?: string; command?: { type: string; what?: unknown } };
+
+        if (body.op === 'act' && body.command?.type === 'preAct') {
+          chosen.push(body.command.what);
+        }
+      });
+
+      // The river is checked through. In the next hand the other player has the button and acts first, with this one in the big blind behind
+      await first.click('.turn [data-action="check"]');
+      await second.waitForSelector('.turn [data-action="call"]:enabled');
+      await first.waitForSelector('.ahead [data-action="ahead-check"]:enabled');
+      assert.deepEqual(await first.locator('.ahead button:enabled').allInnerTexts(), ['Fold', 'Check/Fold', 'Check', 'Check/Call any']);
+
+      // The table hears the choice, and its answer never comes back
+      const choices = await Gate.on(first, 'choices');
+      await choices.close('answers');
+      await first.click('.ahead [data-action="ahead-check"]');
+      await first.waitForSelector('.ahead [data-action="ahead-check"][aria-pressed="true"]');
+      await choices.holding();
+      await choices.lose();
+      await first.waitForSelector('.toast:has-text("No answer from the table")');
+      await choices.open();
+
+      // Long enough for a page that sent it again to have done so; what it asked the table agrees with what it shows
+      await sleep(QUIET_MS);
+      assert.deepEqual(chosen, ['check'], 'a choice whose answer was lost was sent again');
+      assert.equal(await first.locator('.ahead [data-action="ahead-check"][aria-pressed="true"]').count(), 1, 'the choice the table has is no longer shown');
+
+      // The call brings the action, the table checks, and the flop puts this player first to act: a new turn, not the one the choice answered
+      await second.click('.turn [data-action="call"]');
+      await first.waitForSelector('.turn [data-action="check"]:enabled');
+      assert.equal(await first.locator('.board .card[data-card]').count(), 3);
+      assert.deepEqual((await first.locator('.feed li').allInnerTexts()).slice(-3, -1), [`${nameOf(second)} calls 10`, `${nameOf(first)} checks`]);
+      assert.equal(await first.locator('.ahead, [aria-pressed="true"]').count(), 0, 'a choice is still shown on the turn');
+    }
+
+    assert.deepEqual(sent, [['raise', 'check', 'raise', 'check', 'check'], ['call', 'check', 'check', 'call']], 'each move was sent once: the refused bet and the lost check were tapped again by the player, and the check chosen ahead was no move of the page');
     assert.deepEqual(said.map(ownComplaints), [[], []], 'a page complained in the console');
 
     await first.unrouteAll({ behavior: 'ignoreErrors' });

@@ -141,6 +141,7 @@ test('a table connection whose move the newer build refused tells nobody, sends 
   const connection = new TableConnection(line, { tableId, auth }, new ServerClock(), {
     view: () => told.push('view'),
     move: () => undefined,
+    chose: () => undefined,
     status: () => told.push('status'),
     refused: () => told.push('refused'),
     notice: (message) => told.push(message),
@@ -182,6 +183,7 @@ test('an offer to chop or its answer that got no answer is looked up with a fres
   const connection = new TableConnection(new ServerLine(transport, PAGE_BUILD, () => undefined), { tableId: 'T', auth: { id: 'P', token: 'X' } }, new ServerClock(), {
     view: () => undefined,
     move: () => undefined,
+    chose: () => undefined,
     status: () => undefined,
     refused: () => told.push('refused'),
     notice: (message) => told.push(message),
@@ -217,6 +219,7 @@ test('a page left open on a table that is then put away is told so once, by the 
   const listener: TableListener = {
     view: () => undefined,
     move: () => undefined,
+    chose: () => undefined,
     status: () => undefined,
     refused: (error) => refused.push(error),
     notice: (message) => told.push(message),
@@ -268,6 +271,7 @@ test('a reaction sent to a table that was put away says nothing and takes no sea
   const connection = new TableConnection(line, { tableId, auth }, new ServerClock(), {
     view: () => undefined,
     move: () => undefined,
+    chose: () => undefined,
     status: () => undefined,
     refused: (error) => refused.push(error),
     notice: (message) => told.push(message),

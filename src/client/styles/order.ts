@@ -52,4 +52,5 @@ export const STYLESHEETS = [
   'bounty-list.css',
   'replay.css',
   'standings.css',
+  'pre-action.css',
 ];

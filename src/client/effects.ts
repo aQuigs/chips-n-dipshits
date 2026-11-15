@@ -8,6 +8,7 @@ import { handSounds } from './effects/handSounds.ts';
 import { honorToasts } from './effects/honorToasts.ts';
 import { nightRecap } from './effects/nightRecap.ts';
 import { chatNudges } from './effects/nudges.ts';
+import { preActionLines } from './effects/preActionLines.ts';
 import { reactions } from './effects/reactions.ts';
 import { replayMakesWay } from './effects/replayMakesWay.ts';
 import { yourTurn } from './effects/yourTurn.ts';
@@ -54,6 +55,8 @@ export interface EffectContext {
   replay: ReplaySetAside;
   /** Shows the viewer a line at the top of the screen for a few seconds. */
   toast(message: string): void;
+  /** Says a line to a screen reader alone, for what the screen shows without words. */
+  announce(message: string): void;
 }
 
 /** Something that happens on the page when the table changes: a sound, an animation, an alert. */
@@ -83,6 +86,7 @@ const TABLE_EFFECTS: (() => TableEffect)[] = [
   chatNudges,
   dealtCards,
   replayMakesWay,
+  preActionLines,
 ];
 
 /** The effects of one table screen. */

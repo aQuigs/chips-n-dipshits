@@ -29,7 +29,7 @@ import type { Platform } from './platform.ts';
 import { PREFERENCES, Preferences } from './prefs.ts';
 import { movePromptEl, SeatMoves } from './seatMoves.ts';
 import type { Abilities, AppPreferences } from './prefs.ts';
-import { controlsEl, controlsSignature, lockTurn, sizingMemory } from './render/controls.ts';
+import { AHEAD_ACTION, controlsEl, controlsSignature, lockTurn, sizingMemory } from './render/controls.ts';
 import type { Sizing } from './render/controls.ts';
 import { frame } from './render/dialogs/dialog.ts';
 import { dialogAllowed, dialogEl, dialogShows } from './render/dialogs/index.ts';
@@ -114,6 +114,8 @@ export class App {
   private readonly platform: Platform;
   private readonly themeHost: HTMLElement;
   private readonly toastEl = h('div.toast', { role: 'status', hidden: true });
+  /** Words for a screen reader alone, kept through every redraw so that a new line is heard. */
+  private readonly spokenEl = h('p.unseen', { role: 'status' });
 
   private readonly clock = new ServerClock();
   private readonly server: ServerLine;
@@ -541,6 +543,7 @@ export class App {
     const table = new TableConnection(this.server, session, this.clock, {
       view: (shown, wentBack) => this.showView(shown, wentBack),
       move: (lock, sent) => this.screen?.shown.moveIs(lock, sent),
+      chose: (sent) => this.screen?.shown.choiceIs(sent),
       status: () => this.showStatus(),
       refused: (error) => this.dropSession(error),
       notice: (message) => this.toast(message),
@@ -583,6 +586,7 @@ export class App {
       dealt,
       replay: { setAside: () => this.setReplayAside(), turn: (mine) => replay.turn(mine) },
       toast: (message) => this.toast(message),
+      announce: (message) => (this.spokenEl.textContent = message),
     });
     const screen: TableScreen = {
       topbar: new Slot(h('header.topbar')),
@@ -661,7 +665,7 @@ export class App {
   private mount(content: HTMLElement): void {
     // Whatever was up over the screen before goes with it, and lets go of what it held back
     this.closeStandings?.();
-    this.root.replaceChildren(content, this.toastEl);
+    this.root.replaceChildren(content, this.toastEl, this.spokenEl);
   }
 
   /**
@@ -864,6 +868,9 @@ export class App {
 
   private drawControls(screen: TableScreen, view: TableView): void {
     const waiting = screen.shown.waiting;
+    // A choice of a move ahead draws the bar again the moment it is pressed, and whoever pressed it with a key is still on it.
+    // Only such a button is found again: no key press may land on a button of the turn that came up in its place
+    const focused = document.activeElement instanceof HTMLElement && screen.controls.element.contains(document.activeElement) ? document.activeElement.dataset.action : undefined;
     const redrawn = screen.controls.draw([controlsSignature(view), waiting], () =>
       controlsEl(
         view,
@@ -880,6 +887,10 @@ export class App {
 
     if (redrawn) {
       this.hotkeys.shown();
+    }
+
+    if (redrawn && focused?.startsWith(AHEAD_ACTION)) {
+      screen.controls.element.querySelector<HTMLElement>(`[data-action="${focused}"]`)?.focus();
     }
 
     // Freshly built buttons are free; a move still on its way keeps them locked

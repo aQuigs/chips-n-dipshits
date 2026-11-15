@@ -509,6 +509,7 @@ export function replayView(record: HandRecord, step: ReplayStep, table: TableVie
     turn: 0,
     deadline: null,
     options: null,
+    ahead: null,
     canOfferChop: false,
     foldChops: false,
     canAnswerChop: false,
@@ -532,6 +533,8 @@ export function replayView(record: HandRecord, step: ReplayStep, table: TableVie
     shuffleAfterHand: false,
     requests: [],
     reactions: [],
+    // A move chosen ahead belongs to the hand on the table, not to the one played back
+    preAction: null,
     // Whoever holds the night's high hand now may not have held it then, which the record does not say
     tonight: { ...table.tonight, highHand: { ...table.tonight.highHand, next: null } },
   };

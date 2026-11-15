@@ -1,30 +1,34 @@
+import { boardsDealt } from '../engine/bombPots.ts';
 import type { HandEvent } from '../engine/events.ts';
 import { ASIDE_SOUNDS } from './sound.ts';
 import type { SoundName } from './sound.ts';
+import type { TableChange } from './tableChange.ts';
 
 /**
  * What one hand event sounds like to the viewer at `viewer`, in a hand dealt on `dealtOn` boards from
- * its first card: the table of which event makes which sound. A new kind of event takes a case here,
- * a sound or silence, and the build fails until it has one.
+ * its first card: the table of which event makes which sound. `tapping` is the seat whose moves are
+ * the viewer's own taps. A new kind of event takes a case here, a sound or silence, and the build
+ * fails until it has one.
  */
-function soundOf(event: HandEvent, viewer: number | null, dealtOn: number): SoundName | null {
-  // A player's own move is silent to them: they made it, and the server's answer comes a moment after the tap
+function soundOf(event: HandEvent, viewer: number | null, dealtOn: number, tapping: number | null): SoundName | null {
   const byOther = (seat: number) => seat !== viewer;
+  // A move the player tapped is silent to them: they made it, and the server's answer comes a moment after the tap
+  const heard = (seat: number) => seat !== tapping;
 
   switch (event[0]) {
     case 'deal':
       return 'deal';
 
     case 'fold':
-      return byOther(event[1]) ? 'fold' : null;
+      return heard(event[1]) ? 'fold' : null;
 
     case 'check':
-      return byOther(event[1]) ? 'knock' : null;
+      return heard(event[1]) ? 'knock' : null;
 
     case 'call':
     case 'bet':
     case 'raise':
-      return byOther(event[1]) ? (event[3] === 0 ? 'allIn' : 'chips') : null;
+      return heard(event[1]) ? (event[3] === 0 ? 'allIn' : 'chips') : null;
 
     // Every street sounds the same, and once: boards dealt together, as in a double-board bomb pot, get a street at the
     // same moment, and the first board's event is the one heard, whether or not the others' arrive with it. A board run
@@ -81,11 +85,12 @@ export interface Heard {
  * heard for. Each sound plays once, where it last came, and only the last few, so a burst of moves
  * reads as how it ended, not as noise. A sound beside the game (`ASIDE_SOUNDS`) takes none of those
  * few places. The viewer's own pot needs no second, smaller one for someone else's beside it. `dealtOn`
- * is how many boards the hand was dealt on from its first card.
+ * is how many boards the hand was dealt on from its first card. `tapping` is the seat whose moves the
+ * viewer made by hand, and so does not hear: their own, unless the table made them for the viewer.
  */
-export function soundsPlaced(events: readonly HandEvent[], seat: number | null, dealtOn = 1): Heard[] {
+export function soundsPlaced(events: readonly HandEvent[], seat: number | null, dealtOn = 1, tapping = seat): Heard[] {
   const heard = events.flatMap((event, nth) => {
-    const sound = soundOf(event, seat, dealtOn);
+    const sound = soundOf(event, seat, dealtOn, tapping);
 
     return sound === null ? [] : [{ sound, event: nth }];
   });
@@ -99,4 +104,9 @@ export function soundsPlaced(events: readonly HandEvent[], seat: number | null, 
 /** The sounds of `soundsPlaced` alone, as whatever plays them needs them. */
 export function soundsHeard(events: readonly HandEvent[], seat: number | null, dealtOn = 1): SoundName[] {
   return soundsPlaced(events, seat, dealtOn).map(({ sound }) => sound);
+}
+
+/** What a view brought sounds like to the viewer at `seat`, who hears their own move when the table made it for them. */
+export function soundsOf({ events, view, madeAhead }: Pick<TableChange, 'events' | 'view' | 'madeAhead'>, seat: number | null): Heard[] {
+  return soundsPlaced(events, seat, boardsDealt(view.hand?.bombPot ?? null), madeAhead ? null : seat);
 }

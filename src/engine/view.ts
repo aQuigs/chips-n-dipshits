@@ -16,12 +16,14 @@ import type { Role } from './hosts.ts';
 import { handsLeft, nightIsOver, onLastHand } from './night.ts';
 import { buildPots } from './pots.ts';
 import type { Pot } from './pots.ts';
+import { facingOf } from './preAction.ts';
+import type { Facing } from './preAction.ts';
 import { liveReactions } from './reactions.ts';
 import { memberOf, seatIndexOf } from './seats.ts';
 import { asSeen, fullyShown } from './shown.ts';
 import { tonightView } from './tonight.ts';
 import type { TonightView } from './tonight.ts';
-import type { AutoShow, BombPot, FeedEntry, Hand, HandPlayer, HandResult, HandStage, PassedOver, PlayerAction, Reaction, RequestKind, Straddle, StraddlePost, Street, TableConfig, TableState } from './types.ts';
+import type { AutoShow, BombPot, FeedEntry, Hand, HandPlayer, HandResult, HandStage, PassedOver, PlayerAction, PreAction, Reaction, RequestKind, Straddle, StraddlePost, Street, TableConfig, TableState } from './types.ts';
 
 /** A hole card as one viewer sees it: the card, or null when it is face down for them. */
 export type VisibleCard = Card | null;
@@ -95,6 +97,8 @@ export interface HandView {
   deadline: number | null;
   /** What the viewer may do, when the action is on them. */
   options: BettingOptions | null;
+  /** What the viewer would face if the action reached them now, while they wait for it and may choose their move ahead (`preAction.ts`); null when they have no turn to choose for. */
+  ahead: Facing | null;
   /** The viewer is the small blind on the clock and may offer to chop instead of a move. */
   canOfferChop: boolean;
   /** The viewer folding now ends the hand in a chop with nobody asked, so a page showing the fold names nobody next. */
@@ -152,6 +156,8 @@ export interface TableView {
   you: { id: string; name: string; role: Role; seat: number | null; identity: string | null };
   /** When the viewer's seat shows cards without their asking: theirs alone to see, and empty without a seat. */
   autoShow: AutoShow[];
+  /** The move the viewer chose ahead of their turn in the hand on the table, or null: theirs alone to see. */
+  preAction: PreAction | null;
   seats: (SeatView | null)[];
   hand: HandView | null;
   /** The seats are shuffled when the hand ends. */
@@ -218,9 +224,10 @@ export function viewFor(state: TableState, playerId: string, now: number): Table
     };
   });
 
+  const mine = hand?.players.find((p) => p.seat === mySeat);
+
   let handView: HandView | null = null;
   if (hand) {
-    const mine = hand.players.find((p) => p.seat === mySeat);
     const myTurn = hand.stage === 'betting' && mine !== undefined && hand.toAct === mySeat;
 
     handView = {
@@ -244,6 +251,7 @@ export function viewFor(state: TableState, playerId: string, now: number): Table
       turn: state.turn,
       deadline: hand.deadline,
       options: myTurn ? bettingOptions(state, hand, mine) : null,
+      ahead: mine ? facingOf(state, hand, mine) : null,
       canOfferChop: mySeat >= 0 && mayOfferChop(state, mySeat),
       foldChops: mySeat >= 0 && foldChops(state, mySeat),
       canAnswerChop: hand.stage === 'chop' && mine !== undefined && hand.toAct === mySeat,
@@ -273,6 +281,7 @@ export function viewFor(state: TableState, playerId: string, now: number): Table
     handCount: state.handCount,
     you: { id: me.id, name: me.name, role, seat: mySeat >= 0 ? mySeat : null, identity: me.identity },
     autoShow: mySeat >= 0 ? state.seats[mySeat]!.autoShow : [],
+    preAction: mine?.pre ?? null,
     seats,
     hand: handView,
     shuffleAfterHand: state.shuffleAfterHand,

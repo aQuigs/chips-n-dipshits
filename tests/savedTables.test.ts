@@ -472,6 +472,12 @@ test('every saved table loads with every player mucking as before, and a table s
   assert.deepEqual(saved.seats.slice(0, 2).map((seat) => seat!.autoShow), [[], ['lost', 'foldedTo']]);
 });
 
+test('every saved table loads with no move chosen ahead by anyone', () => {
+  for (const file of FILES) {
+    assert.ok((load(file).hand?.players ?? []).every((player) => !('pre' in player)), file);
+  }
+});
+
 test('every table saved before schema 6 loads in one go with what was shown as a flag for each card: a hand shown is both, one not shown is neither', () => {
   for (const file of FILES) {
     const saved = JSON.parse(readFileSync(new URL(file, FOLDER), 'utf8')) as { state?: TableState } & TableState;

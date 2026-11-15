@@ -23,6 +23,7 @@ export * from './hosts.ts';
 export * from './names.ts';
 export * from './night.ts';
 export * from './pots.ts';
+export * from './preAction.ts';
 export * from './presets.ts';
 export * from './mentions.ts';
 export * from './reactions.ts';

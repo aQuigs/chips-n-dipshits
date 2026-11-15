@@ -1,7 +1,7 @@
 /* Random play on a test table: what the simulation runs, and what plays a saved table on after it is read back. */
 import assert from 'node:assert/strict';
 
-import { addMember, AUTO_SHOWS, CONFIG_KEYS, fullyShown, LIMITS, mayOfferChop, MOST_RUNS, nextDeadline, owes, rabbitToHunt, REACTIONS, SEAT_COUNT, seededRng, straddlesAllowed, viewFor } from '../src/engine/index.ts';
+import { addMember, AUTO_SHOWS, CONFIG_KEYS, fullyShown, LIMITS, mayOfferChop, MOST_RUNS, nextDeadline, owes, PRE_ACTIONS, rabbitToHunt, REACTIONS, SEAT_COUNT, seededRng, straddlesAllowed, STREETS, viewFor } from '../src/engine/index.ts';
 import type { Command, GameError, Rng } from '../src/engine/index.ts';
 import type { TestTable } from './helpers.ts';
 import { randomConfig } from './randomConfig.ts';
@@ -63,6 +63,24 @@ const SHOWN_TOGETHER = [[0], [1], [0, 1], [1, 0]];
 /** The hand on the table, or now and then the one before it, which a command for it is refused. */
 const handOrOneBefore = (t: TestTable, rng: Rng) => (t.state.hand?.number ?? t.state.handCount) - (chance(rng, 90) ? 0 : 1);
 
+/**
+ * Everyone with a seat at once, as with straddles, each with `percent` chances in a hundred: they choose
+ * a move ahead of their turn, change theirs or take it back. Mostly for the spot they are in, where the
+ * table still refuses those with no turn to come and a move that is not on offer; now and then for
+ * another hand, street or bet, as a choice that was slow to arrive would be.
+ */
+export function chooseAhead(t: TestTable, rng: Rng, percent: number): void {
+  const hand = t.state.hand;
+
+  for (const seat of seated(t).filter(() => chance(rng, percent))) {
+    const late = chance(rng, 10);
+    const street = late && chance(rng, 50) ? pick(rng, STREETS)! : (hand?.street ?? 'preflop');
+    const facing = (hand?.currentBet ?? 0) + (late && chance(rng, 50) ? (1 + rng.int(3)) * (hand?.bigBlind ?? 1) : 0);
+
+    attempt(t, seatOwnerIndex(t, seat), { type: 'preAct', what: chance(rng, 15) ? null : pick(rng, PRE_ACTIONS)!, hand: handOrOneBefore(t, rng), street, facing });
+  }
+}
+
 export const FUZZ_COMMANDS: ((fuzz: Fuzz) => void)[] = [
   ({ t, who }) => attempt(t, who, { type: 'sitOut' }),
   ({ t, who }) => attempt(t, who, { type: 'sitIn' }),
@@ -117,6 +135,7 @@ export const FUZZ_COMMANDS: ((fuzz: Fuzz) => void)[] = [
       }
     }
   },
+  ({ t, rng }) => chooseAhead(t, rng, 100),
   ({ t, rng, who }) => attempt(t, who, { type: 'showCards', hand: handOrOneBefore(t, rng), cards: pick(rng, SHOWN_TOGETHER)! }),
   ({ t, rng, who }) => attempt(t, who, { type: 'huntRabbit', hand: handOrOneBefore(t, rng) }),
   ({ t, rng, playerId }) => attempt(t, someoneRunningTheGame(t, rng), { type: 'setStack', playerId, stack: rng.int(2000) }),

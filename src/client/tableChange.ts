@@ -35,6 +35,8 @@ export interface TableChange {
   current: boolean;
   /** The table returned to an earlier state: the Sheet was restored, or the viewer's own move, shown early, was taken off again. */
   wentBack: boolean;
+  /** The viewer's own move among `events` that the table made for them, chosen ahead of their turn (`PendingChoice` says so); undefined when they made none, or tapped it. */
+  madeAhead?: HandEvent;
   /** The server's time as the page reckons it when the view was put on screen, which is later than the view's own when it was slow to arrive. */
   now: number;
   /**

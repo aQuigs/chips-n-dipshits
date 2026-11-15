@@ -1,7 +1,8 @@
 import type { Command, Reaction } from '../engine/types.ts';
 import type { TableView } from '../engine/view.ts';
-import type { TurnLock } from './connection.ts';
+import type { Choice, TurnLock } from './connection.ts';
 import type { BoardCard, TableMotion } from './motion.ts';
+import { PendingChoice } from './pendingChoice.ts';
 import { PendingMove } from './pendingMove.ts';
 import { Suspense } from './suspense.ts';
 import { spotsOf, TableChances } from './tableChances.ts';
@@ -28,8 +29,9 @@ const nameOf = (view: TableView): string => view.seats[view.you.seat!]?.lastActi
 /**
  * The table as the page shows it, which is not always the table as the server last told it. Each view
  * from the server passes through the same layers on its way to the screen and to the effects, in this
- * order: `Suspense` holds back the end of a hand while the last cards of a runout turn, and
- * `PendingMove` lays the player's own move over a view that has not caught up with it. Whatever draws
+ * order: `Suspense` holds back the end of a hand while the last cards of a runout turn,
+ * `PendingMove` lays the player's own move over a view that has not caught up with it, and
+ * `PendingChoice` does the same for the move they chose ahead of their turn. Whatever draws
  * the table screen or reacts to it gets the result (`view()`, and the changes handed to `tell`), and
  * nothing goes around it. What the screen shows beyond the view is worked out from that result too:
  * `TableChances` reads the chances of the hands face up off the table as shown, never as it is.
@@ -38,6 +40,7 @@ export class ShownTable {
   private readonly news = new TableNews();
   private readonly suspense: Suspense;
   private readonly pending = new PendingMove();
+  private readonly choice = new PendingChoice();
   private readonly tableChances: TableChances;
   private readonly now: () => number;
   private readonly waited: () => number;
@@ -65,7 +68,7 @@ export class ShownTable {
 
   /** The table as the screen shows it; null until the first view has come. */
   view(): TableView | null {
-    return this.latest && this.pending.shown(this.suspense.shown(this.latest));
+    return this.latest && this.choice.shown(this.pending.shown(this.suspense.shown(this.latest)));
   }
 
   /** The last cards of a runout being turned over, which the table draws but which say nothing yet of the viewer's hand. */
@@ -104,7 +107,7 @@ export class ShownTable {
     this.latest = view;
 
     // Worked out before the table is drawn: what is held back, or laid over the view, decides what is drawn
-    const change = this.pending.see(this.suspense.see(this.news.change(before, view, this.now(), wentBack)));
+    const change = this.choice.see(this.pending.see(this.suspense.see(this.news.change(before, view, this.now(), wentBack))));
 
     this.show(change);
   }
@@ -135,6 +138,22 @@ export class ShownTable {
       if (undone?.unanswered) {
         this.out.say(`The table has no sign of your ${undone.name}, so it is still your turn.`);
       }
+    }
+  }
+
+  /**
+   * Follows the move the player chose ahead of their turn, as the connection says how it stands: going
+   * out (`sent`), or, with null, accounted for along with every choice before it. It shows as chosen
+   * from the moment it goes out, and nothing else of the table changes for it, so the effects hear
+   * nothing. Once it is accounted for the table's word shows: the choice as it was set, or nothing
+   * chosen where the table refused it or the hand had moved on, which the table's own words explain.
+   */
+  choiceIs(sent: Choice | null): void {
+    if (sent) {
+      this.choice.begin(sent);
+      this.out.draw();
+    } else if (this.choice.settle()) {
+      this.out.draw();
     }
   }
 

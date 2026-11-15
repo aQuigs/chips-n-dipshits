@@ -137,7 +137,7 @@ async function connectionThat(answer: (request: ApiRequest) => Promise<ApiRespon
   try {
     const transport: Transport = { send: answer };
     const line = new ServerLine(transport, '__BUILD__', () => undefined);
-    const listener: TableListener = { view: () => undefined, move: () => undefined, status: () => undefined, refused: () => undefined, notice: () => undefined };
+    const listener: TableListener = { view: () => undefined, move: () => undefined, chose: () => undefined, status: () => undefined, refused: () => undefined, notice: () => undefined };
     const table = new TableConnection(line, { tableId: 'ABC234', auth: { id: 'A', token: 'T' } }, new ServerClock(), listener);
 
     await table.send({ type: 'fold' });

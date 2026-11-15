@@ -25,7 +25,7 @@ import { THEMES } from '../src/client/themes.ts';
 import { shortAmount, signedAmount } from '../src/engine/amounts.ts';
 import { BADGES, badgeOf, DEFAULT_CONFIG, LIMITS, onTheClock, presetSettings, REACTION_GAP_MS, REACTION_LIFE_MS } from '../src/engine/index.ts';
 import { cardWords } from '../src/engine/handNames.ts';
-import type { Bounty, Card, Command, KnownPlayer, Straddle, TableConfig, TableView } from '../src/engine/index.ts';
+import type { Bounty, Card, Command, KnownPlayer, PreActionKind, Straddle, TableConfig, TableView } from '../src/engine/index.ts';
 import { PUT_AWAY_AFTER_MS, PUT_AWAY_MESSAGE } from '../src/server/putAway.ts';
 import { contrast } from '../tests/colorVision.ts';
 import { boxes, Gate, overlap, Rig, RigTable, SCREENS, setStageHeight, squeezed, textBoxes } from './rig.ts';
@@ -1456,6 +1456,56 @@ function foldedToTheBlinds(rig: Rig, kind: ChopTable, config: Partial<TableConfi
   table.act('Quigs', { type: 'fold' });
 
   return table;
+}
+
+// ---- A move chosen ahead of a turn ----
+
+const AHEAD_BUTTONS = '.ahead [data-action^="ahead-"]';
+const aheadChoice = (what: string) => `.ahead [data-action="ahead-${what}"]`;
+const aheadSet = (what: string) => `${aheadChoice(what)}[aria-pressed="true"]`;
+
+/** The choices ahead a page offers, leaving out the dimmed ones, as they read, the one that is set marked. */
+const aheadOffered = (page: Page) => page.locator(`${AHEAD_BUTTONS}:enabled`).evaluateAll((buttons) => buttons.map((button) => `${button.textContent}${button.getAttribute('aria-pressed') === 'true' ? ' ✓' : ''}`));
+
+/** A player chooses a move ahead from another device, for the spot the table is in. */
+function chooseAhead(table: RigTable, name: string, what: PreActionKind | null): void {
+  const hand = table.view(name).hand!;
+
+  table.act(name, { type: 'preAct', what, hand: hand.number, street: hand.street, facing: hand.currentBet });
+}
+
+// A 360 phone with its table standing and lying, and the desktop, where the bar keeps the height of a turn, and a phone
+// held sideways, where the bar stands beside the table and keeps none
+const AHEAD_LAYOUTS: { name: string; screen: ScreenName; height?: number }[] = [
+  { name: 'phone-standing', screen: 'smallPhone', height: Math.ceil(SCREENS.smallPhone.width / WIDE_ASPECT) + 1 },
+  { name: 'phone-lying', screen: 'smallPhone', height: Math.floor(SCREENS.smallPhone.width / WIDE_ASPECT) - 1 },
+  { name: 'phone-sideways', screen: 'phoneSideways' },
+  { name: 'desktop', screen: 'desktop' },
+];
+
+/** That the choices lie where they lay, to the pixel a bar beside the table may round its width by. */
+function assertSamePlaces(now: Box[], before: Box[], what: string): void {
+  const moved = now.some((box, nth) => (['left', 'top', 'right', 'bottom'] as const).some((edge) => Math.abs(box[edge] - before[nth]![edge]) > 1));
+
+  assert.ok(now.length === before.length && !moved, `${what}: ${JSON.stringify(now)}, and before ${JSON.stringify(before)}`);
+}
+
+/** The five choices ahead are whole, on the screen and apart, with what the bar says around them, and nothing scrolls sideways. Gives where they lie. */
+async function assertAheadFits(page: Page, what: string): Promise<Box[]> {
+  const { width, height } = page.viewportSize()!;
+  const choices = await boxes(page, AHEAD_BUTTONS);
+
+  assert.equal(choices.length, 5, `${what}: the choices`);
+  for (const box of [...choices, ...(await boxes(page, '.ahead-title'))]) {
+    assert.ok(box.left >= -1 && box.right <= width + 1 && box.top >= -1 && box.bottom <= height + 1, `${what}: a choice runs off the screen: ${JSON.stringify(box)} on ${width}x${height}`);
+  }
+
+  choices.forEach((one, index) => assertApart([one], choices.slice(index + 1), `${what}: two choices`));
+  assertApart(choices, await boxes(page, '.ahead-title, .extras > *, .waiting .next-hand, .seat .plate'), `${what}: a choice and what is around it`);
+  assert.deepEqual(await squeezed(page, `${AHEAD_BUTTONS}, ${AHEAD_BUTTONS} span, .ahead-title`), [], `${what}: a choice is cut off`);
+  await assertNoSidewaysScroll(page);
+
+  return choices;
 }
 
 /** What the buttons of the turn are, in the order they are drawn. */
@@ -11897,6 +11947,424 @@ const CHECKS: Check[] = [
       table.act('Kibitz', { type: 'chat', text: 'nice kings' });
       await stu.waitForSelector('.toast:has-text("You have 🏆 the high hand with three kings")');
       await stu.context().close();
+    },
+  ],
+  [
+    'a player waiting for the action has the five moves they can choose ahead in the same five places whatever they face, the ones not on offer dimmed, at nine seats on a 360 phone standing and lying, a phone held sideways and the desktop: every one is whole, on the screen and apart from the others, and none lies where a button of the turn comes up, even a turn that can only fold or call',
+    async (rig) => {
+      for (const layout of AHEAD_LAYOUTS) {
+        const table = rig.table(tenPlayers().slice(0, 9));
+        table.deal({ button: 0 });
+        const page = await table.open('Stu', layout.screen);
+        const where = (what: string) => `${layout.name}, ${what}`;
+        const turnButtons = () => boxes(page, '.turn .buttons button');
+        // Of a turn, only its buttons: how the bets of nine players lie on the table is other checks' to hold
+        const assertTurnWhole = async (turn: string): Promise<void> => {
+          assert.deepEqual(await squeezed(page, '.turn .buttons button, .turn .buttons button span'), [], where(`a button of ${turn} is cut off`));
+          assert.ok((await turnButtons()).every((box) => box.top >= 0 && box.bottom <= page.viewportSize()!.height + 1), where(`a button of ${turn} is off the screen`));
+        };
+
+        if (layout.height) {
+          await setStageHeight(page, layout.height);
+        }
+
+        // Before the flop Stu faces the big blind, with Marge to act before him
+        await page.waitForSelector('.ahead');
+        assert.deepEqual(await aheadOffered(page), ['Fold', 'Call 20', 'Call any']);
+        assert.deepEqual(await texts(page, `${AHEAD_BUTTONS}:disabled`), ['Check/Fold', 'Check']);
+        const places = await assertAheadFits(page, where('facing a bet'));
+        await shot(page, `ahead-facing-bet-${layout.name}`);
+
+        table.act(MARGE, { type: 'call' });
+        await page.waitForSelector('.turn [data-action="fold"]:enabled');
+        assert.equal(await page.locator('.ahead').count(), 0, where('choices ahead are offered on the turn itself'));
+        assertApart(places, await turnButtons(), where('a choice ahead and a button of the turn that came up'));
+        await assertTurnWhole('the turn that followed');
+
+        // Having called, he has no turn to come unless someone raises
+        table.act('Stu', { type: 'call' });
+        await page.waitForSelector('.turn', { state: 'detached' });
+        assert.equal(await page.locator('.ahead').count(), 0, where('a player whose bet stands is offered a choice ahead'));
+
+        table.act('Big Al', { type: 'raise', to: 120 });
+        await page.waitForSelector(aheadChoice('call'));
+        assert.deepEqual(await aheadOffered(page), ['Fold', 'Call 100', 'Call any']);
+
+        // On the flop nothing is bet, and three players act before him
+        table.play(passive, (view) => view.hand!.street === 'flop');
+        await page.waitForSelector(`${aheadChoice('check')}:enabled`);
+        assert.deepEqual(await aheadOffered(page), ['Fold', 'Check/Fold', 'Check', 'Check/Call any']);
+        assert.deepEqual(await texts(page, `${AHEAD_BUTTONS}:disabled`), ['Call']);
+        assertSamePlaces(await assertAheadFits(page, where('with nothing bet')), places, where('the choices moved between a bet and none'));
+        await shot(page, `ahead-nothing-bet-${layout.name}`);
+
+        // A bet bigger than his stack leaves the Check/Fold he chose set, which folds now, and every choice where it was
+        chooseAhead(table, 'Stu', 'checkFold');
+        await page.waitForSelector(aheadSet('checkFold'));
+        table.act(WIDEST, { type: 'raise', to: table.view(WIDEST).hand!.options!.maxRaiseTo });
+        await page.waitForSelector(`${aheadChoice('call')}:enabled`);
+        assert.deepEqual(await aheadOffered(page), ['Fold', 'Check/Fold ✓', 'Call all in 999,879', 'Call any']);
+        assertSamePlaces(await assertAheadFits(page, where('facing a bet of more than the stack')), places, where('the choices moved as a bet came'));
+        await shot(page, `ahead-facing-all-in-${layout.name}`);
+
+        // Taken back, it is no longer on offer: Fold says the same
+        chooseAhead(table, 'Stu', null);
+        await page.waitForSelector(`${aheadChoice('checkFold')}:disabled`);
+        assert.deepEqual(await aheadOffered(page), ['Fold', 'Call all in 999,879', 'Call any']);
+
+        // His turn has two buttons and no bet to size, the least a turn can have
+        table.act(UNICODE, { type: 'fold' });
+        table.act(MARGE, { type: 'fold' });
+        await page.waitForSelector('.turn [data-action="fold"]:enabled');
+        assert.deepEqual(await turnActions(page), ['fold', 'call']);
+        assertApart(places, await turnButtons(), where('a choice ahead and a button of a turn that can only fold or call'));
+        await assertTurnWhole('a turn that can only fold or call');
+        await shot(page, `ahead-turn-after-${layout.name}`);
+
+        // Having folded, he has none at all
+        table.act('Stu', { type: 'fold' });
+        await page.waitForSelector('.seat.me.folded');
+        assert.equal(await page.locator('.ahead').count(), 0, where('a player who folded is offered a choice ahead'));
+
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'with the chat open on a 360 phone the bar gives the chat its room and offers no choices ahead: the table is no smaller for them, the one that is set stays in sight, a tap takes it back, and it lies clear of the buttons of a turn that a raise brings',
+    async (rig) => {
+      const table = rig.table(MOTION_PLAYERS);
+      const page = await table.open('Pam', 'smallPhone');
+      const shown = () => texts(page, `${AHEAD_BUTTONS}:visible`);
+      const stage = async () => (await boxes(page, '.stage'))[0]!;
+
+      await page.clock.setFixedTime(Date.now() - 60_000);
+      await toggleFeed(page, 'smallPhone');
+      await page.waitForSelector('.feed.open');
+      const before = await stage();
+
+      // In the big blind, with three players to act before her
+      table.deal({ button: 0 });
+      await page.waitForSelector('.ahead', { state: 'attached' });
+      assert.deepEqual(await shown(), []);
+      assert.ok((await stage()).bottom >= before.bottom - 1, 'the choices took room from the table while the chat is open');
+
+      chooseAhead(table, 'Pam', 'check');
+      await page.waitForSelector(`${aheadSet('check')}:visible`);
+      assert.deepEqual(await shown(), ['Check']);
+      assert.deepEqual(await squeezed(page, `${AHEAD_BUTTONS}[aria-pressed="true"]`), []);
+      await shot(page, 'ahead-chat-open-set');
+
+      const off = page.waitForResponse((response) => (response.request().postData() ?? '').includes('"type":"preAct"'));
+      await page.tap(aheadSet('check'));
+      await off;
+      await page.waitForSelector(aheadSet('check'), { state: 'detached' });
+      assert.deepEqual(await shown(), []);
+      assert.equal(table.view('Pam').preAction, null);
+
+      // A call she chose is taken off by a raise that brings her turn: where it lay there is no button of the turn
+      table.act('Al', { type: 'raise', to: 60 });
+      chooseAhead(table, 'Pam', 'call');
+      await page.waitForSelector(`${aheadSet('call')}:visible`);
+      assert.deepEqual(await shown(), ['Call 40']);
+      const [place] = await boxes(page, aheadSet('call'));
+
+      table.act('Quigs', { type: 'raise', to: 200 });
+      table.act('Stu', { type: 'fold' });
+      await page.waitForSelector('.turn [data-action="fold"]:enabled');
+      assert.deepEqual(await turnActions(page), ['fold', 'call', 'raise']);
+      assertApart([place!], await boxes(page, '.turn .buttons button'), 'the choice that was set and a button of the turn that came up');
+
+      await page.context().close();
+    },
+  ],
+  [
+    'a choice ahead shows as set the moment it is tapped, before the table has answered, stays set through news of the table, moves when another is tapped and comes off when tapped again, on a 360 phone and the desktop; pressed with a key, the keyboard stays on it, and never lands on a button of the turn',
+    async (rig) => {
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        // The desktop's table plays in dollars and cents
+        const cents = screen === 'desktop';
+        const call = cents ? 'Call 0.25' : 'Call 10';
+        const table = rig.table(MOTION_PLAYERS, cents ? CENTS : {});
+        table.deal({ button: 0 });
+        const page = await table.open('Stu', screen);
+        const press = pressOn(page, screen);
+        const gate = await Gate.on(page, 'choices');
+        const answerTo = (what: string | null) => page.waitForResponse((response) => (response.request().postData() ?? '').includes(`"type":"preAct","what":${JSON.stringify(what)}`));
+
+        // Held on its way: the table has heard nothing, and the page shows the choice
+        await gate.close('requests');
+        await press(aheadChoice('call'));
+        await page.waitForSelector(aheadSet('call'));
+        await gate.holding();
+        assert.equal(table.view('Stu').preAction, null);
+
+        // News of the table draws the bar again, with the choice still on it
+        table.act('Quigs', { type: 'chat', text: 'good luck all' });
+        await page.waitForSelector('.feed li:has-text("good luck all")', { state: 'attached' });
+        assert.deepEqual(await aheadOffered(page), ['Fold', `${call} ✓`, 'Call any']);
+
+        // Another, tapped before the first is answered, takes its place at once and goes after it
+        const [first, second] = [answerTo('call'), answerTo('fold')];
+        await press(aheadChoice('fold'));
+        await page.waitForSelector(aheadSet('fold'));
+        assert.deepEqual(await aheadOffered(page), ['Fold ✓', call, 'Call any']);
+        assert.equal(table.view('Stu').preAction, null);
+        await shot(page, `ahead-fold-set-${screen}`);
+
+        await gate.open();
+        await first;
+        await second;
+        assert.deepEqual(table.view('Stu').preAction, ['fold']);
+        assert.deepEqual(await aheadOffered(page), ['Fold ✓', call, 'Call any'], 'the answers put an earlier choice back on the page');
+
+        // Tapped again, it comes off
+        const off = answerTo(null);
+        await press(aheadChoice('fold'));
+        await page.waitForSelector(`${aheadChoice('fold')}[aria-pressed="false"]`);
+        await off;
+        assert.equal(table.view('Stu').preAction, null);
+        assert.deepEqual(await aheadOffered(page), ['Fold', call, 'Call any']);
+
+        if (screen === 'desktop') {
+          const set = answerTo('call');
+          await page.focus(aheadChoice('call'));
+          await page.keyboard.press('Space');
+          await page.waitForSelector(aheadSet('call'));
+          await set;
+          assert.equal(await page.evaluate('document.activeElement.dataset.action'), 'ahead-call', 'the bar was drawn again and the keyboard is no longer on the choice');
+
+          // A raise takes the call off and brings the turn: the keyboard is on no button that would play a move
+          table.act('Al', { type: 'raise', to: 600 });
+          table.act('Quigs', { type: 'fold' });
+          await page.waitForSelector('.turn [data-action="fold"]:enabled');
+          assert.equal(await page.evaluate(`document.activeElement.closest('.turn') === null`), true, 'the keyboard landed on a button of the turn');
+        }
+
+        assert.deepEqual(await texts(page, '.toast:visible'), []);
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'a move chosen ahead is made the moment the action arrives, with motion on, for its player and for another, on a phone standing and lying and on the desktop: the bets slide in and land where the still table has them, and three in a row take the hand to the next street in one view',
+    async (rig) => {
+      // The layouts every check of motion holds a table's shape at
+      for (const layout of MOTION_LAYOUTS.filter((each) => !each.slower)) {
+        const table = rig.table(MOTION_PLAYERS);
+        table.deal({ button: 0, holes: { 0: 'Ah Kd', 1: 'Qc Qd', 2: '7h 7s', 3: '9c 4d' }, board: 'Kh 7c 2c 9d 3s' });
+
+        const own = await watch(table, 'Stu', layout);
+        const other = await watch(table, 'Pam', layout);
+        const where = (what: string) => `${layout.name}, ${what}`;
+        const both = async (what: string, act: () => unknown) => {
+          const seen = await own.step(what, act);
+
+          return [seen, await other.step(what, () => undefined)] as const;
+        };
+
+        // Stu chooses on another device, and both of his pages here show it
+        chooseAhead(table, 'Stu', 'call');
+        await Promise.all([own.moving, own.still].map((page) => page.waitForSelector(aheadSet('call'))));
+        assert.equal(await other.still.locator('.ahead [aria-pressed="true"]').count(), 0, where('another player is shown the choice'));
+
+        await both('the call before', () => table.act('Al', { type: 'call' }));
+
+        // Quigs calls, and the table calls for Stu in the same breath: two bets slide in, a beat apart, each from its seat
+        for (const seen of await both('a call, and the call chosen ahead after it', () => table.act('Quigs', { type: 'call' }))) {
+          const bets = flightsOf(seen, 'chips', false);
+
+          assert.deepEqual(bets.map((bet) => [bet.seat, bet.text]), [[0, '20'], [1, '20']], where('the two calls'));
+          bets.forEach((bet) => assertOver(bet.from, seen.after.plates[bet.seat!], where(`the call of seat ${bet.seat} leaves its seat`)));
+          assert.ok(bets[1]!.delay >= bets[0]!.delay, where('the call chosen ahead comes after the call that brought the action'));
+        }
+
+        assert.equal(await own.still.locator('.ahead, .turn').count(), 0, where('the player is asked nothing: their move is made'));
+        assert.equal(await text(own.still, '.seat.me .status'), 'Call');
+        await shot(own.still, `ahead-played-${layout.name}`);
+
+        // On the flop Stu is first, and the three behind him have each chosen
+        await both('the flop', () => table.act('Pam', { type: 'check' }));
+
+        chooseAhead(table, 'Pam', 'check');
+        chooseAhead(table, 'Al', 'callAny');
+        chooseAhead(table, 'Quigs', 'checkFold');
+        await other.still.waitForSelector(aheadSet('check'));
+
+        for (const seen of await both('three checks in a row and the turn card', () => table.act('Stu', { type: 'check' }))) {
+          const cards = flightsOf(seen, 'card', false);
+
+          assert.equal(cards.length, 1, where('the turn card comes'));
+          assertDrops(cards[0]!, where('the turn card'));
+        }
+
+        assert.deepEqual(table.view('Stu').hand!.boards[0], ['Kh', '7c', '2c', '9d']);
+        assert.deepEqual((await texts(other.still, '.feed li')).slice(-5), ['Stu checks', 'Pam checks', 'Al checks', 'Quigs checks', 'Turn: K♥ 7♣ 2♣ 9♦']);
+        await shot(other.still, `ahead-three-in-a-row-${layout.name}`);
+
+        for (const page of [own.moving, own.still, other.moving, other.still]) {
+          await page.context().close();
+        }
+      }
+    },
+  ],
+  [
+    'a player whose move chosen ahead is made for them is not told it is their turn, and hears the move; one whose choice a raise took off is told, has the buttons of the turn where they always are with nothing set, and a screen reader hears that the choice is off',
+    async (rig) => {
+      const table = rig.table(MOTION_PLAYERS, { name: 'Friday Night' });
+      table.deal({ button: 0 });
+      const page = await table.open('Stu', 'desktop', LISTEN);
+      const usual = await table.open('Pam', 'desktop');
+      const spoken = () => text(page, 'p.unseen[role="status"]');
+
+      // As a page slow between the rig's steps would not reckon the table later than it is
+      for (const each of [page, usual]) {
+        await each.clock.setFixedTime(Date.now() - 60_000);
+      }
+
+      chooseAhead(table, 'Stu', 'call');
+      await page.waitForSelector(aheadSet('call'));
+
+      table.act('Al', { type: 'call' });
+      await toldOf(page, 'Al');
+      await page.waitForFunction('window.played.length > 0');
+      const heard = (await page.evaluate('window.played.length')) as number;
+
+      // A fold brings the action, so the call that follows it can only be the one made for him
+      table.act('Quigs', { type: 'fold' });
+      await toldOf(page, 'Stu');
+      await page.waitForFunction(`window.played.length >= ${heard} + 2`);
+      // Long enough for a chime to have followed, had the page taken this for a turn
+      await page.waitForTimeout(300);
+      assert.deepEqual(await playedNames(page, heard), ['fold', 'chips'], 'the fold, then the player’s own call, and no chime for a turn');
+      assert.equal(await spoken(), '');
+
+      // The flop: Stu is first, which is a turn like any other and chimes, and Pam behind him has chosen to check
+      table.act('Pam', { type: 'check' });
+      await page.waitForFunction(`window.played.length >= ${heard} + 5`);
+      assert.deepEqual(await playedNames(page, heard + 2), ['knock', 'street', 'turn']);
+      chooseAhead(table, 'Pam', 'check');
+      await usual.waitForSelector(aheadSet('check'));
+
+      table.act('Stu', { type: 'raise', to: 40 });
+      await usual.waitForSelector('.turn [data-action="fold"]:enabled');
+      assert.equal(await usual.locator('.ahead, .controls [aria-pressed="true"]').count(), 0, 'something shows as chosen on the turn');
+      assert.deepEqual(await turnActions(usual), ['fold', 'call', 'raise']);
+      assert.equal(await text(usual, 'p.unseen[role="status"]'), 'Check is no longer set for your turn.');
+      await assertTurnFits(usual, 'the turn after a choice came off');
+      await shot(usual, 'ahead-dropped-turn-desktop');
+
+      // The buttons are where the buttons of a turn are for a player who chose nothing
+      const dropped = await boxes(usual, '.turn .buttons button');
+
+      table.act('Pam', { type: 'call' });
+      table.act('Al', { type: 'fold' });
+      table.act('Stu', { type: 'check' });
+      await usual.waitForSelector('.turn [data-action="check"]:enabled');
+
+      const plain = await boxes(usual, '.turn .buttons button');
+      assert.ok(dropped.length === 3 && dropped.every((box, nth) => sameBox(box, plain[nth])), `the buttons of the turn after a choice came off lie at ${JSON.stringify(dropped)}, and those of a plain turn at ${JSON.stringify(plain)}`);
+
+      await page.context().close();
+      await usual.context().close();
+    },
+  ],
+  [
+    'no order of a choice ahead and the table makes a player do what their screen did not show: held while the action arrives, lost on the way, refused, and taken back too late',
+    async (rig) => {
+      const open = async () => {
+        const table = rig.table(MOTION_PLAYERS);
+        table.deal({ button: 0 });
+        const page = await table.open('Stu', 'desktop');
+        const gate = await Gate.on(page, 'choices');
+
+        await page.clock.setFixedTime(Date.now() - 60_000);
+
+        return { table, page, gate };
+      };
+      const untouched = (table: RigTable) => table.view('Stu').seats[1]!.lastAction === 'small blind';
+      const answered = (page: Page) => page.waitForResponse((response) => (response.request().postData() ?? '').includes('"type":"preAct"'));
+
+      // Held while the action arrives: the turn comes up with nothing set, and the choice is refused when it gets there
+      const held = await open();
+      await held.gate.close('requests');
+      await held.page.click(aheadChoice('fold'));
+      await held.page.waitForSelector(aheadSet('fold'));
+      await held.gate.holding();
+
+      held.table.act('Al', { type: 'call' });
+      held.table.act('Quigs', { type: 'call' });
+      await held.page.waitForSelector('.turn [data-action="fold"]:enabled');
+      assert.equal(await held.page.locator('.ahead, [aria-pressed="true"]').count(), 0, 'held: something shows as chosen on the turn');
+
+      const late = answered(held.page);
+      await held.gate.open();
+      await late;
+      await held.page.waitForSelector('.toast:visible:has-text("The hand moved on before that arrived, so nothing is set ahead")');
+      assert.ok(untouched(held.table), 'held: the table made a move for the player');
+      assert.deepEqual(await turnActions(held.page), ['fold', 'call', 'raise']);
+      await shot(held.page, 'ahead-held-until-the-turn');
+      await held.page.context().close();
+
+      // Lost on the way: the page goes on showing the choice until it has asked the table, which has none
+      const lost = await open();
+      const polls = await Gate.on(lost.page, 'polls');
+      await lost.gate.close('requests');
+      await lost.page.click(aheadChoice('callAny'));
+      await lost.gate.holding();
+      await polls.close('requests');
+      await lost.gate.lose();
+      await lost.page.waitForSelector('.toast:visible:has-text("No answer from the table")');
+      assert.deepEqual(await aheadOffered(lost.page), ['Fold', 'Call 10', 'Call any ✓'], 'lost: the choice went off the page before the table was heard from');
+
+      await lost.gate.open();
+      await polls.open();
+      await lost.page.waitForSelector(`${aheadChoice('callAny')}[aria-pressed="false"]`);
+      assert.equal(lost.table.view('Stu').preAction, null);
+
+      lost.table.act('Al', { type: 'call' });
+      lost.table.act('Quigs', { type: 'call' });
+      await lost.page.waitForSelector('.turn [data-action="fold"]:enabled');
+      assert.ok(untouched(lost.table), 'lost: the table made a move for the player');
+      await lost.page.context().close();
+
+      // Refused: nothing is set, on the page or at the table, and the table's words say why
+      const refused = await open();
+      await refused.gate.close('requests');
+      await refused.page.click(aheadChoice('call'));
+      await refused.gate.holding();
+      await refused.gate.refuse();
+      await refused.page.waitForSelector('.toast:visible:has-text("The table is busy, try again")');
+      await refused.page.waitForSelector(`${aheadChoice('call')}[aria-pressed="false"]`);
+      assert.equal(refused.table.view('Stu').preAction, null);
+      await refused.page.context().close();
+
+      // Taken back too late: the fold was made, the page shows it and says so, and the take-back is no refusal
+      const back = await open();
+      const set = answered(back.page);
+      await back.page.click(aheadChoice('fold'));
+      await set;
+      await back.page.waitForSelector(aheadSet('fold'));
+
+      await back.gate.close('requests');
+      await back.page.click(aheadChoice('fold'));
+      await back.page.waitForSelector(`${aheadChoice('fold')}[aria-pressed="false"]`);
+      await back.gate.holding();
+
+      back.table.act('Al', { type: 'call' });
+      back.table.act('Quigs', { type: 'call' });
+      const sentence = 'That came too late: your fold was already made.';
+      await back.page.waitForSelector(`.toast:visible:has-text("${sentence}")`);
+      await back.page.waitForSelector('.seat.me.folded');
+
+      // The take-back gets there after the fold: the table answers with itself, and the page says nothing more
+      const tooLate = answered(back.page);
+      await back.gate.open();
+      assert.equal(((await (await tooLate).json()) as { ok: boolean }).ok, true, 'a take-back that came too late was refused');
+      assert.equal(back.table.view('Stu').seats[1]!.folded, true);
+      assert.deepEqual((await texts(back.page, '.toast:visible')).filter((said) => said !== sentence), []);
+      await shot(back.page, 'ahead-taken-back-too-late');
+      await back.page.context().close();
     },
   ],
 ];

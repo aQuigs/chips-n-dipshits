@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
 import type { APIResponse, Browser, BrowserContext, BrowserContextOptions, Page, Route } from 'playwright';
 
-import { FLEETING, MOVES } from '../src/client/connection.ts';
+import { CHOICES, FLEETING, MOVES } from '../src/client/connection.ts';
 import { GIF_HOSTS } from '../src/client/gifs.ts';
 import { startDevServer } from '../src/dev/server.ts';
 import type { DevServer } from '../src/dev/server.ts';
@@ -461,14 +461,14 @@ export class RigBrowser {
   }
 }
 
-/** Which of a page's requests a gate stands in the way of: the moves of a hand, the polls for news of the table, reactions, showing cards after a hand, or asking for the list of known players, the standings, or one player's nights. */
-export type Gated = 'moves' | 'polls' | 'reactions' | 'shows' | 'players' | 'standings' | 'nights';
+/** Which of a page's requests a gate stands in the way of: the moves of a hand, the choices of a move ahead of a turn, the polls for news of the table, reactions, showing cards after a hand, or asking for the list of known players, the standings, or one player's nights. */
+export type Gated = 'moves' | 'choices' | 'polls' | 'reactions' | 'shows' | 'players' | 'standings' | 'nights';
 
 /** The requests a gate stops that are not commands, by what they ask for. */
 const GATED_OPS: Partial<Record<Gated, ApiRequest['op']>> = { polls: 'poll', players: 'players', standings: 'standings', nights: 'nights' };
 
 /** The commands a gate for each other kind of request stops. */
-const GATED_COMMANDS: Partial<Record<Gated, ReadonlySet<Command['type']>>> = { moves: MOVES, reactions: FLEETING, shows: new Set(['showCards']) };
+const GATED_COMMANDS: Partial<Record<Gated, ReadonlySet<Command['type']>>> = { moves: MOVES, choices: CHOICES, reactions: FLEETING, shows: new Set(['showCards']) };
 
 /** Where a closed gate stops things: on their way to the server, which then has heard nothing, or on the way back from it. */
 export type GateSide = 'requests' | 'answers';

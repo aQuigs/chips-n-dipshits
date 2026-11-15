@@ -128,4 +128,21 @@
   :is([data-text-size='large'], [data-text-size='largest']) .runs-question .btn {
     white-space: normal;
   }
+
+  /*
+   * Four moves across, as with the offer to chop, have a quarter of the screen each, and on a phone standing
+   * "Raise to" fills its quarter as drawn in a wide font: their words stay as they were. Up to the width
+   * where a quarter has room for the words at the largest size; a phone lying has them two across.
+   */
+  @container app (max-width: 499.98px) {
+    [data-text-size] .turn .buttons:has(> .btn:nth-child(4)) {
+      --text-scale: 1;
+    }
+  }
+
+  /* The switches under the moves give up padding, as the bet's sizes do: a third row of them takes from the table what it has not got to give, and the pot goes under the viewer's bet */
+  :is([data-text-size='large'], [data-text-size='largest']) .extras .toggle {
+    gap: 6px;
+    padding: 0 8px 0 4px;
+  }
 }

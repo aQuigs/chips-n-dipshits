@@ -347,10 +347,19 @@ const STANDING: Size = { name: '375 standing', ...SCREENS.phone };
 const LYING: Size = { name: '360 lying', ...lying(SCREENS.smallPhone) };
 const PHONES: Size[] = [SMALL_STANDING, STANDING, LYING, { name: '375 lying', ...lying(SCREENS.phone) }];
 
-/** What a phone's page is looked at with, besides as it stands. The last is for a phone standing: its table at the least height it still stands at. */
-const WITH = ['a toast up', 'the chat open', 'the table just standing'] as const;
+/**
+ * What a phone's page is looked at with, besides as it stands. The last two are for a phone standing and
+ * hold its table to a height: the least it still stands at, and the least it is laid out by shares of its
+ * height at. The height a phone gives its table by itself depends on the fonts of the machine.
+ */
+const WITH = ['a toast up', 'the chat open', 'the table just standing', 'the table just too tall for a short one'] as const;
 
 type With = (typeof WITH)[number];
+
+const STANDING_ONLY: readonly With[] = ['the table just standing', 'the table just too tall for a short one'];
+
+// Up to this height a table is laid out as a short one, its rows one under another, and above it by shares of its height: `max-height` in src/client/styles/table.css
+const SHORT_TABLE_PX = 350;
 
 // Word of something earned, long enough for two lines on a phone
 const TWO_LINE_TOAST = 'You earned 🃏 Rivered and 🔥 Heater, and 🏆 the high hand with a straight flush, queen high';
@@ -377,6 +386,11 @@ async function lookWith(page: Page, { width }: Size, how: With | null, look: () 
       break;
     case 'the table just standing':
       await setStageHeight(page, Math.ceil(width / WIDE_ASPECT) + 1);
+      await look();
+      break;
+    case 'the table just too tall for a short one':
+      // Where a share of the height comes to the least, beside seats no shorter than on a taller table
+      await setStageHeight(page, SHORT_TABLE_PX + 1);
       await look();
       break;
     default:
@@ -545,7 +559,7 @@ async function sweepTable(sweep: Sweep, rig: Rig, table: RigTable, state: TableS
   for (const size of PHONES) {
     await phone.setViewportSize(size);
 
-    for (const how of [null, ...WITH.filter((how) => how !== 'the table just standing' || size.height > size.width)]) {
+    for (const how of [null, ...WITH.filter((how) => !STANDING_ONLY.includes(how) || size.height > size.width)]) {
       await lookWith(phone, size, how, () => look(phone, [size.name, how].filter(Boolean).join(', ')));
     }
   }
@@ -919,6 +933,71 @@ const historyGainsTheHand: Check = [
     const after = await hands(page);
     assert.deepEqual([after.at(0), after.at(-1), after.filter((hand) => hand.endsWith('open'))], [String(newest), '2', [`${reading} open`]]);
     assert.equal((await place(page)).lastLineAt, before.lastLineAt, 'the hand added above moved the line its reader was on');
+  },
+];
+
+// Run in the page: every mark over a seat that does not stand on the top of that seat's plate, with where each of the two is
+const MARKS_OFF_THEIR_SEATS = `[...document.querySelectorAll('.seat-reaction:not([hidden])')].flatMap((mark) => {
+  const box = (element) => {
+    const { left, top, right, bottom } = element.getBoundingClientRect();
+
+    return { left: Math.round(left), top: Math.round(top), right: Math.round(right), bottom: Math.round(bottom) };
+  };
+  const plate = document.querySelector('.table .seat[data-seat="' + mark.dataset.seat + '"] .plate');
+  const [at, on] = [box(mark), plate && box(plate)];
+  const x = (at.left + at.right) / 2;
+  const stands = on && x >= on.left && x <= on.right && at.top <= on.top && at.bottom > on.top - (at.bottom - at.top);
+
+  return stands ? [] : [mark.getAttribute('aria-label') + ' is at ' + JSON.stringify(at) + ', and the plate of its seat at ' + JSON.stringify(on)];
+})`;
+
+/** The table of a 360 phone held one way up: lying down, or standing at the least height it stands at. */
+const PHONE_HELD = {
+  lying: async (page: Page) => {
+    await page.setViewportSize(LYING);
+    await page.waitForSelector('.table.wide');
+  },
+  standing: async (page: Page) => {
+    await page.setViewportSize(SMALL_STANDING);
+    await setStageHeight(page, Math.ceil(SMALL_STANDING.width / WIDE_ASPECT) + 1);
+    await page.waitForSelector('.table.tall');
+  },
+};
+
+/**
+ * A mark is placed by where its seat's plate is, and a table that changes shape puts every seat
+ * somewhere else. Put back as the room changes, which is before the table is drawn in its new shape,
+ * the marks stand where their seats were.
+ */
+const marksFollowTheTableTurned: Check = [
+  'a reaction over a seat and a thing landed on one are over their seats still when the phone is turned on its side, and when it is turned back',
+  async (rig) => {
+    const table = TABLE_STATES.reactions.build(rig, 9);
+    const page = await table.open(VIEWER, 'smallPhone');
+
+    for (const [from, to] of [
+      ['standing', 'lying'],
+      ['lying', 'standing'],
+    ] as const) {
+      let off: string[] | null = null;
+
+      // The page takes a mark down on a timer of its own, so a turn that ran long is made again: a few times, never without end
+      for (let tries = 0; tries < FLEETING_TRIES && off === null; tries++) {
+        await PHONE_HELD[from](page);
+
+        if (!(await reactionsFlying.shown(page))) {
+          await reactionsFlying.show(rig, table, page);
+        }
+
+        await PHONE_HELD[to](page);
+        const found = (await page.evaluate(MARKS_OFF_THEIR_SEATS)) as string[];
+
+        off = (await reactionsFlying.shown(page)) ? found : null;
+      }
+
+      assert.ok(off, `the marks were gone before the phone was turned from ${from} to ${to}, ${FLEETING_TRIES} times over`);
+      assert.deepEqual(off, [], `turned from ${from} to ${to}`);
+    }
   },
 ];
 
@@ -1990,5 +2069,5 @@ export function layoutSweep(picturesIn: string): Check[] {
     },
   ]);
 
-  return [...defects, replayFromTheBar(picturesIn), historyGainsTheHand, barKeepsTheTurnsHeight(picturesIn), choicesKeepTheirPlaces, chatMakesWayForTheTurn(picturesIn), keyboardInTheBoxKeepsTheChat, lookSeesWhatATapPassesThrough, ...underTheFinger(), ...secondTapFindsNothingNew, commitsWaitFromWhenTheyAreDrawn, aRowThatMovesUpIsHeld, aHoldRunsFromWhenThePageIsFree, aHoldRunsOutOnTime, aPageInTheBackgroundLetsGo, onlyWhatCameUpOverAnotherIsHeld, ...tables, ...screens];
+  return [...defects, replayFromTheBar(picturesIn), historyGainsTheHand, barKeepsTheTurnsHeight(picturesIn), choicesKeepTheirPlaces, chatMakesWayForTheTurn(picturesIn), keyboardInTheBoxKeepsTheChat, lookSeesWhatATapPassesThrough, ...underTheFinger(), ...secondTapFindsNothingNew, commitsWaitFromWhenTheyAreDrawn, aRowThatMovesUpIsHeld, aHoldRunsFromWhenThePageIsFree, aHoldRunsOutOnTime, aPageInTheBackgroundLetsGo, onlyWhatCameUpOverAnotherIsHeld, marksFollowTheTableTurned, ...tables, ...screens];
 }

@@ -13,19 +13,17 @@ interface Showing {
 /**
  * The marks over the seats, on `layer`, which lies exactly over `stage` where the table is drawn. Each is
  * placed over the middle of its seat's plate; several on one seat stand side by side, the latest last.
+ * Whoever moves the seats, with a new view or a room of another size, calls `follow` once the table is drawn for it.
  */
 export class ReactionMarks implements SeatMarks {
   private readonly layer: HTMLElement;
   private readonly stage: HTMLElement;
   private readonly showing: Showing[] = [];
   private readonly timers = new Set<ReturnType<typeof setTimeout>>();
-  private readonly resized: ResizeObserver;
 
   constructor(layer: HTMLElement, stage: HTMLElement) {
     this.layer = layer;
     this.stage = stage;
-    this.resized = new ResizeObserver(() => this.follow());
-    this.resized.observe(layer);
   }
 
   show(mark: SeatMark, after: number): void {
@@ -95,7 +93,6 @@ export class ReactionMarks implements SeatMarks {
 
   /** Takes everything off, when the table is left. */
   dispose(): void {
-    this.resized.disconnect();
     this.timers.forEach((timer) => clearTimeout(timer));
     this.timers.clear();
     this.showing.splice(0).forEach(({ element }) => element.remove());

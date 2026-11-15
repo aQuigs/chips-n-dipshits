@@ -1043,6 +1043,9 @@ export class App {
         this.drawStage(screen, view);
       }
     }
+
+    // Once the table is drawn for the room it now has, never before: a new shape puts every seat a mark stands over somewhere else
+    screen.marks.follow();
   }
 
   private tickCountdowns(): void {

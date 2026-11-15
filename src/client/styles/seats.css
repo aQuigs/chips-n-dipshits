@@ -3,6 +3,12 @@
 /* The width of every seat but the viewer's, set on the table so the viewer's seat can measure its room by it */
 .table {
   --seat-w-other: clamp(66px, 20cqmin, 128px);
+  /* The cards of the viewer's own seat, wider than the rest, set here for what is placed by that seat's height */
+  --own-card-w: clamp(32px, 9cqmin, 62px);
+  /* How near the bottom of the table the middle of a bet from a seat along it may come: the viewer's seat at
+     its fullest (the cards down to the plate, a plate of three lines, the line under it), half a bet, and
+     the felt between the two with the little the seat stands off the edge */
+  --bottom-seat-reach: calc(var(--own-card-w) * 1.008 + 4.275em + 1.445em + 0.8em + 6px);
 }
 
 /* A column that centers its children, so a label wider than the seat spills evenly to both sides */
@@ -53,7 +59,7 @@
 }
 
 .seat.me .hole {
-  --card-w: clamp(32px, 9cqmin, 62px);
+  --card-w: var(--own-card-w);
 }
 
 .plate {
@@ -327,6 +333,15 @@
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   transform: translate(-50%, -50%);
+}
+
+/*
+ * A seat is as tall as its lines, which stop shrinking with the table once its letters are as small as
+ * they get. On a standing table a little too tall to be laid out as a short one (table.css), a share
+ * of the height alone puts the viewer's bet on the ranks of their own cards.
+ */
+.bet.from-bottom {
+  top: min(var(--y), 100% - var(--bottom-seat-reach));
 }
 
 .bet .chip {

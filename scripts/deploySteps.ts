@@ -181,6 +181,16 @@ function notLinked(elsewhere: LinkFilesElsewhere | null): string {
   );
 }
 
+/** Makes a web app. When that fails it says what may be there all the same, which the next run cannot see for a while. */
+function createWebApp({ clasp, say }: DeployDeps, description: string, version?: number): WebApp {
+  try {
+    return webAppFor(clasp.createWebApp(description, version));
+  } catch (error) {
+    say('\nThat failed, and Google may have made the web app all the same. Its list shows a new web app only after about a minute: run this again after that and it finds what is there, sooner and it makes a second.');
+    throw error;
+  }
+}
+
 /** Builds for one web app, pushes that build and has the web app serve it. Gives what was built and the version the web app was given. */
 async function publish({ clasp, checkout, say, now }: DeployDeps, app: WebApp, title: string): Promise<{ built: Built; version: number | null }> {
   say(`Building for ${app.url} and pushing that build.`);
@@ -208,11 +218,11 @@ async function unsettledAt(deps: DeployDeps, url: string, built: Built, check: s
   }
 
   return new DeployUnsettled(
-    `${url} was given this build (${built.id}), and after ${SETTLE_DEADLINE_MS / 1000} s it ${heard ? 'is still not the only one that answers there' : 'has not answered there once'}: ${other ?? 'nothing was heard'}. ` +
+    `${url} was given this build (${built.id}), and after ${SETTLE_DEADLINE_MS / 1000} s it ${heard ? `has not been alone there for ${QUIET_MS / 1000} s on end` : 'has not answered there once'}: ${other ?? 'nothing was heard'}. ` +
       (heard
-        ? 'Google was seen to take under a minute. Until only this build answers, a page there can be told the game was updated and ask for a reload, more than once. '
+        ? 'Google was seen to take under a minute. While another build answers, a page there can be told the game was updated and ask for a reload, more than once. '
         : "The web app may not have taken the version: look at the script's deployments in the Apps Script editor. Or the script asks for a permission it did not have, and answers nobody until its owner has opened the address and approved it. ") +
-      `Run "${check}" in a few minutes: it passes when only this build answers, and says so when another still does.`,
+      `Run "${check}" in a few minutes: it passes when only this build answers.`,
   );
 }
 
@@ -252,7 +262,7 @@ async function friendsBefore({ answers }: DeployDeps, url: string): Promise<Frie
 
   if (builds.length > 1) {
     throw new DeployRefused(
-      `Two builds answer at the friends' address ${url}, ${builds.map(named).join(' and ')}: that address was given a version in the last minute or so, by a deploy from another checkout or by hand, ` +
+      `Two builds answer at the friends' address ${url}, ${builds.map(named).join(' and ')}: that address was given a version in the last minute or so, by a deploy that was stopped or ran out of time, from this checkout or another, or by hand, ` +
         'and for about that long Google answers from the one it had as well. Wait a minute and run this again. Nothing was pushed.',
     );
   }
@@ -261,28 +271,42 @@ async function friendsBefore({ answers }: DeployDeps, url: string): Promise<Frie
 }
 
 /**
- * Holds a staging run to the friends' address being answered by what answered there before, and gives
- * what there is to say of it. What answers at an address is what it serves; Google's list of web apps
- * may still show either of them as it was a minute ago.
+ * Holds a staging run to what it must never do, and gives what there is to say of the friends' address.
+ * What answers at an address is what it serves; Google's list of web apps may still show either of
+ * them as it was a minute ago.
+ *
+ * All a staging run could do to the friends' address is put its own build there, so that build
+ * answering there is the alarm. Any other change is something else's doing and is said, not thrown:
+ * the look before can hear only the version an address had, in the minute after it was given another.
  */
-async function friendsAfter({ answers }: DeployDeps, url: string, before: FriendsBefore): Promise<string> {
+async function friendsAfter({ answers }: DeployDeps, url: string, before: FriendsBefore, staged: Built): Promise<string> {
+  const { builds, failed } = await askRound(answers, url);
+
+  if (builds.includes(staged.id)) {
+    throw new Error(
+      `The friends' address ${url} is answered by ${named(staged.id)}, the build this run put at the staging address, which staging must never bring about. ` +
+        "Look at the script's deployments in the Apps Script editor before doing anything else.",
+    );
+  }
+
   const untold = (why: string) => `Whether the friends' address ${url} still serves what it served could not be told from its answers: ${why}. Nothing here gives that address a version.`;
 
   if ('unknown' in before) {
     return untold(`it gave none to go by before this (${before.unknown})`);
   }
 
-  const { builds, failed } = await askRound(answers, url);
-  const moved = builds.find((build) => build !== before.build);
+  if (builds.length === 0) {
+    return untold(`it gives none now (${failed.join(', ')})`);
+  }
 
-  if (moved !== undefined) {
-    throw new Error(
-      `The friends' address ${url} was answered by ${named(before.build)} before this and is answered by ${named(moved)} now, which staging must never bring about. ` +
-        "Look at the script's deployments in the Apps Script editor before doing anything else.",
+  if (builds.some((build) => build !== before.build)) {
+    return (
+      `Note: the friends' address ${url} was answered by ${named(before.build)} before this and is answered by ${builds.map(named).join(' and ')} now. ` +
+      "That is not the build this put at the staging address, so it is not this run's doing: something else gave that address a version in the last minutes. Find out what before going live."
     );
   }
 
-  return builds.length === 0 ? untold(`it gives none now (${failed.join(', ')})`) : `The friends' address ${url} was not touched: ${named(before.build)}, which answered there before this, is still the one that answers.`;
+  return `The friends' address ${url} was not touched: ${named(before.build)}, which answered there before this, is still the one that answers.`;
 }
 
 /** Sets up a game where there is none: the Sheet and its script unless one is linked, and its web app. */
@@ -323,7 +347,7 @@ async function setUp(deps: DeployDeps, linked: boolean, record: Deployment | nul
   await checkout.build('');
   clasp.push();
 
-  const live = webAppFor(clasp.createWebApp(TITLE));
+  const live = createWebApp(deps, TITLE);
 
   await checkout.writeDeployment(live);
   await publish(deps, live, TITLE);
@@ -338,7 +362,10 @@ async function putOnRecord({ clasp, checkout }: DeployDeps): Promise<never> {
   const existing = clasp.webApps();
 
   if (existing.length === 0) {
-    throw new DeployRefused('The linked script has no web app, so there is no address to update. "npm run deploy -- --new" gives it one, at a new address.');
+    throw new DeployRefused(
+      'The linked script has no web app that Google lists, so there is no address to update. One made in the last minute is not on the list yet: if that may be, run this again in a minute. ' +
+        'Otherwise "npm run deploy -- --new" gives the script one, at a new address.',
+    );
   }
 
   // One made for staging is never the friends'. Taking one of several others would leave the links friends have on old code if it were the wrong one
@@ -362,7 +389,7 @@ async function putOnRecord({ clasp, checkout }: DeployDeps): Promise<never> {
 
 /** Puts this build on a second web app of the same script, and leaves the friends' address serving what it served. */
 async function stage(deps: DeployDeps, record: Deployment, live: ListedWebApp, listed: readonly ListedWebApp[]): Promise<void> {
-  const { clasp, checkout, say } = deps;
+  const { checkout, say } = deps;
   const kept = listed.find((app) => app.deploymentId === record.staging?.deploymentId);
   const strangers = listed.filter((app) => app !== live && app !== kept);
 
@@ -407,14 +434,8 @@ async function stage(deps: DeployDeps, record: Deployment, live: ListedWebApp, l
   let staging: WebApp | undefined = kept && record.staging;
 
   if (!staging) {
-    try {
-      // It starts on the version friends are listed as served, and gets the build for its own address below
-      staging = webAppFor(clasp.createWebApp(STAGING_TITLE, live.version));
-    } catch (error) {
-      say('\nThat failed, and Google may have made the staging web app all the same. Its list shows a new web app only after about a minute: run this again after that and it finds it, sooner and it makes a second.');
-      throw error;
-    }
-
+    // It starts on the version friends are listed as served, and gets the build for its own address below
+    staging = createWebApp(deps, STAGING_TITLE, live.version);
     await checkout.writeDeployment(withStaging(record, staging));
   }
 
@@ -423,7 +444,7 @@ async function stage(deps: DeployDeps, record: Deployment, live: ListedWebApp, l
 
   const unsettled = await unsettledAt(deps, staging.url, built, 'npm run check:live -- --staging');
   // Looked at whether or not the staging address settled: this is the one thing a staging run must not have done
-  const friends = await friendsAfter(deps, record.url, before);
+  const friends = await friendsAfter(deps, record.url, before, built);
 
   if (unsettled) {
     throw unsettled;

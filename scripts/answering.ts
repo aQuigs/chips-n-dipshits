@@ -87,26 +87,25 @@ export async function untilOnly(build: string, url: string, { answers, now, paus
   const began = now().getTime();
   let heard = false;
   let alone = 0;
-  let other: { at: number; said: (seconds: number) => string } | null = null;
+  let other: { at: number; what: string } | null = null;
 
   for (;;) {
     const { builds, failed } = await askRound(answers, url);
     const at = now().getTime();
     const stray = builds.find((each) => each !== build);
+    const notTheBuild = stray !== undefined ? `${named(stray)} answered` : failed.length > 0 ? `a call got no answer (${failed.join(', ')})` : null;
 
     heard ||= builds.includes(build);
-    alone = stray === undefined && failed.length === 0 ? alone + AT_A_TIME : 0;
+    alone = notTheBuild === null ? alone + AT_A_TIME : 0;
 
-    if (stray !== undefined) {
-      other = { at, said: (seconds) => `${named(stray)} answered ${seconds} s ago` };
-    } else if (failed.length > 0) {
-      other = { at, said: (seconds) => `a call ${seconds} s ago got no answer (${failed.join(', ')})` };
+    if (notTheBuild !== null) {
+      other = { at, what: notTheBuild };
     }
 
     const settled = at - (other?.at ?? began) >= QUIET_MS && alone >= QUIET_ANSWERS;
 
     if (settled || at - began >= SETTLE_DEADLINE_MS) {
-      return { settled, heard, other: other && other.said(Math.round((at - other.at) / 1000)) };
+      return { settled, heard, other: other && `${other.what} ${Math.round((at - other.at) / 1000)} s ago` };
     }
 
     await pause(BETWEEN_ROUNDS_MS);
@@ -145,13 +144,12 @@ export function answersOver(post: Post): Answers {
         return { failed: whyNot(error) };
       }
 
-      let answer: unknown;
+      let answer: unknown = null;
 
       try {
         answer = JSON.parse(text);
       } catch {
         // Google's own page for a script that failed, or for one that may not be opened without signing in
-        return { failed: `HTTP ${status}, and nothing the game answers with` };
       }
 
       if (typeof answer !== 'object' || answer === null || Array.isArray(answer)) {

@@ -99,6 +99,8 @@ class FakeScript implements Clasp, Answers {
   failsAfterMakingTheSheet = false;
   /** How long after a web app is given a version the one it had goes on answering at its address too, every other call. */
   mixMs = 0;
+  /** The next this many calls to an address where two versions answer all get the one it had: nothing evens the real mix out. */
+  oldNext = 0;
   /** How far behind the list of web apps is: a read shows the script as it was this long ago, and every other read as it was twice as long ago. */
   listLagMs = 0;
   /** A web app whose address answers nothing for now. */
@@ -162,8 +164,8 @@ class FakeScript implements Clasp, Answers {
       return { failed: 'no answer' };
     }
 
-    const version = this.mixedAt(deploymentId!) && this.asked++ % 2 === 0 ? app.before! : app.version;
-    const build = idOf(this.versions[version - 1]!);
+    const old = this.mixedAt(deploymentId!) && (this.oldNext > 0 ? this.oldNext-- > 0 : this.asked++ % 2 === 0);
+    const build = idOf(this.versions[(old ? app.before! : app.version) - 1]!);
 
     this.answered.push({ at: this.clock.ms, url, build });
 
@@ -483,10 +485,23 @@ test('a linked script whose only web app was made for staging has no address to 
   assert.equal(checkout.record, null);
 });
 
+test('--new whose web app was made with Google and never heard of says so, and the next run finds it and makes no second address', async () => {
+  const { script, checkout, run, told } = linked();
+  script.loseNextAnswer = true;
+
+  await assert.rejects(run('new'), /socket hang up/);
+  assert.equal(checkout.record, null);
+  assert.match(told(), /Google may have made the web app all the same\. Its list shows a new web app only after about a minute: run this again after that/);
+
+  await assert.rejects(run('new'), refused(/already has a web app, and --new makes an address only where there is none/));
+  await assert.rejects(run(), refused(/the one web app the linked script has was put in \.deployment\.json/));
+  assert.equal(script.webAppsNow().length, 1);
+});
+
 test('a linked script with no web app and no record is refused, and makes none unasked', async () => {
   const { script, run } = linked();
 
-  await assert.rejects(run(), refused(/has no web app.*npm run deploy -- --new/));
+  await assert.rejects(run(), refused(/has no web app that Google lists.*One made in the last minute is not on the list yet.*npm run deploy -- --new/));
 
   assert.deepEqual(script.calls, []);
   assert.equal(script.webApps().length, 0);
@@ -592,12 +607,13 @@ test('a staging web app on record is told from a stranger: staging goes ahead wi
 });
 
 test('a staging web app made with Google whose id never came back is found by the next run, which pushes nothing, and staged at by the one after', async () => {
-  const { script, checkout, run } = deployed();
+  const { script, checkout, run, told } = deployed();
   script.loseNextAnswer = true;
 
   await assert.rejects(run('staging'), /socket hang up/);
   assert.equal(script.webApps().length, 2, 'it was made');
   assert.equal(checkout.record!.staging, undefined, 'and this checkout does not know of it');
+  assert.match(told(), /Google may have made the web app all the same\. Its list shows a new web app only after about a minute: run this again after that/);
 
   const before = [...script.calls];
   await assert.rejects(run('staging'), refused(/a staging web app this checkout had no record of, so it was put in \.deployment\.json under "staging"/));
@@ -655,16 +671,32 @@ function movingTogether(script: FakeScript): void {
   };
 }
 
-test('staging that finds another build answering at the friends\' address than before fails loudly, whatever the list of web apps shows', async () => {
-  for (const listLagMs of [60_000, 0]) {
+test('staging that finds its own build answering at the friends\' address fails loudly, whatever the list of web apps shows and whatever answered there before', async () => {
+  for (const [listLagMs, silentBefore] of [
+    [60_000, false],
+    [0, false],
+    [0, true],
+  ] as const) {
     const { script, run, told } = deployed();
     script.listLagMs = listLagMs;
     movingTogether(script);
 
+    // The friends' address answers nothing until the staging web app is given its build
+    if (silentBefore) {
+      const update = script.updateWebApp.bind(script);
+
+      script.silent = LIVE;
+      script.updateWebApp = (...given) => {
+        script.silent = null;
+
+        return update(...given);
+      };
+    }
+
     await assert.rejects(
       run('staging'),
-      new RegExp(`was answered by build ${idOf(OLD_CODE)} before this and is answered by build ${idOf(built(webAppUrlFor('AKfycb-made-2')))} now, which staging must never bring about`),
-      `a list ${listLagMs} ms behind`,
+      new RegExp(`is answered by build ${idOf(built(webAppUrlFor('AKfycb-made-2')))}, the build this run put at the staging address, which staging must never bring about`),
+      `a list ${listLagMs} ms behind, ${silentBefore ? 'no answer' : 'an answer'} before`,
     );
     assert.doesNotMatch(told(), /Staging at|was not touched/);
   }
@@ -679,6 +711,27 @@ test('staging is refused while two builds answer at the friends\' address, which
 
   assert.deepEqual(script.calls, []);
   assert.equal(checkout.record!.staging, undefined);
+});
+
+test('a friends\' address that something else gave a version a moment ago is not laid at the staging run\'s door, though the first look there heard only the version it had', async () => {
+  const { script, checkout, run, told } = deployed();
+  script.mixMs = 60_000;
+  script.givenElsewhere(LIVE, 'code a stopped deploy put there');
+  script.oldNext = 4;
+
+  await run('staging');
+
+  const staging = checkout.record!.staging!;
+  assert.equal(script.serves(staging.deploymentId), built(staging.url));
+  assert.match(told(), new RegExp(`Staging at ${staging.url}`));
+  assert.match(
+    told(),
+    new RegExp(
+      `Note: the friends' address ${LIVE_URL} was answered by build ${idOf(OLD_CODE)} before this and is answered by build ${idOf('code a stopped deploy put there')} now\\. ` +
+        'That is not the build this put at the staging address, so it is not this run\'s doing',
+    ),
+  );
+  assert.doesNotMatch(told(), /was not touched/);
 });
 
 test('staging goes ahead when the friends\' address gives no answer to go by, and says that it could not tell', async () => {
@@ -833,8 +886,8 @@ test('an address where another build still answers at the deadline is not said t
     (error: unknown) =>
       error instanceof DeployUnsettled &&
       new RegExp(
-        `${LIVE_URL} was given this build \\(${idOf(built(LIVE_URL))}\\), and after ${SETTLE_DEADLINE_MS / 1000} s it is still not the only one that answers there: build ${idOf(OLD_CODE)} answered \\d+ s ago\\..*` +
-          'a page there can be told the game was updated.*Run "npm run check:live" in a few minutes',
+        `${LIVE_URL} was given this build \\(${idOf(built(LIVE_URL))}\\), and after ${SETTLE_DEADLINE_MS / 1000} s it has not been alone there for ${QUIET_MS / 1000} s on end: build ${idOf(OLD_CODE)} answered \\d+ s ago\\..*` +
+          'While another build answers, a page there can be told the game was updated.*Run "npm run check:live" in a few minutes',
       ).test(error.message),
   );
 
@@ -848,7 +901,7 @@ test('a staging address where another build still answers at the deadline is not
   const quiet = deployed();
   quiet.script.mixMs = Infinity;
 
-  await assert.rejects(quiet.run('staging'), (error: unknown) => error instanceof DeployUnsettled && /is still not the only one that answers there.*Run "npm run check:live -- --staging" in a few minutes/.test(error.message));
+  await assert.rejects(quiet.run('staging'), (error: unknown) => error instanceof DeployUnsettled && /has not been alone there for 45 s on end.*Run "npm run check:live -- --staging" in a few minutes/.test(error.message));
 
   assert.doesNotMatch(quiet.told(), /Staging at/);
   assert.equal(quiet.checkout.record!.staging!.build, markOf(quiet.checkout.record!.staging!.url), 'what was put there is on record, for going live to compare with');
@@ -868,7 +921,7 @@ test('an address that never answers as the build put there says so, and that the
     run(),
     (error: unknown) =>
       error instanceof DeployUnsettled &&
-      /has not answered there once: a call \d+ s ago got no answer \(no answer\)\..*look at the script's deployments in the Apps Script editor\. Or the script asks for a permission it did not have/.test(error.message),
+      /has not answered there once: a call got no answer \(no answer\) \d+ s ago\..*look at the script's deployments in the Apps Script editor\. Or the script asks for a permission it did not have/.test(error.message),
   );
 });
 

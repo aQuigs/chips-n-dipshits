@@ -85,7 +85,7 @@ test('one answer from the build the address had starts the stretch over, however
 
 test('a call that got no answer, or one from code that names no build, starts the stretch over like any other build', async () => {
   for (const [stray, said] of [
-    [{ failed: 'ECONNRESET' }, 'a call 45 s ago got no answer (ECONNRESET)'],
+    [{ failed: 'ECONNRESET' }, 'a call got no answer (ECONNRESET) 45 s ago'],
     [{ build: null }, 'code from before builds had ids answered 45 s ago'],
   ] as const) {
     const { asking, elapsed } = address({ 30_000: stray });
@@ -104,7 +104,7 @@ test('an address that never comes to answer as the build alone is given up at th
 
   const silent = address({}, { silentUntil: Infinity });
 
-  assert.deepEqual(await untilOnly(NEW, URL, silent.asking), { settled: false, heard: false, other: 'a call 0 s ago got no answer (ECONNRESET)' });
+  assert.deepEqual(await untilOnly(NEW, URL, silent.asking), { settled: false, heard: false, other: 'a call got no answer (ECONNRESET) 0 s ago' });
 
   // The build it had is still alone there: the web app did not take the version
   const untaken = address({}, { otherwise: { build: OLD } });

@@ -465,29 +465,49 @@ const pictureName = (said: string) => said.toLowerCase().replace(/[^a-z0-9]+/g, 
 
 /**
  * A way a page can be set that changes the size of everything read on it, by a class or custom
- * properties on its root.
+ * properties on its root, or by the attribute the page itself sets for one of its preferences.
  */
 interface PageSetting {
   /** Said of a look made with it; null for the page as it comes. */
   name: string | null;
   rootClass?: string;
   rootStyle?: Record<string, string>;
+  /** The attribute a preference is kept in, on the element the page keeps it on: put to `value` for the look, and back to what the page had after it. */
+  attribute?: { on: string; name: string; value: string };
 }
 
 /**
- * The page as it comes is the one way today. A setting such as larger text is a line here: every look
- * of the sweep, of the table and of every other screen, is then made with it too, and no check changes.
+ * The page as it comes, and as each preference that changes what is read on it sets it: larger text at
+ * both its steps, and the theme whose edges and weights are its own. A setting is a line here: every
+ * look of the sweep, of the table and of every other screen, is made with it too, and no check changes.
  */
-const PAGE_SETTINGS: PageSetting[] = [{ name: null }];
+const PAGE_SETTINGS: PageSetting[] = [
+  { name: null },
+  { name: 'large text', attribute: { on: '#app', name: 'data-text-size', value: 'large' } },
+  { name: 'largest text', attribute: { on: '#app', name: 'data-text-size', value: 'largest' } },
+  { name: 'High Contrast', attribute: { on: ':root', name: 'data-theme', value: 'contrast' } },
+];
 
 // Run in the page: puts a setting on the root, or takes it off again
-const setRoot = ({ rootClass, rootStyle = {} }: PageSetting, on: boolean) => `(() => {
+const setRoot = ({ rootClass, rootStyle = {}, attribute }: PageSetting, on: boolean) => `(() => {
   const root = document.documentElement;
 
   ${rootClass ? `root.classList.toggle(${JSON.stringify(rootClass)}, ${on});` : ''}
 
   for (const [name, value] of ${JSON.stringify(Object.entries(rootStyle))}) {
     ${on ? 'root.style.setProperty(name, value)' : 'root.style.removeProperty(name)'};
+  }
+
+  const { on: selector, name, value } = ${JSON.stringify(attribute ?? {})};
+  const kept = selector && document.querySelector(selector);
+
+  if (kept && ${on}) {
+    window.__sweepHad = kept.getAttribute(name);
+    kept.setAttribute(name, value);
+  } else if (kept && window.__sweepHad === null) {
+    kept.removeAttribute(name);
+  } else if (kept) {
+    kept.setAttribute(name, window.__sweepHad);
   }
 })()`;
 
@@ -505,7 +525,7 @@ class Sweep {
   /** Looks at the page as it stands, once with each way a page can be set, where `where` says which look this is. */
   async look(page: Page, where: string, read: () => Promise<Finding[]> = () => unreadable(page)): Promise<void> {
     for (const setting of PAGE_SETTINGS) {
-      const set = setting.rootClass !== undefined || setting.rootStyle !== undefined;
+      const set = setting.rootClass !== undefined || setting.rootStyle !== undefined || setting.attribute !== undefined;
 
       if (set) {
         await page.evaluate(setRoot(setting, true));

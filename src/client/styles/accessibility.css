@@ -123,4 +123,9 @@
   :is([data-text-size='large'], [data-text-size='largest']) .turn .btn {
     line-height: 1.1;
   }
+
+  /* "Three times" is one run of words, and wider at these sizes than a third of the smallest phone */
+  :is([data-text-size='large'], [data-text-size='largest']) .runs-question .btn {
+    white-space: normal;
+  }
 }

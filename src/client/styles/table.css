@@ -100,6 +100,8 @@
 
 .pot {
   font-size: calc(1.25em * var(--own-text-scale));
+  /* The page's line height over what the pot has grown by: its line is as tall as it was drawn, so nothing under it is moved onto the viewer's cards */
+  line-height: calc(1.4 / var(--own-text-scale));
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
@@ -113,9 +115,14 @@
   text-transform: uppercase;
 }
 
+/*
+ * The pots one by one do not grow with the pot where the pot grows by more than the table (a phone,
+ * accessibility.css): a pot a player, larger, runs to a line more and puts what is under it on the viewer's cards.
+ */
 .sidepots {
   color: var(--felt-muted);
-  font-size: 0.7em;
+  font-size: calc(0.7em / var(--own-text-scale));
+  line-height: 1.4;
   font-weight: 500;
 }
 
@@ -275,7 +282,7 @@
 
   /* Two boards and the bets over and under them have the room to the line on the smallest phone */
   .table.wide[data-boards='2'] .pot {
-    font-size: 1em;
+    font-size: calc(1em * var(--own-text-scale));
   }
 
   /* The pots one by one go on the pot's own line, as far as it has room for them after the pot: all of them are in the title, and the result says who won which */
@@ -314,7 +321,7 @@
     place-self: center start;
     max-width: none;
     margin-left: 0.6em;
-    font-size: 1em;
+    font-size: calc(1em * var(--own-text-scale));
     text-align: center;
   }
 

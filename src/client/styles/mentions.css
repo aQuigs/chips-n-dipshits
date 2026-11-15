@@ -59,7 +59,8 @@
 .mention-list li {
   flex: none;
   min-height: 36px;
-  padding: 8px 12px;
+  /* Larger letters take from the padding what their line gains, so a name is as tall as it was drawn and the list ends where it did, under the bar */
+  padding: calc(8px - 9.8px * (var(--text-scale) - 1)) 12px;
   overflow: hidden;
   font-size: calc(14px * var(--text-scale));
   text-overflow: ellipsis;

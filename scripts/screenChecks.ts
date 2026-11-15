@@ -36,6 +36,7 @@ import type { Flight, Spots } from './pageSpies.ts';
 import { STAND_IN_HOST } from './standInHost.ts';
 import { runChecks } from './checkRunner.ts';
 import { layoutSweep } from './layoutSweep.ts';
+import { tapsLive } from './underTheFinger.ts';
 
 const OUT = fileURLToPath(new URL('../screenshots/', import.meta.url));
 
@@ -1161,6 +1162,8 @@ const UNCONFIRMED_MARK = ' data-unconfirmed=""';
 /** What a page shows once whatever was moving on it has landed. */
 async function shownOn(page: Page): Promise<Shown> {
   await dealt(page);
+  // A control that has just come up in another's place wears the mark of it for a moment (the tap guard)
+  await tapsLive(page);
 
   const { table, bar } = (await page.evaluate(`({ table: ${DRAWN}, bar: ${drawnOf('.controls-slot')} })`)) as { table: Drawn; bar: Drawn };
 
@@ -5269,6 +5272,8 @@ const CHECKS: Check[] = [
           // A bet being typed while the flash plays is still there after it, in the same box
           await page.fill('#raise-amount', '137');
           await page.evaluate(`window.turnPanel = document.querySelector('.turn')`);
+          // What a tap reaches is asked once the turn's buttons take one (the tap guard)
+          await tapsLive(page);
           const onTopLit = await page.evaluate(ON_TOP);
           await page.evaluate('window.flash.play(); window.flash.finished');
           table.act('Stu', { type: 'chat', text: 'take your time' });
@@ -11580,6 +11585,8 @@ const CHECKS: Check[] = [
       await page.waitForSelector('.turn [data-action="check"]:enabled');
       assert.equal(await page.locator('.history').count(), 0, 'the history the replay was opened from still hides the buttons');
       assert.equal((await toastTold(page)).text, 'Your turn. The replay will pick up where you left it.');
+      // The buttons came up where the replay's lay, and take no tap for a moment (the tap guard)
+      await tapsLive(page);
       assert.ok(await page.evaluate(`(() => {
         const box = document.querySelector('.turn [data-action="check"]').getBoundingClientRect();
 

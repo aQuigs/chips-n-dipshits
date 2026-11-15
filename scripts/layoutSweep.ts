@@ -19,7 +19,7 @@ import { HISTORY_LIMIT } from '../src/server/api.ts';
 import type { Check } from './checkRunner.ts';
 import { SCROLLS, telling, unreadable } from './covered.ts';
 import type { Finding } from './covered.ts';
-import { opsSent, replayDrawn } from './pageSpies.ts';
+import { answeredTo, opsSent, replayDrawn } from './pageSpies.ts';
 import { boxes, Gate, overlap, SCREENS, setStageHeight, WIDE_ASPECT } from './rig.ts';
 import type { Rig, RigTable, ScreenName } from './rig.ts';
 import { cameUp, tellingOf, watched, watchTheBar } from './underTheFinger.ts';
@@ -1074,7 +1074,7 @@ const chatMakesWayForTheTurn = (picturesIn: string): Check => [
     await watchTheBar(page);
 
     // Sent with a tap on Send, which takes the keyboard from the box as it lands: the chat must not go down under the tap
-    await page.locator('.say [type="submit"]').tap();
+    await answeredTo(page, 'chat', () => page.locator('.say [type="submit"]').tap());
     await chatShows(false);
     await settled(page);
     await wholeTurnInSight('once the line was sent');
@@ -1111,7 +1111,7 @@ const keyboardInTheBoxKeepsTheChat: Check = [
     assert.equal(await page.locator('#chat-input').inputValue(), 'f', 'a letter typed did not go into the chat’s box');
 
     // Sent with a click on Send, which has the keyboard from then on: the chat must not go down under the click, or after it
-    await page.locator('.say [type="submit"]').click();
+    await answeredTo(page, 'chat', () => page.locator('.say [type="submit"]').click());
     await page.waitForFunction(`document.querySelector('#chat-input').value === ''`);
     await settled(page);
     await chatShows(true);
@@ -1269,8 +1269,9 @@ const ARRIVALS: Arrival[] = [
   },
 ];
 
-// A timer may fire a moment before its time
-const TIMER_SLACK_MS = 20;
+// A hold runs from when its control is drawn, and its mark can be seen only once the page has finished drawing what
+// the view brought, which on a busy machine is tens of milliseconds later: a hold is measured that much short
+const HOLD_SEEN_LATE_MS = 100;
 
 /**
  * The checks of what comes up under a finger, one for each arrival, on every screen with the chat shut
@@ -1341,7 +1342,7 @@ export const underTheFinger = (): Check[] =>
 
           heldForGood += commits.length;
           here.push(...liveAtOnce.filter((said) => said.includes(forGood)).map((said) => `  ${said} took a tap the moment it came up`));
-          here.push(...commits.filter((one) => one.lasted < TAPS_SETTLE_MS - TIMER_SLACK_MS).map((one) => `  ${one.what} was let go ${Math.round(one.lasted)} ms after it came up`));
+          here.push(...commits.filter((one) => one.lasted < TAPS_SETTLE_MS - HOLD_SEEN_LATE_MS).map((one) => `  ${one.what} was let go ${Math.round(one.lasted)} ms after it came up`));
         }
 
         wrong.push(...(here.length > 0 ? [`${where}:`, ...here] : []));
@@ -1359,6 +1360,8 @@ interface OwnTap {
   build(rig: Rig): RigTable;
   /** The button tapped. */
   tap: string;
+  /** What the tap sends the table. */
+  sends: Command['type'];
   /** On the page once the table has answered. */
   then: string;
 }
@@ -1374,6 +1377,7 @@ const OWN_TAPS: OwnTap[] = [
       return table;
     },
     tap: '.controls [data-action="show-card"][data-place="0"]',
+    sends: 'showCards',
     then: '.show-cards:not(:has([data-place="0"])) [data-place="1"]',
   },
   {
@@ -1386,6 +1390,7 @@ const OWN_TAPS: OwnTap[] = [
       return table;
     },
     tap: '.controls [data-action="sit-in"]',
+    sends: 'sitIn',
     then: '.controls [data-action="sit-out"]',
   },
 ];
@@ -1404,7 +1409,7 @@ const secondTapFindsNothingNew = OWN_TAPS.map((own): Check => [
       const sent = opsSent(page);
 
       await watchTheBar(page);
-      await page.locator(own.tap).tap();
+      await answeredTo(page, own.sends, () => page.locator(own.tap).tap());
       await page.waitForSelector(own.then);
 
       const { found } = await watched(page);
@@ -1416,6 +1421,85 @@ const secondTapFindsNothingNew = OWN_TAPS.map((own): Check => [
     }
   },
 ]);
+
+/** A tap of the player's own whose answer brings up a button that commits for good. */
+interface CommitsAfter {
+  what: string;
+  build(rig: Rig): RigTable;
+  tap: string;
+  /** The requests the tap makes, held at a gate. */
+  asks: 'moves' | 'shows';
+  then: string;
+  /** The button that commits, by what it says. */
+  commits: string;
+}
+
+const COMMITS_AFTER: CommitsAfter[] = [
+  {
+    what: 'the vote on how many times to run it, after a call all in',
+    build: (rig) => inTheBigBlind(rig, { maxRuns: 3 }, (view) => view.hand!.options!.maxRaiseTo),
+    tap: '.turn [data-action="call"]',
+    asks: 'moves',
+    then: '.controls [data-action^="rit-"]',
+    commits: 'Twice',
+  },
+  {
+    what: 'the offer of the other card, after one is shown',
+    build(rig) {
+      const table = raisedFromTheBigBlind(rig);
+
+      everyoneFolds(table);
+
+      return table;
+    },
+    tap: '.controls [data-action="show-card"][data-place="0"]',
+    asks: 'shows',
+    then: '.show-cards:not(:has([data-place="0"])) [data-place="1"]',
+    commits: 'Show ',
+  },
+];
+
+/**
+ * The deployed server takes a second or two to answer, far longer than a hold lasts. A hold counted from
+ * the tap that led to a button would be over before the button was drawn: here the answer is kept back
+ * for longer than a hold, the one wait of a length of time in these checks, and the button still waits
+ * its whole time from when it is drawn.
+ */
+const commitsWaitFromWhenTheyAreDrawn: Check = [
+  `a button whose tap cannot be taken back takes no tap for ${TAPS_SETTLE_MS} ms from when it is drawn, however long the answer that brought it took: ${COMMITS_AFTER.map((one) => one.what).join(', and ')}`,
+  async (rig) => {
+    for (const { what, build, tap, asks, then, commits } of COMMITS_AFTER) {
+      const table = build(rig);
+      const page = await table.open(VIEWER, 'smallPhone');
+
+      await page.setViewportSize(SMALL_STANDING);
+      await page.waitForSelector(`${tap}:enabled`);
+      await settled(page);
+
+      const answers = await Gate.on(page, asks);
+      const polls = await Gate.on(page, 'polls');
+
+      await watchTheBar(page);
+      await answers.close('answers');
+      await polls.close('requests');
+      await page.locator(tap).tap();
+      await answers.holding();
+      await page.evaluate(`new Promise((done) => setTimeout(done, ${TAPS_SETTLE_MS + HOLD_SEEN_LATE_MS}))`);
+      await answers.open();
+      await polls.open();
+      await page.waitForSelector(then);
+
+      const { found, held, liveAtOnce } = await watched(page);
+      const waited = held.filter((one) => one.what.includes(commits));
+
+      assert.deepEqual(liveAtOnce.filter((said) => said.includes(commits)), [], `${what}: it took a tap the moment it was drawn`);
+      assert.ok(waited.length > 0, `${what}: it was not held back: ${JSON.stringify(held)}`);
+      assert.deepEqual(waited.filter((one) => one.lasted < TAPS_SETTLE_MS - HOLD_SEEN_LATE_MS), [], `${what}: it was let go before its time`);
+      assert.deepEqual(found.flatMap(tellingOf), [], `${what}: a tap lands on what it was not aimed at`);
+      await page.close();
+    }
+  },
+];
 
 /**
  * The other side of the same rule: a tap is held back only where a different control lay, and only for
@@ -1456,7 +1540,7 @@ const onlyWhatCameUpOverAnotherIsHeld: Check = [
         const raise = held.filter((one) => one.what.includes('Raise'));
 
         assert.ok(raise.length > 0, `${where}: Raise came up where “Sit out next hand” lay and was not held back: ${JSON.stringify(held)}`);
-        assert.deepEqual(raise.filter((one) => one.lasted < TAPS_SETTLE_MS - TIMER_SLACK_MS), [], `${where}: Raise was let go before the moment was over`);
+        assert.deepEqual(raise.filter((one) => one.lasted < TAPS_SETTLE_MS - HOLD_SEEN_LATE_MS), [], `${where}: Raise was let go before the moment was over`);
         continue;
       }
 
@@ -1594,5 +1678,5 @@ export function layoutSweep(picturesIn: string): Check[] {
     },
   ]);
 
-  return [...defects, replayFromTheBar(picturesIn), historyGainsTheHand, barKeepsTheTurnsHeight(picturesIn), choicesKeepTheirPlaces, chatMakesWayForTheTurn(picturesIn), keyboardInTheBoxKeepsTheChat, lookSeesWhatATapPassesThrough, ...underTheFinger(), ...secondTapFindsNothingNew, onlyWhatCameUpOverAnotherIsHeld, ...tables, ...screens];
+  return [...defects, replayFromTheBar(picturesIn), historyGainsTheHand, barKeepsTheTurnsHeight(picturesIn), choicesKeepTheirPlaces, chatMakesWayForTheTurn(picturesIn), keyboardInTheBoxKeepsTheChat, lookSeesWhatATapPassesThrough, ...underTheFinger(), ...secondTapFindsNothingNew, commitsWaitFromWhenTheyAreDrawn, onlyWhatCameUpOverAnotherIsHeld, ...tables, ...screens];
 }

@@ -7,16 +7,16 @@
 import type { Page } from 'playwright';
 
 /** Everything on a page that takes a tap. */
-export const TAPPED = 'button, input, select, textarea, a[href], summary, [role="switch"], [role="button"]';
+const TAPPED = 'button, input, select, textarea, a[href], summary, [role="switch"], [role="button"]';
 
 /** What lies behind a dialog and closes it when tapped. */
-export const BACKDROP = '.overlay';
+const BACKDROP = '.overlay';
 
 /** The bar under the table, which also changes shape with nothing drawn anew. */
-export const BAR = '.controls-slot';
+const BAR = '.controls-slot';
 
 /** The sizes of a bet, which play nothing: only the button beside them plays what they set. One of them coming up under a finger costs nobody a chip. */
-export const PLAYS_NOTHING = '.turn .sizing *';
+const PLAYS_NOTHING = '.turn .sizing *';
 
 // The class the page puts on a control that takes no tap yet (pageTapGuard.ts)
 const SETTLING = 'taps-settling';
@@ -195,9 +195,6 @@ export async function watched(page: Page): Promise<Watched> {
 
 /** Every control that has come up where a different one lay, since the watch began. */
 export const cameUp = async (page: Page): Promise<CameUp[]> => (await watched(page)).found;
-
-/** Every control the page has held back from a tap since the watch began, once none is held any more. */
-export const heldBack = async (page: Page): Promise<Held[]> => (await watched(page)).held;
 
 /** What is wrong with what came up, in words; empty when a tap in that moment does nothing at all. */
 export const tellingOf = (found: CameUp): string[] => [

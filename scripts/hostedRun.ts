@@ -1491,6 +1491,62 @@ try {
     assert.ok(!failures || failures.getLastRow() <= 1, `something failed on the way: ${failures?.shown(2, 2)}, ${failures?.shown(2, 4)}`);
   }
 
+  console.log('A check that fails on a page told the game was updated says another build answered, and one that fails any other way says only what failed');
+  {
+    const SOON_MS = 3000;
+
+    /** Plays the check at a server whose answers `instead` may replace, and gives what the check failed with. */
+    const failedCheck = async (instead: (op: unknown, answer: () => object) => object): Promise<Error> => {
+      const pages: Page[] = [];
+      const checked = await startDevServer({
+        port: 0,
+        page: async () => html,
+        answer: async (body, _request, answering) => {
+          await answering.untilNews(body);
+
+          return instead((body as { op?: unknown }).op, () => answering.handle(body) as object);
+        },
+      });
+
+      try {
+        await playCheck({
+          address: checked.url,
+          open: async (url) => {
+            const page = await open(browser);
+
+            page.setDefaultTimeout(SOON_MS);
+            pages.push(page);
+            await page.goto(url);
+
+            return { page, app: page };
+          },
+          picture: (name) => `${PICTURES}hosted-check-failed-${name}.png`,
+          say: () => {},
+        });
+      } catch (error) {
+        return error as Error;
+      } finally {
+        for (const page of pages) {
+          await page.context().close();
+        }
+
+        await checked.close();
+      }
+
+      return assert.fail('the check passed');
+    };
+
+    // For about a minute after a web app is given a version, the one it had answers some of the calls: here, the host's first move
+    const mixed = await failedCheck((op, answer) => (op === 'act' ? { ...answer(), build: 'theoneithad0' } : answer()));
+    assert.match(mixed.message, new RegExp(`Timeout ${SOON_MS}ms exceeded`), 'what failed is still said');
+    assert.match(mixed.message, /A page of the check's is showing "The game was updated".*both may still be answering: wait a minute and run the check again/s);
+    assert.ok(mixed.cause instanceof Error, 'and the failure itself is kept');
+
+    const broken = await failedCheck((op, answer) => (op === 'act' ? { ok: false, code: 'internal', error: 'Something went wrong on the server, try again', build: UNSTAMPED_BUILD } : answer()));
+    assert.match(broken.message, new RegExp(`Timeout ${SOON_MS}ms exceeded`));
+    assert.doesNotMatch(broken.message, /The game was updated/);
+  }
+
   console.log('The Apps Script-hosted page holds up');
 } finally {
   await browser.close();

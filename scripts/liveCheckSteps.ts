@@ -100,8 +100,48 @@ async function presetNames(visitor: Visitor): Promise<string[]> {
   return answer.presets.map((preset) => preset.name);
 }
 
-/** Plays the check's short game at `place`, and throws at the first thing that is not as it should be. */
+const ANOTHER_BUILD_ANSWERED =
+  'A page of the check\'s is showing "The game was updated": an answer came to it from another build than its own, and it stopped there. ' +
+  'For about a minute after a web app is given a version, Google answers from the version it had as well, so both may still be answering: wait a minute and run the check again. ' +
+  'The deploy waits that minute out before it says "Live at" or "Staging at". If this comes after it said so, the address was given another version since.';
+
+/** Whether a page is showing that the game was updated, which it does once an answer has come to it from another build than its own. */
+async function toldOfAnUpdate(visitors: readonly Visitor[]): Promise<boolean> {
+  for (const visitor of visitors) {
+    try {
+      if (!visitor.page.isClosed() && (await visitor.app.locator('.outdated').count()) > 0) {
+        return true;
+      }
+    } catch {
+      // A page that can no longer be looked at shows nothing to go by
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Plays the check's short game at `place`, and throws at the first thing that is not as it should be.
+ * A step that failed on a page told of an update says so: such a page shows nothing more, and the step
+ * would otherwise read as one that only took too long.
+ */
 export async function playCheck(place: CheckedPlace): Promise<void> {
+  const opened: Visitor[] = [];
+  const open: CheckedPlace['open'] = async (url, phone) => {
+    const visitor = await place.open(url, phone);
+    opened.push(visitor);
+
+    return visitor;
+  };
+
+  try {
+    await play({ ...place, open });
+  } catch (error) {
+    throw (await toldOfAnUpdate(opened)) ? new Error(`${error instanceof Error ? error.message : String(error)}\n\n${ANOTHER_BUILD_ANSWERED}`, { cause: error }) : error;
+  }
+}
+
+async function play(place: CheckedPlace): Promise<void> {
   /** Does one thing a player does and says how long the table took to show it. */
   const timed = async (what: string, step: () => Promise<unknown>): Promise<void> => {
     const started = Date.now();

@@ -7,8 +7,9 @@
   --own-card-w: clamp(32px, 9cqmin, 62px);
   /* How near the bottom of the table the middle of a bet from a seat along it may come: the viewer's seat at
      its fullest (the cards down to the plate, a plate of three lines, the line under it), half a bet, and
-     the felt between the two with the little the seat stands off the edge */
-  --bottom-seat-reach: calc(var(--own-card-w) * 1.008 + 4.275em + 1.445em + 0.8em + 6px);
+     the felt between the two with the little the seat stands off the edge. The last is what the line of the
+     viewer's own stack has grown by, where larger text grows it alone (accessibility.css) */
+  --bottom-seat-reach: calc(var(--own-card-w) * 1.008 + 4.275em + 1.445em + 0.8em + 6px + (var(--own-text-scale, 1) - 1) * 1.25em);
 }
 
 /* A column that centers its children, so a label wider than the seat spills evenly to both sides */

@@ -21,7 +21,7 @@ import { SheetPlayerStore } from '../src/gas/sheetPlayerStore.ts';
 import { SheetPresetStore } from '../src/gas/sheetPresetStore.ts';
 import { RESULTS_TAB, SheetResultStore } from '../src/gas/sheetResultStore.ts';
 import { SheetStore, TABLE_COLUMNS } from '../src/gas/sheetStore.ts';
-import { UNSTAMPED_BUILD } from '../src/server/build.ts';
+import { OUTDATED_MESSAGE, UNSTAMPED_BUILD } from '../src/server/build.ts';
 import { MemoryErrorLog } from '../src/server/memoryErrorLog.ts';
 import { MemoryPlayerStore } from '../src/server/memoryPlayerStore.ts';
 import { MemoryPresetStore } from '../src/server/memoryPresetStore.ts';
@@ -1495,8 +1495,8 @@ try {
   {
     const SOON_MS = 3000;
 
-    /** Plays the check at a server whose answers `instead` may replace, and gives what the check failed with. */
-    const failedCheck = async (instead: (op: unknown, answer: () => object) => object): Promise<Error> => {
+    /** Plays the check at a server whose answers `instead` may replace, and gives what the check failed with. `stepMs` is how long a step may take. */
+    const failedCheck = async (instead: (op: unknown, answer: () => object) => object, stepMs = SOON_MS): Promise<Error> => {
       const pages: Page[] = [];
       const checked = await startDevServer({
         port: 0,
@@ -1514,7 +1514,7 @@ try {
           open: async (url) => {
             const page = await open(browser);
 
-            page.setDefaultTimeout(SOON_MS);
+            page.setDefaultTimeout(stepMs);
             pages.push(page);
             await page.goto(url);
 
@@ -1542,9 +1542,15 @@ try {
     assert.match(mixed.message, /A page of the check's is showing "The game was updated".*both may still be answering: wait a minute and run the check again/s);
     assert.ok(mixed.cause instanceof Error, 'and the failure itself is kept');
 
+    // Or one of the check's own requests, which no page hears the answer to: the version it had turns away what a page of another build
+    // may not ask. It is the check's last step, so the game before it is given the time a game takes
+    const refused = await failedCheck((op, answer) => (op === 'standings' ? { ok: false, code: 'stale', error: OUTDATED_MESSAGE, build: 'theoneithad0' } : answer()), STEP_TIMEOUT_MS);
+    assert.match(refused.message, /the standings could not be read: The game was updated\. Reload to keep playing\./);
+    assert.match(refused.message, /A request of the check's own was turned away as one from a page of another build\..*both may still be answering: wait a minute and run the check again/s);
+
     const broken = await failedCheck((op, answer) => (op === 'act' ? { ok: false, code: 'internal', error: 'Something went wrong on the server, try again', build: UNSTAMPED_BUILD } : answer()));
     assert.match(broken.message, new RegExp(`Timeout ${SOON_MS}ms exceeded`));
-    assert.doesNotMatch(broken.message, /The game was updated/);
+    assert.doesNotMatch(broken.message, /The game was updated|another build/);
   }
 
   console.log('The Apps Script-hosted page holds up');

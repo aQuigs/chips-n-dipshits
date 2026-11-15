@@ -14,6 +14,7 @@ import type { Locator, Page } from 'playwright';
 
 import { LIMITS } from '../src/engine/index.ts';
 import type { KnownPlayer, Preset } from '../src/engine/index.ts';
+import { OUTDATED_MESSAGE } from '../src/server/build.ts';
 import { CHECK_PLAYER, isCheckPlayer } from '../src/server/playerStore.ts';
 
 /** The game where a page has it: two frames deep as Apps Script serves it, the page itself elsewhere. */
@@ -100,10 +101,13 @@ async function presetNames(visitor: Visitor): Promise<string[]> {
   return answer.presets.map((preset) => preset.name);
 }
 
-const ANOTHER_BUILD_ANSWERED =
-  'A page of the check\'s is showing "The game was updated": an answer came to it from another build than its own, and it stopped there. ' +
+const BOTH_MAY_ANSWER =
   'For about a minute after a web app is given a version, Google answers from the version it had as well, so both may still be answering: wait a minute and run the check again. ' +
   'The deploy waits that minute out before it says "Live at" or "Staging at". If this comes after it said so, the address was given another version since.';
+
+// The two ways a check meets an answer from another build than its page's: the page hears it and stops, or a request of the check's own is turned away
+const ANOTHER_BUILD_ANSWERED = `A page of the check's is showing "The game was updated": an answer came to it from another build than its own, and it stopped there. ${BOTH_MAY_ANSWER}`;
+const ANOTHER_BUILD_REFUSED = `A request of the check's own was turned away as one from a page of another build. ${BOTH_MAY_ANSWER}`;
 
 /** Whether a page is showing that the game was updated, which it does once an answer has come to it from another build than its own. */
 async function toldOfAnUpdate(visitors: readonly Visitor[]): Promise<boolean> {
@@ -122,8 +126,8 @@ async function toldOfAnUpdate(visitors: readonly Visitor[]): Promise<boolean> {
 
 /**
  * Plays the check's short game at `place`, and throws at the first thing that is not as it should be.
- * A step that failed on a page told of an update says so: such a page shows nothing more, and the step
- * would otherwise read as one that only took too long.
+ * A step that failed because another build answered says so: a page told of an update shows nothing
+ * more, and the step would otherwise read as one that only took too long.
  */
 export async function playCheck(place: CheckedPlace): Promise<void> {
   const opened: Visitor[] = [];
@@ -137,7 +141,10 @@ export async function playCheck(place: CheckedPlace): Promise<void> {
   try {
     await play({ ...place, open });
   } catch (error) {
-    throw (await toldOfAnUpdate(opened)) ? new Error(`${error instanceof Error ? error.message : String(error)}\n\n${ANOTHER_BUILD_ANSWERED}`, { cause: error }) : error;
+    const message = error instanceof Error ? error.message : String(error);
+    const why = (await toldOfAnUpdate(opened)) ? ANOTHER_BUILD_ANSWERED : message.includes(OUTDATED_MESSAGE) ? ANOTHER_BUILD_REFUSED : null;
+
+    throw why ? new Error(`${message}\n\n${why}`, { cause: error }) : error;
   }
 }
 

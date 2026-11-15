@@ -30,7 +30,12 @@ const largestScript = (html: string) => [...html.matchAll(APP_SCRIPT)].map((foun
 async function servedIsBuilt(host: Visitor): Promise<void> {
   const built = await readFile(BUILT_PAGE, 'utf8');
   const served = await host.app.locator('script').last().evaluate((script) => script.textContent ?? '');
-  assert.equal(served, largestScript(built), "the script Apps Script serves is not the one in dist/gas; build and deploy again, or Apps Script has changed it on the way");
+  assert.equal(
+    served,
+    largestScript(built),
+    'the script Apps Script serves is not the one in dist/gas. If the address was given this version under a minute ago, the version it had may still be serving the page: wait a minute and run the check again. ' +
+      'If not, build and deploy again, or Apps Script has changed it on the way',
+  );
 
   // A page that took itself for another build than the script would stop at its first request and ask to be reloaded
   const servedBuild = await host.app.locator('script').last().evaluate('window.CND_BUILD');

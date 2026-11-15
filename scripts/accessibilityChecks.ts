@@ -694,10 +694,14 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
           await onFold!.waitForSelector(arrival.arrived);
           assert.deepEqual([await focused(page), await focused(onFold!)], ['Your move', 'Your move'], 'the keyboard was on a move of the last decision and is not on the bar itself');
 
-          // A key that comes a moment late for the last decision makes no move in this one
+          // A key that comes a moment late for the last decision makes no move in this one: not while its buttons, come
+          // up where the last one's lay, take no tap, and not once they do, since the keyboard is on none of them
+          await page.keyboard.press('Enter');
+          await tapsLive(page);
           await page.keyboard.press('Enter');
           await page.evaluate('void 0');
           assert.deepEqual(sent, [], 'a key pressed as the new bar was drawn made a move');
+          assert.equal(await focused(page), 'Your move', 'the keyboard left the bar as its buttons were let go');
         }
       }
 
@@ -727,6 +731,9 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
         await page.keyboard.down('Enter');
       }
       await page.keyboard.up('Enter');
+      await page.evaluate('void 0');
+      await tapsLive(page);
+      await page.keyboard.press('Enter');
       await page.evaluate('void 0');
       assert.deepEqual(sent, ['call'], 'Enter held down from one decision made a move in the next');
       assert.equal(table.view('Quigs').seats[0]!.bet, 10, 'the call of 30 was made');
@@ -763,8 +770,11 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
       await host.waitForSelector('.dialog li:has(b:text-is("Lurk")) [data-action="approve"]', { state: 'detached' });
       assert.deepEqual(await held(), ['Approve, Moth', 'Moth'], 'the keyboard did not stay on the request it was on');
 
-      // Her button came up where another's lay, and takes no tap for a moment: the keyboard is still on it once it does
+      // Her button came up where another's lay, and takes no tap for a moment: it is told from every other while it
+      // is held as after, and the keyboard is still on it once it is let go
+      assert.deepEqual(await alike(host), [], 'two controls are alike while one of them takes no tap');
       await tapsLive(host);
+      assert.deepEqual(await alike(host), []);
       assert.deepEqual(await held(), ['Approve, Moth', 'Moth'], 'the keyboard left a button as it was let go');
       await host.keyboard.press('Escape');
 

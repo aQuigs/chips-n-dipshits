@@ -62,7 +62,7 @@ export interface Watched {
 // drawn anew or the bar changes shape, with how things lay before, asking of each control that came up where
 // another had been what a tap there would reach. A control is told from another as the page tells them apart,
 // by its id and its data marks. Every control the page holds back is tapped the moment it is, where it lies
-const WATCH = `(({ tapped, backdrop, bar, playsNothing, settling }) => {
+const WATCH = `(({ tapped, backdrop, bar, playsNothing, settling, byName }) => {
   const named = (element) => element.matches(backdrop) ? 'the backdrop of the dialog' : JSON.stringify((element.getAttribute('aria-label') || element.textContent || element.placeholder || element.id || element.tagName).trim().replace(/\\s+/g, ' ').slice(0, 30));
   const reaches = (element, x, y) => element.contains(document.elementFromPoint(x, y));
   // A tap passes through a control that is held back to what it lies on, which is around it; under a dialog or a replay it reaches the cover instead
@@ -117,7 +117,9 @@ const WATCH = `(({ tapped, backdrop, bar, playsNothing, settling }) => {
       .map((control) => ({ ...control, held: control.element.classList.contains(settling) }))
       .filter(({ element, box, held }) => box.right - box.left >= 2 && box.bottom - box.top >= 2 && (reaches(element, ...middle(box)) || (held && inSightThough(element, ...middle(box)))));
 
-  const same = (a, b) => a.element === b.element || (a.is !== null && a.is === b.is);
+  // In a list with a row to a player the name is whose a button is, and what a finger aims at: with it, two buttons the
+  // page gives the same marks are still seen as two, and the one that comes up in the other's place as taking its tap
+  const same = (a, b) => a.element === b.element || (a.is !== null && a.is === b.is && (!byName || named(a.element) === named(b.element)));
   const watched = { before: controls(), found: [], told: new Set(), held: [], liveAtOnce: [] };
 
   const compare = () => {
@@ -223,9 +225,13 @@ const WATCH = `(({ tapped, backdrop, bar, playsNothing, settling }) => {
   window.__underTheFinger = watched;
 })`;
 
-/** Notes where every control on the page is, and watches the page from then on. */
-export async function watchTheBar(page: Page): Promise<void> {
-  await page.evaluate(`${WATCH}(${JSON.stringify({ tapped: TAPPED, backdrop: BACKDROP, bar: BAR, playsNothing: PLAYS_NOTHING, settling: SETTLING })})`);
+/**
+ * Notes where every control on the page is, and watches the page from then on. `byName` tells two controls
+ * apart by what they say as well as by their marks: for a list of players, where it is the name that says
+ * whose a button is, and a button that kept its marks and its place under another name is another's.
+ */
+export async function watchTheBar(page: Page, byName = false): Promise<void> {
+  await page.evaluate(`${WATCH}(${JSON.stringify({ tapped: TAPPED, backdrop: BACKDROP, bar: BAR, playsNothing: PLAYS_NOTHING, settling: SETTLING, byName })})`);
 }
 
 /**

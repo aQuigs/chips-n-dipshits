@@ -1250,6 +1250,10 @@ interface Arrival {
   gone?: string;
   /** Moves it uncovers, by what they say, each of which is held back on some screen: a wrong tap there is a move. */
   uncovers?: string[];
+  /** What it draws anew is a list with a row to a player, each button named for its player: a button that comes up where the same button of another player lay is another control, whatever the page knows it by. */
+  rowToAPlayer?: boolean;
+  /** Controls, by what they say, that lie where they lay through it: held back on no screen, since nothing came up under a finger there. */
+  staysPut?: string[];
 }
 
 const TABLE_OF_SIX = 6;
@@ -1309,6 +1313,28 @@ function callAndIsRaised(table: RigTable): void {
     return { type: 'raise', to: view.hand!.options!.minRaiseTo };
   }, viewersTurn);
 }
+
+/** A table between hands with the viewer a co-host, who has the players' requests to answer and their seats to move. */
+function viewerRunsTheTable(rig: Rig): RigTable {
+  const table = tableWithTrophy(rig, TABLE_OF_SIX, EVEN);
+
+  table.act(WIDEST, { type: 'setCohost', playerId: table.auth(VIEWER).id, on: true });
+
+  return table;
+}
+
+const [FIRST_ASKING, NEXT_ASKING] = ['Alice', 'Bob'];
+
+/** Someone new to the table asks for an open seat. */
+function asksForASeat(table: RigTable, name: string, seat: number): void {
+  table.join(name);
+  table.act(name, { type: 'requestSeat', seat, buyIn: EVEN[0]! });
+}
+
+const REQUESTS = '.dialog-body > section:first-child > .rows > li';
+// Seat 3 of the table of six, whose row is the third of six and goes to the end when they are moved to the last seat
+const MOVED = NAMES[2]!;
+const LAST_SEAT = 8;
 
 // The mark a move's button carries for the decision it answers: decisionOf in src/client/render/controls.ts
 const decisionMark = (table: RigTable) => `${table.view(VIEWER).hand!.number}.${table.view(VIEWER).hand!.turn}`;
@@ -1421,6 +1447,53 @@ const ARRIVALS: Arrival[] = [
     step: (table) => table.play(folding, (view) => view.hand!.stage === 'done'),
     then: '.message.result',
   },
+  {
+    when: 'the first of two requests for a seat is withdrawn with the list of players open, and the other’s Approve and Deny move up to where its own lay',
+    build(rig) {
+      const table = viewerRunsTheTable(rig);
+
+      asksForASeat(table, FIRST_ASKING, 6);
+      asksForASeat(table, NEXT_ASKING, 7);
+
+      return table;
+    },
+    open: (page) => openFromMenu(page, 'players'),
+    step: (table) => table.act(FIRST_ASKING, { type: 'cancelRequest' }),
+    then: `${REQUESTS}:only-child`,
+    rowToAPlayer: true,
+  },
+  {
+    when: 'a request for a seat comes in with the list of players open, and every seated player’s buttons move down under it',
+    build: viewerRunsTheTable,
+    open: (page) => openFromMenu(page, 'players'),
+    step: (table) => asksForASeat(table, FIRST_ASKING, 6),
+    then: '.dialog [data-action="deny"]',
+    rowToAPlayer: true,
+  },
+  {
+    when: 'a player is moved to the last seat with the list of players open, and the rows after theirs move up',
+    build: viewerRunsTheTable,
+    open: (page) => openFromMenu(page, 'players'),
+    step: (table) => table.act(WIDEST, { type: 'moveSeat', playerId: table.auth(MOVED).id, seat: LAST_SEAT }),
+    then: `.dialog-body .rows > li:last-child:has-text("seat ${LAST_SEAT + 1}")`,
+    rowToAPlayer: true,
+  },
+  {
+    when: 'someone whose name comes first joins the table with Mute players open, and every switch moves down a row',
+    build: (rig) => tableWithTrophy(rig, TABLE_OF_SIX, EVEN),
+    open: (page) => openFromMenu(page, 'mute'),
+    step: (table) => table.join('Aaron'),
+    then: '.dialog .rows > li:first-child:has-text("Aaron")',
+    rowToAPlayer: true,
+  },
+  {
+    when: 'a hand ends with the night’s numbers open and two players change places in them, under a leader who stays where they were',
+    build: (rig) => waitingBehindTheLongestCall(rig, TABLE_OF_SIX),
+    open: (page) => openFromMenu(page, 'tonight'),
+    step: (table) => table.play(folding, (view) => view.hand!.stage === 'done'),
+    then: '.message.result',
+    staysPut: [WIDEST],
+  },
 ];
 
 // A hold is timed from when the watch first sees its button held, which is before the page is free again and the
@@ -1483,7 +1556,7 @@ export const underTheFinger = (): Check[] =>
           const sent = opsSent(page);
           const polls = arrival.inOneView ? await Gate.on(page, 'polls') : null;
 
-          await watchTheBar(page);
+          await watchTheBar(page, arrival.rowToAPlayer);
           await polls?.close('requests');
 
           return { page, sent, polls, where: `${size?.name ?? 'desktop'}${chat ? ', the chat open' : ''}` };
@@ -1526,6 +1599,7 @@ export const underTheFinger = (): Check[] =>
         }
 
         here.push(...held.filter((one) => one.sameLetGo === false).map((one) => `  ${one.what} is not the control it was once let go`));
+        here.push(...held.filter((one) => (arrival.staysPut ?? []).some((says) => one.what.includes(says))).map((one) => `  ${one.what} took no tap for a moment, and lies where it lay`));
 
         if (forGood !== undefined) {
           const commits = held.filter((one) => one.what.includes(forGood));

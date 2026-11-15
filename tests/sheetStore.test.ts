@@ -1404,6 +1404,8 @@ test('a table is asked its last words while its row is still in the Tables tab, 
     return [buyIn(-50, state.id)];
   };
 
+  const asSaved = tables.cells[1]!.slice(0, 9);
+
   ledger.refuseWritesAfter(0);
   sweep(lastWords);
 
@@ -1411,6 +1413,7 @@ test('a table is asked its last words while its row is still in the Tables tab, 
   assert.deepEqual(idsIn(tables), ['OLD222', 'NEW333'], 'it stays where its record is still waiting');
   assert.equal(archive(), null);
   assert.match(String(tables.cells[1]![9]), /"id":"OLD222:1:away:0"/);
+  assert.deepEqual(tables.cells[1]!.slice(0, 9), asSaved, 'the table itself is cell for cell as it was saved, so code too old to read this code\'s tables can still read this one');
   assert.equal(anotherRun().read('OLD222')!.id, 'OLD222');
 
   ledger.acceptWrites();

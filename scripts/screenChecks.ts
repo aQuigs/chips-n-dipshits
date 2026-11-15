@@ -12545,6 +12545,58 @@ const CHECKS: Check[] = [
     },
   ],
   [
+    'a player whose choice ahead came off with their seat, removed by the host or standing up on another device, is not told anything came too late when the next bet folds them: they changed nothing, and the fold is that of a player who left',
+    async (rig) => {
+      for (const leaves of ['removed by the host', 'standing up on another device'] as const) {
+        const table = rig.table(MOTION_PLAYERS, { actionSeconds: 30 });
+        table.deal({ button: 0 });
+
+        const page = await table.open('Stu', 'desktop');
+        const set = page.waitForResponse((response) => (response.request().postData() ?? '').includes('"type":"preAct"'));
+        await page.click(aheadChoice('callAny'));
+        await set;
+        await page.waitForSelector(aheadSet('callAny'));
+
+        // The seat is given up and the next bet comes round, both between two of this page's updates, as on a slow line
+        const polls = await Gate.on(page, 'polls');
+        await polls.close('answers');
+
+        if (leaves === 'removed by the host') {
+          table.act('Quigs', { type: 'kick', playerId: table.auth('Stu').id });
+        } else {
+          const other = await table.open('Stu', 'phone');
+          const stood = other.waitForResponse((response) => (response.request().postData() ?? '').includes('"type":"standUp"'));
+          await other.tap('[data-action="menu"]');
+          await other.tap('[data-action="stand"]');
+          await other.tap('[data-action="confirm"]');
+          await stood;
+
+          table.act('Al', { type: 'raise', to: 100 });
+          table.act('Quigs', { type: 'call' });
+          await table.heardBy(other);
+          await other.waitForSelector('.seat.folded:has-text("Stu")');
+          assert.deepEqual((await toasts(other)).map((toast) => toast.text).filter((said) => said.includes('too late')), [], 'on the device he stood up on');
+          await other.context().close();
+        }
+
+        if (leaves === 'removed by the host') {
+          table.act('Al', { type: 'raise', to: 100 });
+          table.act('Quigs', { type: 'call' });
+        }
+
+        assert.deepEqual(table.view('Quigs').hand!.events.filter((event) => event[1] === 1).at(-1), ['fold', 1, true], `${leaves}: the hand did not fold him unasked, so the check shows nothing`);
+
+        await polls.open();
+        await table.heardBy(page);
+        await page.waitForSelector('.seat.folded:has-text("Stu")');
+        assert.deepEqual((await toasts(page)).map((toast) => toast.text), [], `${leaves}: he was told something came too late, or something else that is not so`);
+        assert.equal(await page.locator('.ahead [aria-pressed="true"]').count(), 0, `${leaves}: a choice still shows as set`);
+        await shot(page, `ahead-off-with-the-seat-${leaves.replaceAll(' ', '-')}`);
+        await page.context().close();
+      }
+    },
+  ],
+  [
     'a page of the rig tells the time by the rig’s clock alone: it stands still through a real wait, goes on with the clock when the check moves it, with news or with none, is the rig’s again once a page loaded anew has heard from the table, and is what a move’s wait for its answer is counted by',
     async (rig) => {
       const table = rig.table(['Quigs', 'Pam', 'Sam'].map((name) => ({ name, stack: 1000 })), { actionSeconds: 60 });

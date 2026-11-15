@@ -1368,6 +1368,31 @@ test('a call made at another price than the screen showed is told: Call any was 
   assert.equal(await change, 'refused');
 });
 
+test('a player whose choice came off with their seat is not told anything came too late when the hand folds them: the fold is that of a player who left, and they changed nothing', async (t) => {
+  for (const leaves of ['is removed by the host', 'stands up on another device'] as const) {
+    const { server, page } = await waitingFor(t, 'Stu');
+    await Promise.all([page.choose('callAny'), page.wire.answer('act')]);
+    assert.deepEqual(page.view.preAction, ['callAny']);
+
+    // Both between two of the page's updates: the seat is given up, and the next bet reaches a player the hand does not wait for
+    if (leaves === 'is removed by the host') {
+      server.act('Quigs', { type: 'kick', playerId: server.session('Stu').auth.id });
+    } else {
+      server.act('Stu', { type: 'standUp' });
+    }
+
+    server.act('Quigs', { type: 'raise', to: 60 });
+    await page.wire.answer('poll');
+
+    assert.deepEqual(page.events(-1).filter((event) => event[1] === 1).at(-1), ['fold', 1, true], leaves);
+    assert.equal(page.view.preAction, null, leaves);
+    assert.deepEqual(page.said, [], `a player who ${leaves}`);
+
+    // Their own fold is heard, since no tap of theirs made it
+    assert.deepEqual(page.heard, ['chips', 'fold'], leaves);
+  }
+});
+
 test('a choice the table has that the screen did not show is told in a sentence: one made on another device, never one tapped here', async (t) => {
   const { server, page } = await waitingFor(t, 'Stu');
   const hand = page.view.hand!;

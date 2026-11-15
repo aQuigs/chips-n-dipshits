@@ -71,9 +71,16 @@ function droppedLine({ before, view, madeAhead }: TableChange): string | null {
   return chosen && !view.preAction && stillToAct && !madeAhead ? `${named(chosen, view.config)} is no longer set for your turn.` : null;
 }
 
-/** The table made another move than the choice on screen stood for: they had changed it or taken it back, and that got there too late. */
+/** Whether the hand made this move for a player it does not wait for, who is away or giving up their seat: no choice of theirs, made ahead or otherwise. */
+const unasked = (move: HandEvent): boolean => (move[0] === 'fold' || move[0] === 'check') && move[2] === true;
+
+/**
+ * The table made another move than the choice on screen stood for: they had changed it or taken it back,
+ * and that got there too late. A move the hand made unasked is not that: the player stood up, here or on
+ * another device, or was taken from their seat, the choice came off with the seat, and nothing was late.
+ */
 function tooLateLine({ before, events, madeAhead }: TableChange): string | null {
-  return madeAhead && before && !madeAsShown(before, events, madeAhead) ? `That came too late: your ${madeAhead[0]} was already made.` : null;
+  return madeAhead && before && !unasked(madeAhead) && !madeAsShown(before, events, madeAhead) ? `That came too late: your ${madeAhead[0]} was already made.` : null;
 }
 
 /**

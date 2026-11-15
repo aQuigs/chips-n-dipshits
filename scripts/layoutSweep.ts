@@ -951,16 +951,20 @@ const MARKS_OFF_THEIR_SEATS = `[...document.querySelectorAll('.seat-reaction:not
   return stands ? [] : [mark.getAttribute('aria-label') + ' is at ' + JSON.stringify(at) + ', and the plate of its seat at ' + JSON.stringify(on)];
 })`;
 
-/** The table of a 360 phone held one way up: lying down, or standing at the least height it stands at. */
+/**
+ * The table of a 360 phone held one way up: lying down, or standing at the least height it stands at. Each
+ * waits for the page to have laid itself out for the room: standing is two changes of the room, and the
+ * table is tall after the first, so its shape alone says nothing of the second.
+ */
 const PHONE_HELD = {
   lying: async (page: Page) => {
     await page.setViewportSize(LYING);
-    await page.waitForSelector('.table.wide');
+    await settled(page);
   },
   standing: async (page: Page) => {
     await page.setViewportSize(SMALL_STANDING);
     await setStageHeight(page, Math.ceil(SMALL_STANDING.width / WIDE_ASPECT) + 1);
-    await page.waitForSelector('.table.tall');
+    await settled(page);
   },
 };
 

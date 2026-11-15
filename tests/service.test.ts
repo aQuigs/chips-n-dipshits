@@ -409,11 +409,18 @@ test('integers from random bytes cover the whole range evenly', () => {
 
 // ---- Old tables put away ----
 
+// The cache behind each store over a Sheet, for a test that needs it as another version of the game leaves it
+const CACHE_OF = new WeakMap<TableStore, FakeCache>();
+
 function sheetStore(): TableStore {
   const lock = new FakeLock();
   const spreadsheet = new FakeSpreadsheet(lock);
+  const cache = new FakeCache();
+  const store = new SheetStore({ spreadsheet: () => spreadsheet, cache, lock, flush: () => {} });
 
-  return new SheetStore({ spreadsheet: () => spreadsheet, cache: new FakeCache(), lock, flush: () => {} });
+  CACHE_OF.set(store, cache);
+
+  return store;
 }
 
 const EITHER_STORE: [string, () => TableStore][] = [
@@ -538,7 +545,10 @@ for (const [kind, storeOf] of EITHER_STORE) {
 
     // A later version of the game saved the table, and then this one was put back
     const newer = STATE_SCHEMA + 1;
-    store.transact(tableId, (state) => ({ save: { ...state!, schema: newer, version: state!.version + 1 }, at: clock.time, effects: [], result: null }));
+    const savedAs = store.transact(tableId, (state) => ({ save: { ...state!, schema: newer, version: state!.version + 1 }, at: clock.time, effects: [], result: state!.version + 1 }));
+
+    // That version keeps what it caches of a table under names of its own, so this one's cache has nothing of the save
+    CACHE_OF.get(store)?.entries.clear();
 
     const requests = [
       { op: 'poll', tableId, auth: host.auth, since: -1 },
@@ -563,6 +573,12 @@ for (const [kind, storeOf] of EITHER_STORE) {
       assert.equal(row.tableId, tableId);
       assert.match(row.message, new RegExp(`saved by a newer version of the game \\(schema ${newer}; this version reads up to schema ${STATE_SCHEMA}\\)\\. Deploy that version again, or restore the Sheet to before it was deployed`));
     }
+
+    // A page's poll asks to be held. The host asks first whether to hold it, and of one it holds, whether there is news:
+    // neither may be what fails, or the page is told "Something went wrong" and never hears what did
+    assert.equal(service.waitFor({ ...requests[0], holdMs: 25_000 }), null, 'the poll is not held, so that it is answered at once');
+    assert.equal(service.hasNews(tableId, savedAs), true, 'and one that was being held is let go to be answered');
+    assert.equal(errors.rows.length, 4, 'neither is a failure of its own');
 
     // Nothing was saved over it: it is still the newer version's table
     assert.throws(() => store.transact(tableId, (state) => ({ save: null, effects: [], result: state })), /saved by a newer version/);

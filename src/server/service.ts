@@ -274,7 +274,8 @@ export class PokerService {
 
       return { tableId, since, ms: holdMs };
     } catch (error) {
-      if (error instanceof ApiFailure) {
+      // Not held, and so answered at once by `handle`: with a refusal, or with what became of a table a newer version saved
+      if (error instanceof ApiFailure || error instanceof NewerTable) {
         return null;
       }
 
@@ -285,9 +286,19 @@ export class PokerService {
   /** Whether a poll that already has version `since` of a table would get anything back. */
   hasNews(tableId: string, since: number): boolean {
     const id = wellFormedTableId(tableId);
-    const peek = id === null ? null : this.store.peek(id);
 
-    return !peek || peek.version !== since || (peek.wakeAt !== null && peek.wakeAt <= this.clock.now());
+    try {
+      const peek = id === null ? null : this.store.peek(id);
+
+      return !peek || peek.version !== since || (peek.wakeAt !== null && peek.wakeAt <= this.clock.now());
+    } catch (error) {
+      // Saved by a newer version while the poll was held: that is news, and `handle` is the one to say it
+      if (error instanceof NewerTable) {
+        return true;
+      }
+
+      throw error;
+    }
   }
 
   /**

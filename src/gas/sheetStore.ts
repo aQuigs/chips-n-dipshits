@@ -776,9 +776,11 @@ export class SheetStore implements TableStore {
   /**
    * Moves old tables from the Tables tab to the Archive, under the lock. Each step leaves every table
    * in at least one of the two: a table is written to the Archive, and that write pushed through,
-   * before anything of it is taken out of Tables, and its cache entries go before its row does, so the
-   * cache never answers for a table the tab no longer has. Its row is emptied, never deleted: no other
-   * table's row moves, so no row number remembered for another table is made wrong.
+   * before anything of it is taken out of Tables, and its cache entries go before its row does, so
+   * this version's cache never answers for a table the tab no longer has. A version of another schema
+   * has entries of its own, which are not this one's to remove: it may show such a table from them
+   * until they run out, and finds it gone the first time something is done there. Its row is emptied,
+   * never deleted: no other table's row moves, so no row number remembered for another table is made wrong.
    */
   private sweep(now: number, lastWords: LastWords): void {
     const tables = this.sheet('tables');

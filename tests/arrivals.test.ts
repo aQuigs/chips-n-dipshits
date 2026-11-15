@@ -6,8 +6,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
+import { STATE_SCHEMA } from '../src/engine/index.ts';
 import type { TableState } from '../src/engine/index.ts';
-import { CacheArrivalKeys } from '../src/gas/cacheArrivalKeys.ts';
+import { arrivalEntry, CacheArrivalKeys } from '../src/gas/cacheArrivalKeys.ts';
 import { SheetPlayerStore } from '../src/gas/sheetPlayerStore.ts';
 import { SheetStore } from '../src/gas/sheetStore.ts';
 import type { ApiResponse, Auth, Who } from '../src/server/api.ts';
@@ -282,14 +283,14 @@ for (const [kind, setup] of KINDS) {
 
     assert.equal(ARRIVAL_KEY_SECONDS, 600);
     if (cache) {
-      assert.deepEqual([...cache.seconds].filter(([key]) => key.includes(KEY)), [[`arrival:${KEY}`, ARRIVAL_KEY_SECONDS]]);
+      assert.deepEqual([...cache.seconds].filter(([key]) => key.includes(KEY)), [[arrivalEntry(KEY), ARRIVAL_KEY_SECONDS]]);
     }
 
     sameMember(first, join(host.view.id, 'Ann', KEY));
 
     clock.time += ARRIVAL_KEY_SECONDS * 1000;
     if (cache) {
-      cache.entries.delete(`arrival:${KEY}`);
+      cache.entries.delete(arrivalEntry(KEY));
     }
 
     assert.match(failure(join(host.view.id, 'Ann', KEY)).error, NAME_TAKEN);
@@ -361,8 +362,11 @@ test('what is kept under a key in the script cache is which table and member, an
   const ann = joined(join(host.view.id, 'Ann', KEY));
 
   const kept = [...cache.entries].filter(([key]) => key.startsWith('arrival:'));
-  assert.deepEqual(kept.map(([key]) => key).sort(), [`arrival:${KEY}`, `arrival:${OTHER_KEY}`].sort());
-  assert.deepEqual(Object.keys(JSON.parse(cache.entries.get(`arrival:${KEY}`)!) as object).sort(), ['asked', 'memberId', 'tableId']);
+  assert.deepEqual(kept.map(([key]) => key).sort(), [arrivalEntry(KEY), arrivalEntry(OTHER_KEY)].sort());
+
+  // Under a name that carries the schema, like all else that is cached of a table: no version reads what another kept
+  assert.equal(arrivalEntry(KEY), `arrival:${STATE_SCHEMA}:${KEY}`);
+  assert.deepEqual(Object.keys(JSON.parse(cache.entries.get(arrivalEntry(KEY))!) as object).sort(), ['asked', 'memberId', 'tableId']);
 
   for (const [, value] of kept) {
     assert.ok(!value.includes(ann.auth.token) && !value.includes(host.auth.token));
@@ -400,7 +404,7 @@ test('what the cache holds under a key that is not an arrival, as after a versio
   const left = ['not json', 'null', '{"tableId":"ABC234"}', JSON.stringify({ tableId: host.view.id, memberId: 7, asked: 'x' })];
 
   for (const [index, name] of ['Ann', 'Bob', 'Cat', 'Dee'].entries()) {
-    cache.entries.set(`arrival:${KEY}`, left[index]!);
+    cache.entries.set(arrivalEntry(KEY), left[index]!);
     assert.equal(joined(join(host.view.id, name, KEY)).view.you.name, name, left[index]!);
   }
 });

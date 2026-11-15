@@ -15,6 +15,7 @@ import type { Plugin } from 'esbuild';
 
 import { buildAll, buildFiles, buildOf, pushedMark } from '../scripts/bundle.ts';
 import type { Build } from '../scripts/bundle.ts';
+import { arrivalEntry } from '../src/gas/cacheArrivalKeys.ts';
 import type { ApiRequest, ApiResponse, Built } from '../src/server/api.ts';
 import { UNSTAMPED_BUILD } from '../src/server/build.ts';
 import { FakeCache, FakeLock, FakeSpreadsheet } from './fakes.ts';
@@ -181,7 +182,7 @@ test('the script pushed to Apps Script answers an arrival asked again under its 
   assert.ok(created.ok && created.kind === 'joined');
 
   // Every run of the script starts with an empty memory, so only the cache can be what a later run finds
-  assert.deepEqual([...script.cache.entries.keys()].filter((entry) => entry.includes(key)), [`arrival:${key}`]);
+  assert.deepEqual([...script.cache.entries.keys()].filter((entry) => entry.includes(key)), [arrivalEntry(key)]);
 
   const again = call(script, { op: 'create', name: 'Host', key });
   assert.ok(again.ok && again.kind === 'joined');

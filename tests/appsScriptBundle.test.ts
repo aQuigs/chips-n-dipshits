@@ -4,6 +4,7 @@
  * browser fails here instead of on the first real deployment.
  */
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -225,6 +226,24 @@ test('what is pushed to Apps Script has a mark that changes with any of it, the 
   assert.notEqual(pushedMark(withOtherAccess), pushedMark(files), 'a deploy with another manifest is not the deploy that was staged');
   assert.notEqual(pushedMark({ ...files, 'gas/Code.js': `${files['gas/Code.js']}\n` }), pushedMark(files));
   assert.equal(pushedMark({ ...files, 'web/index.html': 'anything' }), pushedMark(files), 'the page for another host is not pushed');
+});
+
+test('the same sources build to the same id from whatever folder the build is run in', async () => {
+  const elsewhere = await mkdtemp(join(tmpdir(), 'cnd-elsewhere-'));
+
+  try {
+    // In a process of its own: the bundler takes the folder it works from when it is first loaded
+    const built = execFileSync(
+      process.execPath,
+      ['--input-type=module', '-e', `const { buildFiles } = await import(${JSON.stringify(new URL('../scripts/bundle.ts', import.meta.url).href)}); console.log((await buildFiles(${JSON.stringify(DEPLOYED_AT)})).id);`],
+      { cwd: elsewhere, encoding: 'utf8' },
+    );
+
+    // A deploy waits to hear the id it built at the address, and a page stops at an answer that carries another
+    assert.equal(built.trim(), (await BUILT).id);
+  } finally {
+    await rm(elsewhere, { recursive: true, force: true });
+  }
 });
 
 test('a deploy is handed the id its build answers with, and the mark of the files it wrote for Apps Script, appsscript.json among them', async () => {

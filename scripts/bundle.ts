@@ -2,7 +2,7 @@ import { build } from 'esbuild';
 import type { Plugin } from 'esbuild';
 import { createHash } from 'node:crypto';
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { STYLESHEETS } from '../src/client/styles/order.ts';
@@ -33,6 +33,9 @@ function api(body) { return CND.api(body); }
 async function bundle(entry: string, options: Parameters<typeof build>[0] = {}): Promise<string> {
   const result = await build({
     entryPoints: [pathOf(entry)],
+    // A script that is not minified names each of its modules by its path from here, and the build's id is a hash of
+    // that text: from the repo's root it is the same id wherever the build is run
+    absWorkingDir: resolve(pathOf('.')),
     bundle: true,
     write: false,
     format: 'iife',
@@ -181,7 +184,7 @@ export interface Build {
  * pointed at the deployed script once there is one.
  *
  * The id is a hash of the page and the script as built, before it is written into them. So the same
- * sources give the same id, whenever and however often they are built, and a deploy that changes
+ * sources give the same id, whenever, wherever and however often they are built, and a deploy that changes
  * nothing a page or the server runs leaves the pages that are open alone.
  * `plugins` are esbuild's, for a test to build from sources other than the ones in the tree.
  */

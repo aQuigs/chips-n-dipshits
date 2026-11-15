@@ -33,8 +33,10 @@ export interface DevServerOptions {
   answer?: (body: unknown, request: IncomingMessage, server: Answering) => Promise<unknown>;
 }
 
-/** The two things the server does with a request to the game, for whoever answers in its place. */
+/** What the server does with a request to the game, for whoever answers in its place. */
 export interface Answering {
+  /** Whether a poll that already has version `since` of a table would get anything back. */
+  hasNews(tableId: string, since: number): boolean;
   /** Resolves when a poll's wait for news is over, and at once for anything else. */
   untilNews(body: unknown): Promise<void>;
   /** The game's answer, as the table stands when it is asked. */
@@ -112,7 +114,7 @@ export async function startDevServer(options: DevServerOptions): Promise<DevServ
   };
 
   // Whichever build the server is when it is asked, which a deploy may change while a request is held
-  const answering: Answering = { untilNews: holdUntilNews, handle: (body) => service.handle(body) };
+  const answering: Answering = { hasNews: (tableId, since) => service.hasNews(tableId, since), untilNews: holdUntilNews, handle: (body) => service.handle(body) };
 
   const answer =
     options.answer ??

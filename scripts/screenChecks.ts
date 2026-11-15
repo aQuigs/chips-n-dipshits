@@ -1792,12 +1792,12 @@ const drawnCards = (page: Page, seat: number) => page.evaluate(`[...document.que
 async function dealFlights(table: RigTable, page: Page): Promise<(number | null)[][]> {
   clearTable(table);
 
-  const cleared = table.version;
+  const before = table.version;
   table.deal({ button: 0, holes: { 0: 'Qc Jc', 2: PAM_HOLE } });
 
-  await page.waitForFunction(`${flightsSince(cleared)}.filter((flight) => flight.name === 'deal').length === ${2 * SHOW_PLAYERS.length}`);
+  await page.waitForFunction(`${flightsSince(before)}.filter((flight) => flight.name === 'deal').length === ${2 * SHOW_PLAYERS.length}`);
   await dealt(page);
-  const flights = await flown(page, cleared);
+  const flights = await flown(page, before);
   playOut(table);
 
   return flights.filter((flight) => flight.name === 'deal').map(({ seat, delay, duration }) => [seat, delay, duration]);
@@ -10890,8 +10890,8 @@ const CHECKS: Check[] = [
         'what a hand heard of when it was over set moving',
       );
 
-      const startOf = (name: string) => flights.filter((flight) => flight.name === name).map((flight) => flight.delay);
-      assert.ok(flights.at(-1)!.delay >= Math.max(...startOf('muck')), 'the pot crossed before the last cards went in');
+      const mucks = flights.filter((flight) => flight.name === 'muck').map((flight) => flight.delay);
+      assert.ok(flights.at(-1)!.delay >= Math.max(...mucks), 'the pot crossed before the last cards went in');
 
       await table.heardBy(still);
       await assertAsStill(moving, still, 'a hand heard of when it was over');

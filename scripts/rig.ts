@@ -81,9 +81,9 @@ const bringsView = (answer: unknown): answer is ViewAnswer => (answer as { kind?
 /** A page that is behind, at one table: see `Stall`. */
 interface Behind {
   tableId: string;
-  /** Its last poll, and the server's way of answering it, for asking again in its name. */
+  /** Its last poll, and the server it was sent to, for asking again in its name. */
   body: unknown;
-  handle: (body: unknown) => unknown;
+  server: Answering;
   /** How many polls it has sent, the last of which is the one it listens to, and how many of them the server has not answered. */
   polls: number;
   unanswered: number;
@@ -108,21 +108,19 @@ interface Behind {
 class Stall {
   private readonly ms: number;
   private readonly way: StallWay;
-  private readonly hasNews: (tableId: string, since: number) => boolean;
   private steppedAt = -Infinity;
   private over = false;
 
   /** For each page, how many things the check has asked of it and not yet got. */
   private readonly asked = new Map<string, { pending: number }>();
 
-  /** For each page that is behind and each table it asks about: its last poll, the views it has coming, oldest first, and the version of the newest. */
+  /** Each page that is behind, by the page and the table it asks about. */
   private readonly behind = new Map<string, Behind>();
   private looking = false;
 
-  constructor(ms: number, way: StallWay, hasNews: (tableId: string, since: number) => boolean) {
+  constructor(ms: number, way: StallWay) {
     this.ms = ms;
     this.way = way;
-    this.hasNews = hasNews;
   }
 
   /** The check has changed the table or moved its clock. */
@@ -140,7 +138,11 @@ class Stall {
         }
 
         // Only for a poll the server has: one a gate stopped on its way, or a page that is gone, was told nothing by a server that kept up either
-        for (const page of [...this.behind.values()].filter((behind) => behind.unanswered > 0)) {
+        for (const page of this.behind.values()) {
+          if (page.unanswered === 0) {
+            continue;
+          }
+
           try {
             this.keepNews(page);
           } catch {
@@ -228,12 +230,11 @@ class Stall {
    */
   private async inTurn(id: string | undefined, body: unknown, { tableId, since }: { tableId: string; since: number }, server: Answering): Promise<unknown> {
     const key = `${id} ${tableId}`;
-    const page = this.behind.get(key) ?? { tableId, body, handle: server.handle, polls: 0, unanswered: 0, views: [], newest: since };
+    const page = this.behind.get(key) ?? { tableId, body, server, polls: 0, unanswered: 0, views: [], newest: since };
     const mine = (page.polls += 1);
 
     this.behind.set(key, page);
     page.body = body;
-    page.handle = server.handle;
     page.unanswered += 1;
 
     try {
@@ -281,11 +282,11 @@ class Stall {
    * gives. Gives back what the server says when that is no view: that nothing has changed, or a refusal.
    */
   private keepNews(page: Behind, anyway = false): unknown {
-    if (!anyway && !this.hasNews(page.tableId, page.newest)) {
+    if (!anyway && !page.server.hasNews(page.tableId, page.newest)) {
       return undefined;
     }
 
-    const answer = page.handle({ ...(page.body as object), since: page.newest });
+    const answer = page.server.handle({ ...(page.body as object), since: page.newest });
 
     if (!bringsView(answer)) {
       return answer;
@@ -554,7 +555,6 @@ export class RigTable {
     return this.view(this.host).version;
   }
 
-
   /** The table in a browser, as one of its members, on a screen of the given size. `init` runs in the page before anything of its own. */
   async open(name: string, screen: ScreenName, init?: string, options?: PageOptions): Promise<Page> {
     const { id, token } = this.auth(name);
@@ -621,8 +621,8 @@ export class Rig {
     this.stall = parts.stall;
   }
 
-  /** A rig with nothing on it yet, whose pages open in `browser`. `way` is how its pages are slow in a stalled run. */
-  static async start(browser: Browser, way: StallWay = 'deaf'): Promise<Rig> {
+  /** A rig with nothing on it yet, whose pages open in `browser`; given `way`, a stalled one whose pages are slow that way. */
+  static async start(browser: Browser, way?: StallWay): Promise<Rig> {
     const clock = { ms: Date.now() };
     const results = new MemoryResultStore(() => clock.ms);
     const store = new MemoryStore(results);
@@ -632,7 +632,7 @@ export class Rig {
     const errors = new MemoryErrorLog({ now: () => clock.ms });
     const service = new PokerService({ store, presets, players, results, clock: { now: () => clock.ms }, rng: seededRng(20261113), errors });
     const html = await (built ??= clientPage({}));
-    const stall = STALL_MS > 0 ? new Stall(STALL_MS, way, (tableId, since) => service.hasNews(tableId, since)) : null;
+    const stall = way ? new Stall(STALL_MS, way) : null;
     const server = await startDevServer({
       port: 0,
       page: async () => html,
@@ -858,7 +858,7 @@ export class Rig {
 export class RigBrowser {
   private browser: Browser | null = null;
 
-  /** A new rig, which whoever asks closes when done with it. `way` is how its pages are slow in a stalled run. */
+  /** A new rig, which whoever asks closes when done with it; given `way`, a stalled one whose pages are slow that way. */
   async rig(way?: StallWay): Promise<Rig> {
     if (!this.browser?.isConnected()) {
       this.browser = await chromium.launch();

@@ -106,7 +106,8 @@ const telling = (thrown: unknown) =>
 export async function runChecks(checks: readonly Check[], { only, picturesIn }: CheckRun): Promise<boolean> {
   // A stalled run puts every check through each way a page can be slow
   const ways: readonly (StallWay | undefined)[] = STALL_MS > 0 ? STALL_WAYS : [undefined];
-  const chosen = ways.flatMap((way) => checks.map(([name, run]): Stalled => [way ? `[${way}] ${name}` : name, run, way])).filter(([name]) => only.length === 0 || only.some((part) => name.includes(part)));
+  const all = ways.flatMap((way) => checks.map(([name, run]): Stalled => [way ? `[${way}] ${name}` : name, run, way]));
+  const chosen = all.filter(([name]) => only.length === 0 || only.some((part) => name.includes(part)));
   const notes = chosen.map((): string[] => []);
   const workers = Array.from({ length: Math.min(workerCount(), chosen.length) }, (): Worker => ({ browser: new RigBrowser(), lines: [] }));
   const printedOn = keepPrintsApart();

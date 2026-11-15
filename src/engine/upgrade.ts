@@ -182,10 +182,25 @@ function fillDefaults(table: TableState): void {
 }
 
 /**
+ * A table saved by a newer version of the game than this one, as is met when older code is put back.
+ * There is no way down from a newer shape, and guessing at one would save the table wrong.
+ */
+export class NewerTable extends Error {
+  constructor(schema: number) {
+    super(`This table was saved by a newer version of the game (schema ${schema}; this version reads up to schema ${STATE_SCHEMA}). Deploy that version again, or restore the Sheet to before it was deployed`);
+    this.name = 'NewerTable';
+  }
+}
+
+/**
  * Brings a saved table up to the shape this code reads, so a game in progress survives a new version:
  * first the steps, for what changed shape, then the defaults, for what was added.
  */
 export function upgradeState(saved: TableState): TableState {
+  if (saved.schema > STATE_SCHEMA) {
+    throw new NewerTable(saved.schema);
+  }
+
   while (saved.schema !== STATE_SCHEMA) {
     const step = STEPS[saved.schema];
     if (!step) {

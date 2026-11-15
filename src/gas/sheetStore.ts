@@ -954,7 +954,7 @@ export class SheetStore implements TableStore {
     try {
       state = restoreState(json);
     } catch {
-      // Saved by code too old to load: put away as it is, with nothing asked of it
+      // Saved by code too old to load, or by a newer version than this: put away as it is, with nothing asked of it
     }
 
     // A table the Archive already has was asked when it got there, by the sweep that could not finish

@@ -1,4 +1,4 @@
-import { addMember, applyCommand, createTable, GameError, listedLike, playerName, presetName, presetSettings, randomId, requireLevel, setIdentity, sharedPreset, tick, UNITS, viewFor } from '../engine/index.ts';
+import { addMember, applyCommand, createTable, GameError, listedLike, NewerTable, playerName, presetName, presetSettings, randomId, requireLevel, setIdentity, sharedPreset, tick, UNITS, viewFor } from '../engine/index.ts';
 import type { Arriving, Command, Ctx, KnownPlayer, Member, Preset, Rng, TableState, Unit } from '../engine/index.ts';
 import { HISTORY_LIMIT } from './api.ts';
 import type { ApiResponse, Auth, ErrorCode, Joined, UnitStandings, Who } from './api.ts';
@@ -140,6 +140,9 @@ function presetsAnswer(presets: Preset[]): ApiResponse {
 
 const NO_SUCH_TABLE = 'That table does not exist';
 
+// What a player is told of a table this code is too old to read. The log is told what to do about it (`NewerTable`)
+const NEWER_TABLE = "This table was saved by a newer version of the game than the one running now, so it can't be opened. Whoever runs the game needs to put the newer version back.";
+
 /** The store has no table under this id. Whether it was put away is found out in one place, `answer`. */
 class NoSuchTable extends ApiFailure {
   readonly tableId: string;
@@ -212,6 +215,13 @@ export class PokerService {
         this.failed(failureOf(request, `The lock was not free in time: ${error.message}`));
 
         return { ok: false, code: 'busy', error: error.message };
+      }
+
+      // Not a refusal, which would take the seat out of a player's browser: the table is whole, and opens again under the version that saved it
+      if (error instanceof NewerTable) {
+        this.failed(failureOf(request, error));
+
+        return { ok: false, code: 'internal', error: NEWER_TABLE };
       }
 
       this.failed(failureOf(request, error));

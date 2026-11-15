@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { TIMING, viewFor } from '../src/engine/index.ts';
+import { STATE_SCHEMA, TIMING, viewFor } from '../src/engine/index.ts';
 import type { Command, Rng } from '../src/engine/index.ts';
 import { SheetStore } from '../src/gas/sheetStore.ts';
 import type { Auth } from '../src/server/api.ts';
 import { ByteRng } from '../src/server/byteRng.ts';
+import { MemoryErrorLog } from '../src/server/memoryErrorLog.ts';
 import { MemoryPlayerStore } from '../src/server/memoryPlayerStore.ts';
 import { MemoryPresetStore } from '../src/server/memoryPresetStore.ts';
 import { MemoryStore } from '../src/server/memoryStore.ts';
@@ -525,3 +526,45 @@ test('old tables are seen to when a table is made and at no other time, by the c
   joined(service.handle({ op: 'create', name: 'Dee' }));
   assert.deepEqual(sweeps, [clock.time - 20 * DAY_MS, clock.time]);
 });
+
+for (const [kind, storeOf] of EITHER_STORE) {
+  test(`${kind}: a table saved by a newer version of the game is not opened, says so in words its players and whoever runs the game can act on, and is left as it was`, () => {
+    const clock = { time: 1_000_000, now: () => clock.time };
+    const errors = new MemoryErrorLog(clock);
+    const store = storeOf();
+    const service = new PokerService({ store, presets: new MemoryPresetStore(), players: new MemoryPlayerStore(seededRng(12)), clock, rng: seededRng(11), errors });
+    const host = joined(service.handle({ op: 'create', name: 'Host' }));
+    const tableId = host.view.id;
+
+    // A later version of the game saved the table, and then this one was put back
+    const newer = STATE_SCHEMA + 1;
+    store.transact(tableId, (state) => ({ save: { ...state!, schema: newer, version: state!.version + 1 }, at: clock.time, effects: [], result: null }));
+
+    const requests = [
+      { op: 'poll', tableId, auth: host.auth, since: -1 },
+      { op: 'info', tableId },
+      { op: 'join', tableId, name: 'Latecomer' },
+      { op: 'act', tableId, auth: host.auth, command: { type: 'chat', text: 'hello' } },
+    ];
+
+    for (const request of requests) {
+      const answer = failure(service.handle(request));
+
+      // Not a refusal: the seat stays in the address and the browser's memory for when the newer version is back
+      assert.equal(answer.code, 'internal', request.op);
+      assert.equal(answer.error, "This table was saved by a newer version of the game than the one running now, so it can't be opened. Whoever runs the game needs to put the newer version back.", request.op);
+    }
+
+    // A page asks again every few seconds: the log has a row for each kind of request that met it, not one for each time
+    service.handle(requests[0]);
+    assert.deepEqual(errors.rows.map((row) => row.where), ['server poll', 'server info', 'server join', 'server act']);
+
+    for (const row of errors.rows) {
+      assert.equal(row.tableId, tableId);
+      assert.match(row.message, new RegExp(`saved by a newer version of the game \\(schema ${newer}; this version reads up to schema ${STATE_SCHEMA}\\)\\. Deploy that version again, or restore the Sheet to before it was deployed`));
+    }
+
+    // Nothing was saved over it: it is still the newer version's table
+    assert.throws(() => store.transact(tableId, (state) => ({ save: null, effects: [], result: state })), /saved by a newer version/);
+  });
+}

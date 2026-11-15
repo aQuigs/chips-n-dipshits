@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const CHECKS = 'scripts/screenChecks.ts';
-const PAGE = 'src/client';
+const CLIENT = 'src/client';
 
 /** The lines of a file that match, each with where it is, so a failure says what to change. */
 function linesWith(path: string, pattern: RegExp): string[] {
@@ -31,9 +31,9 @@ test('no screen check gives a wait a timeout of its own', () => {
 });
 
 test('the page tells the time by Date.now alone, which is what a rig holds', () => {
-  const sources = readdirSync(`${ROOT}${PAGE}`, { recursive: true, encoding: 'utf8' }).filter((name) => name.endsWith('.ts'));
+  const sources = readdirSync(`${ROOT}${CLIENT}`, { recursive: true, encoding: 'utf8' }).filter((name) => name.endsWith('.ts'));
   assert.ok(sources.length > 50, 'the page’s sources were not found');
 
   // With nothing in the brackets a Date is the time now, which is what the rig cannot hold; made from a time it is only that time written out
-  assert.deepEqual(sources.flatMap((name) => linesWith(`${PAGE}/${name}`, /\bnew Date\(\s*\)|\bnew Date\b(?!\()|(?<!new )\bDate\(\s*\)|performance\.timeOrigin/)), [], 'a page that read the time another way would run ahead of a rig’s clock');
+  assert.deepEqual(sources.flatMap((name) => linesWith(`${CLIENT}/${name}`, /\bnew Date\(\s*\)|\bnew Date\b(?!\()|(?<!new )\bDate\(\s*\)|performance\.timeOrigin/)), [], 'a page that read the time another way would run ahead of a rig’s clock');
 });

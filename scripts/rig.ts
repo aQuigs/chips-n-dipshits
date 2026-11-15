@@ -70,13 +70,10 @@ function stallAsked(): number {
  * What makes a rig as slow as a machine too busy to keep up, in a run that asks for it with RIG_STALL.
  * A check's steps are done at once, as ever, but its pages hear of none of them until the stall after
  * the last is over, and the server sits on every request a while before it hears it. To a page that is
- * the step itself coming late, since the game's clock stands still meanwhile. And a page the check is
- * not waiting on hears later still, as the page a busy machine gets to last.
- *
- * So a page is always left waiting in real time before it hears of a step, a move tapped on a page is
- * still on its way when the check's next line runs, a page gets nothing of the table between two steps
- * unless the check waited on it, and what a page asks for itself is answered before its news of the
- * last step: what loses such a race once in a hundred runs on a slow runner loses it here every time.
+ * the step itself coming late, since the game's clock stands still meanwhile. A page the check is not
+ * waiting on hears later still, as the page a busy machine gets to last, and what a page asks for
+ * itself is answered before its news of the step. So what loses a race once in a hundred runs on a
+ * slow runner loses it here every time.
  */
 class Stall {
   private readonly ms: number;
@@ -306,7 +303,7 @@ export class RigTable {
 
       return { save: state, at: this.rig.now(), effects: [], result: null };
     });
-    this.rig.changed();
+    this.rig.stepped();
   }
 
   /** Starts the game if need be and deals a hand with the button and the cards fixed: a new game, with the blinds left of that button. */
@@ -367,10 +364,9 @@ export class RigTable {
   }
 
   /**
-   * Resolves once a page has taken up the table as it stands now, by the number only the server's answer
-   * brings. A page left to itself between two steps may get the table after each or only after the last,
-   * as the machine has it: wait this way before a step whose news the page must tell on its own, and
-   * before reading from the page anything the last step did not visibly change.
+   * Resolves once a page has taken up the table as it stands now, by the version only the server's answer
+   * brings. Taken up is not shown where the page holds something back in its own time, as it does the end
+   * of an all-in hand: that has a sign of its own to wait for.
    */
   async heardBy(page: Page): Promise<void> {
     const { version } = this.view(this.host);
@@ -460,7 +456,7 @@ export class Rig {
       port: 0,
       page: async () => html,
       service,
-      lag: stall ? ({ body, headers }) => stall.lag([headers[PAGE_HEADER]].flat()[0], (body as { op?: string } | null)?.op === 'poll') : undefined,
+      lag: stall ? (body, request) => stall.lag(request.headers[PAGE_HEADER] as string | undefined, (body as { op?: string } | null)?.op === 'poll') : undefined,
     });
 
     return new Rig({ store, presets, players, results, errors, browser, service, server, clock, stall });
@@ -477,7 +473,7 @@ export class Rig {
   /** Moves the game's clock forward, and with it the clock of every page: the rig's time is the only time its pages have. */
   advance(ms: number): void {
     this.clock.ms += ms;
-    this.changed();
+    this.stepped();
     this.tellTheTime();
   }
 
@@ -494,7 +490,7 @@ export class Rig {
       for (const page of this.pages()) {
         // Through the frame, which a stalled rig does not take for the check waiting on the page. A page
         // that has gone, or is between two documents, gets the time with the server's next answer
-        void page.mainFrame().evaluate(`window.rig?.clock(${this.clock.ms})`).catch(() => undefined);
+        void page.mainFrame().evaluate(`window.rig?.forward(${this.clock.ms})`).catch(() => undefined);
       }
     });
   }
@@ -504,21 +500,21 @@ export class Rig {
       return this.service.handle(request);
     }
 
-    // A step when it changed its table, which a look at the table may too: a poll lets whatever came due happen
+    // A request is a step when it changes its table, which a look may too (a poll lets whatever came due happen), or names none
     const { tableId } = request as { tableId?: string };
     const version = () => (tableId ? this.store.peek(tableId)?.version : undefined);
     const before = version();
     const answer = this.service.handle(request);
 
     if (!tableId || version() !== before) {
-      this.changed();
+      this.stepped();
     }
 
     return answer;
   }
 
   /** Told of every step that changes a table or moves the clock, which is what a stalled rig's pages hear of late. */
-  changed(): void {
+  stepped(): void {
     this.stall?.stepped();
   }
 
@@ -634,7 +630,7 @@ export class Rig {
     return Promise.all(
       this.pages().map(async (page, index) => {
         const path = `${pathStart}-${index + 1}.png`;
-        const [now, picture] = await Promise.all([inTime(page.evaluate(PAGE_NOW) as Promise<PageNow>), inTime(page.screenshot({ path, timeout: LAST_LOOK_TIMEOUT_MS }))]);
+        const [now, picture] = await Promise.all([inTime(page.evaluate(PAGE_NOW) as Promise<PageNow>), inTime(page.screenshot({ path }))]);
         const lines = [`Page ${index + 1}, ${this.whose.get(page) ?? 'opened by the page before it'}: ${picture ? path : 'no picture could be taken'}`];
 
         if (!now) {

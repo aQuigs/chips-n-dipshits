@@ -1241,7 +1241,7 @@ function feltingHand(rig: Rig): RigTable {
   return table;
 }
 
-/** How many toasts a page has told since it was loaded. Asked of what the page kept, never of the screen, where a toast lasts seconds. */
+/** How many toasts a page has told since it was loaded. */
 const toastsTold = async (page: Page) => (await toasts(page)).length;
 
 /**
@@ -10140,7 +10140,6 @@ const CHECKS: Check[] = [
         await shot(stu, `show-play-by-play-${screen}`);
         await toggleFeed(stu, screen);
 
-        // The history is asked for once the page has the hand off the table: asked sooner, it is answered before the table has put the hand in it
         clear(rig, table);
         await table.heardBy(stu);
         const press = pressOn(stu, screen);
@@ -10793,7 +10792,6 @@ const CHECKS: Check[] = [
         await shot(stu, `auto-show-play-by-play-${screen}`);
         await toggleFeed(stu, screen);
 
-        // The history is asked for once the page has the hand off the table: asked sooner, it is answered before the table has put the hand in it
         clear(rig, table);
         await table.heardBy(stu);
         const press = pressOn(stu, screen);

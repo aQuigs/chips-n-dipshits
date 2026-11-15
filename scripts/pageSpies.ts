@@ -25,25 +25,23 @@ export interface Toast {
 /**
  * Run in every page a rig opens, before anything of the page's own.
  *
- * It makes the page's clock the rig's. The game on a rig keeps a clock that stands still until the check
- * moves it, and a page tells the time by `Date.now`, which runs: left alone, a page that waited in real
- * time thinks the table later than it is, by however slow the machine was, and then finds no time left
- * for what it would have done or takes what it hears for old news. So `Date.now` here is the rig's time
- * and never runs by itself. It is put forward by every answer of the server, before the page reads the
- * answer, and by the rig whenever its clock is moved (`window.rig.clock`). Never back, so the two can
- * come in either order. Timers, animations and `performance.now` run as ever: what a page does in its
- * own time is what a check watches.
+ * Makes `Date.now` the rig's clock, which stands still until the check moves it: left running, the clock
+ * of a page that waited on a slow machine says the table is later than it is, and the page finds no time
+ * left for what it would have done or takes news for old. It only goes forward: with each answer of the
+ * server, before the page reads it (as JSON, or as text for the stand-in for Apps Script), and with
+ * `rig.advance` (`window.rig.forward`). Timers, animations and `performance.now` run as ever. What the
+ * page measures on its own device by `Date.now` stands still with it: how long a poll took, and how long
+ * a move has gone unanswered.
  *
- * It also keeps what a check would otherwise have to catch while it lasts: every toast the page tells
- * (`window.rig.toasts`), and the version of the newest table the page has taken up (`window.rig.version`),
- * set once the page is done with the answer that brought it, which it is before any timer of its runs.
- * The answer to a poll counts only while that poll is the page's latest: one it has asked again since
- * is one it throws away. A page loaded again starts both afresh.
+ * Also keeps every toast the page tells (`window.rig.toasts`) and the version of the newest table it has
+ * taken up (`window.rig.version`), set once the page is done with the answer that brought it, which it
+ * is before any timer of its runs. A poll's answer counts only while the page has sent no newer poll,
+ * since it throws the older one's away. A page loaded again starts both afresh.
  */
 export const RIG_PAGE = (now: number) => `(() => {
   const rig = { now: ${now}, version: -1, toasts: [] };
 
-  rig.clock = (ms) => {
+  rig.forward = (ms) => {
     rig.now = Math.max(rig.now, ms);
   };
   window.rig = rig;
@@ -54,7 +52,7 @@ export const RIG_PAGE = (now: number) => `(() => {
     const now = view?.now ?? answer?.now;
 
     if (typeof now === 'number') {
-      rig.clock(now);
+      rig.forward(now);
     }
 
     if (typeof view?.version === 'number' && !thrownAway) {
@@ -107,14 +105,12 @@ export const RIG_PAGE = (now: number) => `(() => {
   }).observe(document, { subtree: true, childList: true });
 })()`;
 
-/** Every toast a page has told since it was loaded, in order, whether or not one is still up. */
+/** Every toast a page has told since it was loaded, in order: asked of what was kept, since a toast is gone from the screen in seconds. */
 export const toasts = (page: Page) => page.evaluate('window.rig.toasts') as Promise<Toast[]>;
 
 /**
  * Resolves with the first toast a page has told that has `words` in it, waiting for it if need be; with
- * `after`, the first past that many toasts, for words a page tells more than once. A toast is up for a
- * few seconds, so one that came while the check was looking elsewhere is gone from the screen by the time
- * a slow machine looks for it: what the page told is asked of what was kept, never of the screen.
+ * `after`, the first past that many toasts, for words a page tells more than once.
  */
 export async function toastTold(page: Page, words = '', after = 0): Promise<Toast> {
   const told = await page.waitForFunction(`window.rig.toasts.slice(${after}).find((toast) => toast.text.includes(${JSON.stringify(words)}))`);
@@ -315,16 +311,13 @@ export async function answeredAfter(page: Page, make: () => Promise<unknown>): P
   return answer;
 }
 
-/** The command a request carries, by its type; null for any other request. */
-const commandIn = (request: Request) => (JSON.parse(request.postData() ?? '{}') as { command?: { type?: string } }).command?.type ?? null;
-
 /**
- * Does on a page what sends a command of the given type, and resolves with the server's answer to it.
- * For a command that is no move of the turn, a reaction or a setting: what the check does next, on
- * the rig's side above all, then comes after the server has it.
+ * Does on a page what sends a command that is no move of the turn (a reaction, a setting), and resolves
+ * with the server's answer to it: what the check does next on the rig's side then comes after the
+ * server has it. A move is made with `answeredAfter`.
  */
 export async function answeredTo(page: Page, type: Command['type'], make: () => Promise<unknown>): Promise<Response> {
-  const answer = page.waitForResponse((response) => commandIn(response.request()) === type);
+  const answer = page.waitForResponse((response) => (JSON.parse(response.request().postData() ?? '{}') as { command?: { type?: string } }).command?.type === type);
 
   await make();
 
@@ -426,7 +419,7 @@ export interface Flight {
  * time, in the air, until `window.land()` lets them all finish; with `window.holdOnly` set to a move's
  * name, only moves of that name, for a check that holds one thing while the page goes on with another
  * in its own time. `window.held` is every move stopped so and not yet let go, kept from the moment it
- * began: the page takes one off with the table it flew over. `window.frame` counts the page's frames.
+ * began, since a table drawn again takes it off the page. `window.frame` counts the page's frames.
  * `window.inFlight` holds every animation that has not yet told whoever waits on it that it ended: one
  * cut short by a table drawn again is still there while that draw is looked at, though the stage by
  * then says it is still.
@@ -444,8 +437,7 @@ export const MOTION = `(() => {
   };
   requestAnimationFrame(count);
 
-  const held = [];
-  window.held = held;
+  const held = (window.held = []);
   const animate = Element.prototype.animate;
   const around = ${AROUND};
   const seatOf = ${SEAT_OF};

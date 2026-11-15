@@ -978,8 +978,9 @@ export class App {
       picking === null ? null : movePromptEl(view, picking, () => screen.seatMoves.cancel()),
       requests.map((request) => {
         const what = request.kind === 'seat' ? `wants seat ${request.seat + 1} with ${formatAmount(request.amount, view.config)}` : `wants to add ${formatAmount(request.amount, view.config)}`;
-        const approve = h('button.btn.small.primary', { type: 'button', 'data-action': 'approve' }, 'Approve');
-        const deny = h('button.btn.small', { type: 'button', 'data-action': 'deny' }, 'Deny');
+        // Whose request, so the next row's buttons moving up into this one's place are other buttons (the tap guard)
+        const approve = h('button.btn.small.primary', { type: 'button', 'data-action': 'approve', 'data-player': request.playerId }, 'Approve');
+        const deny = h('button.btn.small', { type: 'button', 'data-action': 'deny', 'data-player': request.playerId }, 'Deny');
 
         approve.addEventListener('click', () => holdWhile(approve, () => this.send({ type: 'approve', playerId: request.playerId })));
         deny.addEventListener('click', () => holdWhile(deny, () => this.send({ type: 'deny', playerId: request.playerId })));
@@ -1171,16 +1172,21 @@ export class App {
     const body = () => screen.overlay.element.querySelector('.dialog-body');
     const scrolled = this.dialogDrawn === this.dialogOpens ? (body()?.scrollTop ?? 0) : 0;
 
-    // Drawn again for what changed at the table, a dialog stays where its reader had scrolled to
-    const redrawn = screen.overlay.draw([this.dialogOpens, dialogShows(dialog, view, handlers)], () => {
-      screen.overlay.element.hidden = false;
+    // Drawn again for what changed at the table, a dialog stays where its reader had scrolled to. Put back before the
+    // tap guard looks at the dialog: it is the rows the reader has in sight that a finger may be on its way to
+    screen.overlay.draw(
+      [this.dialogOpens, dialogShows(dialog, view, handlers)],
+      () => {
+        screen.overlay.element.hidden = false;
 
-      return dialogEl(dialog, view, handlers);
-    });
-
-    if (redrawn && scrolled > 0) {
-      body()!.scrollTop = scrolled;
-    }
+        return dialogEl(dialog, view, handlers);
+      },
+      () => {
+        if (scrolled > 0) {
+          body()!.scrollTop = scrolled;
+        }
+      },
+    );
 
     this.dialogDrawn = this.dialogOpens;
     screen.modal.update(true);
@@ -1222,8 +1228,8 @@ export class App {
 
   // ---- A hand played back ----
 
-  /** Plays a finished hand back over the table. */
-  private openReplay(record: HandRecord): void {
+  /** Plays a finished hand back over the table. `byItself` when it comes seconds after it was asked for, under a finger that may be on its way to the bar by then. */
+  private openReplay(record: HandRecord, byItself = false): void {
     const screen = this.screen;
     const view = this.shownView();
     const steps = view && replaySteps(record, view.config);
@@ -1231,7 +1237,13 @@ export class App {
       return;
     }
 
-    screen.replay.show({ record, steps, table: view, kept: screen.dealt.of(view.you.id, record.number) });
+    const show = () => screen.replay.show({ record, steps, table: view, kept: screen.dealt.of(view.you.id, record.number) });
+
+    if (byItself) {
+      screen.taps.byItself(show);
+    } else {
+      show();
+    }
   }
 
   /**
@@ -1295,7 +1307,7 @@ export class App {
     const refusal = noReplayLine(record, view.config);
 
     if (refusal === null) {
-      this.openReplay(record);
+      this.openReplay(record, unasked);
     } else {
       this.toast(refusal);
     }
@@ -1313,11 +1325,17 @@ export class App {
 
   /** Takes a hand being played back off the table, and the history it was opened from, for the game to have the viewer (`ReplaySetAside`). */
   private setReplayAside(): boolean {
-    if (!this.screen?.replay.setAside()) {
+    const screen = this.screen;
+
+    if (!screen?.replay.isOpen) {
       return false;
     }
 
-    this.closeDialog(true);
+    // The replay is no slot's to draw, so the guard is told here: the turn's buttons come up where the replay's lay
+    screen.taps.byItself(() => {
+      screen.replay.setAside();
+      this.closeDialog(true);
+    });
 
     return true;
   }

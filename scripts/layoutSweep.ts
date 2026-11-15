@@ -20,9 +20,10 @@ import type { Check } from './checkRunner.ts';
 import { SCROLLS, telling, unreadable } from './covered.ts';
 import type { Finding } from './covered.ts';
 import { answeredTo, opsSent, replayDrawn } from './pageSpies.ts';
-import { boxes, Gate, overlap, SCREENS, setStageHeight, WIDE_ASPECT } from './rig.ts';
+import { boxes, Gate, overlap, SCREENS, setStageHeight, STALL_MS, WIDE_ASPECT } from './rig.ts';
 import type { Rig, RigTable, ScreenName } from './rig.ts';
-import { cameUp, tellingOf, watched, watchTheBar } from './underTheFinger.ts';
+import { cameUp, tapsLive, tellingOf, watched, watchTheBar } from './underTheFinger.ts';
+import type { Held } from './underTheFinger.ts';
 
 const VIEWER = 'Quigs';
 // The widest sixteen letters a name can be, which the sweep makes the host and the holder of the high hand, so the star and the trophy stand beside the name with the least room for them
@@ -1140,6 +1141,12 @@ interface Arrival {
   inOneView?: boolean;
   /** What commits for good among what comes up, by what it says: on every screen it takes no tap for the whole settle time from when it is drawn, whatever lay there. */
   forGood?: string;
+  /** What the player has open on the page when it comes. */
+  open?(page: Page): Promise<void>;
+  /** What is gone from the page once it has come. */
+  gone?: string;
+  /** Moves it uncovers, by what they say, each of which is held back on some screen: a wrong tap there is a move. */
+  uncovers?: string[];
 }
 
 const TABLE_OF_SIX = 6;
@@ -1267,11 +1274,77 @@ const ARRIVALS: Arrival[] = [
     step: (table) => table.act(WIDEST, { type: 'endNight' }),
     then: RECAP,
   },
+  {
+    when: 'a replay opened from the hand history is set aside as the action reaches the viewer, and closes by itself with the history over the turn’s buttons',
+    build: (rig) => waitingBehindTheLongestCall(rig, TABLE_OF_SIX),
+    async open(page) {
+      await openFromMenu(page, 'history');
+      await page.locator('.history details[data-hand="1"] summary').click();
+      await page.locator('.history details[data-hand="1"] [data-action="replay"]').click();
+      await replayDrawn(page);
+    },
+    step: (table) => table.play(others({ type: 'fold' }), viewersTurn),
+    then: '.turn [data-action="call"]:enabled',
+    gone: '.replay',
+    uncovers: ['Fold', 'Call'],
+  },
+  {
+    when: 'a replay opened from the bar, with no dialog under it, is set aside as a hand is dealt with the viewer first to act',
+    build: (rig) => tableWithTrophy(rig, TABLE_OF_SIX, EVEN, { actionSeconds: 30 }),
+    async open(page) {
+      // Under a phone's open chat the bar has no such button, and there the turn comes as it does anywhere
+      if (await page.locator(REPLAY_LAST).isVisible()) {
+        await page.locator(REPLAY_LAST).click();
+        await replayDrawn(page);
+      }
+    },
+    step: (table) => table.deal({ button: TABLE_OF_SIX - 3, holes: holesFor(TABLE_OF_SIX) }),
+    then: '.turn [data-action="call"]:enabled',
+    gone: '.replay',
+    uncovers: ['Fold', 'Call'],
+  },
+  {
+    when: 'the night’s numbers, open over a full table and scrolled to their end by a reader, are drawn anew where the reader has them as a hand ends',
+    build: (rig) => waitingBehindTheLongestCall(rig, 9),
+    async open(page) {
+      await openFromMenu(page, 'tonight');
+      await page.locator('.dialog-body summary').last().scrollIntoViewIfNeeded();
+
+      // Nine players' rows are more than a phone lying down shows at once: there the dialog is drawn anew out of the place it is first drawn in
+      if (page.viewportSize()!.height <= LYING.height) {
+        assert.ok(((await page.evaluate(`document.querySelector('.dialog-body').scrollTop`)) as number) > 0, 'the night’s numbers are too short to scroll beside a table lying down');
+      }
+    },
+    step: (table) => table.play(folding, (view) => view.hand!.stage === 'done'),
+    then: '.message.result',
+  },
 ];
 
-// A hold runs from when its control is drawn, and its mark can be seen only once the page has finished drawing what
-// the view brought, which on a busy machine is tens of milliseconds later: a hold is measured that much short
-const HOLD_SEEN_LATE_MS = 100;
+// A hold is timed from when the watch first sees its button held, which is before the page is free again and the
+// hold's time begins: it is never seen short, but for what two readings of a clock round off
+const CLOCK_ROUNDS_MS = 5;
+
+/**
+ * The hold each button was let go from for good. A bar drawn again while a button is held hands the rest
+ * of the time on to the new button, which is seen held once more: only the last of them runs to the end.
+ */
+const ranOut = (held: Held[]): Held[] => held.filter((one, at) => held.slice(at + 1).every((later) => (later.is ?? later.what) !== (one.is ?? one.what)));
+
+/** The holds that were let go and taken up again by the same button inside one hold's time, with how long the button took a tap in between. */
+const letGoBetween = (held: Held[]): { hold: Held; live: number }[] =>
+  held.flatMap((hold, at) => {
+    const next = held.slice(at + 1).find((later) => (later.is ?? later.what) === (hold.is ?? hold.what));
+    const live = next && hold.lasted !== null ? next.from - (hold.from + hold.lasted) : 0;
+
+    return live > CLOCK_ROUNDS_MS && live < TAPS_SETTLE_MS ? [{ hold, live }] : [];
+  });
+
+const letGoEarly = (held: Held[]): string[] => [
+  ...ranOut(held)
+    .filter((one) => one.sinceFirst !== null && one.sinceFirst < TAPS_SETTLE_MS - CLOCK_ROUNDS_MS)
+    .map((one) => `  ${one.what} was let go ${Math.round(one.sinceFirst ?? 0)} ms after it first came up`),
+  ...letGoBetween(held).map(({ hold, live }) => `  ${hold.what} took a tap for ${Math.round(live)} ms in the middle of its hold`),
+];
 
 /**
  * The checks of what comes up under a finger, one for each arrival, on every screen with the chat shut
@@ -1302,6 +1375,7 @@ export const underTheFinger = (): Check[] =>
           }
 
           await settled(page);
+          await arrival.open?.(page);
 
           const sent = opsSent(page);
           const polls = arrival.inOneView ? await Gate.on(page, 'polls') : null;
@@ -1313,6 +1387,12 @@ export const underTheFinger = (): Check[] =>
         }),
       );
 
+      if (arrival.gone) {
+        const there = await Promise.all(pages.map(({ page }) => page.locator(arrival.gone!).isVisible()));
+
+        assert.ok(there.some(Boolean), `what is to go (${arrival.gone}) was on no screen to begin with: the arrival no longer shows what it is here for`);
+      }
+
       arrival.step(table);
       await Promise.all(pages.map(({ polls }) => polls?.open()));
 
@@ -1321,7 +1401,13 @@ export const underTheFinger = (): Check[] =>
       let cameUpAnywhere = 0;
       let heldForGood = 0;
 
+      const heldSomewhere = new Set<string>();
+
       for (const { page, sent, where } of pages) {
+        if (arrival.gone) {
+          await page.waitForSelector(arrival.gone, { state: 'hidden' });
+        }
+
         await page.waitForSelector(then);
         await settled(page);
 
@@ -1330,6 +1416,7 @@ export const underTheFinger = (): Check[] =>
         const forGood = arrival.forGood;
 
         cameUpAnywhere += found.length;
+        held.forEach((one) => heldSomewhere.add(one.what));
 
         if (sent.includes('act')) {
           here.push('  a tap on a control that was held back reached the table all the same');
@@ -1342,7 +1429,7 @@ export const underTheFinger = (): Check[] =>
 
           heldForGood += commits.length;
           here.push(...liveAtOnce.filter((said) => said.includes(forGood)).map((said) => `  ${said} took a tap the moment it came up`));
-          here.push(...commits.filter((one) => one.lasted < TAPS_SETTLE_MS - HOLD_SEEN_LATE_MS).map((one) => `  ${one.what} was let go ${Math.round(one.lasted)} ms after it came up`));
+          here.push(...letGoEarly(commits));
         }
 
         wrong.push(...(here.length > 0 ? [`${where}:`, ...here] : []));
@@ -1351,6 +1438,10 @@ export const underTheFinger = (): Check[] =>
       assert.equal(wrong.length, 0, `a tap lands on what it was not aimed at\n${wrong.join('\n')}`);
       assert.ok(cameUpAnywhere > 0, 'nothing came up where another control lay, on any screen: the arrival no longer shows what it is here for');
       assert.ok(arrival.forGood === undefined || heldForGood > 0, `“${arrival.forGood}” was held back on no screen: the arrival no longer shows what it is here for`);
+
+      for (const move of arrival.uncovers ?? []) {
+        assert.ok([...heldSomewhere].some((what) => what.includes(move)), `${move} was uncovered and held back on no screen: ${[...heldSomewhere].join(', ')}`);
+      }
     },
   ]);
 
@@ -1434,6 +1525,9 @@ interface CommitsAfter {
   commits: string;
 }
 
+// How much longer than a hold lasts the answer is kept back
+const KEPT_PAST_A_HOLD_MS = 100;
+
 const COMMITS_AFTER: CommitsAfter[] = [
   {
     what: 'the vote on how many times to run it, after a call all in',
@@ -1484,7 +1578,7 @@ const commitsWaitFromWhenTheyAreDrawn: Check = [
       await polls.close('requests');
       await page.locator(tap).tap();
       await answers.holding();
-      await page.evaluate(`new Promise((done) => setTimeout(done, ${TAPS_SETTLE_MS + HOLD_SEEN_LATE_MS}))`);
+      await page.evaluate(`new Promise((done) => setTimeout(done, ${TAPS_SETTLE_MS + KEPT_PAST_A_HOLD_MS}))`);
       await answers.open();
       await polls.open();
       await page.waitForSelector(then);
@@ -1494,10 +1588,228 @@ const commitsWaitFromWhenTheyAreDrawn: Check = [
 
       assert.deepEqual(liveAtOnce.filter((said) => said.includes(commits)), [], `${what}: it took a tap the moment it was drawn`);
       assert.ok(waited.length > 0, `${what}: it was not held back: ${JSON.stringify(held)}`);
-      assert.deepEqual(waited.filter((one) => one.lasted < TAPS_SETTLE_MS - HOLD_SEEN_LATE_MS), [], `${what}: it was let go before its time`);
+      assert.deepEqual(letGoEarly(waited), [], `${what}: it was let go before its time`);
       assert.deepEqual(found.flatMap(tellingOf), [], `${what}: a tap lands on what it was not aimed at`);
       await page.close();
     }
+  },
+];
+
+// Run in the page: taps where the first request's Approve lies, the moment the banners are next drawn anew
+const TAP_THE_FIRST_APPROVE_AS_THE_BANNERS_CHANGE = `(() => {
+  const box = document.querySelector('.banners [data-action="approve"]').getBoundingClientRect();
+
+  new MutationObserver((_changes, watch) => {
+    watch.disconnect();
+    document.elementFromPoint((box.left + box.right) / 2, (box.top + box.bottom) / 2)?.click();
+  }).observe(document.querySelector('.banners'), { childList: true, subtree: true });
+})()`;
+
+/**
+ * Rows of one kind are the hard case: every row has an Approve, and the next row's moves up into the
+ * place of one that goes. Each says whose it is, or the page takes one for the other and a host's tap
+ * seats a player they never meant to.
+ */
+const aRowThatMovesUpIsHeld: Check = [
+  'a host reaching for one player’s Approve as that request goes does not approve the next player’s, whose row has moved up under the tap, on a 360 phone and the desktop',
+  async (rig) => {
+    for (const screen of ['smallPhone', 'desktop'] as const) {
+      const table = tableWithTrophy(rig, TABLE_OF_SIX, EVEN);
+
+      table.join('Alice');
+      table.join('Bob');
+      table.act('Alice', { type: 'requestSeat', seat: TABLE_OF_SIX, buyIn: 1000 });
+      table.act('Bob', { type: 'requestSeat', seat: TABLE_OF_SIX + 1, buyIn: 1000 });
+
+      const page = await table.open(WIDEST, screen);
+      const sent = opsSent(page);
+
+      await page.waitForFunction(`document.querySelectorAll('.banners [data-action="approve"]').length === 2`);
+      await settled(page);
+      await page.evaluate(TAP_THE_FIRST_APPROVE_AS_THE_BANNERS_CHANGE);
+
+      table.act('Alice', { type: 'cancelRequest' });
+      await page.waitForFunction(`document.querySelectorAll('.banners [data-action="approve"]').length === 1`);
+      await tapsLive(page);
+
+      assert.ok(!sent.includes('act'), `${screen}: the tap for Alice’s Approve was taken by the row that moved up`);
+      assert.ok(!table.view(WIDEST).seats.some((seat) => seat?.name === 'Bob'), `${screen}: Bob was seated by a tap meant for Alice’s request`);
+      await page.close();
+    }
+  },
+];
+
+// How many times the bar is drawn again while one of its buttons is held, and how late a hold may end on a busy machine
+const REDRAWS_IN_A_HOLD = 12;
+const LET_GO_LATE_MS = 250;
+
+/** A button that is held back as it comes up. */
+interface HeldAsItComes {
+  what: string;
+  size: (typeof PHONES)[number];
+  build(rig: Rig): RigTable;
+  step(table: RigTable): void;
+  then: string;
+  /** The button, by what it says. */
+  held: string;
+}
+
+const HELD_AS_THEY_COME: HeldAsItComes[] = [
+  {
+    what: 'Raise, which comes up where a switch lay beside a table lying down',
+    size: LYING,
+    build: (rig) => waitingBehindTheLongestCall(rig, TABLE_OF_SIX),
+    step: (table) => table.play(others({ type: 'fold' }), viewersTurn),
+    then: '.turn [data-action="call"]:enabled',
+    held: 'Raise',
+  },
+  {
+    what: 'the offer to show a card, which commits for good',
+    size: SMALL_STANDING,
+    build: raisedFromTheBigBlind,
+    step: everyoneFolds,
+    then: '.controls [data-action="show-card"]',
+    held: 'Show ',
+  },
+];
+
+const heldAsTheyCome = HELD_AS_THEY_COME.map((one) => one.what).join('; ');
+
+/** Opens the viewer's page as they wait, at the size the button is held at. */
+async function waitingAt({ build, size }: HeldAsItComes, rig: Rig): Promise<{ table: RigTable; page: Page }> {
+  const table = build(rig);
+  const page = await table.open(VIEWER, 'smallPhone');
+
+  await page.setViewportSize(size);
+  await page.waitForSelector('.controls .waiting');
+  await settled(page);
+
+  return { table, page };
+}
+
+// How long a slow phone may take over drawing what a view brought: most of a hold
+const DRAWING_TAKES_MS = 250;
+
+// Run in the page, before the watch begins so that the watch first sees a hold once this is over: keeps the page busy,
+// in the task that draws what `selector` finds, for as long as a slow phone takes to lay such a drawing out
+const BUSY_AS_IT_DRAWS = `(({ selector, busy }) => {
+  new MutationObserver((_changes, watch) => {
+    if (document.querySelector(selector)) {
+      watch.disconnect();
+
+      for (const until = performance.now() + busy; performance.now() < until; ) {}
+
+      window.__keptBusy = true;
+    }
+  }).observe(document.body, { childList: true, subtree: true });
+})`;
+
+/**
+ * A hold lasts as long as it takes to see that the page has changed, so its time begins when the page is
+ * free to show the change and to take a tap, not when the drawing began. A slow phone, or a machine
+ * running these checks four at a time, takes a good part of a hold to lay out what a hand's end
+ * brought: counted from before that, a hold is over almost as soon as its button can be tapped.
+ */
+const aHoldRunsFromWhenThePageIsFree: Check = [
+  `a button held back takes no tap for ${TAPS_SETTLE_MS} ms from when the page is free again, though drawing what brought it kept the page busy for ${DRAWING_TAKES_MS} ms: ${heldAsTheyCome}`,
+  async (rig) => {
+    for (const one of HELD_AS_THEY_COME) {
+      const { table, page } = await waitingAt(one, rig);
+
+      await page.evaluate(`${BUSY_AS_IT_DRAWS}(${JSON.stringify({ selector: one.then, busy: DRAWING_TAKES_MS })})`);
+      await watchTheBar(page);
+
+      one.step(table);
+      await page.waitForSelector(one.then);
+
+      const ones = (await watched(page)).held.filter((hold) => hold.what.includes(one.held));
+
+      assert.ok(await page.evaluate('window.__keptBusy === true'), `${one.what}: the page was not kept busy as it drew: the check no longer shows what it is here for`);
+      assert.ok(ones.length > 0, `${one.what}: it was not held back`);
+      assert.deepEqual(letGoEarly(ones), [], `${one.what}: it was let go before its time, counted from when the page was free to take a tap`);
+      await page.close();
+    }
+  },
+];
+
+/**
+ * A hold has one clock, started when its control first came up. A bar drawn again meanwhile, as it is
+ * when a hand's end reaches a busy page in two views, hands the hold on to the new button with the rest
+ * of its time: it must neither start over, which under steady news would hold a button for good, nor
+ * end early, nor be left on something nobody lets go of.
+ */
+const aHoldRunsOutOnTime: Check = [
+  `a button held back is let go ${TAPS_SETTLE_MS} ms after it first came up, neither sooner nor later, though its bar is drawn again and again meanwhile, and a second after the last drawing nothing on the page is held: ${heldAsTheyCome}`,
+  async (rig) => {
+    for (const one of HELD_AS_THEY_COME) {
+      const { table, page } = await waitingAt(one, rig);
+
+      await watchTheBar(page);
+      one.step(table);
+      await page.waitForSelector(one.then);
+
+      // The viewer's own switch, thrown from their other device, draws the bar anew each time with every button where it was
+      for (let nth = 0; nth < REDRAWS_IN_A_HOLD; nth += 1) {
+        table.act(VIEWER, { type: 'setStraddle', kind: 'straddle', on: nth % 2 === 0 });
+        await page.waitForSelector(`.controls [data-action="straddle"][aria-checked="${nth % 2 === 0}"]`);
+      }
+
+      const ones = (await watched(page)).held.filter((hold) => hold.what.includes(one.held));
+      const last = ranOut(ones);
+      const drawnAgain = ones.filter((hold) => !last.includes(hold));
+
+      assert.ok(ones.length > 0, `${one.what}: it was not held back`);
+      // A stalled page hears of the switch too late to be drawn again inside the hold
+      assert.ok(STALL_MS > 0 || drawnAgain.length > 0, `${one.what}: the bar was not drawn again while it was held: the check no longer shows what it is here for`);
+      assert.deepEqual(letGoEarly(ones), [], `${one.what}: it was let go before its time`);
+      assert.deepEqual(last.filter((hold) => hold.sinceFirst !== null && hold.sinceFirst > TAPS_SETTLE_MS + LET_GO_LATE_MS), [], `${one.what}: it was held longer than its time from when it first came up`);
+
+      // Had the time begun anew with each drawing, the button drawn last would have waited the whole of it by itself
+      if (drawnAgain.length > 0) {
+        assert.deepEqual(last.filter((hold) => hold.lasted !== null && hold.lasted >= TAPS_SETTLE_MS - CLOCK_ROUNDS_MS), [], `${one.what}: drawn again while held, it began its time anew`);
+      }
+
+      await page.evaluate(`new Promise((done) => setTimeout(done, 1000))`);
+      assert.equal(await page.evaluate(`document.querySelectorAll('.taps-settling').length`), 0, `${one.what}: a second after the last drawing something on the page is still held`);
+      await page.close();
+    }
+  },
+];
+
+// How late a timer may come in a tab that is not in front
+const HIDDEN_TIMERS_MS = 1000;
+
+// Run in the page: timers as a tab in the background has them, none sooner than the next whole second
+const TIMERS_AS_WHEN_HIDDEN = `(() => {
+  const real = window.setTimeout;
+
+  window.setTimeout = (run, wait = 0, ...given) => real(run, Math.ceil((performance.now() + wait) / ${HIDDEN_TIMERS_MS}) * ${HIDDEN_TIMERS_MS} - performance.now(), ...given);
+})()`;
+
+/**
+ * A page goes on drawing in a tab that is not in front, and its timers are slowed to one a second, not
+ * stopped. A hold begun there must still end by itself: a player who comes back to the tab must not find
+ * a button that takes no tap. The checks' browser cannot hide a page, so the page is given such timers.
+ */
+const aPageInTheBackgroundLetsGo: Check = [
+  `a button held back by a page in the background, where a timer comes once a second, is let go all the same, and not before its time: ${HELD_AS_THEY_COME[0]!.what}`,
+  async (rig) => {
+    const [one] = HELD_AS_THEY_COME;
+    const { table, page } = await waitingAt(one!, rig);
+
+    await watchTheBar(page);
+    await page.evaluate(TIMERS_AS_WHEN_HIDDEN);
+
+    one!.step(table);
+    await page.waitForSelector(one!.then);
+
+    const ones = (await watched(page)).held.filter((hold) => hold.what.includes(one!.held));
+
+    assert.ok(ones.length > 0, `${one!.what}: it was not held back`);
+    assert.deepEqual(letGoEarly(ones), [], `${one!.what}: it was let go before its time`);
+    // One slowed timer begins the hold's time and a second ends it
+    assert.deepEqual(ranOut(ones).filter((hold) => hold.sinceFirst === null || hold.sinceFirst > 2 * HIDDEN_TIMERS_MS + TAPS_SETTLE_MS + LET_GO_LATE_MS), [], `${one!.what}: it was not let go in the time two slowed timers take`);
+    await page.close();
   },
 ];
 
@@ -1540,7 +1852,7 @@ const onlyWhatCameUpOverAnotherIsHeld: Check = [
         const raise = held.filter((one) => one.what.includes('Raise'));
 
         assert.ok(raise.length > 0, `${where}: Raise came up where “Sit out next hand” lay and was not held back: ${JSON.stringify(held)}`);
-        assert.deepEqual(raise.filter((one) => one.lasted < TAPS_SETTLE_MS - HOLD_SEEN_LATE_MS), [], `${where}: Raise was let go before the moment was over`);
+        assert.deepEqual(letGoEarly(raise), [], `${where}: Raise was let go before the moment was over`);
         continue;
       }
 
@@ -1678,5 +1990,5 @@ export function layoutSweep(picturesIn: string): Check[] {
     },
   ]);
 
-  return [...defects, replayFromTheBar(picturesIn), historyGainsTheHand, barKeepsTheTurnsHeight(picturesIn), choicesKeepTheirPlaces, chatMakesWayForTheTurn(picturesIn), keyboardInTheBoxKeepsTheChat, lookSeesWhatATapPassesThrough, ...underTheFinger(), ...secondTapFindsNothingNew, commitsWaitFromWhenTheyAreDrawn, onlyWhatCameUpOverAnotherIsHeld, ...tables, ...screens];
+  return [...defects, replayFromTheBar(picturesIn), historyGainsTheHand, barKeepsTheTurnsHeight(picturesIn), choicesKeepTheirPlaces, chatMakesWayForTheTurn(picturesIn), keyboardInTheBoxKeepsTheChat, lookSeesWhatATapPassesThrough, ...underTheFinger(), ...secondTapFindsNothingNew, commitsWaitFromWhenTheyAreDrawn, aRowThatMovesUpIsHeld, aHoldRunsFromWhenThePageIsFree, aHoldRunsOutOnTime, aPageInTheBackgroundLetsGo, onlyWhatCameUpOverAnotherIsHeld, ...tables, ...screens];
 }

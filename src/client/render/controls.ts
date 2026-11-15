@@ -611,6 +611,9 @@ function showCardsEl(view: TableView, seat: SeatView, handlers: ControlHandlers)
   if (offer.places.length > 1) {
     const both = commandButton('button.chip-btn', 'show', 'Both', show(offer.places));
 
+    // Which hand's cards, as on the button for each
+    both.dataset.keep = String(offer.hand);
+
     both.setAttribute('aria-label', 'Show both cards');
     buttons.push(both);
   }

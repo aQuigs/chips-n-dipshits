@@ -85,8 +85,12 @@ export class Slot {
     this.redrawn = redrawn;
   }
 
-  /** `shows` is everything the content depends on; `build` runs only when that differs from last time. Says whether it ran. */
-  draw(shows: unknown, build: () => Child): boolean {
+  /**
+   * `shows` is everything the content depends on; `build` runs only when that differs from last time. Says whether it ran.
+   * `settle` runs with the new content on the page, before `redrawn` is told of it: it puts back what a
+   * rebuild loses of its reader's place, how far they had scrolled, so the content is seen where they have it.
+   */
+  draw(shows: unknown, build: () => Child, settle?: () => void): boolean {
     const signature = JSON.stringify(shows);
     if (signature === this.drawn) {
       return false;
@@ -96,6 +100,7 @@ export class Slot {
     this.redrawn?.leaving();
     this.element.replaceChildren();
     append(this.element, build());
+    settle?.();
     this.redrawn?.drawn();
 
     return true;

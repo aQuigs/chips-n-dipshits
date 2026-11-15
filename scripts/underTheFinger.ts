@@ -38,8 +38,14 @@ export interface CameUp {
 /** A control the page held back from a tap. */
 export interface Held {
   what: string;
-  /** How long it took no tap, in milliseconds. */
-  lasted: number;
+  /** What the page knows it by once it is drawn anew; null for a control with no mark. */
+  is: string | null;
+  /** When the watch saw it held, by the page's clock. */
+  from: number;
+  /** How long it took no tap, in milliseconds. Null for one that was taken off the page still held. */
+  lasted: number | null;
+  /** How long after a control of its key was first held it was let go: longer than `lasted` for one drawn again while held. */
+  sinceFirst: number | null;
   /** Whether, let go, it is known for the control it was while held, and is left as it was drawn. Null while still held. */
   sameLetGo: boolean | null;
 }
@@ -59,6 +65,8 @@ export interface Watched {
 const WATCH = `(({ tapped, backdrop, bar, playsNothing, settling }) => {
   const named = (element) => element.matches(backdrop) ? 'the backdrop of the dialog' : JSON.stringify((element.getAttribute('aria-label') || element.textContent || element.placeholder || element.id || element.tagName).trim().replace(/\\s+/g, ' ').slice(0, 30));
   const reaches = (element, x, y) => element.contains(document.elementFromPoint(x, y));
+  // A tap passes through a control that is held back to what it lies on, which is around it; under a dialog or a replay it reaches the cover instead
+  const inSightThough = (element, x, y) => document.elementFromPoint(x, y)?.contains(element) ?? false;
   const middle = (box) => [(box.left + box.right) / 2, (box.top + box.bottom) / 2];
 
   // As the page knows a control (controlKey in src/client/ui.ts): by its id, else its tag with every data-*, name and value attribute
@@ -107,7 +115,7 @@ const WATCH = `(({ tapped, backdrop, bar, playsNothing, settling }) => {
       ...[...document.querySelectorAll(backdrop)].flatMap((element) => around(element).map((box) => ({ element, is: null, box }))),
     ]
       .map((control) => ({ ...control, held: control.element.classList.contains(settling) }))
-      .filter(({ element, box, held }) => box.right - box.left >= 2 && box.bottom - box.top >= 2 && (held || reaches(element, ...middle(box))));
+      .filter(({ element, box, held }) => box.right - box.left >= 2 && box.bottom - box.top >= 2 && (reaches(element, ...middle(box)) || (held && inSightThough(element, ...middle(box)))));
 
   const same = (a, b) => a.element === b.element || (a.is !== null && a.is === b.is);
   const watched = { before: controls(), found: [], told: new Set(), held: [], liveAtOnce: [] };
@@ -144,25 +152,68 @@ const WATCH = `(({ tapped, backdrop, bar, playsNothing, settling }) => {
   new MutationObserver(compare).observe(document.body, { childList: true, subtree: true });
   new ResizeObserver(compare).observe(document.querySelector(bar));
 
-  // Every control the page holds back, for how long, and a tap on each the moment it is held
+  // Every control the page holds back, for how long, and a tap on each the moment it is held. A control drawn again
+  // while held is a new element with the old one's key, and the time since the first of them was held is kept by key
   const holding = new Map();
+  const streaks = new Map();
+
+  // Under a held backdrop lies the whole page: a tap anywhere around the dialog must reach nothing that takes one
+  const underTheBackdrop = (held) => {
+    const all = held.getBoundingClientRect();
+    const dialog = held.firstElementChild?.getBoundingClientRect();
+    const fell = new Set();
+
+    for (let across = 0.5; across < 8; across += 1) {
+      for (let down = 0.5; down < 12; down += 1) {
+        const [x, y] = [all.left + (all.width * across) / 8, all.top + (all.height * down) / 12];
+        const reached = document.elementFromPoint(x, y);
+        const other = reached?.closest(tapped + ', [tabindex]:not([tabindex="-1"])');
+
+        if (dialog && x > dialog.left && x < dialog.right && y > dialog.top && y < dialog.bottom) {
+          continue;
+        }
+
+        if (other && !fell.has(named(other))) {
+          fell.add(named(other));
+          watched.found.push({ aimedAt: '"the page under the dialog"', cameUp: named(held), at: Math.round(x) + ', ' + Math.round(y), taken: false, fallsTo: named(other) });
+        }
+
+        for (const kind of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+          reached?.dispatchEvent(new MouseEvent(kind, { bubbles: true, cancelable: true, composed: true, view: window, clientX: x, clientY: y }));
+        }
+      }
+    }
+  };
 
   new MutationObserver((changes) => {
     for (const { target } of changes) {
       const held = target.classList.contains(settling);
 
       if (held && !holding.has(target)) {
-        const [x, y] = middle(target.getBoundingClientRect());
-        const reached = document.elementFromPoint(x, y);
+        // Tapped where it can be seen: the rest of it is cut off by what it scrolls in, and a tap there is on something else
+        const seen = inSight(target);
+        const [x, y] = middle(seen);
+        const reached = seen.right > seen.left && seen.bottom > seen.top ? document.elementFromPoint(x, y) : null;
 
-        holding.set(target, { what: named(target), is: marksOf(target), from: performance.now(), lasted: null, sameLetGo: null });
+        const key = marksOf(target) ?? target;
+        const streak = streaks.get(key);
+        const from = performance.now();
+
+        // A hold of the same control that began within one hold's length of the last is the same hold going on
+        streaks.set(key, { first: streak && from - streak.last < 400 ? streak.first : from, last: from });
+        holding.set(target, { what: named(target), is: marksOf(target), from, lasted: null, sinceFirst: null, sameLetGo: null });
         watched.held.push(holding.get(target));
 
         for (const kind of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
           reached?.dispatchEvent(new MouseEvent(kind, { bubbles: true, cancelable: true, composed: true, view: window, clientX: x, clientY: y }));
         }
+
+        if (target.matches(backdrop)) {
+          underTheBackdrop(target);
+        }
       } else if (!held && holding.has(target)) {
         holding.get(target).lasted = performance.now() - holding.get(target).from;
+        holding.get(target).sinceFirst = performance.now() - streaks.get(marksOf(target) ?? target).first;
         holding.get(target).sameLetGo = marksOf(target) === holding.get(target).is && target.getAttribute('class') !== '';
         holding.delete(target);
       }

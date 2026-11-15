@@ -1,4 +1,4 @@
-import { holds, stillAimedAt } from './tapGuard.ts';
+import { holds, shownAt, stillAimedAt, stillHeld } from './tapGuard.ts';
 import type { Box, Drawing, Hold, Spot } from './tapGuard.ts';
 import { controlKey } from './ui.ts';
 import type { Redrawn } from './ui.ts';
@@ -86,8 +86,12 @@ function around(backdrop: Element): Box[] {
  */
 function lying(): Spot<Element>[] {
   const cuts: Cuts = new Map();
-  const reached = (control: Element, { left, top, right, bottom }: Box) =>
-    right > left && bottom > top && (control.classList.contains(SETTLING) || control.contains(document.elementFromPoint((left + right) / 2, (top + bottom) / 2)));
+  // A tap passes through a control that is held back to what it lies on, which is around it; under a dialog or a replay it reaches the cover instead
+  const reached = (control: Element, { left, top, right, bottom }: Box) => {
+    const hit = right > left && bottom > top ? document.elementFromPoint((left + right) / 2, (top + bottom) / 2) : null;
+
+    return hit !== null && (control.contains(hit) || (control.classList.contains(SETTLING) && hit.contains(control)));
+  };
 
   const controls = [...document.querySelectorAll(TAPPED)].map((control): Spot<Element> => ({ control, is: marksOf(control), box: inSight(control, cuts), forGood: control.matches(COMMITS_FOR_GOOD) }));
   const backdrops = [...document.querySelectorAll(BACKDROP)].flatMap((control) => around(control).map((box): Spot<Element> => ({ control, is: null, box, forGood: false })));
@@ -116,11 +120,13 @@ export class TapGuard implements Redrawn {
   private last: Spot<Element>[] = [];
   private held: Hold<Element>[] = [];
   private timer: ReturnType<typeof setTimeout> | null = null;
+  private whenFree: ReturnType<typeof setTimeout> | null = null;
   private playersOwn = false;
 
   /** Guards against `part` changing shape with nothing drawn anew, as the bar does when the chat beside it opens, goes down for a turn or comes back, and when the screen is turned. */
   watchShape(part: HTMLElement): void {
     this.shapes.observe(part);
+    // At every step of a scroll, not once it has stopped: a change of shape right behind it is measured against where things lay then
     part.addEventListener('scroll', () => (this.last = lying()), { passive: true });
   }
 
@@ -151,9 +157,26 @@ export class TapGuard implements Redrawn {
     }
   }
 
+  /**
+   * Runs a change of the page that is the game's own doing and no slot's redraw, a replay that opens or
+   * is set aside by itself: what it brings up or uncovers is held back like anything drawn anew.
+   */
+  byItself(change: () => void): void {
+    this.leaving();
+
+    try {
+      change();
+    } finally {
+      this.drawn();
+    }
+  }
+
   dispose(): void {
     this.shapes.disconnect();
-    this.letGo(Infinity);
+    clearTimeout(this.whenFree ?? undefined);
+    clearTimeout(this.timer ?? undefined);
+    this.unmarkAll();
+    this.held = [];
   }
 
   private moved(): void {
@@ -173,7 +196,7 @@ export class TapGuard implements Redrawn {
     const at = performance.now();
 
     this.last = lying();
-    this.letGo(Infinity);
+    this.unmarkAll();
     this.held = holds(
       this.drawings,
       this.last.filter((spot) => !spot.control.matches(PLAYS_NOTHING)),
@@ -185,7 +208,27 @@ export class TapGuard implements Redrawn {
       spot.control.classList.add(SETTLING);
     }
 
+    // The time of what came up begins when the page is next free, to show it and to take a tap: looking at a drawing
+    // lays it out, which takes a slow phone a good part of a hold, and the rest of what the view brought is drawn after
+    if (this.held.some((hold) => hold.until === null)) {
+      this.whenFree ??= setTimeout(() => this.shown(), 0);
+    }
+
     this.letGo(at);
+  }
+
+  private shown(): void {
+    const at = performance.now();
+
+    this.whenFree = null;
+    this.held = shownAt(this.held, at);
+    this.letGo(at);
+  }
+
+  private unmarkAll(): void {
+    for (const { spot } of this.held) {
+      unmark(spot.control);
+    }
   }
 
   /** Lets go of every control whose time is over at `at`, and comes back for the next one. `held` keeps them all until the page is looked at again: a control drawn again has the rest of its time. */
@@ -193,19 +236,19 @@ export class TapGuard implements Redrawn {
     clearTimeout(this.timer ?? undefined);
     this.timer = null;
 
-    const waiting = this.held.filter((hold) => hold.until > at);
-    const stillHeld = new Set(waiting.map((hold) => hold.spot.control));
+    const waiting = stillHeld(this.held, at);
+    const marked = new Set(waiting.map((hold) => hold.spot.control));
 
     for (const { spot } of this.held) {
-      if (!stillHeld.has(spot.control)) {
+      if (!marked.has(spot.control)) {
         unmark(spot.control);
       }
     }
 
-    if (waiting.length > 0) {
-      const next = Math.min(...waiting.map((hold) => hold.until));
+    const ends = waiting.flatMap(({ until }) => (until === null ? [] : [until]));
 
-      this.timer = setTimeout(() => this.letGo(performance.now()), next - performance.now());
+    if (ends.length > 0) {
+      this.timer = setTimeout(() => this.letGo(performance.now()), Math.min(...ends) - performance.now());
     }
   }
 }

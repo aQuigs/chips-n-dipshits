@@ -11,10 +11,10 @@
  */
 
 /**
- * How long a control that came up in another's place takes no tap, counted from when it came up: about
- * the time it takes to see that the page has changed. It is also how long a finger may still be on its
- * way to what lay there before. Shorter than the keys' wait (`KEYS_SETTLE_MS`): a key is held back
- * whatever it presses, a tap only where something else lay.
+ * How long a control that came up in another's place takes no tap, counted from when the page is free
+ * to show it (`shownAt`): about the time it takes to see that the page has changed. It is also how long
+ * a finger may still be on its way to what lay there before. Shorter than the keys' wait
+ * (`KEYS_SETTLE_MS`): a key is held back whatever it presses, a tap only where something else lay.
  */
 export const TAPS_SETTLE_MS = 350;
 
@@ -48,10 +48,13 @@ export interface Drawing<C> {
   spots: Spot<C>[];
 }
 
-/** A control that takes no tap until `until`. */
+/**
+ * A control that takes no tap until `until`. Null while the page is still busy with the drawing the
+ * control came up in: nobody can see or tap it yet, so its time has not begun (`shownAt`).
+ */
 export interface Hold<C> {
   spot: Spot<C>;
-  until: number;
+  until: number | null;
 }
 
 const same = <C>(a: Spot<C>, b: Spot<C>): boolean => a.control === b.control || (a.is !== null && a.is === b.is);
@@ -63,14 +66,26 @@ const inPlace = (a: Box, b: Box): boolean => [a.left - b.left, a.top - b.top, a.
 /** The drawings a finger may still be on its way to at `at`. */
 export const stillAimedAt = <C>(drawings: readonly Drawing<C>[], at: number): Drawing<C>[] => drawings.filter((drawing) => at - drawing.left < TAPS_SETTLE_MS);
 
+/** The holds among `held` that are not over at `at`. */
+export const stillHeld = <C>(held: readonly Hold<C>[], at: number): Hold<C>[] => held.filter((hold) => hold.until === null || hold.until > at);
+
+/**
+ * The holds once the page is free again, at `at`, to show what it drew and to take a tap: the settle
+ * time of those that came up in that drawing begins now. Laying a drawing out takes a slow phone a good
+ * part of that time, and counted from before it a hold would be over as its control came into sight.
+ */
+export const shownAt = <C>(held: readonly Hold<C>[], at: number): Hold<C>[] => held.map((hold) => (hold.until === null ? { spot: hold.spot, until: at + TAPS_SETTLE_MS } : hold));
+
 /**
  * The controls among `now`, as the page stands at `at` with the last of `drawings` just gone, that take
  * no tap yet, each with when it does:
  *
  * - One that has come up, or moved, to where a different control lay in a drawing a finger may still
- *   be on its way to: for the settle time from now. Every such drawing counts, not only the last: a
- *   part drawn twice in a moment still has a finger on its way to what the first one showed.
- * - One that commits for good and was not in the drawing just gone: for the settle time from now.
+ *   be on its way to: for the settle time from when the page shows it. Every such drawing counts, not
+ *   only the last: a part drawn twice in a moment still has a finger on its way to what the first one
+ *   showed.
+ * - One that commits for good and was not in the drawing just gone: for the settle time from when the
+ *   page shows it.
  * - One that lies where it lay in the drawing just gone has not come up at all: it is live, or among
  *   `held`, the holds of that drawing, has the rest of the time it had.
  */
@@ -82,7 +97,7 @@ export function holds<C>(drawings: readonly Drawing<C>[], now: readonly Spot<C>[
     const before = justGone.filter((was) => same(was, spot));
 
     if (before.some((was) => inPlace(was.box, spot.box))) {
-      const kept = held.find((hold) => hold.until > at && same(hold.spot, spot));
+      const kept = stillHeld(held, at).find((hold) => same(hold.spot, spot));
 
       return kept ? [{ spot, until: kept.until }] : [];
     }
@@ -90,6 +105,6 @@ export function holds<C>(drawings: readonly Drawing<C>[], now: readonly Spot<C>[
     const tookAnothersPlace = aimedAt.some((drawing) => drawing.spots.some((was) => !same(was, spot) && share(was.box, spot.box)));
     const cameUpForGood = spot.forGood && before.length === 0;
 
-    return tookAnothersPlace || cameUpForGood ? [{ spot, until: at + TAPS_SETTLE_MS }] : [];
+    return tookAnothersPlace || cameUpForGood ? [{ spot, until: null }] : [];
   });
 }

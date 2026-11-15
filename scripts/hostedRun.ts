@@ -1362,6 +1362,15 @@ try {
     assert.equal(before.size, older.length);
     assert.ok([...before.values()].every((row) => /\\"schema\\":[2-6],/.test(row)), 'every table is as older code saved it');
 
+    // What that code keeps of its tables in the script's cache, which the two share: it reads these before it reads the Sheet
+    const theirsOf = () => Object.fromEntries([...cache.entries].filter(([key]) => /^(state|peek|row):[^:]+$/.test(key)));
+    [...before.keys()].forEach((id, index) => {
+      cache.put(`state:${id}`, `{"schema":2,"id":"${id}"}`, 21_600);
+      cache.put(`peek:${id}`, '{"version":1,"wakeAt":null}', 21_600);
+      cache.put(`row:${id}`, String(index + 2), 21_600);
+    });
+    const theirs = theirsOf();
+
     const checked = await startDevServer({ port: 0, page: async () => html, service: game });
 
     try {
@@ -1397,6 +1406,9 @@ try {
       assert.equal(putAway.get(id) ?? after.get(id), row, `the row of ${id} was changed`);
       assert.equal(putAway.has(id), !after.has(id), `${id} is in one of the two tabs`);
     }
+
+    // Nor does it find anything in the cache but what it left there: not a table of this code's, and no entry of its own gone
+    assert.deepEqual(theirsOf(), theirs);
 
     // Nobody at those tables is a player the game knows, so the nights that went on record put nobody in the standings
     const standings = sheet.getSheetByName(RESULTS_TAB);

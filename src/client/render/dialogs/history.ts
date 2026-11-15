@@ -36,9 +36,11 @@ function handEl(hand: HandRecord, table: Denominated, handlers: DialogHandlers):
   const outcome = hand.result.chopped ? 'Blinds chopped' : winners.join(', ');
 
   const noReplay = noReplayLine(hand, table);
-  const replay = noReplay === null ? h('button.btn.small.replay-open', { type: 'button', 'data-action': 'replay', 'aria-label': `Replay this hand, number ${hand.number}`, onclick: () => handlers.replay(hand) }, 'Replay this hand') : h('p.note.no-replay', null, noReplay);
+  // Each control of a hand carries which hand it is of: drawn again with a hand added, the dialog has the keyboard on the hand it was on
+  const marks = { 'data-hand': hand.number };
+  const replay = noReplay === null ? h('button.btn.small.replay-open', { type: 'button', 'data-action': 'replay', ...marks, 'aria-label': `Replay this hand, number ${hand.number}`, onclick: () => handlers.replay(hand) }, 'Replay this hand') : h('p.note.no-replay', null, noReplay);
 
-  return h('details', { 'data-hand': hand.number }, h('summary', null, title, h('small', null, outcome)), replay, h('pre', null, readableLines(hand.summary, handlers.prefs.get('deck'))));
+  return h('details', marks, h('summary', marks, title, h('small', null, outcome)), replay, h('pre', null, readableLines(hand.summary, handlers.prefs.get('deck'))));
 }
 
 /** Puts `hands` in the list, newest first, keeping the element of every hand already in it and its reader's place. */
@@ -53,14 +55,22 @@ function fill(list: HTMLElement, hands: HandRecord[], table: Denominated, handle
   const newestFirst = [...hands].reverse();
   const scroller = list.closest('.dialog-body');
 
-  // Someone with a hand open, or scrolled down, is reading: a hand that stays in the list is held where it
-  // was, since new hands go in above it and the oldest drops off the end. At the top with none open, the
-  // new hand is what they see come in
-  const reading = scroller !== null && (scroller.scrollTop > 0 || list.querySelector(':scope > details[open]') !== null);
+  const keyboard = document.activeElement instanceof HTMLElement && list.contains(document.activeElement) ? document.activeElement : null;
+
+  // Someone with a hand open, scrolled down, or with the keyboard on a hand, is reading: a hand that stays
+  // in the list is held where it was, since new hands go in above it and the oldest drops off the end. At
+  // the top with none open, the new hand is what they see come in
+  const reading = scroller !== null && (scroller.scrollTop > 0 || keyboard !== null || list.querySelector(':scope > details[open]') !== null);
   const held = reading ? newestFirst.map((hand) => drawn.get(String(hand.number))).find((element) => element !== undefined) : undefined;
   const was = held?.getBoundingClientRect().top;
 
   list.replaceChildren(...newestFirst.map((hand) => drawn.get(String(hand.number)) ?? handEl(hand, table, handlers)));
+
+  // A hand that stays is the element it was, and taking it out to put it back took the keyboard off it. The keyboard
+  // on a hand that dropped off the end goes to the dialog, as it does whenever what had it is gone
+  if (keyboard) {
+    (keyboard.isConnected ? keyboard : list.closest<HTMLElement>('[role$="dialog"]'))?.focus({ preventScroll: true });
+  }
 
   if (scroller && held && was !== undefined) {
     scroller.scrollTop += held.getBoundingClientRect().top - was;

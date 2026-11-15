@@ -347,6 +347,9 @@ export function resultSaid({ before, view, events }: Pick<TableChange, 'before' 
 /** The viewer's clock is running down. */
 export const timeSaid = (seconds: number): string => `${seconds} seconds left.`;
 
+/** Why a hand is being played back by itself, some seconds after it was asked for: the keyboard goes into it from wherever it was. */
+export const replayOpenedSaid = (hand: number): string => `Hand #${hand} is cleared from the table. Playing it back, as you asked.`;
+
 /**
  * The seconds left on the clock at which a player is warned, once: late enough to be worth hearing
  * and early enough to act on. None on a clock too short to have both.

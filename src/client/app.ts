@@ -57,7 +57,7 @@ import { pageWays } from './pageAttention.ts';
 import { showStillOffered } from './showing.ts';
 import { ShownTable } from './shownTable.ts';
 import { Sounds } from './sound.ts';
-import { LABELS, menuLabel, requestText, timeSaid } from './spoken.ts';
+import { LABELS, menuLabel, replayOpenedSaid, requestText, timeSaid } from './spoken.ts';
 import { fontsUrl, themeById } from './themes.ts';
 import { TimeWarning } from './timeWarning.ts';
 import { pageTouch } from './pageTouch.ts';
@@ -942,10 +942,24 @@ export class App {
 
     if (redrawn) {
       this.hotkeys.shown();
+      this.keyboardOffTheChat(screen);
     }
 
     // Freshly built buttons are free; a move still on its way keeps them locked
     lockTurn(screen.controls.element, this.turnLocked());
+  }
+
+  /**
+   * A lying phone's open chat goes down to its bar for the viewer's turn, by the stylesheet alone
+   * (sideways.css), and the box in it with it. The keyboard that was in the box goes to the bar under the
+   * table, where the turn is, and not to nothing, which is the top of the page.
+   */
+  private keyboardOffTheChat(screen: TableScreen): void {
+    const held = document.activeElement;
+
+    if (held instanceof HTMLElement && screen.feed.element.contains(held) && held.getClientRects().length === 0) {
+      screen.controls.element.focus({ preventScroll: true });
+    }
   }
 
   /** Why a reaction now would be refused, as the table would say it, or null when one would go: the same rule, by the page's reckoning of the table's clock. */
@@ -1357,6 +1371,10 @@ export class App {
 
     if (refusal === null) {
       this.openReplay(record, unasked);
+
+      if (unasked) {
+        this.announcer.status(replayOpenedSaid(number));
+      }
     } else {
       this.toast(refusal);
     }

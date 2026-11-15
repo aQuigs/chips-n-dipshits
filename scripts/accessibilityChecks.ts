@@ -13,6 +13,7 @@ import { alike, controls, findings, focused, focusIn, heard, SPOKEN, spoken, tre
 import type { Check } from './checkRunner.ts';
 import { MOTION, movesSent } from './pageSpies.ts';
 import { Gate } from './rig.ts';
+import { tapsLive } from './underTheFinger.ts';
 import type { PageOptions, Rig, RigPlayer, RigTable, ScreenName } from './rig.ts';
 
 const THREE: RigPlayer[] = ['Quigs', 'Pam', 'Stu'].map((name) => ({ name, stack: 1000 }));
@@ -286,6 +287,38 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
     },
   ],
   [
+    'beside a table lying down the open chat goes down for the viewer’s turn: the keyboard in its empty box goes to the bar under the table, not to nothing, and nothing is said of it; with a line begun the box keeps the keyboard and the line',
+    async (rig) => {
+      const table = threeHanded(rig);
+      const page = await listening(table, 'Pam', 'phoneSideways');
+      const chatShows = (shows: boolean) => page.waitForSelector('.feed.open .feed-body', { state: shows ? 'visible' : 'hidden' });
+
+      table.deal(ACES_OVER_KINGS);
+      await table.heardBy(page);
+      await page.tap('.feed-toggle');
+      await chatShows(true);
+      await page.focus('#chat-input');
+
+      const waiting = table.version;
+
+      table.act('Quigs', { type: 'call' });
+      await heard(page, 'alert: Your turn. 5 to call. Pot 25 chips.', waiting);
+      await chatShows(false);
+      assert.equal(await focused(page), 'Your move', 'the chat went down for the turn and took the keyboard with it');
+      assert.deepEqual(await spoken(page, waiting), ['log: Quigs calls 10', 'alert: Your turn. 5 to call. Pot 25 chips.'], 'something was said of the chat going down');
+
+      // Her move made, the chat is back. A line begun in its box keeps it open through her next turn
+      table.act('Pam', { type: 'call' });
+      await chatShows(true);
+      await page.focus('#chat-input');
+      await page.keyboard.type('gg');
+      table.act('Stu', { type: 'check' });
+      await heard(page, 'alert: Your turn. Check or bet. Pot 30 chips.', waiting);
+      await chatShows(true);
+      assert.deepEqual(await page.evaluate(`[document.activeElement.id, document.activeElement.value]`), ['chat-input', 'gg'], 'the turn took the keyboard or the line from the chat’s box');
+    },
+  ],
+  [
     'ten views that draw the table and the bar again say nothing, leave the keyboard where it was and keep a bet half typed; so do a chat line, a toast and a move that are said',
     async (rig) => {
       const table = threeHanded(rig);
@@ -552,7 +585,7 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
     },
   ],
   [
-    'a dialog that opens by itself takes the keyboard and gives it back where it was; a replay that makes way for a turn says why, and the turn is said',
+    'a dialog that opens by itself takes the keyboard and gives it back where it was; a replay that makes way for a turn says why, and the turn is said; a replay asked for before its hand is on record says when it will come, and why it has opened',
     async (rig) => {
       const table = threeHanded(rig);
       const quigs = await listening(table, 'Quigs');
@@ -587,10 +620,23 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
       assert.equal(await page.locator('.replay:not([hidden])').count(), 0, 'the replay is still over the turn');
       assert.notEqual(await focused(page), 'nothing', 'the replay closing left the keyboard on nothing');
 
+      // That hand is played out, and its result is still up when Pam asks for it back from the bar. It is not on record
+      // yet and she is told when it will be played; cleared from the table, it opens by itself and says why
+      table.act('Quigs', { type: 'pause' });
+      table.play((view) => ({ type: view.hand!.options!.canCheck ? 'check' : 'fold' }), (view) => view.hand?.stage === 'done');
+      await page.focus('.controls [data-action="replay-last"]');
+      await page.keyboard.press('Enter');
+      await heard(page, 'status: Hand #2 plays back as soon as it is cleared from the table.');
+      table.play(() => null, (view) => view.hand === null);
+      await heard(page, 'status: Hand #2 is cleared from the table. Playing it back, as you asked.');
+      await page.waitForSelector('.replay:not([hidden])');
+      assert.equal(await page.getAttribute('.replay', 'aria-label'), 'Replay of hand #2');
+      assert.equal(await focusIn(page, '.replay'), true, 'the replay opened by itself with the keyboard left behind it');
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('.replay', { state: 'hidden' });
+
       // The night ends while she is in the chat box with nothing typed: Tonight opens over it, and closing it puts her back there
       await page.focus('#chat-input');
-      table.act('Quigs', { type: 'pause' });
-      table.play((view) => ({ type: view.hand!.options!.canCheck ? 'check' : 'fold' }), (view) => view.hand === null);
       table.act('Quigs', { type: 'endNight' });
       await page.waitForSelector('.dialog[aria-label="Tonight"]');
       assert.equal(await focusIn(page, '.dialog'), true, 'Tonight opened with the keyboard left behind it');
@@ -688,7 +734,7 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
     },
   ],
   [
-    'a list drawn again with the keyboard in it leaves the keyboard with the same player, never on the same button of another: a request in Players when one goes and another comes, the mute switch through its own flip, a row of Tonight when the standings change; and the top bar takes the keyboard when what had it is gone',
+    'a list drawn again with the keyboard in it leaves the keyboard with the same player, never on the same button of another: a request in Players when one goes and another comes, the mute switch through its own flip, a row of Tonight when the standings change, a hand of the history and its button as hands are added over it; and the top bar takes the keyboard when what had it is gone',
     async (rig) => {
       const table = threeHanded(rig, { voiceLink: 'https://meet.jit.si/friday-night' });
       const host = await table.open('Quigs', 'desktop');
@@ -716,6 +762,10 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
       await host.waitForSelector('.dialog li:has(b:text-is("Newt")) [data-action="approve"]');
       await host.waitForSelector('.dialog li:has(b:text-is("Lurk")) [data-action="approve"]', { state: 'detached' });
       assert.deepEqual(await held(), ['Approve, Moth', 'Moth'], 'the keyboard did not stay on the request it was on');
+
+      // Her button came up where another's lay, and takes no tap for a moment: the keyboard is still on it once it does
+      await tapsLive(host);
+      assert.deepEqual(await held(), ['Approve, Moth', 'Moth'], 'the keyboard left a button as it was let go');
       await host.keyboard.press('Escape');
 
       // The switch that mutes a player is the same switch once thrown, and keeps the keyboard both ways
@@ -743,6 +793,32 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
       );
       await host.waitForFunction(`document.querySelector('.dialog li summary .who')?.firstChild.textContent === ${JSON.stringify(last)}`);
       assert.deepEqual(await held(), ['SUMMARY', last], 'the keyboard did not stay on the row of the player it was on');
+      await host.keyboard.press('Escape');
+
+      // The hand history is drawn again as each hand goes on record, with that hand put in over the others. The keyboard
+      // stays on the hand it was on: on its line, and then on the button under it
+      // The game is paused after the hand, so that the hand is cleared from the table with none dealt behind it
+      const onRecord = () => {
+        table.act('Quigs', { type: 'pause' });
+        table.play((view) => (view.hand!.options ? { type: view.hand!.options.canCheck ? 'check' : 'fold' } : null), (view) => view.hand === null);
+      };
+      const onHandOne = (control: string) => host.evaluate(`document.activeElement.matches('.history ${control}[data-hand="1"]')`);
+
+      onRecord();
+      await table.heardBy(host);
+      await host.click('[data-action="menu"]');
+      await host.click('.menu-item[data-action="history"]');
+      await host.focus('.history summary[data-hand="1"]');
+      await host.keyboard.press('Enter');
+
+      for (const [hand, control] of [[2, 'summary'], [3, '[data-action="replay"]']] as const) {
+        await host.focus(`.history ${control}[data-hand="1"]`);
+        table.dealNext();
+        onRecord();
+        await host.waitForSelector(`.history details[data-hand="${hand}"]`);
+        assert.equal(await onHandOne(control), true, `hand #${hand} went into the history and the keyboard is on ${await focused(host)}, not on hand #1 where it was`);
+        assert.equal(await host.locator('.history details[data-hand="1"][open]').count(), 1, 'the hand being read was shut');
+      }
       await host.keyboard.press('Escape');
 
       // The link to the voice chat is taken away while the keyboard is on it: the keyboard is left on the top bar, not on nothing

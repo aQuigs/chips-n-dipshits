@@ -17,7 +17,7 @@
 .btn.small {
   min-height: 32px;
   padding: 0 12px;
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
 }
 
 .btn.primary,
@@ -49,7 +49,7 @@
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--panel);
-  font-size: 18px;
+  font-size: calc(18px * var(--text-scale));
 }
 
 .link {
@@ -66,7 +66,7 @@
   border: 1px solid var(--line);
   border-radius: 999px;
   background: var(--panel);
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
   font-weight: 600;
 }
 
@@ -84,7 +84,7 @@
   border: 1px solid var(--line);
   border-radius: 999px;
   background: var(--panel);
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
   font-weight: 600;
 }
 
@@ -120,7 +120,7 @@
 .field {
   display: grid;
   gap: 4px;
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
   font-weight: 600;
   color: var(--muted);
 }
@@ -136,7 +136,7 @@
   border-radius: var(--radius);
   background: var(--bg);
   color: var(--text);
-  font-size: 16px;
+  font-size: calc(16px * var(--text-scale));
   font-weight: 500;
 }
 
@@ -166,7 +166,7 @@
 
 .choice .check {
   color: var(--text);
-  font-size: 15px;
+  font-size: calc(15px * var(--text-scale));
   font-weight: 400;
 }
 
@@ -183,5 +183,5 @@
 
 .note {
   color: var(--muted);
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
 }

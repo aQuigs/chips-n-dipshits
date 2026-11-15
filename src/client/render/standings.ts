@@ -16,7 +16,7 @@ import type { PlayerStanding, UnitStandings } from '../../server/api.ts';
 import type { PlayedNight } from '../../server/resultStore.ts';
 import { asOfText, firstUnit, MONEY, nightDate, nightSummary, potsWonText, ranked, SORTS, summaryOf } from '../standings.ts';
 import type { SortId } from '../standings.ts';
-import { cardText, h } from '../ui.ts';
+import { h, readableText, youMark } from '../ui.ts';
 import { badgeList, badgeMarks } from './badges.ts';
 
 export interface StandingsHandlers {
@@ -34,7 +34,7 @@ const HOURS = SETTLE_AFTER_MS / (60 * 60 * 1000);
 
 const netClass = (net: number): string => (net > 0 ? 'up' : net < 0 ? 'down' : '');
 
-const handEl = (cards: Card[], deck: string): (string | HTMLElement)[] => [`${madeHandName(evaluateHand(cards))} `, h('span.standings-cards', null, cardText(prettyCards(cards), deck))];
+const handEl = (cards: Card[], deck: string): (string | HTMLElement)[] => [`${madeHandName(evaluateHand(cards))} `, h('span.standings-cards', null, readableText(prettyCards(cards), deck))];
 
 /** A part of the page that has to be asked for: says so while it is, and offers another try when it could not be had. */
 function asked<T>(load: () => Promise<T>, what: string, draw: (loaded: T) => (HTMLElement | null)[]): HTMLElement {
@@ -99,7 +99,7 @@ function playerLine(player: PlayerStanding, unit: Unit, handlers: StandingsHandl
       'summary',
       null,
       place,
-      h('span.who', null, player.name),
+      h('span.who', null, player.name, player.id === handlers.you ? youMark() : null),
       h('b', { class: `net ${netClass(player.net)}` }, signedAmount(player.net, { unit })),
       h('span.fold', { 'aria-hidden': 'true' }, '▾'),
       h('small.counts', null, summaryOf(player)),

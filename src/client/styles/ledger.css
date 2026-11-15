@@ -19,7 +19,7 @@
 /* On a phone a heading of two words wraps before it pushes the last column, what each player is up or down, off the screen */
 .ledger th {
   color: var(--muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
   font-weight: 600;
   white-space: normal;
   vertical-align: bottom;

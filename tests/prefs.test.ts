@@ -116,6 +116,23 @@ test('a choice that asks for it is shown on the host from the start and on every
   assert.deepEqual(host.properties, { '--text-size': '1.3' }, 'a choice that did not ask to be shown is not');
 });
 
+test('what the device asks for stands where nothing was chosen, is shown like a choice, and gives way to one', () => {
+  const host = fakeHost();
+  let wish: string | null = 'plain';
+  const prefs = new Preferences(SAMPLES, mapMemory(), host, (key) => (key === 'cardBack' ? wish : null));
+
+  assert.equal(prefs.get('cardBack'), 'plain');
+  assert.equal(host.dataset.cardBack, 'plain');
+  assert.equal(prefs.get('volume'), 60, 'what it asks nothing about is at its default');
+
+  wish = 'tartan';
+  assert.equal(prefs.get('cardBack'), 'stripes', 'a wish for what is not on offer is no wish');
+
+  wish = 'plain';
+  prefs.set('cardBack', 'stripes');
+  assert.equal(prefs.get('cardBack'), 'stripes', 'the player chose, and the device still asks');
+});
+
 test('a watcher hears each new choice of what it watches, until it is stopped', () => {
   const prefs = new Preferences(SAMPLES, mapMemory());
   const heard: unknown[] = [];

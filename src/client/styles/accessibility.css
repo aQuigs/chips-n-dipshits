@@ -1,0 +1,126 @@
+/* ---- What the page owes someone who plays by ear or by keyboard: nothing here changes what is drawn but for the way past the table ---- */
+
+/*
+ * The seats are a list, read in seat order. The list has no box of its own, so the table lays out
+ * every seat and bet as its own child: placed by a share of its size, or one of its rows where it is short.
+ */
+.seats {
+  display: contents;
+}
+
+/* Switched off, the hint is not said either */
+[data-hand-hint='off'] .hint-said {
+  display: none;
+}
+
+/* The way past the table to the bar under it, for a keyboard: out of sight until the keyboard reaches it */
+.skip {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 10;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-raised);
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* The accent is within 3 to 1 of the lit middle of two felts, so a ring there is drawn in the felt's own ink */
+.table {
+  --focus: var(--felt-ink);
+}
+
+.skip:not(:focus-visible) {
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* A part of the screen takes the keyboard only to keep it from falling to the top of the page, so it shows no ring */
+:is(.topbar, .stage, .controls-slot, .banners, .react-panel):focus {
+  outline: none;
+}
+
+/*
+ * Beside the table the chat is always open, and its button, which only opens and shuts it, would be a
+ * stop for the keyboard that does nothing and tells a screen reader the chat is shut. The button goes
+ * and its word stays, drawn where it was. The sizes are feed.css's for the chat beside the table.
+ */
+@container app (min-width: 900px) and (min-height: 521px) {
+  .feed-toggle {
+    visibility: hidden;
+  }
+
+  .feed-toggle .label {
+    visibility: visible;
+  }
+}
+
+/* The one thing a stylesheet moves that the Animations preference and the device's own setting do not already hold still */
+@media (prefers-reduced-motion: reduce) {
+  .toggle i::after {
+    transition: none;
+  }
+}
+
+/*
+ * ---- Text size ----
+ *
+ * Every size of text on the page is its size as drawn times a scale: --text-scale for what is read as
+ * prose (buttons, dialogs, the chat) and --table-text-scale for the figures on the table, which grow
+ * less because nine seats have little room to give. --own-text-scale is for the two figures on the
+ * table a player needs for their own move, the pot and their own stack, where the rest cannot grow.
+ * Cards and the table itself do not grow. The scales are set here and nowhere else.
+ */
+[data-text-size] {
+  --text-scale: 1;
+  --table-text-scale: 1;
+  --own-text-scale: 1;
+
+  font-size: calc(15px * var(--text-scale));
+}
+
+[data-text-size='large'] {
+  --text-scale: 1.15;
+  --table-text-scale: 1.08;
+}
+
+[data-text-size='largest'] {
+  --text-scale: 1.3;
+  --table-text-scale: 1.15;
+}
+
+/*
+ * On a phone, upright or on its side, the table is drawn at the smallest it can be read at and has the
+ * same nine places however many are taken, so the seats' figures stay as drawn: larger, they cover each
+ * other. What a player reads to make their own move still grows by the whole step: the bar under the
+ * table, the pot and their own stack. The bar takes its height from the table's, so it keeps its rows:
+ * the table gives up 6px at the largest step on the smallest phone, and nothing at the other.
+ */
+@media (max-width: 699px), (max-height: 599px) {
+  [data-text-size] .table {
+    --table-text-scale: 1;
+    --own-text-scale: var(--text-scale);
+  }
+
+  /* The name of the table and the last line of the chat are not needed to act, and are read in full once opened */
+  [data-text-size] :is(.topbar, .feed-bar) {
+    --text-scale: 1;
+  }
+
+  /* Five size buttons across 360px with larger words, in a wide font too: the words have the room the padding gives up */
+  :is([data-text-size='large'], [data-text-size='largest']) .presets .chip-btn {
+    padding-inline: 7px;
+  }
+
+  /* A move's words may take two lines at these sizes: set close, they fit the button as it was drawn */
+  :is([data-text-size='large'], [data-text-size='largest']) .turn .btn {
+    line-height: 1.1;
+  }
+}

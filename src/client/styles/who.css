@@ -29,7 +29,7 @@
 }
 
 .who-question {
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
   font-weight: 600;
   color: var(--muted);
 }
@@ -62,7 +62,7 @@
   border-radius: calc(var(--radius) * 2);
   background: var(--panel-raised);
   color: var(--text);
-  font-size: 15px;
+  font-size: calc(15px * var(--text-scale));
   font-weight: 600;
   line-height: 1.2;
   text-align: left;

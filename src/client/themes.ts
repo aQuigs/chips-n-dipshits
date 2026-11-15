@@ -32,9 +32,17 @@ export const THEMES: Theme[] = [
     blurb: 'Light and flat, easy to read outdoors.',
     fonts: ['Space+Grotesk:wght@500;700', 'Inter:wght@400;500;600;700'],
   },
+  {
+    id: 'contrast',
+    name: 'High Contrast',
+    blurb: 'White on black with heavy lines, the easiest to make out.',
+    fonts: ['Inter:wght@400;500;600;700;800'],
+  },
 ];
 
 export const DEFAULT_THEME = 'cardroom';
+/** What a device that asks for more contrast gets until its player picks a theme. */
+export const HIGH_CONTRAST_THEME = 'contrast';
 
 export function themeById(id: string | null): Theme {
   return THEMES.find((theme) => theme.id === id) ?? THEMES.find((theme) => theme.id === DEFAULT_THEME)!;

@@ -11,7 +11,7 @@ import { shapeFor, tableEl } from './render/table.ts';
 import type { Shape } from './render/table.ts';
 import { spotsOf, TableChances } from './tableChances.ts';
 import type { Pace } from './tableChances.ts';
-import { cardText, h, Slot } from './ui.ts';
+import { h, readableText, Slot } from './ui.ts';
 
 /** A finished hand to play back, and for whom. */
 export interface ReplayOf {
@@ -273,10 +273,10 @@ export class ReplayScreen {
     open.leave.classList.toggle('primary', this.waiting);
 
     if (open.told !== player.at) {
-      const lineEl = (line: string) => h('li', null, cardText(line, deck));
+      const lineEl = (line: string) => h('li', null, readableText(line, deck));
 
       open.told = player.at;
-      open.line.replaceChildren(...player.step.lines.map((line) => h('div', null, cardText(line, deck))));
+      open.line.replaceChildren(...player.step.lines.map((line) => h('div', null, readableText(line, deck))));
       open.line.scrollTop = 0;
       open.log.replaceChildren(...steps.slice(0, player.at).flatMap((step) => step.lines.map(lineEl)));
       open.log.scrollTop = open.log.scrollHeight;

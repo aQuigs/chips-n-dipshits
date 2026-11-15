@@ -10,7 +10,7 @@
 .show-cards .show-label {
   padding-inline: 2px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
   font-weight: 600;
 }
 

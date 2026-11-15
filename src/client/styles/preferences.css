@@ -50,7 +50,7 @@
   background: var(--bg);
   color: var(--text);
   font: inherit;
-  font-size: 16px;
+  font-size: calc(16px * var(--text-scale));
   font-weight: 500;
 }
 
@@ -68,7 +68,7 @@
   display: grid;
   gap: 6px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
   font-weight: 600;
 }
 
@@ -111,7 +111,7 @@
 }
 
 .tile:has(input:focus-visible) {
-  outline: 2px solid var(--accent);
+  outline: var(--focus-width) solid var(--focus);
   outline-offset: 3px;
 }
 
@@ -141,7 +141,7 @@
   margin: 8px 0 0;
   padding: 0 4px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
 }
 
 .glossary div {

@@ -1,7 +1,8 @@
 import type { FeedEntry } from '../../engine/types.ts';
 import type { TableView } from '../../engine/view.ts';
 import { chatLineShown } from '../senders.ts';
-import { cardText, h, marksCards } from '../ui.ts';
+import { LABELS } from '../spoken.ts';
+import { cardText, h, marksCards, readableText } from '../ui.ts';
 import { createChatBox } from './chatBox.ts';
 import { chatLineEl, gifOf, namesViewer, showPicture } from './chatLine.ts';
 
@@ -45,8 +46,11 @@ function latestText(entry: FeedEntry, current: FeedLook): (string | HTMLElement)
  * fetched for a closed chat or a line scrolled past.
  */
 export function createFeed(onChat: (text: string) => void, look: () => FeedLook, beside: HTMLElement | null = null): Feed {
-  const list = h('ol.entries', { 'aria-live': 'polite' });
-  const latest = h('span.latest');
+  // Not a live region: new lines are said by the page's announcer, once, whether or not this list is open.
+  // It takes the keyboard so that it can be scrolled without a pointer
+  const list = h('ol.entries', { role: 'list', 'aria-label': LABELS.lines, tabindex: 0 });
+  // The newest line is for the eye: said as it came, and not again as the name of the button it stands on
+  const latest = h('span.latest', { 'aria-hidden': 'true' });
   // Up from when a line names the viewer with the list out of sight, shut or down for their turn, until they have the list in sight again
   const named = h('span.named-you', { hidden: true }, h('span.unseen', null, 'A line names you. '), '@');
   const toggle = h('button.feed-toggle', { type: 'button', 'aria-expanded': 'false', 'aria-controls': 'feed-body' }, h('span.label', null, 'Chat'), named, latest);
@@ -58,7 +62,7 @@ export function createFeed(onChat: (text: string) => void, look: () => FeedLook,
       .sort((a, b) => a.localeCompare(b)),
   );
 
-  const element = h('aside.feed', null, h('div.feed-bar', null, toggle, beside), h('div.feed-body', { id: 'feed-body' }, list, box.element));
+  const element = h('aside.feed', { 'aria-label': LABELS.feed }, h('div.feed-bar', null, toggle, beside), h('div.feed-body', { id: 'feed-body' }, list, box.element));
 
   toggle.addEventListener('click', () => {
     const open = element.classList.toggle('open');
@@ -116,7 +120,7 @@ export function createFeed(onChat: (text: string) => void, look: () => FeedLook,
 
   const lineEl = (entry: FeedEntry, current: FeedLook): HTMLElement => {
     if (entry.kind !== 'chat') {
-      return h('li', { 'data-kind': entry.kind }, cardText(entry.text, current.deck));
+      return h('li', { 'data-kind': entry.kind }, readableText(entry.text, current.deck));
     }
 
     const line = chatLineEl(entry, { you, pictures: current.pictures });

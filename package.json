@@ -22,6 +22,7 @@
     "@google/clasp": "^3.4.1",
     "@types/google-apps-script": "^2.0.15",
     "@types/node": "^26.6.6",
+    "axe-core": "^4.14.0",
     "esbuild": "^0.28.2",
     "playwright": "^1.65.0",
     "typescript": "^7.0.2"

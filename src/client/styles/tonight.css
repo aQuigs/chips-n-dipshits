@@ -16,7 +16,7 @@
 
 /* Any name wraps rather than run out of the box: two long ones can share a crown */
 .tonight-crown strong {
-  font: var(--display-weight) calc(26px * var(--display-scale)) / 1.15 var(--font-display);
+  font: var(--display-weight) calc(26px * var(--display-scale) * var(--text-scale)) / 1.15 var(--font-display);
   letter-spacing: var(--display-spacing);
   text-transform: var(--display-case);
   overflow-wrap: anywhere;

@@ -34,7 +34,7 @@
 
   position: absolute;
   inset: 0;
-  font-size: clamp(10px, 2.5cqmin, 14px);
+  font-size: calc(clamp(10px, 2.5cqmin, 14px) * var(--table-text-scale));
   user-select: none;
 }
 
@@ -95,11 +95,11 @@
 }
 
 .board.later {
-  opacity: 0.45;
+  opacity: calc(1 - 0.55 * var(--dim));
 }
 
 .pot {
-  font-size: 1.25em;
+  font-size: calc(1.25em * var(--own-text-scale));
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
@@ -250,16 +250,16 @@
    * lower, and beside the cards of the lower, which lie face down for as long as a bet is out. Further
    * toward the middle it would be on a board or the pot as soon as it, or the pot, is a long one.
    */
-  .table.wide > .bet:is(.from-left, .from-right) {
+  .table.wide .bet:is(.from-left, .from-right) {
     top: calc(var(--seat-y) * var(--side-spread) + var(--side-shift) + var(--from-seat-top));
     transform: translateX(-50%);
   }
 
-  .table.wide > .bet.upper {
+  .table.wide .bet.upper {
     --from-seat-top: calc(var(--side-seat-h) + 2px);
   }
 
-  .table.wide > .bet.lower {
+  .table.wide .bet.lower {
     --from-seat-top: 3px;
   }
 

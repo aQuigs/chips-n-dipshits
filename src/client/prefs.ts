@@ -134,6 +134,20 @@ export const PREFERENCES = {
     css: 'attribute',
     glossary: HOTKEY_LIST,
   },
+  // Last, so that nothing above it moves. Each step is a pair of scales in styles/accessibility.css
+  textSize: {
+    kind: 'choice',
+    label: 'Text size',
+    hint: 'The figures on the table grow less than the rest, so that nine seats still fit a small phone',
+    group: 'Text',
+    options: [
+      { value: 'standard', label: 'Standard' },
+      { value: 'large', label: 'Large' },
+      { value: 'largest', label: 'Largest' },
+    ],
+    default: 'standard',
+    css: 'attribute',
+  },
 } satisfies Record<string, Pref>;
 
 /**
@@ -158,6 +172,12 @@ export interface PrefMemory {
   get(key: string): string | null;
   set(key: string, value: string): void;
 }
+
+/**
+ * What the device asks for where its player has chosen nothing, in the words a choice is kept in:
+ * the high-contrast theme on a device set to more contrast, say. Null where it asks for nothing.
+ */
+export type Wishes = (key: string) => string | null;
 
 /** The part of an element a choice is shown on. */
 export interface PrefHost {
@@ -198,14 +218,16 @@ export class Preferences<R extends Record<string, Pref>> {
   readonly registry: R;
   private readonly memory: PrefMemory;
   private readonly host: PrefHost | null;
+  private readonly wished: Wishes;
   private readonly chosen = new Map<string, string>();
   private readonly watchers = new Map<string, Set<(value: never) => void>>();
 
   /** `host` is the element the choices that ask for it are shown on. */
-  constructor(registry: R, memory: PrefMemory, host: PrefHost | null = null) {
+  constructor(registry: R, memory: PrefMemory, host: PrefHost | null = null, wished: Wishes = () => null) {
     this.registry = registry;
     this.memory = memory;
     this.host = host;
+    this.wished = wished;
 
     for (const key of Object.keys(registry)) {
       this.show(key);
@@ -213,7 +235,7 @@ export class Preferences<R extends Record<string, Pref>> {
   }
 
   get<K extends keyof R & string>(key: K): ValueOf<R[K]> {
-    return decode(this.registry[key]!, this.kept(key)) as ValueOf<R[K]>;
+    return this.valueOf(key) as ValueOf<R[K]>;
   }
 
   set<K extends keyof R & string>(key: K, value: ValueOf<R[K]>): void {
@@ -261,13 +283,18 @@ export class Preferences<R extends Record<string, Pref>> {
     return this.chosen.get(key) ?? null;
   }
 
+  /** What was chosen, else what the device asks for, else the default. */
+  private valueOf(key: string): PrefValue {
+    return decode(this.registry[key]!, this.kept(key) ?? this.wished(key));
+  }
+
   private show(key: string): void {
     const pref = this.registry[key]!;
     if (!this.host || !pref.css) {
       return;
     }
 
-    const text = encode(decode(pref, this.kept(key)));
+    const text = encode(this.valueOf(key));
 
     if (pref.css === 'attribute') {
       this.host.dataset[key] = text;

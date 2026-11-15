@@ -31,7 +31,7 @@
 
 .feed-toggle .label {
   color: var(--accent);
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -42,7 +42,7 @@
   min-width: 0;
   overflow: hidden;
   color: var(--muted);
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -101,7 +101,7 @@
   padding: 4px 12px 8px;
   overflow-y: auto;
   list-style: none;
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
 }
 
 .entries li {

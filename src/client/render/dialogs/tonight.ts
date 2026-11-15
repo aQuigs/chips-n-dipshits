@@ -4,7 +4,7 @@ import type { Card } from '../../../engine/cards.ts';
 import type { TonightRow } from '../../../engine/tonight.ts';
 import type { TableView } from '../../../engine/view.ts';
 import { countsOf, crownOf, leadersOf, missedOf, standingOf, tonightText } from '../../tonightText.ts';
-import { cardText, h } from '../../ui.ts';
+import { h, readableText, youMark } from '../../ui.ts';
 import { badgeList, badgeMarks } from '../badges.ts';
 import { nightOver } from '../night.ts';
 import { copyOnClick, everyone, frame } from './dialog.ts';
@@ -14,7 +14,7 @@ import type { DialogHandlers, DialogKind } from './dialog.ts';
 // hand ends: a line someone is reading would otherwise fold shut under them
 const unfolded = new Set<string>();
 
-const cardsEl = (cards: Card[], handlers: DialogHandlers): HTMLElement => h('span.tonight-cards', null, cardText(prettyCards(cards), handlers.prefs.get('deck')));
+const cardsEl = (cards: Card[], handlers: DialogHandlers): HTMLElement => h('span.tonight-cards', null, readableText(prettyCards(cards), handlers.prefs.get('deck')));
 
 function crownEl(view: TableView): HTMLElement | null {
   const crown = crownOf(view);
@@ -43,8 +43,9 @@ function playerEl(row: TonightRow, view: TableView, handlers: DialogHandlers): H
     { open: unfolded.has(row.playerId) },
     h(
       'summary',
-      null,
-      h('span.who', null, row.name, row.seated ? null : h('small', null, ' left')),
+      // Whose row it is: the rows change places with the standings, and the keyboard stays with the player
+      { 'data-player': row.playerId },
+      h('span.who', null, row.name, row.seated ? null : h('small', null, ' left'), row.playerId === view.you.id ? youMark() : null),
       h('b', { class: `net ${row.net > 0 ? 'up' : row.net < 0 ? 'down' : ''}` }, signedAmount(row.net, view.config)),
       h('span.fold', { 'aria-hidden': 'true' }, '▾'),
       h('small.counts', null, countsOf(row)),

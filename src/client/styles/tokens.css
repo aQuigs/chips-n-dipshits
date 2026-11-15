@@ -58,6 +58,14 @@
   --plate-radius: 10px;
   /* Under what floats over the page: a toast, a picker, a list of names */
   --shadow-raised: 0 8px 30px rgb(0 0 0 / 40%);
+  /*
+   * How far what is out of play is faded and still read: a folded seat, a card that makes no part of the
+   * hand, a board yet to be run. 1 fades each as it was drawn to be, 0 leaves it at full strength.
+   */
+  --dim: 1;
+  /* The ring around whatever has the keyboard */
+  --focus: var(--accent);
+  --focus-width: 2px;
   /* The largest a GIF in the chat is drawn, whatever its own size, so no picture pushes the table around */
   --gif-height: 120px;
   --gif-width: 220px;
@@ -207,4 +215,61 @@
   --plate-radius: 10px;
 
   color-scheme: light;
+}
+
+/*
+ * High Contrast: white on black, and every line heavy enough to find. Held by tests/contrast.test.ts
+ * to 7 to 1 for everything written and 3 to 1 for every edge and mark, and what a device asking for
+ * more contrast gets until its player picks another. Its suits are the four-color deck, each 7 to 1
+ * on the card and apart for the common kinds of color blindness.
+ */
+[data-theme='contrast'] {
+  --bg: #000000;
+  --bg-raised: #000000;
+  --panel: #000000;
+  --panel-raised: #1c1c1c;
+  --line: #a6a6a6;
+  --text: #ffffff;
+  --muted: #d9d9d9;
+  --accent: #ffe600;
+  --accent-ink: #000000;
+  --good: #5dff9b;
+  --good-ink: #000000;
+  --bad: #ffa399;
+  --bad-ink: #000000;
+  --win: #6ef0ff;
+
+  --felt: #03200f;
+  --rail: #ffffff;
+  --rail-edge: #ffffff;
+  --rail-width: clamp(3px, 1cqmin, 6px);
+  --felt-glow: none;
+  --felt-ink: #ffffff;
+  --felt-muted: #d9d9d9;
+
+  --card: #ffffff;
+  --card-edge: #ffffff;
+  --suit-s: #000000;
+  --suit-c: #006400;
+  --suit-h: #881038;
+  --suit-d: #0033cc;
+  --suit-four-s: #000000;
+  --suit-four-h: #881038;
+  --suit-four-d: #0033cc;
+  --suit-four-c: #006400;
+  --card-back: repeating-linear-gradient(45deg, #5b7cff 0 6px, #3f62ea 6px 12px);
+  --chip: #ffe600;
+
+  --font-display: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-ui: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --display-weight: 800;
+  --display-case: none;
+  --display-spacing: -0.01em;
+  --radius: 4px;
+  --plate-radius: 4px;
+  /* Nothing shows as a shadow on black: what floats has an edge instead */
+  --shadow-raised: 0 0 0 2px #ffffff;
+  --focus-width: 3px;
+  /* Faded, white on black is under 7 to 1: here what is out of play says so in words alone */
+  --dim: 0;
 }

@@ -9,7 +9,7 @@
 .hand-counts .chip-btn,
 .this-hand .chip-btn {
   min-height: 44px;
-  font-size: 16px;
+  font-size: calc(16px * var(--text-scale));
 }
 
 .this-hand .chip-btn {

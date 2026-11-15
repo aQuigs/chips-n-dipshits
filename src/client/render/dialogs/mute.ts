@@ -1,6 +1,6 @@
 import type { TableView } from '../../../engine/view.ts';
 import { h } from '../../ui.ts';
-import { everyone, frame } from './dialog.ts';
+import { everyone, frame, rowActions } from './dialog.ts';
 import type { DialogHandlers, DialogKind } from './dialog.ts';
 
 /** Everyone at the table but the viewer, seated or watching, in the order of their names. */
@@ -15,12 +15,12 @@ function mute(view: TableView, handlers: DialogHandlers): HTMLElement {
       'li',
       { 'data-muted': muted },
       h('span', null, h('b', null, member.name), muted ? h('small.mute-note', null, 'Muted') : null),
-      h(
-        'span.row-actions',
-        null,
+      rowActions(
+        member,
         h(
           'button.btn.small',
-          { type: 'button', 'data-action': muted ? 'unmute' : 'mute', 'aria-pressed': String(muted), 'aria-label': `${muted ? 'Unmute' : 'Mute'} ${member.name}`, onclick: () => mutes.set(member.id, !muted) },
+          // One id whichever way it stands, so the keyboard stays on the switch it has just thrown
+          { type: 'button', id: `mute-${member.id}`, 'data-action': muted ? 'unmute' : 'mute', 'aria-pressed': String(muted), 'aria-label': `${muted ? 'Unmute' : 'Mute'} ${member.name}`, onclick: () => mutes.set(member.id, !muted) },
           muted ? 'Unmute' : 'Mute',
         ),
       ),

@@ -5,7 +5,7 @@ import type { DialogHandlers, DialogKind } from './dialog.ts';
 
 function copyRow(id: string, label: string, value: string, handlers: DialogHandlers, warning?: string): HTMLElement {
   const input = h('input', { type: 'text', id, readonly: true, value, onfocus: (event: Event) => (event.target as HTMLInputElement).select() });
-  const button = h('button.btn.small.primary', { type: 'button' }, 'Copy');
+  const button = h('button.btn.small.primary', { type: 'button', 'data-copy': id }, 'Copy');
 
   copyOnClick(button, input, () => value, handlers);
 

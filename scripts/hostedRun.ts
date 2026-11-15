@@ -1255,6 +1255,62 @@ try {
     }
   }
 
+  console.log('The page says what language it is in, even where whoever serves it writes the outer page themselves');
+  {
+    const page = await open(browser);
+
+    // As Apps Script may serve it: the page's own markup inside a document that names no language
+    await page.route(server.url, async (route) => {
+      const served = await route.fetch();
+
+      await route.fulfill({ response: served, body: (await served.text()).replace('<html lang="en">', '<html>') });
+    });
+
+    await page.goto(server.url);
+    await page.waitForSelector('[data-action="create-table"]');
+    assert.equal(await page.evaluate('document.documentElement.lang'), 'en', 'a screen reader is left to guess the language');
+    await page.context().close();
+  }
+
+  console.log('The theme and the size of text are set before anything is drawn: what the player chose, else what the device asks for');
+  {
+    // Written down the moment the page first has anything in it, which is before the browser can have painted it
+    const AT_FIRST_DRAW = `new MutationObserver((_changes, observer) => {
+      const app = document.getElementById('app');
+
+      if (app && app.childElementCount > 0) {
+        window.atFirstDraw = { theme: document.documentElement.dataset.theme, textSize: app.dataset.textSize };
+        observer.disconnect();
+      }
+    }).observe(document, { subtree: true, childList: true });`;
+    const page = await open(browser);
+    const drawnAs = async () => {
+      await page.waitForSelector('[data-action="create-table"]');
+
+      return page.evaluate('window.atFirstDraw');
+    };
+
+    await page.addInitScript(AT_FIRST_DRAW);
+    await page.goto(server.url);
+    assert.deepEqual(await drawnAs(), { theme: 'cardroom', textSize: 'standard' }, 'a device that asks for nothing');
+
+    // A device set to more contrast, and a browser set to larger text than it shipped with
+    await page.emulateMedia({ contrast: 'more' });
+    await page.addInitScript(`new MutationObserver((_changes, observer) => {
+      if (document.documentElement) {
+        document.documentElement.style.fontSize = '20px';
+        observer.disconnect();
+      }
+    }).observe(document, { childList: true });`);
+    await page.reload();
+    assert.deepEqual(await drawnAs(), { theme: 'contrast', textSize: 'large' }, 'what the device asks for');
+
+    await page.evaluate(`localStorage.setItem('cnd.theme', 'divebar'); localStorage.setItem('cnd.textSize', 'largest')`);
+    await page.reload();
+    assert.deepEqual(await drawnAs(), { theme: 'divebar', textSize: 'largest' }, 'what the player chose stands over what the device asks for');
+    await page.context().close();
+  }
+
   console.log('The Apps Script-hosted page holds up');
 } finally {
   await browser.close();

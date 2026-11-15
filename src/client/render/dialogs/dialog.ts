@@ -7,6 +7,7 @@ import type { PresetHandlers } from '../presets.ts';
 import type { StandingsHandlers } from '../standings.ts';
 import type { PlayerHandlers } from '../whoField.ts';
 import { h, holdWhile } from '../../ui.ts';
+import type { Child } from '../../ui.ts';
 import type { Dialog } from './index.ts';
 
 export interface DialogHandlers {
@@ -76,9 +77,30 @@ export function frame(title: string, handlers: Pick<DialogHandlers, 'close'>, ..
     'div.dialog',
     // Focusable by script only: opening a dialog puts the keyboard here, not on the page behind it
     { role: 'dialog', 'aria-modal': 'true', 'aria-label': title, tabindex: -1 },
-    h('header', null, h('h2', null, title), h('button.icon', { type: 'button', 'aria-label': 'Close', 'data-action': 'close', onclick: handlers.close }, '✕')),
+    // The dialog's own heading, not the page's banner, which is what a header outside any section is taken for
+    h('header', { role: 'none' }, h('h2', null, title), h('button.icon', { type: 'button', 'aria-label': 'Close', 'data-action': 'close', onclick: handlers.close }, '✕')),
     h('div.dialog-body', null, body),
   );
+}
+
+/**
+ * The buttons at the end of a player's row in a list, each marked as that player's and named with their
+ * name. A dialog drawn again puts the keyboard back on the button that had it, found by its marks
+ * (`Slot`): found by its place among its like, it would be the same button on another player's row once
+ * the rows had changed. And a row of buttons heard one after another says whose each is.
+ */
+export function rowActions(player: { id: string; name: string }, ...buttons: Child[]): HTMLElement {
+  const actions = h('span.row-actions', null, buttons);
+
+  for (const button of actions.querySelectorAll('button')) {
+    button.dataset.player = player.id;
+
+    if (!button.hasAttribute('aria-label')) {
+      button.setAttribute('aria-label', `${button.textContent}, ${player.name}`);
+    }
+  }
+
+  return actions;
 }
 
 /**

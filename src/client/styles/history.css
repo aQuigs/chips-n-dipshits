@@ -19,6 +19,6 @@
 .history pre {
   margin: 0 0 12px;
   color: var(--muted);
-  font: 12px/1.5 ui-monospace, 'SF Mono', Menlo, monospace;
+  font: calc(12px * var(--text-scale))/1.5 ui-monospace, 'SF Mono', Menlo, monospace;
   white-space: pre-wrap;
 }

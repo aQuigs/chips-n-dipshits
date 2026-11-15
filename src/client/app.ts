@@ -1,4 +1,3 @@
-import { formatAmount } from '../engine/amounts.ts';
 import { liveReactions, REACTION_TOO_SOON, reactionRefusal } from '../engine/reactions.ts';
 import { replaySteps } from '../engine/replay.ts';
 import { anteText, blindsText } from '../engine/stakes.ts';
@@ -6,6 +5,7 @@ import type { Preset } from '../engine/presets.ts';
 import type { Command, HandRecord, TableConfig } from '../engine/types.ts';
 import type { TableView } from '../engine/view.ts';
 import type { ApiError, ApiRequest, ApiResponse, Auth } from '../server/api.ts';
+import { PageAnnouncer } from './announcer.ts';
 import { isRefusal, nextRetry, ServerClock, ServerLine, sleep, TableConnection } from './connection.ts';
 import type { SendOutcome, Session } from './connection.ts';
 import { TableEffects } from './effects.ts';
@@ -18,6 +18,7 @@ import { browserOf } from './pageErrors.ts';
 import type { PageFailure } from './pageErrors.ts';
 import { DealtCards, forgetDealt } from './dealtCards.ts';
 import { forgetMutes, Mutes } from './mutes.ts';
+import { pageWishes } from './pageWishes.ts';
 import { sendersShown } from './senders.ts';
 import { Motion, motionAbility } from './motion.ts';
 import { pageMotion, pageWatching } from './pageMotion.ts';
@@ -32,7 +33,7 @@ import type { Platform } from './platform.ts';
 import { PREFERENCES, Preferences } from './prefs.ts';
 import { movePromptEl, SeatMoves } from './seatMoves.ts';
 import type { Abilities, AppPreferences } from './prefs.ts';
-import { AHEAD_ACTION, controlsEl, controlsSignature, lockTurn, sizingMemory } from './render/controls.ts';
+import { controlsEl, controlsSignature, lockTurn, sizingMemory } from './render/controls.ts';
 import type { Sizing } from './render/controls.ts';
 import { frame } from './render/dialogs/dialog.ts';
 import { dialogAllowed, dialogEl, dialogShows } from './render/dialogs/index.ts';
@@ -56,7 +57,9 @@ import { pageWays } from './pageAttention.ts';
 import { showStillOffered } from './showing.ts';
 import { ShownTable } from './shownTable.ts';
 import { Sounds } from './sound.ts';
+import { LABELS, menuLabel, requestText, timeSaid } from './spoken.ts';
 import { fontsUrl, themeById } from './themes.ts';
+import { TimeWarning } from './timeWarning.ts';
 import { pageTouch } from './pageTouch.ts';
 import { h, holdWhile, secondsUntil, Slot } from './ui.ts';
 import { pageSounds } from './webAudioSounds.ts';
@@ -97,6 +100,8 @@ interface TableScreen {
   seatMoves: SeatMoves;
   shape: Shape;
   resizeObserver: ResizeObserver;
+  /** The trouble with the connection that a screen reader was last told of, which is told once and not with every redraw. */
+  troubleSaid: 'unreachable' | 'struggling' | null;
 }
 
 function parseMember(value: string | null | undefined): Auth | null {
@@ -118,9 +123,11 @@ export class App {
   private readonly root: HTMLElement;
   private readonly platform: Platform;
   private readonly themeHost: HTMLElement;
-  private readonly toastEl = h('div.toast', { role: 'status', hidden: true });
-  /** Words for a screen reader alone, kept through every redraw so that a new line is heard. */
-  private readonly spokenEl = h('p.unseen', { role: 'status' });
+  // For the eye: its words are said through the announcer, which a screen reader hears whether or not the line is still up
+  private readonly toastEl = h('div.toast', { hidden: true, 'aria-hidden': 'true' });
+  /** What a screen reader is told, kept on the page through every screen and every redraw so that each line is heard once. */
+  private readonly announcer = new PageAnnouncer(LABELS.spoken);
+  private readonly timeWarning = new TimeWarning();
 
   private readonly clock = new ServerClock();
   private readonly server: ServerLine;
@@ -173,7 +180,12 @@ export class App {
     this.root = root;
     this.platform = platform;
     this.themeHost = themeHost;
-    this.prefs = new Preferences(PREFERENCES, platform.memory, root);
+
+    const device = pageWishes();
+
+    this.prefs = new Preferences(PREFERENCES, platform.memory, root, device.wished);
+    device.onChange(() => this.applyTheme(this.prefs.get('theme')));
+
     this.me = new RememberedPlayer(platform.memory);
     this.prefs.watch('theme', (id) => this.applyTheme(id));
     for (const key of ['deck', 'gifs'] as const) {
@@ -228,6 +240,9 @@ export class App {
   }
 
   private begin(): void {
+    // Whoever serves the page may write its outer markup themselves, as Apps Script does, and a page that
+    // names no language is read out in the screen reader's own, whatever that is
+    document.documentElement.lang ||= 'en';
     this.applyTheme(this.prefs.get('theme'));
     setInterval(() => {
       this.tickCountdowns();
@@ -401,7 +416,7 @@ export class App {
         void this.showJoin(tableId);
 
         if (response.code === 'unauthorized') {
-          this.toast('That personal link no longer works here. Join again to play.');
+          this.fail('That personal link no longer works here. Join again to play.');
         }
 
         return;
@@ -470,7 +485,7 @@ export class App {
           this.showPutAway(tableId, response);
         } else {
           this.showLobby();
-          this.toast(`There is no table with the code ${tableId}.`);
+          this.fail(`There is no table with the code ${tableId}.`);
         }
 
         return;
@@ -478,7 +493,7 @@ export class App {
 
       // The link stays in the address, so a reload is another try
       retryIn = nextRetry(retryIn);
-      this.toast('Could not reach the table. Trying again…');
+      this.fail('Could not reach the table. Trying again…');
       await sleep(retryIn);
     }
   }
@@ -494,7 +509,7 @@ export class App {
       return true;
     }
 
-    this.toast(response && !response.ok ? response.error : 'Could not create the table. Check your connection and try again.');
+    this.fail(response && !response.ok ? response.error : 'Could not create the table. Check your connection and try again.');
     return false;
   }
 
@@ -513,7 +528,7 @@ export class App {
       return true;
     }
 
-    this.toast(response && !response.ok ? response.error : 'Could not join the table. Check your connection and try again.');
+    this.fail(response && !response.ok ? response.error : 'Could not join the table. Check your connection and try again.');
     return false;
   }
 
@@ -557,7 +572,7 @@ export class App {
       chose: (sent) => this.screen?.shown.choiceIs(sent),
       status: () => this.showStatus(),
       refused: (error) => this.dropSession(error),
-      notice: (message) => this.toast(message),
+      notice: (message) => this.fail(message),
     });
     this.table = table;
 
@@ -579,8 +594,8 @@ export class App {
       () => ({ deck: this.prefs.get('deck'), pictures: this.prefs.get('gifs'), shown: sendersShown(this.prefs, mutes, table.session.auth.id, 'chat') }),
       picker.toggleElement,
     );
-    const stage = new Slot(h('div.stage'));
-    const bar = h('div.controls-slot');
+    const stage = new Slot(h('main.stage', { 'aria-label': LABELS.table, tabindex: -1 }));
+    const bar = h('section.controls-slot', { 'aria-label': LABELS.bar, tabindex: -1 });
     // The parts whose controls come up by themselves have the guard. Not the table, drawn anew with every move and with none of its controls moving
     const taps = new TapGuard();
     taps.watchShape(bar);
@@ -601,13 +616,18 @@ export class App {
       dealt,
       replay: { setAside: () => this.setReplayAside(), turn: (mine) => replay.turn(mine) },
       toast: (message) => this.toast(message),
-      announce: (message) => (this.spokenEl.textContent = message),
+      say: this.announcer,
     });
+    const controls = new Slot(bar, taps);
+    // The first thing a keyboard reaches: the table is a long way to tab through to a turn that is on the clock
+    const skip = h('button.skip', { type: 'button', onclick: () => controls.element.focus() }, LABELS.skip);
     const screen: TableScreen = {
-      topbar: new Slot(h('header.topbar')),
-      banners: new Slot(h('div.banners'), taps),
+      topbar: new Slot(h('header.topbar', { tabindex: -1 })),
+      // A landmark only while it has something in it (`drawBanners`)
+      // Takes the keyboard itself when the button that had it is gone with its notice, as the table and the bar do
+      banners: new Slot(h('section.banners', { 'aria-label': LABELS.notices, tabindex: -1, hidden: true }), taps),
       stage,
-      controls: new Slot(bar, taps),
+      controls,
       taps,
       overlay,
       modal: new Modal(overlay.element),
@@ -629,7 +649,7 @@ export class App {
           effects.run(change);
           this.replayOnceRecorded(change.view);
         },
-        say: (message) => this.toast(message),
+        say: (message) => this.fail(message),
       }),
       sizing: sizingMemory(),
       seatMoves: new SeatMoves(stage.element, {
@@ -639,6 +659,7 @@ export class App {
       }),
       shape: 'wide',
       resizeObserver: new ResizeObserver(() => this.reshape()),
+      troubleSaid: null,
     };
 
     screen.overlay.element.addEventListener('click', (event) => {
@@ -648,7 +669,7 @@ export class App {
     });
 
     this.screen = screen;
-    page.append(screen.topbar.element, screen.banners.element, stage.element, above, screen.controls.element, feed.element, screen.overlay.element);
+    page.append(skip, screen.topbar.element, screen.banners.element, stage.element, above, screen.controls.element, feed.element, screen.overlay.element);
     this.mount(page);
     // Beside the page, not in it: a dialog shuts everything else in the page off from the keyboard, and a replay opens over one
     page.after(replay.element);
@@ -681,12 +702,24 @@ export class App {
     this.screen = null;
     this.dialog = null;
     this.offered = null;
+    this.announcer.forget();
   }
 
   private mount(content: HTMLElement): void {
     // Whatever was up over the screen before goes with it, and lets go of what it held back
     this.closeStandings?.();
-    this.root.replaceChildren(content, this.toastEl, this.spokenEl);
+
+    const kept = [this.toastEl, ...this.announcer.elements];
+
+    // What speaks stays where it is: a region taken off the page and put back may be read out again
+    for (const child of [...this.root.children]) {
+      if (!kept.includes(child as HTMLElement)) {
+        child.remove();
+      }
+    }
+
+    this.root.prepend(content);
+    this.root.append(...kept.filter((element) => !element.isConnected));
   }
 
   /**
@@ -822,7 +855,7 @@ export class App {
       this.showLobby();
     }
 
-    this.toast(error.code === 'not_found' ? 'That table no longer exists.' : 'This browser is not at the table anymore. Join again to keep playing.');
+    this.fail(error.code === 'not_found' ? 'That table no longer exists.' : 'This browser is not at the table anymore. Join again to keep playing.');
   }
 
   /** Puts on screen a view the connection has taken up: only such a one, so nothing happens twice for a view that was dropped. */
@@ -889,9 +922,8 @@ export class App {
 
   private drawControls(screen: TableScreen, view: TableView): void {
     const waiting = screen.shown.waiting;
-    // A choice of a move ahead draws the bar again the moment it is pressed, and whoever pressed it with a key is still on it.
-    // Only such a button is found again: no key press may land on a button of the turn that came up in its place
-    const focused = document.activeElement instanceof HTMLElement && screen.controls.element.contains(document.activeElement) ? document.activeElement.dataset.action : undefined;
+    // A choice of a move ahead draws the bar again the moment it is pressed, and whoever pressed it with a key is still on it:
+    // the slot finds that button again. It finds no other, so no key press lands on a button of the turn that came up in its place
     const redrawn = screen.controls.draw([controlsSignature(view), waiting], () =>
       controlsEl(
         view,
@@ -902,6 +934,7 @@ export class App {
           openStraddles: () => this.openDialog({ kind: 'straddles' }),
           replay: (hand) => this.replayHand(hand),
           sizing: screen.sizing,
+          say: (message) => this.announcer.status(message),
         },
         waiting,
       ),
@@ -909,10 +942,6 @@ export class App {
 
     if (redrawn) {
       this.hotkeys.shown();
-    }
-
-    if (redrawn && focused?.startsWith(AHEAD_ACTION)) {
-      screen.controls.element.querySelector<HTMLElement>(`[data-action="${focused}"]`)?.focus();
     }
 
     // Freshly built buttons are free; a move still on its way keeps them locked
@@ -953,10 +982,10 @@ export class App {
     const ante = anteText(view.config);
 
     screen.topbar.draw([waiting, state, view.config.name, blinds, ante, view.config.voiceLink], () => [
-      h('button.icon.menu-button', { type: 'button', 'aria-label': 'Menu', 'data-action': 'menu', onclick: () => this.openDialog({ kind: 'menu' }) }, '☰', waiting > 0 ? h('span.dot', null, String(waiting)) : null),
+      h('button.icon.menu-button', { type: 'button', 'aria-label': menuLabel(waiting), 'data-action': 'menu', onclick: () => this.openDialog({ kind: 'menu' }) }, '☰', waiting > 0 ? h('span.dot', null, String(waiting)) : null),
       // The ante takes the place of the word: a small phone has no room for both beside the hand's number.
       // It is a piece of its own, so where there is no room for it either it moves to the next line whole
-      h('div.title', null, h('b', { title: view.config.name }, view.config.name), ante ? h('span', null, `${blinds} `, h('span.ante', null, `· ${ante}`)) : h('span', null, `${blinds} hold’em`)),
+      h('div.title', null, h('b', { role: 'heading', 'aria-level': '1', title: view.config.name }, view.config.name), ante ? h('span', null, `${blinds} `, h('span.ante', null, `· ${ante}`)) : h('span', null, `${blinds} hold’em`)),
       state ? h('span.pill', null, state) : null,
       voiceLinkEl(view.config.voiceLink),
       h('button.btn.small', { type: 'button', 'data-action': 'invite', onclick: () => this.openDialog({ kind: 'invite' }) }, 'Invite'),
@@ -977,10 +1006,12 @@ export class App {
       trouble ? h('div.banner.warn', null, troubleText[trouble]) : null,
       picking === null ? null : movePromptEl(view, picking, () => screen.seatMoves.cancel()),
       requests.map((request) => {
-        const what = request.kind === 'seat' ? `wants seat ${request.seat + 1} with ${formatAmount(request.amount, view.config)}` : `wants to add ${formatAmount(request.amount, view.config)}`;
-        // Whose request, so the next row's buttons moving up into this one's place are other buttons (the tap guard)
-        const approve = h('button.btn.small.primary', { type: 'button', 'data-action': 'approve', 'data-player': request.playerId }, 'Approve');
-        const deny = h('button.btn.small', { type: 'button', 'data-action': 'deny', 'data-player': request.playerId }, 'Deny');
+        const what = requestText(request, view.config);
+        // Each says whose request it answers: several can be up at once, and a screen reader lands on a button without its line.
+        // And each carries whose it is: the next row's buttons moving up into this one's place are other buttons, to the tap
+        // guard and to the keyboard alike
+        const approve = h('button.btn.small.primary', { type: 'button', 'data-action': 'approve', 'data-player': request.playerId, 'aria-label': `Approve ${request.name}` }, 'Approve');
+        const deny = h('button.btn.small', { type: 'button', 'data-action': 'deny', 'data-player': request.playerId, 'aria-label': `Deny ${request.name}` }, 'Deny');
 
         approve.addEventListener('click', () => holdWhile(approve, () => this.send({ type: 'approve', playerId: request.playerId })));
         deny.addEventListener('click', () => holdWhile(deny, () => this.send({ type: 'deny', playerId: request.playerId })));
@@ -988,6 +1019,16 @@ export class App {
         return h('div.banner', null, h('span', null, h('b', null, request.name), ` ${what}`), approve, deny);
       }),
     ]);
+
+    screen.banners.element.hidden = screen.banners.element.childElementCount === 0;
+
+    if (trouble !== screen.troubleSaid) {
+      screen.troubleSaid = trouble;
+
+      if (trouble) {
+        this.announcer.alert(troubleText[trouble]);
+      }
+    }
   }
 
   private drawStage(screen: TableScreen, view: TableView): void {
@@ -1068,6 +1109,11 @@ export class App {
     // A move that has waited too long for its answer says so by the clock, with no view to draw it
     if (screen && (screen.shown.waiting === 'unconfirmed') !== screen.stage.element.hasAttribute('data-unconfirmed')) {
       this.drawShown();
+    }
+
+    const left = view && this.timeWarning.due(view, this.clock.now());
+    if (left) {
+      this.announcer.alert(timeSaid(left));
     }
   }
 
@@ -1388,7 +1434,7 @@ export class App {
     }
 
     // A refusal here says nothing about the player's seat, so it never takes them from the table
-    this.toast(response && !response.ok ? response.error : 'No answer from the server. Try again in a moment.');
+    this.fail(response && !response.ok ? response.error : 'No answer from the server. Try again in a moment.');
 
     return false;
   }
@@ -1402,7 +1448,7 @@ export class App {
     }
 
     // A refusal here says nothing about the player's seat, so it never takes them from the table
-    this.toast(response && !response.ok ? response.error : 'No answer from the server. Checking the presets…');
+    this.fail(response && !response.ok ? response.error : 'No answer from the server. Checking the presets…');
 
     return null;
   }
@@ -1418,7 +1464,19 @@ export class App {
     }
   }
 
+  /** A passing word at the top of the screen, said to a screen reader when it is free. */
   private toast(message: string): void {
+    this.showToast(message);
+    this.announcer.toast(message);
+  }
+
+  /** Word that something did not go as asked: shown like any other, and said to a screen reader at once. */
+  private fail(message: string): void {
+    this.showToast(message);
+    this.announcer.alert(message);
+  }
+
+  private showToast(message: string): void {
     this.toastEl.textContent = message;
     this.toastEl.hidden = false;
 

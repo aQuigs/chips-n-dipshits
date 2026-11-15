@@ -5,7 +5,7 @@
  * nobody glancing at the table takes it for a card in play, whatever colors they can tell apart.
  */
 .board .card.hunted {
-  opacity: 0.55;
+  opacity: calc(1 - 0.45 * var(--dim));
   outline: 2px dashed var(--felt-ink);
   outline-offset: 1px;
   box-shadow: none;

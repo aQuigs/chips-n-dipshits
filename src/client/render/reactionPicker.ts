@@ -23,7 +23,7 @@ const capitalized = (words: string) => words.charAt(0).toUpperCase() + words.sli
 export const reactionLabel = (kind: ReactionKind): string => (kind.thrown ? `Throw ${kind.name}` : capitalized(kind.name));
 
 export class ReactionPicker {
-  // Built once and kept, so it keeps the keyboard's focus as it opens and closes the panel
+  // Built once and kept, so the keyboard can be handed back to it when the panel closes
   private readonly button = h(
     'button.react-toggle',
     { type: 'button', hidden: true, 'aria-label': 'Reactions', 'aria-expanded': 'false', 'aria-controls': 'react-panel', 'data-action': 'reactions', onclick: () => this.toggle() },
@@ -100,10 +100,19 @@ export class ReactionPicker {
   }
 
   close(): void {
-    if (this.open) {
-      this.open = false;
-      this.throwing = null;
-      this.redraw();
+    if (!this.open) {
+      return;
+    }
+
+    const within = this.slot.element.contains(document.activeElement);
+
+    this.open = false;
+    this.throwing = null;
+    this.redraw();
+
+    // The panel took the keyboard when it opened, and gives it back to the button it was opened with
+    if (within) {
+      this.button.focus();
     }
   }
 
@@ -112,9 +121,30 @@ export class ReactionPicker {
   }
 
   private toggle(): void {
-    this.open = !this.open;
-    this.throwing = null;
+    if (this.open) {
+      this.close();
+      return;
+    }
+
+    this.open = true;
     this.redraw();
+    this.enter();
+  }
+
+  /**
+   * Puts the keyboard in the panel. The panel is drawn over the table, a long way before its button
+   * in the order of the page, where nobody playing by keyboard or by ear would come across it.
+   */
+  private enter(): void {
+    const panel = this.slot.element.querySelector<HTMLElement>('.react-panel');
+
+    (panel?.querySelector<HTMLElement>('button:enabled') ?? panel)?.focus();
+  }
+
+  private step(throwing: ReactionKind | null): void {
+    this.throwing = throwing;
+    this.redraw();
+    this.enter();
   }
 
   private redraw(): void {
@@ -129,14 +159,14 @@ export class ReactionPicker {
     if (throwing) {
       return h(
         'div.react-panel',
-        { id: 'react-panel', role: 'group', 'aria-label': `${reactionLabel(throwing)} at` },
+        { id: 'react-panel', role: 'group', 'aria-label': `${reactionLabel(throwing)} at`, tabindex: -1 },
         h('div.react-heading', null, `Throw ${throwing.mark} at…`),
         h(
           'div.react-targets',
           null,
           others.map((other) => h('button.btn.small', { type: 'button', 'data-throw-at': other.id, onclick: () => this.pick(throwing, other.id) }, other.name)),
         ),
-        h('button.btn.small.react-back', { type: 'button', 'data-action': 'react-back', onclick: () => ((this.throwing = null), this.redraw()) }, 'Back'),
+        h('button.btn.small.react-back', { type: 'button', 'data-action': 'react-back', onclick: () => this.step(null) }, 'Back'),
         h('div.react-note', { 'aria-live': 'polite' }),
       );
     }
@@ -150,14 +180,14 @@ export class ReactionPicker {
           title: reactionLabel(kind),
           'data-react': kind.id,
           'data-thrown': kind.thrown ? '' : null,
-          onclick: () => (kind.thrown ? ((this.throwing = kind), this.redraw()) : this.pick(kind)),
+          onclick: () => (kind.thrown ? this.step(kind) : this.pick(kind)),
         },
         kind.mark,
       );
 
     return h(
       'div.react-panel',
-      { id: 'react-panel', role: 'group', 'aria-label': 'Reactions' },
+      { id: 'react-panel', role: 'group', 'aria-label': 'Reactions', tabindex: -1 },
       h('div.react-heading', null, 'React'),
       h('div.react-row', null, REACTIONS.filter((kind) => !kind.thrown).map(choice)),
       h('div.react-heading', null, others.length > 0 ? 'Throw at someone' : 'Throw at someone, once someone else sits down'),

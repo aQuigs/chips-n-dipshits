@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { halfShownLabel, showOffer, showStillOffered } from '../src/client/showing.ts';
+import { showOffer, showStillOffered } from '../src/client/showing.ts';
+import { seatSaid } from '../src/client/spoken.ts';
 import { spotsOf } from '../src/client/tableChances.ts';
 import { addMember, fullyShown, handFacts, prettyCard, replayHand, seededRng } from '../src/engine/index.ts';
 import type { Command, Rng, TableView } from '../src/engine/index.ts';
@@ -357,13 +358,14 @@ test('the page offers the cards still face down of the hand that is over, and se
 
 test('what a screen reader is told of a seat with one card up and one down, and of one with both or none', () => {
   const t = foldedToTheBigBlind();
-  const seat = () => t.view(0).seats[1]!;
+  // The seat as another player hears it, which is the one place its cards are said
+  const said = () => seatSaid(t.view(0), t.view(0).seats[1]!, { status: 'Fold', took: 0, chance: null, made: null, muted: false });
 
-  assert.equal(halfShownLabel(seat()), null);
+  assert.equal(said(), 'P1, small blind, 990 chips, folded.');
   t.show(1, [1]);
-  assert.equal(halfShownLabel(seat()), 'P1 shows the king of diamonds; the other card is face down');
+  assert.equal(said(), 'P1, small blind, 990 chips, folded, shows king of diamonds, the other card face down.');
   t.show(1, [0]);
-  assert.equal(halfShownLabel(seat()), null);
+  assert.equal(said(), 'P1, small blind, 990 chips, folded, shows ace of spades, king of diamonds.');
 });
 
 test('over random games the cards shown by choice are kept card by card and never turned down again', () => {

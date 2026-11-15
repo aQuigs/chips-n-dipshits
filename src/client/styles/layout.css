@@ -44,7 +44,7 @@
 
 .topbar .title b {
   overflow: hidden;
-  font: var(--display-weight) calc(16px * var(--display-scale)) / 1.2 var(--font-display);
+  font: var(--display-weight) calc(16px * var(--display-scale) * var(--text-scale)) / 1.2 var(--font-display);
   letter-spacing: var(--display-spacing);
   text-transform: var(--display-case);
   text-overflow: ellipsis;
@@ -53,7 +53,7 @@
 
 .topbar .title span {
   color: var(--muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
 }
 
 .topbar .title .ante {
@@ -65,7 +65,7 @@
   border: 1px solid var(--line);
   border-radius: 999px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
   font-weight: 600;
   white-space: nowrap;
 }
@@ -91,7 +91,7 @@
   border-radius: 999px;
   background: var(--bad);
   color: var(--bad-ink);
-  font-size: 11px;
+  font-size: calc(11px * var(--text-scale));
   font-weight: 700;
   line-height: 18px;
 }
@@ -109,7 +109,7 @@
   padding: 8px 12px;
   border-bottom: 1px solid var(--line);
   background: var(--panel);
-  font-size: 14px;
+  font-size: calc(14px * var(--text-scale));
 }
 
 .banner > span {

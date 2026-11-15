@@ -4,7 +4,7 @@ import { h } from '../../ui.ts';
 import { roleOf } from '../../../engine/hosts.ts';
 import { badgeMarks } from '../badges.ts';
 import { hostAlone, hostOrCohost, roleMark } from '../roles.ts';
-import { frame } from './dialog.ts';
+import { frame, rowActions } from './dialog.ts';
 import type { DialogHandlers, DialogKind } from './dialog.ts';
 
 function players(view: TableView, handlers: DialogHandlers): HTMLElement {
@@ -13,9 +13,8 @@ function players(view: TableView, handlers: DialogHandlers): HTMLElement {
       'li',
       null,
       h('span', null, h('b', null, request.name), request.kind === 'seat' ? ` wants seat ${request.seat + 1} with ${formatAmount(request.amount, view.config)}` : ` wants to add ${formatAmount(request.amount, view.config)}`),
-      h(
-        'span.row-actions',
-        null,
+      rowActions(
+        { id: request.playerId, name: request.name },
         h('button.btn.small.primary', { type: 'button', 'data-action': 'approve', onclick: () => void handlers.send({ type: 'approve', playerId: request.playerId }) }, 'Approve'),
         h('button.btn.small', { type: 'button', 'data-action': 'deny', onclick: () => void handlers.send({ type: 'deny', playerId: request.playerId }) }, 'Deny'),
       ),
@@ -113,9 +112,8 @@ function players(view: TableView, handlers: DialogHandlers): HTMLElement {
               seat.moveTo !== null ? h('small.move-note', null, `Moves to seat ${seat.moveTo + 1} after this hand`) : null,
               owes(seat) ? h('small.owes-note', null, `Owes ${owes(seat)}`) : null,
             ),
-            h(
-              'span.row-actions',
-              null,
+            rowActions(
+              { id: seat.playerId, name: seat.name },
               h('button.btn.small', { type: 'button', 'data-action': 'set-stack', onclick: () => handlers.open({ kind: 'setStack', playerId: seat.playerId }) }, 'Set stack'),
               move(seat),
               owes(seat) ? h('button.btn.small', { type: 'button', 'data-action': 'forgive-blinds', onclick: () => void handlers.send({ type: 'forgiveBlinds', playerId: seat.playerId }) }, 'Forgive blinds') : null,
@@ -136,9 +134,8 @@ function players(view: TableView, handlers: DialogHandlers): HTMLElement {
       'li',
       null,
       h('span', null, nameOf(playerId, name)),
-      h(
-        'span.row-actions',
-        null,
+      rowActions(
+        { id: playerId, name },
         roleButtons(playerId, name),
         played.has(playerId) ? null : remove(playerId, name, 'They have not played here, so they are taken off the table and their name is free again. They can join again from the link.', true),
       ),

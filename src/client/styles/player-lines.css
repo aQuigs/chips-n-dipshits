@@ -36,12 +36,7 @@
   overflow-wrap: anywhere;
 }
 
-:is(.tonight-players, .standings-players) .me .who::after {
-  content: ' (you)';
-  color: var(--muted);
-  font-weight: 400;
-}
-
+:is(.tonight-players, .standings-players) .who .you,
 :is(.tonight-players, .standings-players) .who small,
 :is(.tonight-players, .standings-players) .counts {
   color: var(--muted);
@@ -63,7 +58,7 @@
 
 :is(.tonight-players, .standings-players) .fold {
   color: var(--muted);
-  font-size: 18px;
+  font-size: calc(18px * var(--text-scale));
   line-height: 1;
 }
 
@@ -85,7 +80,7 @@
 
 :is(.tonight-leaders, .tonight-players, .standings-players) dt {
   color: var(--muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
 }
 
 :is(.tonight-leaders, .tonight-players, .standings-players) dd {

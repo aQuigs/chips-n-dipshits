@@ -81,7 +81,7 @@
   gap: 0 0.3em;
   min-height: 50px;
   padding: 4px 8px;
-  font-size: 16px;
+  font-size: calc(16px * var(--text-scale));
   line-height: 1.15;
 }
 
@@ -129,7 +129,7 @@
 @container app (max-width: 420px) {
   .extras .chip-btn,
   .extras .toggle {
-    font-size: 12px;
+    font-size: calc(12px * var(--text-scale));
   }
 
   .extras .chip-btn {
@@ -145,7 +145,7 @@
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--bg);
-  font-size: 16px;
+  font-size: calc(16px * var(--text-scale));
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   text-align: right;

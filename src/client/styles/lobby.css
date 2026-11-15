@@ -54,7 +54,7 @@
 
 .card-panel h2,
 .dialog h2 {
-  font: var(--display-weight) calc(20px * var(--display-scale)) / 1.2 var(--font-display);
+  font: var(--display-weight) calc(20px * var(--display-scale) * var(--text-scale)) / 1.2 var(--font-display);
   letter-spacing: var(--display-spacing);
   text-transform: var(--display-case);
 }

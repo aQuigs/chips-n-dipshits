@@ -18,7 +18,7 @@
 .badge small {
   margin-left: 1px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: calc(11px * var(--text-scale));
 }
 
 /* In the night's list a row of their own, under what the player did */

@@ -1,0 +1,60 @@
+/*
+ * ---- A device that draws every page in its own few colors (Windows contrast themes) ----
+ *
+ * There every background color, shadow and gradient of the page is gone and every ink is the device's
+ * own, whichever theme is chosen. What the page said with a fill alone it says here with an edge, in
+ * the device's color for what is selected. Nothing here is drawn for anyone else.
+ */
+@media (forced-colors: active) {
+  /* Faded ink on the device's ground is the very thing its owner turned off */
+  [data-theme] {
+    --dim: 0;
+  }
+
+  /* On and off were the color of the track */
+  .toggle i {
+    border: 1px solid ButtonText;
+  }
+
+  .toggle i::after {
+    forced-color-adjust: none;
+    background: ButtonText;
+  }
+
+  .toggle[aria-checked='true'] i {
+    forced-color-adjust: none;
+    border-color: Highlight;
+    background: Highlight;
+  }
+
+  .toggle[aria-checked='true'] i::after {
+    background: HighlightText;
+  }
+
+  /* Whose turn it is and who won were a shadow around the plate */
+  .seat.acting .plate,
+  .seat.winner .plate {
+    outline: 3px solid Highlight;
+    outline-offset: 1px;
+  }
+
+  /* Which of several is the one chosen was its fill or its shadow */
+  [aria-pressed='true'],
+  [role='tab'][aria-selected='true'],
+  .tile:has(input:checked) {
+    outline: 3px solid Highlight;
+    outline-offset: -4px;
+  }
+
+  /* Shapes that were a fill and nothing else */
+  .dealer-button,
+  .bet,
+  .timer {
+    border: 1px solid CanvasText;
+  }
+
+  .timer i {
+    forced-color-adjust: none;
+    background: Highlight;
+  }
+}

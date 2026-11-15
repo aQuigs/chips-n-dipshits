@@ -1,4 +1,5 @@
 import type { TableView } from '../engine/view.ts';
+import type { Announcer } from './announcer.ts';
 import type { Attention } from './attention.ts';
 import type { DealtMemory } from './dealtCards.ts';
 import { celebrations } from './effects/celebrations.ts';
@@ -11,6 +12,7 @@ import { chatNudges } from './effects/nudges.ts';
 import { preActionLines } from './effects/preActionLines.ts';
 import { reactions } from './effects/reactions.ts';
 import { replayMakesWay } from './effects/replayMakesWay.ts';
+import { spokenPlay } from './effects/spokenPlay.ts';
 import { yourTurn } from './effects/yourTurn.ts';
 import type { TableMotion } from './motion.ts';
 import type { MuteList } from './mutes.ts';
@@ -55,8 +57,8 @@ export interface EffectContext {
   replay: ReplaySetAside;
   /** Shows the viewer a line at the top of the screen for a few seconds. */
   toast(message: string): void;
-  /** Says a line to a screen reader alone, for what the screen shows without words. */
-  announce(message: string): void;
+  /** The way to say a line to a screen reader alone, for what the screen shows without words. */
+  say: Announcer;
 }
 
 /** Something that happens on the page when the table changes: a sound, an animation, an alert. */
@@ -87,6 +89,7 @@ const TABLE_EFFECTS: (() => TableEffect)[] = [
   dealtCards,
   replayMakesWay,
   preActionLines,
+  spokenPlay,
 ];
 
 /** The effects of one table screen. */

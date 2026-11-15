@@ -155,7 +155,8 @@ const LOOK = `(({ onTop, mayBeCut, scrolls, swiped, inSight, leastEm }) => {
   const read = [];
 
   for (const element of document.body.querySelectorAll('*')) {
-    if (element === hitAll || !shown(element) || element.closest('.unseen')) {
+    // Not what is there for a screen reader alone, nor the way past the table, which is drawn only once the keyboard is on it
+    if (element === hitAll || !shown(element) || element.closest('.unseen, .skip:not(:focus-visible)')) {
       continue;
     }
 

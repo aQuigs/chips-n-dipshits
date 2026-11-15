@@ -140,7 +140,7 @@
 
 .react-heading {
   color: var(--muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
   font-weight: 600;
 }
 
@@ -183,7 +183,7 @@
 
 .react-note {
   color: var(--muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
 }
 
 .react-note:empty {

@@ -46,6 +46,11 @@
   visibility: hidden;
 }
 
+/* The stack alone, not the whole plate: a taller plate rises over the bottom of the viewer's own cards */
+.seat.me .plate .stack {
+  font-size: calc(1em * var(--own-text-scale));
+}
+
 .seat.me {
   --seat-w: clamp(84px, 24cqmin, 150px);
 }
@@ -171,7 +176,7 @@
 .seat.folded .hole,
 .seat.folded .plate,
 .seat.out .plate {
-  opacity: 0.5;
+  opacity: calc(1 - 0.5 * var(--dim));
 }
 
 .seat.winner .plate {
@@ -315,7 +320,7 @@
 }
 
 .seat.open.idle .plate {
-  opacity: 0.4;
+  opacity: calc(1 - 0.6 * var(--dim));
 }
 
 .bet {

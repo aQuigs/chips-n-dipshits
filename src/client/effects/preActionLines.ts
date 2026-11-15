@@ -4,11 +4,11 @@ import { aheadLines } from '../preActions.ts';
 /** Tells a player what became of the move they chose ahead of their turn, where the screen alone would not. */
 export function preActionLines(): TableEffect {
   return {
-    run(change, { announce, toast }) {
+    run(change, { say, toast }) {
       const { spoken, shown } = aheadLines(change);
 
       if (spoken) {
-        announce(spoken);
+        say.status(spoken);
       }
 
       if (shown) {

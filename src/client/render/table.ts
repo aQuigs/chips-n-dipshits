@@ -9,7 +9,7 @@ import type { HandRead } from '../../engine/handNames.ts';
 import type { PotAward } from '../../engine/types.ts';
 import type { HandView, Holding, SeatView, TableView } from '../../engine/view.ts';
 import type { BoardCard, Place } from '../motion.ts';
-import { halfShownLabel } from '../showing.ts';
+import { boardSaid, hintSaid, LABELS, openSeatSaid, potSaid, seatSaid, seatsLabel } from '../spoken.ts';
 import type { ShownChances } from '../tableChances.ts';
 import { cardEl, h } from '../ui.ts';
 import { nightOver } from './night.ts';
@@ -200,7 +200,6 @@ function holeCards(seat: SeatView, markSeen: boolean): HTMLElement[] {
 
     if (markSeen && seat.shown[nth]) {
       drawn.classList.add('seen');
-      drawn.setAttribute('aria-label', `${drawn.getAttribute('aria-label') ?? ''}, shown to the table`);
     }
 
     return drawn;
@@ -269,17 +268,27 @@ const FIGURES_IN_A_LINE = 2;
  * line's title says them in full. A hand run more times than the line has figures for shows only the
  * board being run, the last laid: the ones before it are over, and the felt shows how.
  */
-function chanceEl(figures: (ChanceFigure | null)[], runs: number): HTMLElement {
+function chanceEl(figures: (ChanceFigure | null)[], runs: number): { element: HTMLElement; said: string } {
   const several = figures.length > 1;
   const inFull = figures.map((figure, board) => `${several ? `board ${board + 1} ` : ''}${figure ? `${figure.text}%` : 'still to come'}`).join(', ');
   const shown = runs > FIGURES_IN_A_LINE ? figures.slice(-1) : figures;
   const bare = shown.length > 1;
+  const said = `Chance to win: ${inFull}`;
 
-  return h(
+  const element = h(
     'div.status.chance',
-    { title: `Chance to win: ${inFull}` },
+    { title: said },
     shown.map((figure) => h('span', { class: figure ? figure.favorite && 'favorite' : 'pending' }, figure ? `${figure.text}${bare ? '' : '%'}` : '…')),
   );
+
+  return { element, said: midSentence(said) };
+}
+
+/** Takes what is drawn for the eye out of what is read aloud, where words beside it say the same in an order worth hearing. */
+function unread<E extends HTMLElement | null>(drawn: E): E {
+  drawn?.setAttribute('aria-hidden', 'true');
+
+  return drawn;
 }
 
 function seatEl(view: TableView, seat: SeatView, slot: number, shape: Shape, clockOffset: number, moving: string | null, chances: ShownChances | null, muted: boolean): HTMLElement[] {
@@ -313,7 +322,7 @@ function seatEl(view: TableView, seat: SeatView, slot: number, shape: Shape, clo
 
   // Folded hands leave the table, except the viewer's own, which stays to look at, and one turned up after the hand
   const showCards = seat.cards !== null && (!seat.folded || isMe || seat.shown.some(Boolean));
-  const hole = showCards ? h('div.hole', { 'aria-label': halfShownLabel(seat) }, markPlaying(holeCards(seat, isMe && hand?.stage === 'done'), holding?.reads ?? [])) : h('div.hole.none');
+  const hole = showCards ? h('div.hole', null, markPlaying(holeCards(seat, isMe && hand?.stage === 'done'), holding?.reads ?? [])) : h('div.hole.none');
 
   let timer: HTMLElement | null = null;
   if (acting && hand.deadline !== null && view.config.actionSeconds > 0) {
@@ -337,7 +346,7 @@ function seatEl(view: TableView, seat: SeatView, slot: number, shape: Shape, clo
     h('div.stack', { title: formatAmount(seat.stack, view.config) }, shortAmount(seat.stack, view.config), seat.pendingAdd > 0 ? h('span.pending', null, ` +${shortAmount(seat.pendingAdd, view.config)}`) : null),
     // The seat has one line. While hands are face up with cards to come it is the hand's chance, as at the result it is
     // what the hand won: that its player is all in, away or leaving is back on it once the hand is over
-    took > 0 ? h('div.status.won', null, `+${shortAmount(took, view.config)}`) : (chance ?? (status ? h('div.status', { 'data-status': status }, status) : null)),
+    took > 0 ? h('div.status.won', null, `+${shortAmount(took, view.config)}`) : (chance?.element ?? (status ? h('div.status', { 'data-status': status }, status) : null)),
     // The seconds left, for everyone: the bar under the name alone is easy to miss until the time is gone
     timer ? h('div.status.clock', { 'data-countdown': hand!.deadline }, '') : null,
     // In the plate, in short: a line under the seat would run onto the next one down the side of a phone's table
@@ -345,57 +354,76 @@ function seatEl(view: TableView, seat: SeatView, slot: number, shape: Shape, clo
     timer,
   );
 
-  const seatNode = h(
-    'div',
-    { class: classes.join(' '), style: place.style, 'data-seat': seat.seat },
-    hole,
-    plate,
-    hand?.button === seat.seat ? dealerButtonEl('Dealer button') : null,
-    vote,
-    hint,
-    label ? h('div.tag.shown', { title: label }, nameEl(label)) : null,
+  // The seat is read as one sentence, in an order worth hearing, and what is drawn is for the eye. The hint
+  // is said apart, so that switching it off (hand-hint.css) silences it too; the hand shown down takes its place
+  const said = h(
+    'span.unseen',
+    null,
+    seatSaid(view, seat, { status, took, chance: chance?.said ?? null, made: label, muted }),
+    hint && !label ? h('span.hint-said', null, ` ${hintSaid(holding!, view.config)}`) : null,
   );
 
-  const nodes = [seatNode];
+  const seatNode = h(
+    'li',
+    { class: classes.join(' '), style: place.style, 'data-seat': seat.seat },
+    said,
+    unread(hole),
+    unread(plate),
+    unread(hand?.button === seat.seat ? dealerButtonEl('Dealer button') : null),
+    unread(vote),
+    unread(hint),
+    unread(label ? h('div.tag.shown', { title: label }, nameEl(label)) : null),
+  );
+
+  const nodes: HTMLElement[] = [seatNode];
   if (seat.bet > 0) {
-    const bet = chipsEl(seat.bet, view.config, betPlace(shape, slot));
+    const bet = chipsEl('li', seat.bet, view.config, betPlace(shape, slot));
 
     bet.dataset.bet = String(seat.seat);
-    nodes.push(bet);
+    nodes.push(unread(bet));
   }
 
   return nodes;
 }
 
 /** A pile of chips as a bet is drawn: a chip and what it is worth, or the chip alone. `place` says where it lies. */
-function chipsEl(amount: number | undefined, table: Denominated, place: Placed): HTMLDivElement {
-  return h('div.bet', { class: [place.class, amount === undefined ? 'bare' : ''].join(' '), style: place.style }, h('i.chip'), amount === undefined ? null : shortAmount(amount, table));
+function chipsEl(tag: 'div' | 'li', amount: number | undefined, table: Denominated, place: Placed): HTMLElement {
+  return h(`${tag}.bet`, { class: [place.class, amount === undefined ? 'bare' : ''].join(' '), style: place.style }, h('i.chip'), amount === undefined ? null : shortAmount(amount, table));
 }
 
 function openSeatEl(view: TableView, seat: number, slot: number, shape: Shape, handlers: TableHandlers): HTMLElement {
   const myRequest = view.requests.find((request) => request.playerId === view.you.id && request.kind === 'seat');
   const place = seatPlace(shape, slot);
   // The button takes its turn on a seat nobody is in
-  const deadButton = view.hand?.button === seat ? dealerButtonEl('Dealer button, on an empty seat this hand') : null;
-  const open = (kind: string, plate: HTMLElement) => h('div', { class: `${place.class} open ${kind}`, style: place.style, 'data-open-seat': seat }, plate, deadButton);
+  const deadButton = unread(view.hand?.button === seat ? dealerButtonEl('Dealer button, on an empty seat this hand') : null);
+  // A seat with a button says which seat in the button's own name; any other is said in a sentence, and its plate is for the eye
+  const open = (kind: string, plate: HTMLElement, said: 'open' | 'asked' | 'target' | null) =>
+    h(
+      'li',
+      { class: `${place.class} open ${kind}`, style: place.style, 'data-open-seat': seat },
+      said || deadButton ? h('span.unseen', null, openSeatSaid(seat, said ?? 'open', deadButton !== null)) : null,
+      said ? unread(plate) : plate,
+      deadButton,
+    );
+  const button = (words: string, props: Record<string, unknown>) => h('button.plate', { type: 'button', 'aria-label': `${words}, seat ${seat + 1}`, ...props }, words);
   const moving = handlers.moving;
 
   // A seat that a move waiting for the hand will fill is not offered to another
   if (moving && !view.seats.some((other) => other?.moveTo === seat)) {
-    return open('target', h('button.plate', { type: 'button', 'data-move-to': seat, onclick: () => moving.to(seat) }, 'Move here'));
+    return open('target', button('Move here', { 'data-move-to': seat, onclick: () => moving.to(seat) }), null);
   }
 
   if (myRequest?.seat === seat) {
-    return open('requested', h('div.plate', null, 'Waiting for the host…'));
+    return open('requested', h('div.plate', null, 'Waiting for the host…'), 'asked');
   }
 
   const { onSit } = handlers;
 
   if (!onSit || view.you.seat !== null || myRequest || nightOver(view)) {
-    return open('idle', h('div.plate', { 'aria-hidden': 'true' }, 'Open'));
+    return open('idle', h('div.plate', null, 'Open'), 'open');
   }
 
-  return open('', h('button.plate', { type: 'button', 'data-sit': seat, onclick: () => onSit(seat) }, 'Sit here'));
+  return open('', button('Sit here', { 'data-sit': seat, onclick: () => onSit(seat) }), null);
 }
 
 function boardEl(hand: HandView, turning: readonly BoardCard[]): HTMLElement {
@@ -415,7 +443,7 @@ function boardEl(hand: HandView, turning: readonly BoardCard[]): HTMLElement {
     boards.push(h('div.board.later', { 'data-run': run }, Array.from({ length: BOARD_SIZE }, () => h('div.card.slot'))));
   }
 
-  return h('div.boards', null, boards);
+  return h('div.boards', { 'aria-hidden': 'true' }, boards);
 }
 
 /** A card that would have come, drawn so that nobody takes it for one in play, and named so to whoever hears the page read. */
@@ -442,7 +470,7 @@ function rabbitEl(hand: HandView, handlers: TableHandlers): HTMLElement | null {
 }
 
 /** In Unicode 6.0, so every phone draws it. */
-const rabbitMark = () => h('span.rabbit-mark', null, '🐇');
+const rabbitMark = () => h('span.rabbit-mark', { 'aria-hidden': 'true' }, '🐇');
 
 /** How many boards a hand's result speaks of: one for a hand everyone else folded, which was won whole however many were out. */
 function boardsWonOn(hand: HandView): number {
@@ -618,18 +646,29 @@ export function handDrawn(hand: HandView | null): unknown {
   return hand?.stage === 'betting' ? { ...hand, pots: null } : hand;
 }
 
+/** The pots one by one as the table shows them under the pot, or null while it shows the pot whole. */
+function sidePotsText(table: Denominated, hand: HandView): string | null {
+  // While bets are still out, an uncalled one looks like a side pot of its own
+  const betsOut = hand.stage === 'betting' || hand.stage === 'chop';
+  const sidePots = hand.pots.length > 1 && !betsOut;
+
+  return sidePots ? hand.pots.map((pot, index) => `${index === 0 ? 'Main' : `Side ${index}`} ${formatAmount(pot.amount, table)}`).join(' · ') : null;
+}
+
 function potEl(table: Denominated, hand: HandView): HTMLElement | null {
   // Once the hand is over the pot has gone to the winners, and the result says who got what
   if (hand.pot === 0 || hand.stage === 'done') {
     return null;
   }
 
-  // While bets are still out, an uncalled one looks like a side pot of its own
-  const betsOut = hand.stage === 'betting' || hand.stage === 'chop';
-  const sidePots = hand.pots.length > 1 && !betsOut;
-  const breakdown = sidePots ? hand.pots.map((pot, index) => `${index === 0 ? 'Main' : `Side ${index}`} ${formatAmount(pot.amount, table)}`).join(' · ') : null;
+  const breakdown = sidePotsText(table, hand);
 
-  return h('div.pot', null, h('span.label', null, hand.bombPot ? 'Bomb pot' : 'Pot'), formatAmount(hand.pot, table), breakdown ? h('div.sidepots', { title: breakdown }, breakdown) : null);
+  return h('div.pot', { 'aria-hidden': 'true' }, h('span.label', null, hand.bombPot ? 'Bomb pot' : 'Pot'), formatAmount(hand.pot, table), breakdown ? h('div.sidepots', { title: breakdown }, breakdown) : null);
+}
+
+/** The board and the pot in words, where they are drawn for the eye. */
+function centerSaid(view: TableView, hand: HandView): string {
+  return [boardSaid(hand), potSaid(view, hand, sidePotsText(view.config, hand))].filter((part) => part !== null).join(' ');
 }
 
 /**
@@ -642,6 +681,8 @@ export function tableEl(view: TableView, shape: Shape, clockOffset: number, hand
   const hero = view.you.seat ?? 0;
   const nodes: HTMLElement[] = [];
 
+  // From seat 1 whoever is looking, never from the viewer's own: where seats overlap the later one in the page is
+  // painted on top, and a table read from the viewer's seat would be painted differently for every seat
   view.seats.forEach((seat, index) => {
     const slot = (index - hero + seatCount) % seatCount;
 
@@ -662,8 +703,19 @@ export function tableEl(view: TableView, shape: Shape, clockOffset: number, hand
     // How many boards the hand is played on, from its first card: the size of their cards and how far the bets stand off follow it
     { class: `table ${shape}${movable ? ' movable' : ''}`, 'data-boards': hand?.runs ?? 1 },
     h('div.felt'),
-    h('div.center', null, hand ? boardEl(hand, turning) : null, hand ? potEl(view.config, hand) : null, messageEl(view, handlers)),
-    nodes,
+    h(
+      'div.center',
+      null,
+      // Found by its heading: a replay draws a second table over the live one, so nothing here can carry an id
+      h('h2.unseen', null, LABELS.center),
+      hand ? h('p.unseen', null, centerSaid(view, hand)) : null,
+      hand ? boardEl(hand, turning) : null,
+      hand ? potEl(view.config, hand) : null,
+      messageEl(view, handlers),
+    ),
+    h('h2.unseen', null, LABELS.seats),
+    // Each bet follows its seat, as it is drawn, and is no part of what is read: its seat says it
+    h('ul.seats', { role: 'list', 'aria-label': seatsLabel(view) }, nodes),
   );
 
   DRAWINGS.set(table, { shape, hero, seats: seatCount, config: view.config });
@@ -779,7 +831,7 @@ export function drawnTable(stage: Element): DrawnTable | null {
     const { style } = place;
     const made =
       what === 'chips'
-        ? chipsEl(amount, drawing.config, place)
+        ? chipsEl('div', amount, drawing.config, place)
         : what === 'cards'
           ? h('div.hole', { style }, cardEl(null), cardEl(null))
           : what === 'mark'

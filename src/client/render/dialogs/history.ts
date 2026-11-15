@@ -4,7 +4,7 @@ import { bombPotName } from '../../../engine/bombPots.ts';
 import type { HandRecord } from '../../../engine/index.ts';
 import { lastOnRecord } from '../../handRecords.ts';
 import { noReplayLine } from '../../replayPlayer.ts';
-import { cardText, h } from '../../ui.ts';
+import { h, readableLines } from '../../ui.ts';
 import { everyone, frame } from './dialog.ts';
 import type { DialogHandlers, DialogKind } from './dialog.ts';
 
@@ -36,9 +36,9 @@ function handEl(hand: HandRecord, table: Denominated, handlers: DialogHandlers):
   const outcome = hand.result.chopped ? 'Blinds chopped' : winners.join(', ');
 
   const noReplay = noReplayLine(hand, table);
-  const replay = noReplay === null ? h('button.btn.small.replay-open', { type: 'button', 'data-action': 'replay', onclick: () => handlers.replay(hand) }, 'Replay this hand') : h('p.note.no-replay', null, noReplay);
+  const replay = noReplay === null ? h('button.btn.small.replay-open', { type: 'button', 'data-action': 'replay', 'aria-label': `Replay this hand, number ${hand.number}`, onclick: () => handlers.replay(hand) }, 'Replay this hand') : h('p.note.no-replay', null, noReplay);
 
-  return h('details', { 'data-hand': hand.number }, h('summary', null, title, h('small', null, outcome)), replay, h('pre', null, cardText(hand.summary, handlers.prefs.get('deck'))));
+  return h('details', { 'data-hand': hand.number }, h('summary', null, title, h('small', null, outcome)), replay, h('pre', null, readableLines(hand.summary, handlers.prefs.get('deck'))));
 }
 
 /** Puts `hands` in the list, newest first, keeping the element of every hand already in it and its reader's place. */

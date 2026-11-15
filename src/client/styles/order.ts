@@ -54,4 +54,6 @@ export const STYLESHEETS = [
   'replay.css',
   'standings.css',
   'pre-action.css',
+  'accessibility.css',
+  'forced-colors.css',
 ];

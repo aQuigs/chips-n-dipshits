@@ -94,7 +94,7 @@
 }
 
 [data-hand-hint='on'] .card.idle {
-  opacity: 0.5;
+  opacity: calc(1 - 0.5 * var(--dim));
 }
 
 /* A line a board would lift the viewer's cards onto the middle of three boards, so their hands share lines as they fit */

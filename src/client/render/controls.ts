@@ -14,6 +14,7 @@ import { choiceOn } from '../pendingChoice.ts';
 import { AHEAD_ORDER, aheadLabel } from '../preActions.ts';
 import { showOffer } from '../showing.ts';
 import type { Waiting } from '../shownTable.ts';
+import { amountSaid, LABELS, NOT_ON_OFFER, sizedSaid } from '../spoken.ts';
 import { cardEl, h, holdWhile } from '../ui.ts';
 import { lastHandsText, nightOver, onLastHand } from './night.ts';
 
@@ -28,6 +29,8 @@ export interface ControlHandlers {
   /** Plays hand number `hand` back over the table, from the history. Resolves once it is up, or once the viewer has been told why not. */
   replay(hand: number): Promise<unknown>;
   sizing: Sizing;
+  /** Says a line to a screen reader alone: what a press changed that the screen shows only on another control. */
+  say(message: string): void;
 }
 
 /**
@@ -87,9 +90,11 @@ function moveLabel(move: string, amount: number, table: Denominated): (HTMLEleme
 const decisionOf = (hand: HandView): string => `${hand.number}.${hand.turn}`;
 
 /**
- * Marks every button of a decision's bar with the decision it answers, and gives the bar back. A button
- * for the next decision is another button, though it says the same and lies in the same place, and
- * whatever tells controls apart across a redraw (the tap guard) takes it for a new one.
+ * Marks every button of a decision's bar with the decision it answers, as the bet's box is (`data-keep`),
+ * and gives the bar back. A button for the next decision is another button, though it says the same and
+ * lies in the same place, to whatever tells controls apart across a redraw. The tap guard takes it for a
+ * new one, and the keyboard is never carried to it (`Slot`): on "Call 5" become "Call 30", or with Enter
+ * held down, the next press would make a move nobody chose.
  */
 function answering<Bar extends HTMLElement>(hand: HandView, bar: Bar): Bar {
   for (const button of bar.querySelectorAll('button')) {
@@ -97,6 +102,12 @@ function answering<Bar extends HTMLElement>(hand: HandView, bar: Bar): Bar {
   }
 
   return bar;
+}
+
+/** A move button with its label, named aloud with the amount in full where the label shortens it to fit. */
+function nameMove(button: HTMLElement, move: string, amount: number, table: Denominated): void {
+  button.replaceChildren(...moveLabel(move, amount, table));
+  button.setAttribute('aria-label', sizedSaid(move, amount, table));
 }
 
 /**
@@ -109,9 +120,11 @@ function turnPanel(table: Denominated, hand: HandView, stack: number, handlers: 
   const opening = hand.currentBet === 0;
   const turn = hand.turn;
 
+  const decision = decisionOf(hand);
   const raiseButton = h('button.btn.raise', { type: 'button', 'data-action': 'raise', 'data-hotkey': HOTKEYS.raise });
-  const slider = h('input', { type: 'range', id: 'raise-slider', min: minRaiseTo, max: maxRaiseTo, step: 1, 'aria-label': 'Bet size' });
-  const amount = h('input', { type: 'text', id: 'raise-amount', inputmode: hasDecimals(table) ? 'decimal' : 'numeric', autocomplete: 'off', 'aria-label': 'Bet size' });
+  // A bet being sized outlasts the bar being drawn again for the same decision (`Slot`), as when the host approves chips mid-turn
+  const slider = h('input', { type: 'range', id: 'raise-slider', min: minRaiseTo, max: maxRaiseTo, step: 1, 'aria-label': 'Bet size', 'data-keep': decision });
+  const amount = h('input', { type: 'text', id: 'raise-amount', inputmode: hasDecimals(table) ? 'decimal' : 'numeric', autocomplete: 'off', 'aria-label': 'Bet size', 'data-keep': decision });
 
   let raiseTo = minRaiseTo;
 
@@ -128,9 +141,14 @@ function turnPanel(table: Denominated, hand: HandView, stack: number, handlers: 
     }
 
     amount.setCustomValidity('');
+    amount.removeAttribute('aria-invalid');
+    // The slider counts in the table's smallest unit, which is not how an amount is said
+    slider.setAttribute('aria-valuetext', amountSaid(raiseTo, table));
     raiseButton.removeAttribute('aria-disabled');
-    raiseButton.replaceChildren(...moveLabel(raiseTo === maxRaiseTo ? 'All in' : opening ? 'Bet' : 'Raise to', raiseTo, table));
+    nameMove(raiseButton, raiseMove(), raiseTo, table);
   };
+
+  const raiseMove = () => (raiseTo === maxRaiseTo ? 'All in' : opening ? 'Bet' : 'Raise to');
 
   /**
    * What is in the box can't be read as an amount. No other amount is put in its place: the button
@@ -138,9 +156,14 @@ function turnPanel(table: Denominated, hand: HandView, stack: number, handlers: 
    * while typing: "1," is on its way to "1,000".
    */
   const refuse = (problem: string): void => {
+    const move = opening ? 'Bet' : 'Raise';
+
     amount.setCustomValidity(problem);
+    amount.setAttribute('aria-invalid', 'true');
     raiseButton.setAttribute('aria-disabled', 'true');
-    raiseButton.replaceChildren(h('span', null, opening ? 'Bet' : 'Raise'));
+    raiseButton.replaceChildren(h('span', null, move));
+    // The button says why it will not go, since the box that says so is another control
+    raiseButton.setAttribute('aria-label', `${move}: ${problem}`);
   };
 
   const readBox = (): void => {
@@ -176,6 +199,12 @@ function turnPanel(table: Denominated, hand: HandView, stack: number, handlers: 
 
   choose(minRaiseTo);
 
+  // A size button changes the amount on the button beside it and says nothing itself, so what it set is said
+  const size = (value: number): void => {
+    choose(value);
+    handlers.say(sizedSaid(raiseMove(), raiseTo, table));
+  };
+
   const typedBefore = handlers.sizing.typed(turn);
   if (typedBefore !== null) {
     amount.value = typedBefore;
@@ -185,9 +214,9 @@ function turnPanel(table: Denominated, hand: HandView, stack: number, handlers: 
   const presetButtons = PRESETS.map((preset) => {
     const target = preset.potShare === null ? minRaiseTo : hand.currentBet + preset.potShare * (hand.pot + callAmount);
 
-    return h('button.chip-btn', { type: 'button', onclick: () => choose(target) }, preset.label);
+    return h('button.chip-btn', { type: 'button', onclick: () => size(target) }, preset.label);
   });
-  presetButtons.push(h('button.chip-btn', { type: 'button', onclick: () => choose(maxRaiseTo) }, 'All in'));
+  presetButtons.push(h('button.chip-btn', { type: 'button', onclick: () => size(maxRaiseTo) }, 'All in'));
   HOTKEYS.sizes.forEach((key, index) => presetButtons[index]?.setAttribute('data-hotkey', key));
 
   // Beside Fold, the other way to leave the hand without playing it: the small blind with only the blinds in, folded to
@@ -198,12 +227,12 @@ function turnPanel(table: Denominated, hand: HandView, stack: number, handlers: 
   const callLabel = callAmount >= stack ? 'Call all in' : 'Call';
   const passButton = options.canCheck
     ? h('button.btn.call', { type: 'button', 'data-action': 'check', 'data-hotkey': HOTKEYS.pass, onclick: () => play({ type: 'check' }) }, 'Check')
-    : h('button.btn.call', { type: 'button', 'data-action': 'call', 'data-hotkey': HOTKEYS.pass, onclick: () => play({ type: 'call' }) }, moveLabel(callLabel, callCost, table));
+    : h('button.btn.call', { type: 'button', 'data-action': 'call', 'data-hotkey': HOTKEYS.pass, 'aria-label': sizedSaid(callLabel, callCost, table), onclick: () => play({ type: 'call' }) }, moveLabel(callLabel, callCost, table));
 
   return h(
     'div.turn',
     null,
-    options.canRaise ? h('div.sizing', null, h('div.presets', null, presetButtons), h('div.amount', null, slider, amount)) : null,
+    options.canRaise ? h('div.sizing', null, h('div.presets', { role: 'group', 'aria-label': LABELS.sizes }, presetButtons), h('div.amount', null, slider, amount)) : null,
     h(
       'div.buttons',
       null,
@@ -425,10 +454,14 @@ function aheadEl(view: TableView, hand: HandView, stack: number, handlers: Contr
       }
     };
 
+    const offered = on || preActionFor(what, facing) !== null;
+    const said = amount === null ? move : sizedSaid(move, amount, view.config);
+
     return h(
       `button.chip-btn.ahead-btn.ahead-${what}`,
-      // Its own words, amount and all: "Call 50" in the place of "Call 20" is another choice
-      { type: 'button', 'aria-pressed': String(on), 'data-action': `${AHEAD_ACTION}${what}`, 'data-keep': amount === null ? move : `${move} ${shortAmount(amount, view.config, 'up')}`, disabled: !on && preActionFor(what, facing) === null, onclick: press },
+      // Dimmed says nothing aloud, so a choice that cannot be made says so in its name. And a choice is the same choice
+      // only while it says the same, amount in full: "Call 50" in the place of "Call 20" is another, as on the turn
+      { type: 'button', 'aria-pressed': String(on), 'aria-label': offered ? said : `${said}, ${NOT_ON_OFFER}`, 'data-action': `${AHEAD_ACTION}${what}`, 'data-keep': said, disabled: !offered, onclick: press },
       h('span', null, words),
     );
   });
@@ -602,6 +635,8 @@ function showCardsEl(view: TableView, seat: SeatView, handlers: ControlHandlers)
     // Which hand's card, so the offer after the next hand is another button
     button.dataset.keep = String(offer.hand);
     button.dataset.place = String(place);
+    // The card in this place of another hand is another card to show
+    button.dataset.keep = String(offer.hand);
     button.setAttribute('aria-label', `Show ${cardWords(card)}`);
     button.append(cardEl(card));
 

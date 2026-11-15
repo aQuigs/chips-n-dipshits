@@ -61,7 +61,7 @@
   min-height: 36px;
   padding: 8px 12px;
   overflow: hidden;
-  font-size: 14px;
+  font-size: calc(14px * var(--text-scale));
   text-overflow: ellipsis;
   white-space: nowrap;
   cursor: pointer;

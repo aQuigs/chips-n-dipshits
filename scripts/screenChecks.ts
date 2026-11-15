@@ -21,6 +21,7 @@ import { KEYS_SETTLE_MS } from '../src/client/hotkeys.ts';
 import { UNCONFIRMED_AFTER_MS } from '../src/client/pendingMove.ts';
 import { STEP_MS } from '../src/client/replayPlayer.ts';
 import { RECIPES } from '../src/client/soundRecipes.ts';
+import { cardSaid } from '../src/client/spoken.ts';
 import { spotsOf } from '../src/client/tableChances.ts';
 import { THEMES } from '../src/client/themes.ts';
 import { shortAmount, signedAmount } from '../src/engine/amounts.ts';
@@ -34,6 +35,7 @@ import type { Box, RigDeal, RigPlayer, ScreenName } from './rig.ts';
 import { answeredAfter, answeredTo, complaints, flightsSince, LISTEN, MOTION, movesSent, NOTICES, opsSent, ownComplaints, replayDrawn, soundOf, SPOTS, TITLES, toastTold, toasts, toldOf } from './pageSpies.ts';
 import type { Flight, Spots } from './pageSpies.ts';
 import { STAND_IN_HOST } from './standInHost.ts';
+import { ACCESSIBILITY_CHECKS } from './accessibilityChecks.ts';
 import { runChecks } from './checkRunner.ts';
 import { layoutSweep } from './layoutSweep.ts';
 import { tapsLive } from './underTheFinger.ts';
@@ -463,10 +465,14 @@ async function inEveryShape(page: Page, look: (shape: string) => Promise<void>, 
 const inShapesOf = (page: Page, screen: ScreenName, look: (shape: string) => Promise<void>, options?: { buttonsUp?: boolean }) =>
   screen === 'desktop' ? look('wide') : inEveryShape(page, look, options);
 
-/** That the playing cards stand apart from the rest by where they sit, which reads the same in any theme or deck, and the rest are faded. */
+/**
+ * That the playing cards stand apart from the rest by where they sit, which reads the same in any theme or deck, and the
+ * rest are faded. A theme that fades nothing (High Contrast, where a faded card is under 7 to 1) leaves it to where they sit.
+ */
 async function assertMarked(page: Page): Promise<void> {
-  const faded = await page.evaluate(`[...document.querySelectorAll('.table .card.idle')].every((card) => Number(getComputedStyle(card).opacity) < 1)`);
-  assert.equal(faded, true, 'a card that does not play is not faded');
+  const fades = await page.evaluate(`getComputedStyle(document.querySelector('.table')).getPropertyValue('--dim').trim() !== '0'`);
+  const faded = await page.evaluate(`[...document.querySelectorAll('.table .card.idle')].every((card) => (Number(getComputedStyle(card).opacity) < 1) === ${fades})`);
+  assert.equal(faded, true, fades ? 'a card that does not play is not faded' : 'a card is faded in a theme that fades nothing');
 
   for (const where of ['.board[data-run="0"]', '.board[data-run="1"]', '.seat.me .hole']) {
     const [playing] = await boxes(page, `${where} .card.plays`);
@@ -1807,10 +1813,15 @@ async function dealFlights(table: RigTable, page: Page): Promise<(number | null)
 /** That Pam's seat is drawn on another page with `cards` up and the rest down, in her order, said so to a screen reader, and clear of what the seats around it say. */
 async function assertPamShows(page: Page, screen: ScreenName, cards: (Card | null)[], where: string): Promise<void> {
   const pam = '.seat[data-seat="2"]';
-  const said = `Pam shows ${cards.filter((card) => card !== null).map(cardWords).join(' and ')}; the other card is face down`;
+  const up = cards.filter((card) => card !== null).map(cardSaid).join(', ');
+  const said = `, shows ${up}${cards.includes(null) ? ', the other card face down' : ''}`;
 
   await page.waitForFunction(`JSON.stringify([...document.querySelectorAll('${pam} .hole .card')].map((card) => card.dataset.card ?? null)) === ${JSON.stringify(JSON.stringify(cards))}`);
-  assert.equal(await page.getAttribute(`${pam} .hole`, 'aria-label'), cards.includes(null) ? said : null, `${where}: what a screen reader says of Pam's cards`);
+  // Said once, in the sentence her seat is read as: the cards drawn are for the eye
+  const sentence = await text(page, `${pam} > .unseen`);
+
+  assert.ok(sentence.includes(said), `${where}: what a screen reader says of Pam's cards`);
+  assert.equal(sentence.includes('face down'), cards.includes(null), `${where}: a card of Pam's is said to be face down that is not, or the other way around`);
   assertOnScreen(await boxes(page, `${pam} .hole .card`), screen, `${where}: Pam's cards`);
   // What a seat says, not its plate: on a phone at nine seats any seat's cards reach over the edge of the plate above
   const around = [...(await textBoxes(page, `.seat:not(${pam}) .plate > *`)), ...(await boxes(page, `.seat:not(${pam}) .hole .card, .board .card`)), ...(await textBoxes(page, '.message.result > div'))];
@@ -7359,9 +7370,9 @@ const CHECKS: Check[] = [
           assert.equal(await host.locator('.tonight-crown, .tonight-missed').count(), 0, 'someone is crowned before the night is over, or a table that counted from its first hand says it missed some');
           assert.equal(await text(host, '.tonight-standing'), 'So far tonight, after 2 hands. The dipshit of the night is crowned when the night ends.');
           assert.deepEqual(await texts(host, '.tonight-leaders div'), [`Up the most\n${WIDEST} ${kind.up}`, `Most pots won\n${WIDEST} and Quigs 1 each`, `Biggest pot\n${WIDEST} ${kind.pot}`, `High hand\n${WIDEST} Three jacks J♣ J♦ J♠ 9♥ 7♦`]);
-          assert.deepEqual(await texts(host, '.tonight-players .who'), [WIDEST, 'Quigs', 'Big Al', 'Pocket Pam', 'Stu left', 'iiiiiiiiiiiiiiii', '你好你好你好你好', 'Ünïcödé Ñandú Ø!', 'Marge Simpson-Jr', 'Zed'], 'the best night first and the worst last');
+          assert.deepEqual(await texts(host, '.tonight-players .who'), [WIDEST, 'Quigs (you)', 'Big Al', 'Pocket Pam', 'Stu left', 'iiiiiiiiiiiiiiii', '你好你好你好你好', 'Ünïcödé Ñandú Ø!', 'Marge Simpson-Jr', 'Zed'], 'the best night first and the worst last');
           assert.equal(await text(host, '.tonight-players li[data-player="Zed"] .counts'), '2 hands · 0 pots won · 1 rebuy');
-          assert.equal(await text(host, '.tonight-players li.me .who'), 'Quigs');
+          assert.equal(await text(host, '.tonight-players li.me .who'), 'Quigs (you)');
           await assertTonightFits(host, screen);
           await shot(host, `tonight-so-far-${kind.name}-${screen}`);
 
@@ -7382,7 +7393,7 @@ const CHECKS: Check[] = [
 
           table.act('Quigs', { type: 'transferChips', from: table.auth('Quigs').id, to: table.auth('Big Al').id, amount: 7 });
           await host.waitForSelector(`.tonight-players li[data-player="Big Al"] .net:has-text("${kind.afterTransfer}")`);
-          assert.deepEqual(await texts(host, '.tonight-players details[open] .who'), [WIDEST, 'Quigs', 'Big Al'], 'a line someone had unfolded folded shut when the dialog was drawn again');
+          assert.deepEqual(await texts(host, '.tonight-players details[open] .who'), [WIDEST, 'Quigs (you)', 'Big Al'], 'a line someone had unfolded folded shut when the dialog was drawn again');
           assert.equal(await scrolledTo(), scrolled, 'the dialog jumped from where its reader had scrolled to when it was drawn again');
           await host.evaluate(`document.querySelector('.dialog-body').scrollTop = 0`);
           await assertTonightFits(host, screen);
@@ -10077,7 +10088,7 @@ const CHECKS: Check[] = [
       await press('.controls [data-action="show-card"][data-place="0"]');
       await pam.waitForSelector('.seat.me .hole .card.seen[data-card="As"]');
       assert.equal(await pam.locator('.seat.me .hole .card.seen').count(), 1);
-      assert.equal(await pam.getAttribute('.seat.me .hole .card[data-card="As"]', 'aria-label'), 'A♠, shown to the table');
+      assert.match(await text(pam, '.seat.me > .unseen'), /, your cards: ace of spades, king of diamonds, ace of spades shown to the table[,.]/);
       assert.deepEqual(await showButtons(pam), [['Show the king of diamonds', 'Kd']], 'what is left to show is the other card alone');
       assert.deepEqual(table.view('Stu').seats[2]!.cards, ['As', null]);
       assert.ok(!JSON.stringify(table.view('Stu')).includes('"Kd"'), 'the card still face down is in another player\'s view');
@@ -11756,12 +11767,13 @@ const CHECKS: Check[] = [
 
         await press('[data-action="standings"]');
         await page.waitForSelector('.standings-players li');
-        assert.deepEqual(await names(page), ['Ann', 'Bob', 'Cy']);
+        assert.deepEqual(await names(page), ['Ann', 'Bob (you)', 'Cy']);
         assert.deepEqual(await nets(page), ['+1,300', '+500', '-1,800']);
         assert.deepEqual(await texts(page, '.standings-players .place'), ['1', '2', '3']);
         assert.deepEqual(await texts(page, '.standings-players summary .counts'), ['2 nights · up in 1 · won 25% of hands', '3 nights · up in 2 · won 25% of hands', '3 nights · up in 0 · won 25% of hands']);
-        assert.deepEqual(await texts(page, '.standings-players li.me .who'), ['Bob']);
-        assert.equal(await style(page, '.standings-players li.me .who', 'content', '::after'), '" (you)"');
+        assert.deepEqual(await texts(page, '.standings-players li.me .who'), ['Bob (you)']);
+        // Written on the page, not drawn by the stylesheet, so that it is read out and copied with the name
+        assert.equal(await text(page, '.standings-players li.me .who .you'), '(you)');
         assert.deepEqual(await texts(page, '.standings-units [aria-pressed="true"]'), ['Chips'], 'the money the viewer has a record in');
         assert.equal(await page.locator('[data-player="Ann"] summary .badge').count(), 2);
         assert.deepEqual(await squeezed(page, '.standings-players .who, .standings-players .net, .standings-players .counts, .standings .note, .standings-controls *'), []);
@@ -11775,12 +11787,12 @@ const CHECKS: Check[] = [
 
         // Another order
         await page.selectOption('#standings-sort', 'nights');
-        assert.deepEqual(await names(page), ['Bob', 'Cy', 'Ann']);
+        assert.deepEqual(await names(page), ['Bob (you)', 'Cy', 'Ann']);
         assert.deepEqual(await texts(page, '.standings-players .place'), ['1', '2', '3']);
         await page.selectOption('#standings-sort', 'biggest');
-        assert.deepEqual(await names(page), ['Bob', 'Ann', 'Cy']);
+        assert.deepEqual(await names(page), ['Bob (you)', 'Ann', 'Cy']);
         await page.selectOption('#standings-sort', 'net');
-        assert.deepEqual(await names(page), ['Ann', 'Bob', 'Cy']);
+        assert.deepEqual(await names(page), ['Ann', 'Bob (you)', 'Cy']);
 
         // A player's nights: asked for when the line is opened, and asked again when that fails
         await nights.close('requests');
@@ -11813,7 +11825,7 @@ const CHECKS: Check[] = [
         await shot(page, `standings-dollars-${screen}`);
         await press('.standings-units [data-unit="chips"]');
         await page.selectOption('#standings-sort', 'nights');
-        assert.deepEqual(await names(page), ['Bob', 'Cy', 'Ann']);
+        assert.deepEqual(await names(page), ['Bob (you)', 'Cy', 'Ann']);
         assert.equal(await page.locator('[data-player="Ann"] details[open] .standings-nights li').count(), 2);
         await nights.open();
         await page.context().close();
@@ -11832,8 +11844,8 @@ const CHECKS: Check[] = [
         await seatPress('.menu [data-action="standings"]');
         await seat.waitForSelector('.standings-players li');
         assert.equal(await text(seat, '.dialog h2'), 'Standings');
-        assert.deepEqual([await names(seat), await nets(seat)], [['Ann', 'Bob', 'Cy'], ['+1,300', '+500', '-1,800']]);
-        assert.deepEqual(await texts(seat, '.standings-players li.me .who'), ['Bob']);
+        assert.deepEqual([await names(seat), await nets(seat)], [['Ann', 'Bob (you)', 'Cy'], ['+1,300', '+500', '-1,800']]);
+        assert.deepEqual(await texts(seat, '.standings-players li.me .who'), ['Bob (you)']);
         await seatPress('[data-player="Cy"] summary');
         await seat.waitForSelector('[data-player="Cy"] .standings-nights li');
         await shot(seat, `standings-at-table-${screen}`);
@@ -12421,6 +12433,7 @@ const CHECKS: Check[] = [
       await page.waitForSelector('.stage[data-unconfirmed]');
     },
   ],
+  ...ACCESSIBILITY_CHECKS,
 ];
 
 await mkdir(OUT, { recursive: true });

@@ -11,7 +11,7 @@ export interface WebApp {
 
 /** The second web app of the same script, where new code is tried before the friends' address gets it. */
 export interface StagingWebApp extends WebApp {
-  /** The build last put there to be tried, until that one or another goes live. */
+  /** A mark of the files last pushed for it, until those or others go live: what a live deploy is compared with. */
   build?: string;
 }
 

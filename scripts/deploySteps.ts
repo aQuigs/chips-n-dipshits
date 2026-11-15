@@ -44,7 +44,7 @@ export interface Checkout {
   /** The record of where the game is, or null when there is none. A record that is there and cannot be trusted is an error, never none. */
   readDeployment(): Promise<Deployment | null>;
   writeDeployment(deployment: Deployment): Promise<void>;
-  /** Builds `dist/` for a web app at this address, or with '' for one that has no address yet, and gives the build's id. */
+  /** Builds `dist/` for a web app at this address, or with '' for one that has no address yet, and gives a mark of what was built for Apps Script: the same for the same files, another for any other. */
   build(webAppUrl: string): Promise<string>;
   /** Where the two files are when this checkout lacks them: a folder above it, or the checkout it is a git worktree of. */
   elsewhere(): LinkFilesElsewhere | null;
@@ -144,7 +144,7 @@ function notLinked(elsewhere: LinkFilesElsewhere | null): string {
   );
 }
 
-/** Builds for one web app, pushes that build and has the web app serve it. Gives the build's id. */
+/** Builds for one web app, pushes that build and has the web app serve it. Gives the mark of what was pushed. */
 async function publish({ clasp, checkout, say, now }: DeployDeps, app: WebApp, title: string): Promise<string> {
   say(`Building for ${app.url} and pushing that build.`);
 
@@ -178,7 +178,14 @@ async function setUp(deps: DeployDeps, linked: boolean, record: Deployment | nul
     }
 
     say('Creating a new Sheet with its script, as --new asks.');
-    clasp.createScript(TITLE);
+
+    try {
+      clasp.createScript(TITLE);
+    } catch (error) {
+      // clasp makes the Sheet and its script first and links the checkout to them last
+      say(`\nThat failed part-way, and a Sheet named "${TITLE}" may have been made all the same. Look for it in Google Drive and remove it before running --new again, which would make another.`);
+      throw error;
+    }
   }
 
   // Creating the project downloads its starter files over the build, and what was in `dist/` before may be for another address.
@@ -254,7 +261,8 @@ async function stage(deps: DeployDeps, record: Deployment, live: ListedWebApp, l
   if (strangers.length > 0) {
     throw new DeployRefused(
       `The linked script has ${webApps(strangers.length)} that this checkout has no record of: ${described(strangers)}. Staging keeps one web app beside the friends' and never makes a third, so nothing was made and nothing was pushed. ` +
-        `If ${strangers.length === 1 ? 'it is' : 'they are'} not needed, archive ${strangers.length === 1 ? 'it' : 'them'} in the Apps Script editor under Deploy, Manage deployments, and run this again.`,
+        `Find out what ${strangers.length === 1 ? 'it is' : 'they are'} for before anything else: if one is the address your friends use, ${DEPLOYMENT_FILE} names the wrong web app as theirs. ` +
+        'One that nobody uses can be archived in the Apps Script editor under Deploy, Manage deployments, which cannot be undone.',
     );
   }
 
@@ -288,18 +296,25 @@ async function stage(deps: DeployDeps, record: Deployment, live: ListedWebApp, l
   say('Check it with "npm run check:live -- --staging". Then "npm run deploy" puts this code at the friends\' address.');
 }
 
-/** Says whether what is about to go live is what was tried at the staging address. Going live without is allowed, and said. */
+/**
+ * Says whether what is about to go live is what was last put at the staging address. Going live without
+ * is allowed, and said. Whether the check was run there, and passed, is not something this can know.
+ */
 async function sayWhetherStaged({ checkout, say }: DeployDeps, staging: StagingWebApp | undefined): Promise<void> {
   if (!staging?.build) {
-    say('Note: this build was not tried at the staging address first ("npm run deploy -- --staging", then "npm run check:live -- --staging").');
+    say('Note: this code was not put at the staging address first ("npm run deploy -- --staging", then "npm run check:live -- --staging").');
 
     return;
   }
 
-  // A build's id is a hash of the page and the script as built, so the same code built for the same address has the same id
+  // The same sources built for the same address are the same files, and so the same mark
   const now = await checkout.build(staging.url);
 
-  say(now === staging.build ? `This is the code that was tried at the staging address (build ${now}).` : `Note: this is not the code that was last tried at the staging address. That was build ${staging.build}; built the same way, this is ${now}.`);
+  say(
+    now === staging.build
+      ? `This is the code that was last put at the staging address (${now}).`
+      : `Note: this is not the code that was last put at the staging address. That was ${staging.build}; built for that address, this is ${now}.`,
+  );
 }
 
 /**
@@ -353,7 +368,11 @@ export async function deploy(mode: Mode, deps: DeployDeps): Promise<void> {
   if (elsewhere?.above) {
     throw new DeployRefused(
       `This checkout has no ${LINK_FILE} of its own, and ${elsewhere.path}, a folder above it, has one. clasp would go by that one and push that folder's build, not this one's. ` +
-        `Copy ${LINK_FILE} and ${DEPLOYMENT_FILE} from there into this checkout, or run the deploy there. Nothing was deployed and nothing was made.`,
+        // With no record beside it, that file may link some other project, and copying it would point this game's deploy there
+        (elsewhere.recorded
+          ? `Copy ${LINK_FILE} and ${DEPLOYMENT_FILE} from there into this checkout, or run the deploy there.`
+          : `That folder has no ${DEPLOYMENT_FILE}, so its ${LINK_FILE} may not be this game's: do not copy it. Give this checkout the ${LINK_FILE} and ${DEPLOYMENT_FILE} of the game, or move that file out of the way.`) +
+        ' Nothing was deployed and nothing was made.',
     );
   }
 

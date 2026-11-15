@@ -66,6 +66,8 @@ class FakeScript implements Clasp {
   loseNextAnswer = false;
   /** A web app Google will not update for now. */
   unavailable: string | null = null;
+  /** clasp makes the Sheet and its script, then fails before it has linked the checkout to them. */
+  failsAfterMakingTheSheet = false;
   private readonly checkout: FakeCheckout;
   private readonly versions: string[] = [];
   private readonly apps = new Map<string, { version: number; description: string }>();
@@ -94,6 +96,11 @@ class FakeScript implements Clasp {
 
   createScript(): void {
     this.calls.push('createScript');
+
+    if (this.failsAfterMakingTheSheet) {
+      throw new Error('Could not pull the new project');
+    }
+
     this.checkout.link = true;
     this.checkout.dist = 'the starter files';
   }
@@ -205,10 +212,22 @@ test('a checkout under a folder that holds a link file is refused whatever was a
     const { script, checkout, run } = setup();
     checkout.found = { path: '/somewhere/the-game', linked: true, recorded: true, above: true };
 
-    await assert.rejects(run(mode), refused(/no \.clasp\.json of its own, and \/somewhere\/the-game, a folder above it, has one.*push that folder's build, not this one's.*Nothing was deployed and nothing was made/), mode);
+    await assert.rejects(
+      run(mode),
+      refused(/no \.clasp\.json of its own, and \/somewhere\/the-game, a folder above it, has one.*push that folder's build, not this one's\. Copy \.clasp\.json and \.deployment\.json from there.*Nothing was deployed and nothing was made/),
+      mode,
+    );
     assert.deepEqual(script.calls, [], mode);
     assert.equal(checkout.record, null, mode);
   }
+});
+
+test('a link file above that has no record of a game beside it may be some other project\'s, and the refusal does not say to copy it', async () => {
+  const { script, checkout, run } = setup();
+  checkout.found = { path: '/somewhere', linked: true, recorded: false, above: true };
+
+  await assert.rejects(run(), (error: unknown) => refused(/\/somewhere, a folder above it, has one.*may not be this game's: do not copy it.*Nothing was deployed and nothing was made/)(error) && !/Copy \.clasp\.json/.test((error as Error).message));
+  assert.deepEqual(script.calls, []);
 });
 
 test('staging is refused the same way where nothing is linked', async () => {
@@ -246,6 +265,17 @@ test('--new sets up a game where there is none: a Sheet with its script, a web a
   assert.equal(script.serves(deploymentId), built(url));
   assert.equal(script.webApps().length, 1);
   assert.match(told(), new RegExp(`Live at ${url}$`));
+});
+
+test('--new that fails while clasp is making the Sheet says one may be there, since running it again would make another', async () => {
+  const { script, checkout, run, told } = setup();
+  script.failsAfterMakingTheSheet = true;
+
+  await assert.rejects(run('new'), /Could not pull the new project/);
+
+  assert.match(told(), /a Sheet named "Chips n' Dipshits" may have been made all the same\. Look for it in Google Drive and remove it before running --new again/);
+  assert.deepEqual(script.calls, ['createScript']);
+  assert.equal(checkout.record, null);
 });
 
 test('--new in a worktree of a checkout that has a game says it is making another one beside it', async () => {
@@ -371,7 +401,7 @@ test('a deploy puts the build for the friends\' address at that address, which s
   assert.equal(script.serves(LIVE), built(LIVE_URL));
   assert.deepEqual(script.calls, ['push', `updateWebApp ${LIVE}`]);
   assert.deepEqual(checkout.record, { deploymentId: LIVE, url: LIVE_URL });
-  assert.match(told(), /^Note: this build was not tried at the staging address first/);
+  assert.match(told(), /^Note: this code was not put at the staging address first/);
   assert.match(told(), new RegExp(`Building for ${LIVE_URL}`));
   assert.match(told(), new RegExp(`Live at ${LIVE_URL}$`));
 });
@@ -439,7 +469,12 @@ test('staging is refused while the script has a web app this checkout has no rec
   const { script, checkout, run } = deployed();
   script.has('AKfycb-stranger', OLD_CODE, 'Made by hand');
 
-  await assert.rejects(run('staging'), refused(/has a web app that this checkout has no record of: AKfycb-stranger \("Made by hand"\)\. Staging keeps one web app beside the friends' and never makes a third, so nothing was made and nothing was pushed/));
+  await assert.rejects(
+    run('staging'),
+    refused(
+      /has a web app that this checkout has no record of: AKfycb-stranger \("Made by hand"\)\. Staging keeps one web app beside the friends' and never makes a third, so nothing was made and nothing was pushed\. Find out what it is for before anything else: if one is the address your friends use.*archived.*which cannot be undone/,
+    ),
+  );
 
   assert.deepEqual(script.calls, []);
   assert.equal(checkout.record!.staging, undefined);
@@ -534,7 +569,7 @@ test('a deploy after staging puts the build for the friends\' address there, say
   assert.equal(script.webApps().length, 2, 'the staging web app is kept for the next time');
   assert.equal(script.versionsMade(), 3, 'one version for staging and one for going live');
   assert.deepEqual(checkout.record, { deploymentId: LIVE, url: LIVE_URL, staging: { deploymentId, url } }, 'what was tried there is no longer what it serves');
-  assert.match(told(), new RegExp(`This is the code that was tried at the staging address \\(build ${buildId(url)}\\)`));
+  assert.match(told(), new RegExp(`This is the code that was last put at the staging address \\(${buildId(url)}\\)`));
   assert.match(told(), new RegExp(`Live at ${LIVE_URL}\nThe staging web app at ${url} now serves that same version, 3\\.$`));
   assert.match(script.webApps().find((app) => app.deploymentId === deploymentId)!.description, /^Chips n' Dipshits, staging, on the version live since /);
 });
@@ -547,7 +582,7 @@ test('a deploy of other code than was last staged goes ahead and says so', async
   await run();
 
   assert.equal(script.serves(LIVE), built(LIVE_URL, 'a later change'));
-  assert.match(told(), /Note: this is not the code that was last tried at the staging address/);
+  assert.match(told(), /Note: this is not the code that was last put at the staging address/);
 });
 
 test('a second deploy with no staging in between says that it was not staged', async () => {
@@ -558,7 +593,7 @@ test('a second deploy with no staging in between says that it was not staged', a
   said.length = 0;
   await run();
 
-  assert.match(told(), /^Note: this build was not tried at the staging address first/);
+  assert.match(told(), /^Note: this code was not put at the staging address first/);
 });
 
 test('a staging web app that cannot be given the live version does not undo the deploy, and the next deploy gives it one', async () => {

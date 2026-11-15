@@ -206,9 +206,23 @@ export async function buildFiles(webAppUrl: string, plugins: Plugin[] = []): Pro
   };
 }
 
-/** Writes the build to `dist/` and gives its id. */
+/**
+ * A mark of everything in a build that is pushed to Apps Script. It tells two pushes apart where the
+ * build's id cannot: the id leaves out the manifest, which says who may open the game and as whom it runs.
+ */
+export function pushedMark(files: Record<string, string>): string {
+  const mark = createHash('sha256');
+
+  for (const path of Object.keys(files).filter((each) => each.startsWith('gas/')).sort()) {
+    mark.update(path).update('\0').update(files[path]!).update('\0');
+  }
+
+  return mark.digest('hex').slice(0, BUILD_ID_LENGTH);
+}
+
+/** Writes the build to `dist/` and gives the mark of what it holds for Apps Script. */
 export async function buildAll(webAppUrl: string): Promise<string> {
-  const { id, files } = await buildFiles(webAppUrl);
+  const { files } = await buildFiles(webAppUrl);
 
   for (const [path, content] of Object.entries(files)) {
     const file = pathOf(`dist/${path}`);
@@ -217,5 +231,5 @@ export async function buildAll(webAppUrl: string): Promise<string> {
     await writeFile(file, content);
   }
 
-  return id;
+  return pushedMark(files);
 }

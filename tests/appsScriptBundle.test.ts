@@ -11,7 +11,7 @@ import vm from 'node:vm';
 
 import type { Plugin } from 'esbuild';
 
-import { buildFiles, buildOf } from '../scripts/bundle.ts';
+import { buildFiles, buildOf, pushedMark } from '../scripts/bundle.ts';
 import type { Build } from '../scripts/bundle.ts';
 import type { ApiRequest, ApiResponse, Built } from '../src/server/api.ts';
 import { UNSTAMPED_BUILD } from '../src/server/build.ts';
@@ -192,6 +192,18 @@ test("the page's script reaches the browser whole, although Apps Script takes ou
   assert.equal(served.length, appScript(built.files['gas/index.html']!).length, 'nothing was cut out of it');
   assert.doesNotThrow(() => new vm.Script(served));
   assert.equal(buildOf(page), built.id, 'nor out of the line that says which build the page is');
+});
+
+test('what is pushed to Apps Script has a mark that changes with any of it, the manifest included, which the build\'s id leaves out', async () => {
+  const { files } = await BUILT;
+  const withOtherAccess = { ...files, 'gas/appsscript.json': files['gas/appsscript.json']!.replace('ANYONE_ANONYMOUS', 'MYSELF') };
+
+  assert.notEqual(withOtherAccess['gas/appsscript.json'], files['gas/appsscript.json'], 'the manifest says who may open the game');
+  assert.match(pushedMark(files), /^[0-9a-f]{12}$/);
+  assert.equal(pushedMark({ ...files }), pushedMark(files));
+  assert.notEqual(pushedMark(withOtherAccess), pushedMark(files), 'a deploy with another manifest is not the deploy that was staged');
+  assert.notEqual(pushedMark({ ...files, 'gas/Code.js': `${files['gas/Code.js']}\n` }), pushedMark(files));
+  assert.equal(pushedMark({ ...files, 'web/index.html': 'anything' }), pushedMark(files), 'the page for another host is not pushed');
 });
 
 test('the page and the script of one build say they are the same build', async () => {

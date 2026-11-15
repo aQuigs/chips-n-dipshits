@@ -808,6 +808,14 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
       await sweep.over(host, 'the turn with more contrast asked for');
       await host.emulateMedia({ contrast: 'no-preference', forcedColors: 'active' });
       await sweep.over(host, 'the turn under forced colors', ['color-contrast']);
+      // A shape that was a background and nothing else is gone there unless the page draws it in the device's inks: a bet's
+      // chip is told from the empty place it would leave by its picture, since the styles read the same either way
+      const chip = host.locator('.bet .chip').first();
+      const drawn = await chip.screenshot();
+
+      await host.evaluate(`void (document.querySelector('.bet .chip').style.background = 'none')`);
+      assert.ok(!drawn.equals(await chip.screenshot()), 'a bet has an empty place where its chip was under forced colors');
+      await host.evaluate(`void document.querySelector('.bet .chip').style.removeProperty('background')`);
       await host.emulateMedia({ forcedColors: 'none' });
 
       // A bet that cannot be read says so on the box and on the button

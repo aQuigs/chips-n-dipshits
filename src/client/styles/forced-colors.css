@@ -57,4 +57,12 @@
     forced-color-adjust: none;
     background: Highlight;
   }
+
+  /* A bet's chip was two gradients, which go with every other background: drawn again in the device's own inks */
+  .bet .chip {
+    forced-color-adjust: none;
+    background:
+      radial-gradient(circle, CanvasText 0 42%, transparent 46%),
+      repeating-conic-gradient(CanvasText 0 30deg, Canvas 30deg 60deg);
+  }
 }

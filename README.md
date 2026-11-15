@@ -206,7 +206,7 @@ The Results tab is what the standings are read from: a row for each table and kn
 
 ## Put an update live
 
-The checkout that deploys holds two files git ignores: `.clasp.json`, which links it to the game's script, and `.deployment.json`, which has the game's address on record and the staging one's. A git worktree starts without them. There the deploy stops, says which checkout holds them, and makes nothing: run it in that checkout, or copy both files over. Copy both: clasp looks for `.clasp.json` in the folders above the one it runs in, so in a worktree kept inside the main checkout it would go by the main checkout's file and push the main checkout's build, and the deploy refuses to run that way.
+The checkout that deploys holds two files git ignores: `.clasp.json`, which links it to the game's script, and `.deployment.json`, which has the game's address on record and the staging one's. A git worktree starts without them, so the deploy there stops, says which checkout holds them, and makes nothing: run it in that checkout, or copy both files over. Copy both even into a worktree inside the main checkout: clasp looks for `.clasp.json` in the folders above, would go by the main checkout's and push the main checkout's build, and the deploy refuses to run that way.
 
 Write a flag after `--`, as in `npm run deploy -- --staging`. Without the `--`, npm keeps the flag for itself; the deploy and the check notice and refuse, rather than do what they do with no flag.
 

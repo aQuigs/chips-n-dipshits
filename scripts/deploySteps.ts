@@ -5,7 +5,7 @@
  * at). Nothing is pushed to or changed at an address this checkout has no record of. And no address is
  * ever removed: a web app that is gone cannot be had back.
  */
-import { DEPLOYMENT_FILE, DeployRefused, keptByNpm, LINK_FILE, WEB_APP_ID, webAppUrlFor } from './deployment.ts';
+import { DEPLOYMENT_FILE, DeployRefused, keptByNpm, LINK_FILE, WEB_APP_ID, webAppFor } from './deployment.ts';
 import type { Deployment, LinkFilesElsewhere, StagingWebApp, WebApp } from './deployment.ts';
 
 export const TITLE = "Chips n' Dipshits";
@@ -120,6 +120,7 @@ export function claspOver(run: (...args: string[]) => string): Clasp {
 const described = (apps: readonly ListedWebApp[]): string => apps.map((app) => `${app.deploymentId} ("${app.description}")`).join(', ');
 const webApps = (count: number): string => (count === 1 ? 'a web app' : `${count} web apps`);
 const isStaging = (app: ListedWebApp): boolean => app.description.startsWith(STAGING_TITLE);
+const withStaging = (record: Deployment, staging: StagingWebApp | undefined): Deployment => ({ deploymentId: record.deploymentId, url: record.url, ...(staging ? { staging } : {}) });
 
 /** Where this checkout's missing files are, when it is a worktree of a checkout that has them: said, or nothing. */
 function foundElsewhere(elsewhere: LinkFilesElsewhere | null): string {
@@ -193,8 +194,7 @@ async function setUp(deps: DeployDeps, linked: boolean, record: Deployment | nul
   await checkout.build('');
   clasp.push();
 
-  const deploymentId = clasp.createWebApp(TITLE);
-  const live = { deploymentId, url: webAppUrlFor(deploymentId) };
+  const live = webAppFor(clasp.createWebApp(TITLE));
 
   await checkout.writeDeployment(live);
   await publish(deps, live, TITLE);
@@ -219,11 +219,11 @@ async function putOnRecord({ clasp, checkout }: DeployDeps): Promise<never> {
     );
   }
 
-  const url = webAppUrlFor(candidates[0]!.deploymentId);
-  await checkout.writeDeployment({ deploymentId: candidates[0]!.deploymentId, url });
+  const live = webAppFor(candidates[0]!.deploymentId);
+  await checkout.writeDeployment(live);
 
   throw new DeployRefused(
-    `This checkout had no address on record, so the ${existing.length === 1 ? 'one web app the linked script has' : "linked script's one web app that was not made for staging"} was put in ${DEPLOYMENT_FILE}: ${url}. Nothing was pushed. ` +
+    `This checkout had no address on record, so the ${existing.length === 1 ? 'one web app the linked script has' : "linked script's one web app that was not made for staging"} was put in ${DEPLOYMENT_FILE}: ${live.url}. Nothing was pushed. ` +
       'If that is the address your friends use, run this again to update it.',
   );
 }
@@ -248,9 +248,9 @@ async function stage(deps: DeployDeps, record: Deployment, live: ListedWebApp, l
 
   // One this made for staging and lost track of: made from another checkout, or made with Google when its id never came back
   if (!kept && strangers.length === 1 && isStaging(strangers[0]!)) {
-    const found = { deploymentId: strangers[0]!.deploymentId, url: webAppUrlFor(strangers[0]!.deploymentId) };
+    const found = webAppFor(strangers[0]!.deploymentId);
 
-    await checkout.writeDeployment({ deploymentId: record.deploymentId, url: record.url, staging: found });
+    await checkout.writeDeployment(withStaging(record, found));
 
     throw new DeployRefused(
       `The linked script has a staging web app this checkout had no record of, so it was put in ${DEPLOYMENT_FILE} under "staging": ${found.url}. Nothing was pushed. ` +
@@ -274,14 +274,12 @@ async function stage(deps: DeployDeps, record: Deployment, live: ListedWebApp, l
 
   if (!staging) {
     // It starts on the version friends are served, and gets the build for its own address below
-    const deploymentId = clasp.createWebApp(STAGING_TITLE, live.version);
-
-    staging = { deploymentId, url: webAppUrlFor(deploymentId) };
-    await checkout.writeDeployment({ deploymentId: record.deploymentId, url: record.url, staging });
+    staging = webAppFor(clasp.createWebApp(STAGING_TITLE, live.version));
+    await checkout.writeDeployment(withStaging(record, staging));
   }
 
   const build = await publish(deps, staging, STAGING_TITLE);
-  await checkout.writeDeployment({ deploymentId: record.deploymentId, url: record.url, staging: { deploymentId: staging.deploymentId, url: staging.url, build } });
+  await checkout.writeDeployment(withStaging(record, { deploymentId: staging.deploymentId, url: staging.url, build }));
 
   const after = clasp.webApps().find((app) => app.deploymentId === live.deploymentId);
   if (after?.version !== live.version) {
@@ -349,7 +347,7 @@ async function goLive(deps: DeployDeps, record: Deployment, live: ListedWebApp, 
 
   if (record.staging) {
     // What was tried there has gone live or been passed over: the next staging says anew what it tried
-    await checkout.writeDeployment({ deploymentId: record.deploymentId, url: record.url, ...(staging ? { staging: { deploymentId: staging.deploymentId, url: staging.url } } : {}) });
+    await checkout.writeDeployment(withStaging(record, staging && { deploymentId: staging.deploymentId, url: staging.url }));
   }
 
   const strangers = listed.filter((app) => app !== live && !(staging && app === kept));

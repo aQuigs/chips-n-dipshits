@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { test } from 'node:test';
 
-import { addressToCheck, deploymentFrom, DeployRefused, linkFilesElsewhere, readDeployment, stagingAsked, webAppUrlFor } from '../scripts/deployment.ts';
+import { addressToCheck, deploymentFrom, DeployRefused, exitOnRefusal, linkFilesElsewhere, readDeployment, stagingAsked, webAppUrlFor } from '../scripts/deployment.ts';
 import type { Deployment, LinkFilesElsewhere } from '../scripts/deployment.ts';
 import { claspOver, deploy, modeOf, TITLE } from '../scripts/deploySteps.ts';
 import type { Checkout, Clasp, ListedWebApp, Mode } from '../scripts/deploySteps.ts';
@@ -154,6 +154,9 @@ const LIVE_URL = webAppUrlFor(LIVE);
 const OLD_CODE = 'the code friends are playing on';
 const STAGING_MADE = `${TITLE}, staging`;
 
+const refused = (pattern: RegExp) => (error: unknown) => error instanceof DeployRefused && pattern.test(error.message);
+const entry = (deploymentId: string) => ({ deploymentId, url: webAppUrlFor(deploymentId) });
+
 function setup() {
   const checkout = new FakeCheckout();
   const script = new FakeScript(checkout);
@@ -163,19 +166,23 @@ function setup() {
   return { checkout, script, said, run, told: () => said.join('\n') };
 }
 
-/** A game that is deployed, in a checkout that holds both of its files. */
-function deployed() {
+/** A checkout linked to a script, with no record of where the game is. */
+function linked() {
   const game = setup();
-
   game.checkout.link = true;
-  game.checkout.record = { deploymentId: LIVE, url: LIVE_URL };
-  game.script.has(LIVE, OLD_CODE);
 
   return game;
 }
 
-const refused = (pattern: RegExp) => (error: unknown) => error instanceof DeployRefused && pattern.test(error.message);
-const entry = (deploymentId: string) => ({ deploymentId, url: webAppUrlFor(deploymentId) });
+/** A game that is deployed, in a checkout that holds both of its files. */
+function deployed() {
+  const game = linked();
+
+  game.checkout.record = entry(LIVE);
+  game.script.has(LIVE, OLD_CODE);
+
+  return game;
+}
 
 test('a checkout that is not linked to a script deploys nothing and makes nothing, and says how a new game is asked for', async () => {
   const { script, checkout, run } = setup();
@@ -293,13 +300,12 @@ test('--new is refused where a game is on record, and nothing of that game is to
   await assert.rejects(run('new'), refused(/already has a game on record.*--new sets one up only where there is none/));
 
   assert.deepEqual(script.calls, []);
-  assert.deepEqual(checkout.record, { deploymentId: LIVE, url: LIVE_URL });
+  assert.deepEqual(checkout.record, entry(LIVE));
   assert.equal(script.serves(LIVE), OLD_CODE);
 });
 
 test('--new is refused for a linked script that already has a web app', async () => {
-  const { script, checkout, run } = setup();
-  checkout.link = true;
+  const { script, run } = linked();
   script.has(LIVE, OLD_CODE);
 
   await assert.rejects(run('new'), refused(/already has a web app, and --new makes an address only where there is none: AKfycb-live/));
@@ -309,8 +315,7 @@ test('--new is refused for a linked script that already has a web app', async ()
 });
 
 test('--new gives a linked script that has no web app its first one, without making another Sheet, from a build made now', async () => {
-  const { script, checkout, run } = setup();
-  checkout.link = true;
+  const { script, checkout, run } = linked();
 
   await run('new');
 
@@ -322,7 +327,7 @@ test('--new gives a linked script that has no web app its first one, without mak
 test('an address on record in a checkout that is not linked to its script is refused, with --new too', async () => {
   for (const mode of ['live', 'staging', 'new'] as const) {
     const { script, checkout, run } = setup();
-    checkout.record = { deploymentId: LIVE, url: LIVE_URL };
+    checkout.record = entry(LIVE);
 
     await assert.rejects(run(mode), refused(/has the game's address on record.*\.clasp\.json is missing, so nothing was deployed/), mode);
     assert.deepEqual(script.calls, [], mode);
@@ -330,13 +335,12 @@ test('an address on record in a checkout that is not linked to its script is ref
 });
 
 test('a linked script with one web app and no record gets that address put on record and nothing pushed; the next run updates it', async () => {
-  const { script, checkout, run } = setup();
-  checkout.link = true;
+  const { script, checkout, run } = linked();
   script.has(LIVE, OLD_CODE);
 
   await assert.rejects(run(), refused(new RegExp(`the one web app the linked script has was put in \\.deployment\\.json: ${LIVE_URL}\\. Nothing was pushed`)));
   assert.deepEqual(script.calls, []);
-  assert.deepEqual(checkout.record, { deploymentId: LIVE, url: LIVE_URL });
+  assert.deepEqual(checkout.record, entry(LIVE));
   assert.equal(script.serves(LIVE), OLD_CODE);
 
   await run();
@@ -344,8 +348,7 @@ test('a linked script with one web app and no record gets that address put on re
 });
 
 test('a linked script with several web apps that could be the friends\' and no record is refused, naming them as Google has them described', async () => {
-  const { script, checkout, run } = setup();
-  checkout.link = true;
+  const { script, checkout, run } = linked();
   script.has(LIVE, OLD_CODE);
   script.has('AKfycb-other', OLD_CODE, 'Made by hand');
 
@@ -356,8 +359,7 @@ test('a linked script with several web apps that could be the friends\' and no r
 });
 
 test('a checkout with no record of a game that has a staging web app finds both in two runs that push nothing, and never takes the staging one for the friends\'', async () => {
-  const { script, checkout, run } = setup();
-  checkout.link = true;
+  const { script, checkout, run } = linked();
   script.has('AKfycb-staging', OLD_CODE, `${STAGING_MADE}, deployed last week`);
   script.has(LIVE, OLD_CODE);
 
@@ -375,8 +377,7 @@ test('a checkout with no record of a game that has a staging web app finds both 
 });
 
 test('a linked script whose only web app was made for staging has no address to take for the friends\'', async () => {
-  const { script, checkout, run } = setup();
-  checkout.link = true;
+  const { script, checkout, run } = linked();
   script.has('AKfycb-staging', OLD_CODE, STAGING_MADE);
 
   await assert.rejects(run(), refused(/has a web app and this checkout has none on record/));
@@ -384,8 +385,7 @@ test('a linked script whose only web app was made for staging has no address to 
 });
 
 test('a linked script with no web app and no record is refused, and makes none unasked', async () => {
-  const { script, checkout, run } = setup();
-  checkout.link = true;
+  const { script, run } = linked();
 
   await assert.rejects(run(), refused(/has no web app.*npm run deploy -- --new/));
 
@@ -400,7 +400,7 @@ test('a deploy puts the build for the friends\' address at that address, which s
 
   assert.equal(script.serves(LIVE), built(LIVE_URL));
   assert.deepEqual(script.calls, ['push', `updateWebApp ${LIVE}`]);
-  assert.deepEqual(checkout.record, { deploymentId: LIVE, url: LIVE_URL });
+  assert.deepEqual(checkout.record, entry(LIVE));
   assert.match(told(), /^Note: this code was not put at the staging address first/);
   assert.match(told(), new RegExp(`Building for ${LIVE_URL}`));
   assert.match(told(), new RegExp(`Live at ${LIVE_URL}$`));
@@ -408,9 +408,8 @@ test('a deploy puts the build for the friends\' address at that address, which s
 
 test('link and record files from two different games are refused before anything is pushed', async () => {
   for (const mode of ['live', 'staging'] as const) {
-    const { script, checkout, run } = setup();
-    checkout.link = true;
-    checkout.record = { deploymentId: LIVE, url: LIVE_URL };
+    const { script, checkout, run } = linked();
+    checkout.record = entry(LIVE);
     script.has('AKfycb-another-game', OLD_CODE);
 
     await assert.rejects(run(mode), refused(/has no web app AKfycb-live.*from different games.*Nothing was pushed/), mode);
@@ -421,8 +420,7 @@ test('link and record files from two different games are refused before anything
 
 test('a record whose friends\' entry is a web app made for staging is refused: a live deploy there would leave the friends on old code', async () => {
   for (const mode of ['live', 'staging'] as const) {
-    const { script, checkout, run } = setup();
-    checkout.link = true;
+    const { script, checkout, run } = linked();
     script.has(LIVE, OLD_CODE);
     script.has('AKfycb-staging', OLD_CODE, `${STAGING_MADE}, deployed last week`);
     checkout.record = { ...entry('AKfycb-staging'), staging: entry(LIVE) };
@@ -443,7 +441,7 @@ test('staging puts the build on a second web app of the script and leaves the fr
   assert.equal(staging.build, buildId(staging.url), 'the record says which build was put there');
   assert.equal(script.serves(staging.deploymentId), built(staging.url), 'the staging page is told its own address');
   assert.equal(script.serves(LIVE), OLD_CODE, 'the friends\' address still serves the old code');
-  assert.deepEqual({ deploymentId: checkout.record!.deploymentId, url: checkout.record!.url }, { deploymentId: LIVE, url: LIVE_URL });
+  assert.deepEqual({ deploymentId: checkout.record!.deploymentId, url: checkout.record!.url }, entry(LIVE));
   assert.ok(!script.calls.some((call) => call.startsWith(`updateWebApp ${LIVE}`)));
   assert.match(told(), new RegExp(`Staging at ${staging.url}`));
   assert.match(told(), new RegExp(`The friends' address ${LIVE_URL} was not touched: it serves version 1 of the script, as before`));
@@ -525,7 +523,7 @@ test('a staging web app on record that the script no longer has is replaced by a
 
 test('a record that names the friends\' address as its own staging web app is refused, and that address keeps its code', async () => {
   const { script, checkout, run } = deployed();
-  checkout.record = { ...checkout.record!, staging: { deploymentId: LIVE, url: LIVE_URL } };
+  checkout.record = { ...checkout.record!, staging: entry(LIVE) };
 
   await assert.rejects(run('staging'), refused(/names the friends' address itself as the staging web app/));
 
@@ -568,7 +566,7 @@ test('a deploy after staging puts the build for the friends\' address there, say
   assert.equal(script.serves(deploymentId), built(LIVE_URL), 'and the staging address serves what they are served');
   assert.equal(script.webApps().length, 2, 'the staging web app is kept for the next time');
   assert.equal(script.versionsMade(), 3, 'one version for staging and one for going live');
-  assert.deepEqual(checkout.record, { deploymentId: LIVE, url: LIVE_URL, staging: { deploymentId, url } }, 'what was tried there is no longer what it serves');
+  assert.deepEqual(checkout.record, { ...entry(LIVE), staging: { deploymentId, url } },'what was tried there is no longer what it serves');
   assert.match(told(), new RegExp(`This is the code that was last put at the staging address \\(${buildId(url)}\\)`));
   assert.match(told(), new RegExp(`Live at ${LIVE_URL}\nThe staging web app at ${url} now serves that same version, 3\\.$`));
   assert.match(script.webApps().find((app) => app.deploymentId === deploymentId)!.description, /^Chips n' Dipshits, staging, on the version live since /);
@@ -615,13 +613,13 @@ test('a staging web app that cannot be given the live version does not undo the 
 
 test('a deploy does nothing to the friends\' address through the staging entry, whatever the record says of staging', async () => {
   const { script, checkout, run, told } = deployed();
-  checkout.record = { ...checkout.record!, staging: { deploymentId: LIVE, url: LIVE_URL, build: 'anything' } };
+  checkout.record = { ...checkout.record!, staging: { ...entry(LIVE), build: 'anything' } };
 
   await run();
 
   assert.deepEqual(script.calls, ['push', `updateWebApp ${LIVE}`]);
   assert.equal(script.serves(LIVE), built(LIVE_URL));
-  assert.deepEqual(checkout.record, { deploymentId: LIVE, url: LIVE_URL });
+  assert.deepEqual(checkout.record, entry(LIVE));
   assert.match(told(), /is not one this made for staging, so it was taken off the record and nothing was done to it/);
 });
 
@@ -634,7 +632,7 @@ test('a deploy leaves a web app that is on record as staging and was not made fo
 
   assert.deepEqual(script.calls, ['push', `updateWebApp ${LIVE}`]);
   assert.equal(script.serves('AKfycb-other'), OLD_CODE);
-  assert.deepEqual(checkout.record, { deploymentId: LIVE, url: LIVE_URL });
+  assert.deepEqual(checkout.record, entry(LIVE));
 });
 
 test('a deploy whose staging web app is no longer the script\'s drops it from the record', async () => {
@@ -644,7 +642,7 @@ test('a deploy whose staging web app is no longer the script\'s drops it from th
   await run();
 
   assert.deepEqual(script.calls, ['push', `updateWebApp ${LIVE}`]);
-  assert.deepEqual(checkout.record, { deploymentId: LIVE, url: LIVE_URL });
+  assert.deepEqual(checkout.record, entry(LIVE));
   assert.match(told(), /is no longer one of the script's, so it was taken off the record/);
 });
 
@@ -807,10 +805,35 @@ test('the record is read as it was written, and one that was changed into someth
 test('a check plays at the friends\' address, or at the staging one when asked, and never at one that is not on record', () => {
   const staging = entry('AKfycb-staging');
 
-  assert.equal(addressToCheck({ deploymentId: LIVE, url: LIVE_URL }, false), LIVE_URL);
-  assert.equal(addressToCheck({ deploymentId: LIVE, url: LIVE_URL, staging }, false), LIVE_URL);
-  assert.equal(addressToCheck({ deploymentId: LIVE, url: LIVE_URL, staging }, true), staging.url);
-  assert.throws(() => addressToCheck({ deploymentId: LIVE, url: LIVE_URL }, true), /no staging web app on record.*npm run deploy -- --staging/);
+  assert.equal(addressToCheck(entry(LIVE), false), LIVE_URL);
+  assert.equal(addressToCheck({ ...entry(LIVE), staging }, false), LIVE_URL);
+  assert.equal(addressToCheck({ ...entry(LIVE), staging }, true), staging.url);
+  assert.throws(() => addressToCheck(entry(LIVE), true),/no staging web app on record.*npm run deploy -- --staging/);
   assert.throws(() => addressToCheck(null, false), /Nothing has been deployed from this checkout/);
   assert.throws(() => addressToCheck(null, true), /Nothing has been deployed from this checkout/);
+});
+
+test('a command that was refused ends with what it was told and a failed exit, and any other failure is left to be seen whole', async () => {
+  const said: unknown[] = [];
+  const error = console.error;
+  console.error = (line: unknown) => void said.push(line);
+
+  try {
+    await exitOnRefusal(async () => {
+      throw new DeployRefused('Nothing was deployed.');
+    });
+
+    assert.deepEqual(said, ['\nNothing was deployed.']);
+    assert.equal(process.exitCode, 1);
+
+    await assert.rejects(
+      exitOnRefusal(async () => {
+        throw new Error('clasp fell over');
+      }),
+      /clasp fell over/,
+    );
+  } finally {
+    console.error = error;
+    process.exitCode = undefined;
+  }
 });

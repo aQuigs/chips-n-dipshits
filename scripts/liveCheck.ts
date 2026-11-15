@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 
 import { buildOf } from './bundle.ts';
-import { addressToCheck, DeployRefused, readDeployment, stagingAsked } from './deployment.ts';
+import { addressToCheck, exitOnRefusal, readDeployment, stagingAsked } from './deployment.ts';
 import { playCheck } from './liveCheckSteps.ts';
 import type { Visitor } from './liveCheckSteps.ts';
 
@@ -73,13 +73,4 @@ async function check(): Promise<void> {
   }
 }
 
-try {
-  await check();
-} catch (error) {
-  if (!(error instanceof DeployRefused)) {
-    throw error;
-  }
-
-  console.error(`\n${error.message}`);
-  process.exitCode = 1;
-}
+await exitOnRefusal(check);

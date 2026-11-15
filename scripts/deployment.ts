@@ -44,6 +44,22 @@ export function webAppUrlFor(deploymentId: string): string {
   return `https://script.google.com/macros/s/${deploymentId}/exec`;
 }
 
+export const webAppFor = (deploymentId: string): WebApp => ({ deploymentId, url: webAppUrlFor(deploymentId) });
+
+/** Runs a command, and ends one that was refused with its message and a failed exit rather than a stack trace. */
+export async function exitOnRefusal(command: () => Promise<void>): Promise<void> {
+  try {
+    await command();
+  } catch (error) {
+    if (!(error instanceof DeployRefused)) {
+      throw error;
+    }
+
+    console.error(`\n${error.message}`);
+    process.exitCode = 1;
+  }
+}
+
 /**
  * The flags npm kept for itself. `npm run deploy --staging`, with no `--` before the flag, never hands
  * it to the script: npm takes it for a setting of its own, and the script would do what it does unasked.
@@ -77,7 +93,7 @@ export function deploymentFrom(text: string): Deployment {
   }
 
   const live = webAppFrom(saved, "the friends' entry");
-  if (saved?.staging === undefined) {
+  if (saved.staging === undefined) {
     return live;
   }
 

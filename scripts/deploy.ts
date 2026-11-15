@@ -8,6 +8,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
+import { answersOver } from './answering.ts';
 import { buildAll } from './bundle.ts';
 import { claspOver, deploy, modeOf } from './deploySteps.ts';
 import { exitOnRefusal, LINK_FILE, linkFilesElsewhere, readDeployment, writeDeployment } from './deployment.ts';
@@ -25,6 +26,7 @@ function clasp(...args: string[]): string {
 await exitOnRefusal(() =>
   deploy(modeOf(process.argv.slice(2), process.env), {
     clasp: claspOver(clasp),
+    answers: answersOver(fetch),
     checkout: {
       linked: () => existsSync(`${ROOT}${LINK_FILE}`),
       readDeployment,
@@ -34,5 +36,6 @@ await exitOnRefusal(() =>
     },
     say: (line) => console.log(line),
     now: () => new Date(),
+    pause: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   }),
 );

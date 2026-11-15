@@ -220,9 +220,9 @@ export function pushedMark(files: Record<string, string>): string {
   return mark.digest('hex').slice(0, BUILD_ID_LENGTH);
 }
 
-/** Writes the build to `dist/`, or to the folder given, and gives the mark of what it holds for Apps Script. */
-export async function buildAll(webAppUrl: string, dist: string = pathOf('dist/')): Promise<string> {
-  const { files } = await buildFiles(webAppUrl);
+/** Writes the build to `dist/`, or to the folder given, and gives its id and the mark of what it holds for Apps Script. */
+export async function buildAll(webAppUrl: string, dist: string = pathOf('dist/')): Promise<{ id: string; mark: string }> {
+  const { id, files } = await buildFiles(webAppUrl);
 
   for (const [path, content] of Object.entries(files)) {
     const file = join(dist, path);
@@ -231,5 +231,5 @@ export async function buildAll(webAppUrl: string, dist: string = pathOf('dist/')
     await writeFile(file, content);
   }
 
-  return pushedMark(files);
+  return { id, mark: pushedMark(files) };
 }

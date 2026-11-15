@@ -1,7 +1,9 @@
 /*
  * The deploy, on a stand-in for the script with Google and for a checkout's files. What the stand-in
  * keeps is what matters about the real thing: a web app serves the version it was last given, a push
- * changes no web app, and a call can take effect with Google and still fail here.
+ * changes no web app, and a call can take effect with Google and still fail here. And what the first
+ * real deploy showed of Google: for a while after a web app is given a version the one before answers
+ * at its address too, and the list of web apps shows the script as it was some time ago.
  */
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -9,16 +11,33 @@ import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { test } from 'node:test';
 
-import { addressToCheck, deploymentFrom, DeployRefused, exitOnRefusal, linkFilesElsewhere, readDeployment, stagingAsked, webAppUrlFor } from '../scripts/deployment.ts';
+import { QUIET_MS, SETTLE_DEADLINE_MS } from '../scripts/answering.ts';
+import type { Answer, Answers } from '../scripts/answering.ts';
+import { addressToCheck, deploymentFrom, DeployRefused, DeployUnsettled, exitOnRefusal, linkFilesElsewhere, readDeployment, stagingAsked, webAppUrlFor } from '../scripts/deployment.ts';
 import type { Deployment, LinkFilesElsewhere } from '../scripts/deployment.ts';
-import { claspOver, deploy, modeOf, TITLE } from '../scripts/deploySteps.ts';
-import type { Checkout, Clasp, ListedWebApp, Mode } from '../scripts/deploySteps.ts';
+import { claspOver, deploy, LIST_DEADLINE_MS, modeOf, TITLE } from '../scripts/deploySteps.ts';
+import type { Built, Checkout, Clasp, ListedWebApp, Mode } from '../scripts/deploySteps.ts';
 
 const NEW_CODE = 'the code in the tree';
+const UNNAMED_CODE = 'code from before builds had ids';
 
-/** What a build of some code for one address is, and the id such a build has: the same code for the same address, the same id. */
+/** What a build of some code for one address is: the same code for the same address, the same build. */
 const built = (url: string, code = NEW_CODE) => `${code}, built for ${url || 'no address'}`;
-const buildId = (url: string, code = NEW_CODE) => `id of ${built(url, code)}`;
+/** The mark of everything such a build pushes, which is what the record keeps of a staged build. */
+const markOf = (url: string, code = NEW_CODE) => `mark of ${built(url, code)}`;
+/** The id on every answer of a build, by what the build is; code from before builds had ids puts none on. */
+const idOf = (build: string) => (build.startsWith(UNNAMED_CODE) ? null : `id of ${build}`);
+
+/** A clock the test moves. A pause takes no time and moves it on. */
+class FakeClock {
+  ms = 3_600_000;
+
+  now = (): Date => new Date(this.ms);
+
+  pause = async (ms: number): Promise<void> => {
+    this.ms += ms;
+  };
+}
 
 class FakeCheckout implements Checkout {
   link = false;
@@ -47,10 +66,10 @@ class FakeCheckout implements Checkout {
     this.record = deployment;
   }
 
-  async build(webAppUrl: string): Promise<string> {
+  async build(webAppUrl: string): Promise<Built> {
     this.dist = built(webAppUrl, this.code);
 
-    return buildId(webAppUrl, this.code);
+    return { id: idOf(this.dist)!, mark: markOf(webAppUrl, this.code) };
   }
 
   elsewhere(): LinkFilesElsewhere | null {
@@ -58,31 +77,60 @@ class FakeCheckout implements Checkout {
   }
 }
 
-class FakeScript implements Clasp {
+/** A web app as the script has it: the version it serves, the one it served before that, and when it was given this one. */
+interface FakeWebApp {
+  version: number;
+  description: string;
+  before: number | null;
+  since: number;
+}
+
+class FakeScript implements Clasp, Answers {
   readonly calls: string[] = [];
   /** Everything that was pushed, the last of it being what a new version is made of. */
   readonly pushed: string[] = [];
+  /** Every call to an address that was answered: when, where, and by which build. */
+  readonly answered: { at: number; url: string; build: string | null }[] = [];
   /** The next web app is made with Google, and the answer that says which never arrives. */
   loseNextAnswer = false;
   /** A web app Google will not update for now. */
   unavailable: string | null = null;
   /** clasp makes the Sheet and its script, then fails before it has linked the checkout to them. */
   failsAfterMakingTheSheet = false;
+  /** How long after a web app is given a version the one it had goes on answering at its address too, every other call. */
+  mixMs = 0;
+  /** How far behind the list of web apps is: a read shows the script as it was this long ago, and every other read as it was twice as long ago. */
+  listLagMs = 0;
+  /** A web app whose address answers nothing for now. */
+  silent: string | null = null;
+  /** clasp updates a web app and does not say which version it gave it. */
+  saysNoVersion = false;
   private readonly checkout: FakeCheckout;
+  private readonly clock: FakeClock;
   private readonly versions: string[] = [];
-  private readonly apps = new Map<string, { version: number; description: string }>();
+  private readonly apps = new Map<string, FakeWebApp>();
+  private readonly lists: { at: number; apps: ListedWebApp[] }[] = [];
+  private listsRead = 0;
+  private asked = 0;
 
-  constructor(checkout: FakeCheckout) {
+  constructor(checkout: FakeCheckout, clock: FakeClock) {
     this.checkout = checkout;
+    this.clock = clock;
   }
 
-  /** A web app the script has from before the test, serving `build`. */
+  /** A web app the script has from before, serving `build`: from long before the test, or from the last thing done to the script in it. */
   has(deploymentId: string, build: string, description = `${TITLE}, deployed some time ago`): void {
     this.versions.push(build);
-    this.apps.set(deploymentId, { version: this.versions.length, description });
+    this.serve(deploymentId, this.versions.length, description, this.lists.at(-1)?.at ?? 0);
   }
 
-  /** The build a visitor to this web app gets. */
+  /** Someone gives a web app a version of this code now, outside the deploy: by hand in the editor, or from another checkout. */
+  givenElsewhere(deploymentId: string, build: string): void {
+    this.versions.push(build);
+    this.serve(deploymentId, this.versions.length, this.apps.get(deploymentId)!.description, this.clock.ms);
+  }
+
+  /** The build a visitor to this web app gets, once only one answers there. */
   serves(deploymentId: string): string | null {
     const app = this.apps.get(deploymentId);
 
@@ -92,6 +140,34 @@ class FakeScript implements Clasp {
   /** How many versions of the script there are, of the few Google keeps. */
   versionsMade(): number {
     return this.versions.length;
+  }
+
+  /** The web apps the script has now, whatever the list shows. */
+  webAppsNow(): string[] {
+    return [...this.apps.keys()];
+  }
+
+  /** Whether the version a web app had still answers at its address some of the time. */
+  mixedAt(deploymentId: string): boolean {
+    const app = this.apps.get(deploymentId);
+
+    return app !== undefined && app.before !== null && this.clock.ms - app.since < this.mixMs;
+  }
+
+  async ask(url: string): Promise<Answer> {
+    const deploymentId = [...this.apps.keys()].find((id) => webAppUrlFor(id) === url);
+    const app = deploymentId === undefined ? undefined : this.apps.get(deploymentId);
+
+    if (!app || deploymentId === this.silent) {
+      return { failed: 'no answer' };
+    }
+
+    const version = this.mixedAt(deploymentId!) && this.asked++ % 2 === 0 ? app.before! : app.version;
+    const build = idOf(this.versions[version - 1]!);
+
+    this.answered.push({ at: this.clock.ms, url, build });
+
+    return { build };
   }
 
   createScript(): void {
@@ -111,7 +187,14 @@ class FakeScript implements Clasp {
   }
 
   webApps(): ListedWebApp[] {
-    return [...this.apps].map(([deploymentId, app]) => ({ deploymentId, ...app }));
+    if (this.listLagMs === 0) {
+      return this.lists.at(-1)?.apps ?? [];
+    }
+
+    // Behind by the lag, and every other read by twice the lag: a later read can show an earlier state
+    const asOf = this.clock.ms - this.listLagMs * (this.listsRead++ % 2 === 0 ? 1 : 2);
+
+    return this.lists.filter((list) => list.at <= asOf).at(-1)?.apps ?? [];
   }
 
   createWebApp(description: string, version?: number): string {
@@ -128,7 +211,7 @@ class FakeScript implements Clasp {
     return deploymentId;
   }
 
-  updateWebApp(deploymentId: string, description: string, version?: number): void {
+  updateWebApp(deploymentId: string, description: string, version?: number): number | null {
     this.calls.push(`updateWebApp ${deploymentId}${version === undefined ? '' : ` to version ${version}`}`);
     assert.ok(this.apps.has(deploymentId), `the script has no web app ${deploymentId}`);
 
@@ -137,15 +220,23 @@ class FakeScript implements Clasp {
     }
 
     this.give(deploymentId, description, version);
+
+    return this.saysNoVersion ? null : this.apps.get(deploymentId)!.version;
   }
 
   private give(deploymentId: string, description: string, version: number | undefined): void {
     if (version === undefined) {
-      this.has(deploymentId, this.pushed.at(-1) ?? 'nothing pushed', description);
+      this.versions.push(this.pushed.at(-1) ?? 'nothing pushed');
     } else {
       assert.ok(version >= 1 && version <= this.versions.length, `the script has no version ${version}`);
-      this.apps.set(deploymentId, { version, description });
     }
+
+    this.serve(deploymentId, version ?? this.versions.length, description, this.clock.ms);
+  }
+
+  private serve(deploymentId: string, version: number, description: string, since: number): void {
+    this.apps.set(deploymentId, { version, description, before: this.apps.get(deploymentId)?.version ?? null, since });
+    this.lists.push({ at: since, apps: [...this.apps].map(([id, app]) => ({ deploymentId: id, version: app.version, description: app.description })) });
   }
 }
 
@@ -159,11 +250,19 @@ const entry = (deploymentId: string) => ({ deploymentId, url: webAppUrlFor(deplo
 
 function setup() {
   const checkout = new FakeCheckout();
-  const script = new FakeScript(checkout);
+  const clock = new FakeClock();
+  const script = new FakeScript(checkout, clock);
   const said: string[] = [];
-  const run = (mode: Mode = 'live') => deploy(mode, { clasp: script, checkout, say: (line) => said.push(line), now: () => new Date(0) });
+  const saidAt: number[] = [];
+  const say = (line: string) => {
+    said.push(line);
+    saidAt.push(clock.ms);
+  };
+  const run = (mode: Mode = 'live') => deploy(mode, { clasp: script, answers: script, checkout, say, now: clock.now, pause: clock.pause });
+  /** When the first line with this in it was said. */
+  const when = (pattern: RegExp) => saidAt[said.findIndex((line) => pattern.test(line))];
 
-  return { checkout, script, said, run, told: () => said.join('\n') };
+  return { checkout, clock, script, said, run, when, told: () => said.join('\n') };
 }
 
 /** A checkout linked to a script, with no record of where the game is. */
@@ -438,13 +537,13 @@ test('staging puts the build on a second web app of the script and leaves the fr
   const staging = checkout.record!.staging!;
   assert.notEqual(staging.deploymentId, LIVE);
   assert.equal(staging.url, webAppUrlFor(staging.deploymentId));
-  assert.equal(staging.build, buildId(staging.url), 'the record says which build was put there');
+  assert.equal(staging.build, markOf(staging.url), 'the record says which build was put there');
   assert.equal(script.serves(staging.deploymentId), built(staging.url), 'the staging page is told its own address');
   assert.equal(script.serves(LIVE), OLD_CODE, 'the friends\' address still serves the old code');
   assert.deepEqual({ deploymentId: checkout.record!.deploymentId, url: checkout.record!.url }, entry(LIVE));
   assert.ok(!script.calls.some((call) => call.startsWith(`updateWebApp ${LIVE}`)));
   assert.match(told(), new RegExp(`Staging at ${staging.url}`));
-  assert.match(told(), new RegExp(`The friends' address ${LIVE_URL} was not touched: it serves version 1 of the script, as before`));
+  assert.match(told(), new RegExp(`The friends' address ${LIVE_URL} was not touched: build ${idOf(OLD_CODE)}, which answered there before this, is still the one that answers`));
   assert.match(told(), /If the check fails, nothing has changed for friends: fix the code and run this again\./, 'what a failed check means is said before it is run');
   assert.match(told(), /the Apps Script editor shows this code, .* no address friends have serves it/, 'so that the new code in the editor alarms nobody');
   assert.equal(script.versionsMade(), 2, 'one version for the staging build, and none for making its web app');
@@ -459,7 +558,7 @@ test('staging again uses the staging web app on record and makes no third', asyn
   checkout.code = 'a later change';
   await run('staging');
 
-  assert.deepEqual(checkout.record!.staging, { deploymentId, url, build: buildId(url, 'a later change') });
+  assert.deepEqual(checkout.record!.staging, { deploymentId, url, build: markOf(url, 'a later change') });
   assert.equal(script.webApps().length, 2);
   assert.equal(script.serves(deploymentId), built(url, 'a later change'));
   assert.equal(script.serves(LIVE), OLD_CODE);
@@ -544,17 +643,65 @@ test('a record whose staging entry is a web app that was not made for staging is
   assert.equal(script.serves('AKfycb-other'), OLD_CODE);
 });
 
-test('staging that finds the friends\' address serving another version than before fails loudly', async () => {
-  const { script, run } = deployed();
+/** A script whose web apps all move together, which Google's do not. */
+function movingTogether(script: FakeScript): void {
   const update = script.updateWebApp.bind(script);
 
-  // A script whose web apps all move together, which Google's do not
   script.updateWebApp = (deploymentId, description, version) => {
-    update(deploymentId, description, version);
-    update(LIVE, description, version);
-  };
+    const given = update(deploymentId, description, version);
+    update(LIVE, description, given ?? undefined);
 
-  await assert.rejects(run('staging'), /served version 1 of the script before this and serves version 3 now, which staging must never bring about/);
+    return given;
+  };
+}
+
+test('staging that finds another build answering at the friends\' address than before fails loudly, whatever the list of web apps shows', async () => {
+  for (const listLagMs of [60_000, 0]) {
+    const { script, run, told } = deployed();
+    script.listLagMs = listLagMs;
+    movingTogether(script);
+
+    await assert.rejects(
+      run('staging'),
+      new RegExp(`was answered by build ${idOf(OLD_CODE)} before this and is answered by build ${idOf(built(webAppUrlFor('AKfycb-made-2')))} now, which staging must never bring about`),
+      `a list ${listLagMs} ms behind`,
+    );
+    assert.doesNotMatch(told(), /Staging at|was not touched/);
+  }
+});
+
+test('staging is refused while two builds answer at the friends\' address, which is when it was given a version a moment ago', async () => {
+  const { script, checkout, run } = deployed();
+  script.mixMs = 60_000;
+  script.givenElsewhere(LIVE, 'code someone put there by hand');
+
+  await assert.rejects(run('staging'), refused(/Two builds answer at the friends' address.*given a version in the last minute or so.*Wait a minute and run this again\. Nothing was pushed/));
+
+  assert.deepEqual(script.calls, []);
+  assert.equal(checkout.record!.staging, undefined);
+});
+
+test('staging goes ahead when the friends\' address gives no answer to go by, and says that it could not tell', async () => {
+  const { script, checkout, run, told } = deployed();
+  script.silent = LIVE;
+
+  await run('staging');
+
+  const staging = checkout.record!.staging!;
+  assert.equal(script.serves(staging.deploymentId), built(staging.url));
+  assert.match(told(), new RegExp(`Staging at ${staging.url}`));
+  assert.match(told(), /Whether the friends' address .* still serves what it served could not be told from its answers: it gave none to go by before this \(no answer\)\. Nothing here gives that address a version/);
+  assert.doesNotMatch(told(), /was not touched/);
+});
+
+test('code from before builds had ids is told from a build by its answers carrying none, and staging beside it says so', async () => {
+  const { script, checkout, run, told } = linked();
+  checkout.record = entry(LIVE);
+  script.has(LIVE, UNNAMED_CODE);
+
+  await run('staging');
+
+  assert.match(told(), /was not touched: code from before builds had ids, which answered there before this, is still the one that answers/);
 });
 
 test('a deploy after staging puts the build for the friends\' address there, says it is the code that was staged, and has the staging web app serve that same version', async () => {
@@ -569,9 +716,160 @@ test('a deploy after staging puts the build for the friends\' address there, say
   assert.equal(script.webApps().length, 2, 'the staging web app is kept for the next time');
   assert.equal(script.versionsMade(), 3, 'one version for staging and one for going live');
   assert.deepEqual(checkout.record, { ...entry(LIVE), staging: { deploymentId, url } },'what was tried there is no longer what it serves');
-  assert.match(told(), new RegExp(`This is the code that was last put at the staging address \\(${buildId(url)}\\)`));
-  assert.match(told(), new RegExp(`Live at ${LIVE_URL}\nThe staging web app at ${url} now serves that same version, 3\\.$`));
+  assert.match(told(), new RegExp(`This is the code that was last put at the staging address \\(${markOf(url)}\\)`));
+  assert.match(told(), new RegExp(`The staging web app at ${url} now serves that same version, 3\\.`));
+  assert.match(told(), new RegExp(`Live at ${LIVE_URL}$`), 'which is the last thing said: it is when friends can be told');
   assert.match(script.webApps().find((app) => app.deploymentId === deploymentId)!.description, /^Chips n' Dipshits, staging, on the version live since /);
+});
+
+test('going live gives the staging web app the version it just made, though the list of web apps still shows the friends\' address on the one before', async () => {
+  const { script, checkout, clock, run, told } = deployed();
+  await run('staging');
+  const { deploymentId, url } = checkout.record!.staging!;
+
+  await clock.pause(600_000);
+  script.listLagMs = 60_000;
+  await run();
+
+  assert.equal(script.serves(LIVE), built(LIVE_URL));
+  assert.equal(script.serves(deploymentId), built(LIVE_URL), 'and not the version friends had before, which is what the list still showed');
+  assert.match(told(), new RegExp(`The staging web app at ${url} now serves that same version, 3\\.`));
+});
+
+test('a deploy that clasp does not tell which version went live leaves the staging web app for the next deploy, and says so', async () => {
+  const { script, checkout, run, told } = deployed();
+  await run('staging');
+  const { deploymentId, url } = checkout.record!.staging!;
+
+  script.saysNoVersion = true;
+  await run();
+
+  assert.equal(script.serves(LIVE), built(LIVE_URL));
+  assert.equal(script.serves(deploymentId), built(url), 'it is given no version read off a list that may be behind');
+  assert.match(told(), /could not be given the version that just went live \(clasp did not say which version that is\)\. The next deploy tries again/);
+  assert.match(told(), new RegExp(`Live at ${LIVE_URL}$`));
+});
+
+test('a staging web app made a minute ago, which the list of web apps does not show yet, is waited for: staging makes no second one and going live does not lose it', async () => {
+  for (const mode of ['staging', 'live'] as const) {
+    const { script, checkout, run, told } = deployed();
+    script.listLagMs = 60_000;
+    await run('staging');
+    const staging = checkout.record!.staging!;
+
+    checkout.code = 'a later change';
+    await run(mode);
+
+    assert.deepEqual(script.webAppsNow(), [LIVE, staging.deploymentId], `${mode}: the script has the two web apps it had`);
+    assert.equal(checkout.record!.staging!.deploymentId, staging.deploymentId, `${mode}: and the record still has the staging one`);
+    assert.equal(script.serves(staging.deploymentId), built(mode === 'staging' ? staging.url : LIVE_URL, 'a later change'), mode);
+    assert.match(told(), /Google's list of the script's web apps does not show the staging web app on record yet\. It can be a minute behind/, mode);
+  }
+});
+
+test('a web app on record is given up for gone only when the list of web apps has had time to catch up and still does not show it', async () => {
+  const gone = deployed();
+  gone.checkout.record = { ...gone.checkout.record!, staging: entry('AKfycb-gone') };
+  const began = gone.clock.ms;
+
+  await gone.run('staging');
+  assert.ok(gone.when(/is no longer one of the script's, so a new one is made/)! - began >= LIST_DEADLINE_MS);
+
+  const other = linked();
+  other.checkout.record = entry(LIVE);
+  other.script.has('AKfycb-another-game', OLD_CODE);
+
+  await assert.rejects(other.run(), refused(/has no web app AKfycb-live.*from different games/));
+  assert.ok(other.clock.ms - began >= LIST_DEADLINE_MS, 'the refusal waits as long, in case the web app was only just made');
+});
+
+test('an address is said to be live, or staged at, only when the build put there has been the only one to answer for a while', async () => {
+  for (const mode of ['live', 'staging'] as const) {
+    const { script, checkout, clock, run, when } = deployed();
+    script.mixMs = 60_000;
+    const began = clock.ms;
+
+    await run(mode);
+
+    const address = mode === 'staging' ? checkout.record!.staging!.url : checkout.record!.url;
+    const said = when(mode === 'staging' ? /Staging at/ : /Live at/)!;
+    const others = script.answered.filter((answer) => answer.url === address && answer.build !== idOf(built(address)));
+
+    assert.ok(said >= began + script.mixMs, `${mode}: said ${said - began} ms in, while the version the address had was still answering`);
+    assert.ok(others.length > 0, `${mode}: the version the address had was heard answering`);
+    assert.ok(said - others.at(-1)!.at >= QUIET_MS, `${mode}: said ${said - others.at(-1)!.at} ms after another build last answered`);
+  }
+});
+
+test('--new does not wait to hear its build at the new address, which answers nobody until its owner has approved the script, and says so', async () => {
+  const { script, checkout, clock, run, told } = setup();
+  const began = clock.ms;
+  let asked = 0;
+
+  script.ask = async () => {
+    asked += 1;
+
+    return { failed: 'HTTP 200, and nothing the game answers with' };
+  };
+
+  await run('new');
+
+  assert.equal(clock.ms, began, 'no time went by waiting');
+  assert.equal(asked, 0);
+  assert.match(told(), /The address answers nobody until its owner has opened it once and approved the permission prompt\./);
+  assert.match(told(), new RegExp(`Live at ${checkout.record!.url}$`));
+});
+
+test('an address where another build still answers at the deadline is not said to be live: the deploy does the rest, ends failed and says what it heard', async () => {
+  const { script, checkout, clock, run, told } = deployed();
+  await run('staging');
+  const { deploymentId, url } = checkout.record!.staging!;
+
+  script.mixMs = Infinity;
+  const began = clock.ms;
+
+  await assert.rejects(
+    run(),
+    (error: unknown) =>
+      error instanceof DeployUnsettled &&
+      new RegExp(
+        `${LIVE_URL} was given this build \\(${idOf(built(LIVE_URL))}\\), and after ${SETTLE_DEADLINE_MS / 1000} s it is still not the only one that answers there: build ${idOf(OLD_CODE)} answered \\d+ s ago\\..*` +
+          'a page there can be told the game was updated.*Run "npm run check:live" in a few minutes',
+      ).test(error.message),
+  );
+
+  assert.ok(clock.ms - began >= SETTLE_DEADLINE_MS);
+  assert.doesNotMatch(told(), /Live at/);
+  assert.equal(script.serves(deploymentId), built(LIVE_URL), 'the staging web app was given the version all the same');
+  assert.deepEqual(checkout.record, { ...entry(LIVE), staging: { deploymentId, url } });
+});
+
+test('a staging address where another build still answers at the deadline is not said to be staged at, and the friends\' address is looked at all the same', async () => {
+  const quiet = deployed();
+  quiet.script.mixMs = Infinity;
+
+  await assert.rejects(quiet.run('staging'), (error: unknown) => error instanceof DeployUnsettled && /is still not the only one that answers there.*Run "npm run check:live -- --staging" in a few minutes/.test(error.message));
+
+  assert.doesNotMatch(quiet.told(), /Staging at/);
+  assert.equal(quiet.checkout.record!.staging!.build, markOf(quiet.checkout.record!.staging!.url), 'what was put there is on record, for going live to compare with');
+
+  const moved = deployed();
+  moved.script.mixMs = Infinity;
+  movingTogether(moved.script);
+
+  await assert.rejects(moved.run('staging'), /which staging must never bring about/);
+});
+
+test('an address that never answers as the build put there says so, and that the web app may not have taken the version', async () => {
+  const { script, run } = deployed();
+  script.silent = LIVE;
+
+  await assert.rejects(
+    run(),
+    (error: unknown) =>
+      error instanceof DeployUnsettled &&
+      /has not answered there once: a call \d+ s ago got no answer \(no answer\)\..*look at the script's deployments in the Apps Script editor\. Or the script asks for a permission it did not have/.test(error.message),
+  );
 });
 
 test('a deploy of other code than was last staged goes ahead and says so', async () => {
@@ -722,8 +1020,8 @@ test('a web app is updated by its id, to a new version or to one named, and clas
   clasp.updateWebApp('AKfycb-live', 'Deployed today');
   clasp.updateWebApp('AKfycb-staging', 'On the live version', 12);
   assert.deepEqual(asked, [
-    ['update-deployment', 'AKfycb-live', '--description', 'Deployed today'],
-    ['update-deployment', 'AKfycb-staging', '--versionNumber', '12', '--description', 'On the live version'],
+    ['update-deployment', 'AKfycb-live', '--description', 'Deployed today', '--json'],
+    ['update-deployment', 'AKfycb-staging', '--versionNumber', '12', '--description', 'On the live version', '--json'],
   ]);
 
   // Without an id, clasp's delete removes the only web app a script has, and a removed address cannot be had back
@@ -732,6 +1030,18 @@ test('a web app is updated by its id, to a new version or to one named, and clas
   clasp.webApps();
   clasp.createWebApp('A web app');
   assert.deepEqual([...new Set(asked.map(([command]) => command))].sort(), ['create-deployment', 'create-script', 'list-deployments', 'push', 'update-deployment']);
+});
+
+test('the version a web app was given is what clasp says it gave it, and nothing it says is no version rather than a guess', () => {
+  const updated = (printed: string) => commandLine({ 'update-deployment': printed }).clasp.updateWebApp('AKfycb-live', 'Deployed today');
+
+  assert.equal(updated('{\n  "deploymentId": "AKfycb-live",\n  "versionNumber": 5,\n  "description": "Deployed today"\n}\n'), 5);
+  assert.equal(updated('- Deploying project...\n{"deploymentId": "AKfycb-live", "versionNumber": 12}\n'), 12, 'whatever clasp prints around it');
+  assert.equal(updated('{"deploymentId": "AKfycb-live"}'), null, 'a web app at @HEAD has none');
+  assert.equal(updated('{"deploymentId": "AKfycb-other", "versionNumber": 5}'), null, 'a version said of another web app is not this one\'s');
+  assert.equal(updated('{"deploymentId": "AKfycb-live", "versionNumber": "5"}'), null);
+  assert.equal(updated('Redeployed AKfycb-live @5\n'), null, 'the line clasp prints without --json is not read');
+  assert.equal(updated(''), null);
 });
 
 test('the files a checkout lacks are found in a folder above it, which clasp would go by, or in the checkout it is a git worktree of', () => {

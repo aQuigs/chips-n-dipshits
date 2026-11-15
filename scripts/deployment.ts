@@ -40,18 +40,26 @@ export class DeployRefused extends Error {
   }
 }
 
+/** The deploy gave an address its version and could not see it take: its message says what is known and what to do. */
+export class DeployUnsettled extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'DeployUnsettled';
+  }
+}
+
 export function webAppUrlFor(deploymentId: string): string {
   return `https://script.google.com/macros/s/${deploymentId}/exec`;
 }
 
 export const webAppFor = (deploymentId: string): WebApp => ({ deploymentId, url: webAppUrlFor(deploymentId) });
 
-/** Runs a command, and ends one that was refused with its message and a failed exit rather than a stack trace. */
+/** Runs a command, and ends one that was refused, or could not see what it did take, with its message and a failed exit rather than a stack trace. */
 export async function exitOnRefusal(command: () => Promise<void>): Promise<void> {
   try {
     await command();
   } catch (error) {
-    if (!(error instanceof DeployRefused)) {
+    if (!(error instanceof DeployRefused || error instanceof DeployUnsettled)) {
       throw error;
     }
 

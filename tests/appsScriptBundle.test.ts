@@ -13,6 +13,7 @@ import vm from 'node:vm';
 
 import type { Plugin } from 'esbuild';
 
+import { answersOver, QUESTION } from '../scripts/answering.ts';
 import { buildAll, buildFiles, buildOf, pushedMark } from '../scripts/bundle.ts';
 import type { Build } from '../scripts/bundle.ts';
 import { arrivalEntry } from '../src/gas/cacheArrivalKeys.ts';
@@ -226,15 +227,17 @@ test('what is pushed to Apps Script has a mark that changes with any of it, the 
   assert.equal(pushedMark({ ...files, 'web/index.html': 'anything' }), pushedMark(files), 'the page for another host is not pushed');
 });
 
-test('the mark a deploy is handed for a build is the mark of the files it wrote for Apps Script, appsscript.json among them', async () => {
+test('a deploy is handed the id its build answers with, and the mark of the files it wrote for Apps Script, appsscript.json among them', async () => {
   const folder = await mkdtemp(join(tmpdir(), 'cnd-build-'));
 
   try {
-    const mark = await buildAll(DEPLOYED_AT, folder);
+    const { id, mark } = await buildAll(DEPLOYED_AT, folder);
     const names = (await readdir(join(folder, 'gas'))).sort();
     const written = Object.fromEntries(await Promise.all(names.map(async (name) => [`gas/${name}`, await readFile(join(folder, 'gas', name), 'utf8')] as const)));
 
     assert.deepEqual(names, ['Code.js', 'appsscript.json', 'index.html']);
+    assert.equal(id, buildOf(written['gas/index.html']!), 'the deploy waits for this to be the only build that answers');
+    assert.equal(id, (await BUILT).id);
     assert.equal(mark, pushedMark(written), 'going live compares this with what staging was given');
     assert.notEqual(pushedMark({ ...written, 'gas/appsscript.json': `${written['gas/appsscript.json']} ` }), mark, 'so a change to appsscript.json alone is not the code that was staged');
   } finally {
@@ -312,6 +315,21 @@ test('the served page is told its address and the table in the link, and nothing
 
   const bare = script.doGet({});
   assert.match(bare.getContent(), /"table":null,"me":null/);
+});
+
+test('what a deploy asks an address, to learn which build answers there, is answered with the build before the Sheet or the cache is touched', async () => {
+  const script = await deploy();
+  const asked: string[] = [];
+  const answers = answersOver(async (_url, { body }) => {
+    asked.push(body);
+
+    return { status: 200, text: async () => script.doPost({ postData: { contents: body } }).content };
+  });
+
+  assert.deepEqual(await answers.ask(DEPLOYED_AT), { build: script.build });
+  assert.deepEqual(asked, [QUESTION]);
+  assert.equal(script.spreadsheet.sheets.size, 0, 'no tab was read or made');
+  assert.equal(script.cache.entries.size, 0);
 });
 
 test('the same API answers over HTTP for a page hosted elsewhere, and bad input is an error, not a crash', async () => {

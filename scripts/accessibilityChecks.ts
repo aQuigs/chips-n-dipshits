@@ -585,7 +585,7 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
     },
   ],
   [
-    'a dialog that opens by itself takes the keyboard and gives it back where it was; a replay that makes way for a turn says why, and the turn is said; a replay asked for before its hand is on record says when it will come, and why it has opened',
+    'a dialog that opens by itself takes the keyboard and gives it back where it was; a replay that makes way for a turn says why, and the turn is said; a replay asked for before its hand is on record says when it will come, and why it has opened; the night’s recap waits for a line half typed',
     async (rig) => {
       const table = threeHanded(rig);
       const quigs = await listening(table, 'Quigs');
@@ -635,9 +635,16 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
       await page.keyboard.press('Escape');
       await page.waitForSelector('.replay', { state: 'hidden' });
 
-      // The night ends while she is in the chat box with nothing typed: Tonight opens over it, and closing it puts her back there
+      // The night ends while she has a line half typed in the chat: Tonight waits, and the keyboard and the line stay hers
       await page.focus('#chat-input');
+      await page.keyboard.type('gg');
       table.act('Quigs', { type: 'endNight' });
+      await table.heardBy(page);
+      assert.equal(await page.locator('.dialog').count(), 0, 'Tonight opened over a line half typed');
+      assert.deepEqual(await page.evaluate(`[document.activeElement.id, document.activeElement.value]`), ['chat-input', 'gg'], 'the night’s end took the keyboard or the line from the chat’s box');
+
+      // The line sent, Tonight opens over the empty box, and closing it puts her back there
+      await page.keyboard.press('Enter');
       await page.waitForSelector('.dialog[aria-label="Tonight"]');
       assert.equal(await focusIn(page, '.dialog'), true, 'Tonight opened with the keyboard left behind it');
       await page.keyboard.press('Escape');

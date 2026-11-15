@@ -292,6 +292,7 @@ async function stage(deps: DeployDeps, record: Deployment, live: ListedWebApp, l
   say(`\nStaging at ${staging.url}`);
   say(`The friends' address ${record.url} was not touched: it serves version ${live.version} of the script, as before.`);
   say('Check it with "npm run check:live -- --staging". Then "npm run deploy" puts this code at the friends\' address.');
+  say('If the check fails, nothing has changed for friends: fix the code and run this again. Until then the Apps Script editor shows this code, which is what was pushed, though no address friends have serves it.');
 }
 
 /**

@@ -2,7 +2,7 @@ import { build } from 'esbuild';
 import type { Plugin } from 'esbuild';
 import { createHash } from 'node:crypto';
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { STYLESHEETS } from '../src/client/styles/order.ts';
@@ -220,12 +220,12 @@ export function pushedMark(files: Record<string, string>): string {
   return mark.digest('hex').slice(0, BUILD_ID_LENGTH);
 }
 
-/** Writes the build to `dist/` and gives the mark of what it holds for Apps Script. */
-export async function buildAll(webAppUrl: string): Promise<string> {
+/** Writes the build to `dist/`, or to the folder given, and gives the mark of what it holds for Apps Script. */
+export async function buildAll(webAppUrl: string, dist: string = pathOf('dist/')): Promise<string> {
   const { files } = await buildFiles(webAppUrl);
 
   for (const [path, content] of Object.entries(files)) {
-    const file = pathOf(`dist/${path}`);
+    const file = join(dist, path);
 
     await mkdir(dirname(file), { recursive: true });
     await writeFile(file, content);

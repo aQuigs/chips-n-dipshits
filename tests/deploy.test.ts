@@ -445,6 +445,8 @@ test('staging puts the build on a second web app of the script and leaves the fr
   assert.ok(!script.calls.some((call) => call.startsWith(`updateWebApp ${LIVE}`)));
   assert.match(told(), new RegExp(`Staging at ${staging.url}`));
   assert.match(told(), new RegExp(`The friends' address ${LIVE_URL} was not touched: it serves version 1 of the script, as before`));
+  assert.match(told(), /If the check fails, nothing has changed for friends: fix the code and run this again\./, 'what a failed check means is said before it is run');
+  assert.match(told(), /the Apps Script editor shows this code, .* no address friends have serves it/, 'so that the new code in the editor alarms nobody');
   assert.equal(script.versionsMade(), 2, 'one version for the staging build, and none for making its web app');
   assert.match(script.webApps().find((app) => app.deploymentId === staging.deploymentId)!.description, /^Chips n' Dipshits, staging, deployed /);
 });

@@ -5,13 +5,15 @@
  */
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 import vm from 'node:vm';
 
 import type { Plugin } from 'esbuild';
 
-import { buildFiles, buildOf, pushedMark } from '../scripts/bundle.ts';
+import { buildAll, buildFiles, buildOf, pushedMark } from '../scripts/bundle.ts';
 import type { Build } from '../scripts/bundle.ts';
 import type { ApiRequest, ApiResponse, Built } from '../src/server/api.ts';
 import { UNSTAMPED_BUILD } from '../src/server/build.ts';
@@ -204,6 +206,22 @@ test('what is pushed to Apps Script has a mark that changes with any of it, the 
   assert.notEqual(pushedMark(withOtherAccess), pushedMark(files), 'a deploy with another manifest is not the deploy that was staged');
   assert.notEqual(pushedMark({ ...files, 'gas/Code.js': `${files['gas/Code.js']}\n` }), pushedMark(files));
   assert.equal(pushedMark({ ...files, 'web/index.html': 'anything' }), pushedMark(files), 'the page for another host is not pushed');
+});
+
+test('the mark a deploy is handed for a build is the mark of the files it wrote for Apps Script, appsscript.json among them', async () => {
+  const folder = await mkdtemp(join(tmpdir(), 'cnd-build-'));
+
+  try {
+    const mark = await buildAll(DEPLOYED_AT, folder);
+    const names = (await readdir(join(folder, 'gas'))).sort();
+    const written = Object.fromEntries(await Promise.all(names.map(async (name) => [`gas/${name}`, await readFile(join(folder, 'gas', name), 'utf8')] as const)));
+
+    assert.deepEqual(names, ['Code.js', 'appsscript.json', 'index.html']);
+    assert.equal(mark, pushedMark(written), 'going live compares this with what staging was given');
+    assert.notEqual(pushedMark({ ...written, 'gas/appsscript.json': `${written['gas/appsscript.json']} ` }), mark, 'so a change to appsscript.json alone is not the code that was staged');
+  } finally {
+    await rm(folder, { recursive: true, force: true });
+  }
 });
 
 test('the page and the script of one build say they are the same build', async () => {

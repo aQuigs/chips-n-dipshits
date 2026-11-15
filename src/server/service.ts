@@ -1,10 +1,10 @@
 import { addMember, applyCommand, createTable, GameError, listedLike, playerName, presetName, presetSettings, randomId, requireLevel, setIdentity, sharedPreset, tick, UNITS, viewFor } from '../engine/index.ts';
-import type { Arriving, Command, Ctx, Member, Preset, Rng, TableState, Unit } from '../engine/index.ts';
+import type { Arriving, Command, Ctx, KnownPlayer, Member, Preset, Rng, TableState, Unit } from '../engine/index.ts';
 import { HISTORY_LIMIT } from './api.ts';
 import type { ApiResponse, Auth, ErrorCode, Joined, UnitStandings, Who } from './api.ts';
 import { NOWHERE } from './errorLog.ts';
 import type { ErrorLog, Failure } from './errorLog.ts';
-import { isPlayerId, NameOnList } from './playerStore.ts';
+import { CHECK_PLAYER, isPlayerId, NameOnList } from './playerStore.ts';
 import type { PlayerStore } from './playerStore.ts';
 import type { PresetStore } from './presetStore.ts';
 import { PUT_AWAY_MESSAGE } from './putAway.ts';
@@ -303,7 +303,7 @@ export class PokerService {
       case 'report':
         return this.reportFromPage(tableIdOf(request), authOf(request), request);
       case 'players':
-        return { ok: true, kind: 'players', players: this.players.list() };
+        return { ok: true, kind: 'players', players: this.players.list().filter((player) => player.name !== CHECK_PLAYER) };
       case 'identify':
         return this.identify(tableIdOf(request), authOf(request), request);
       case 'standings':
@@ -363,7 +363,8 @@ export class PokerService {
    * Who is arriving at a table, from what their request says of it. Being known is only a label, so
    * nothing here stops a game: when the list of players can't be asked, or has no such player, they
    * arrive all the same, as nobody it knows. Only a name is refused: a new one that the list already
-   * has, since its holder may be the one asking.
+   * has, since its holder may be the one asking. A list that can't be read turns nobody away. The one
+   * name that is not refused is the check's (`CHECK_PLAYER`): whoever comes in under it is that player.
    */
   private arrival(request: Fields, tableId: string | null): Arrival {
     const who = whoOf(request);
@@ -380,7 +381,16 @@ export class PokerService {
     }
 
     const name = playerName(request.name);
-    this.refuseNameOnList(name, tableId);
+    const holder = this.without('server check name', tableId, () => listedLike(this.players.list(), name));
+
+    if (holder?.name === CHECK_PLAYER) {
+      return { name: holder.name, identity: holder.id, keepsName: true, enlist: false };
+    }
+
+    // Where both the list and the table have the name, "pick yourself from the list" is the answer that gets its holder in
+    if (holder) {
+      throw new NameOnList(holder.name);
+    }
 
     return { name, identity: null, keepsName: false, enlist: true };
   }
@@ -424,19 +434,6 @@ export class PokerService {
     );
 
     return told ?? joined;
-  }
-
-  /**
-   * Turns away a name for someone new that the list has, before the table has its say: where both
-   * have the name, "pick yourself from the list" is the answer that gets its holder in. A list that
-   * can't be read turns nobody away.
-   */
-  private refuseNameOnList(name: string, tableId: string | null): void {
-    const holder = this.without('server check name', tableId, () => listedLike(this.players.list(), name));
-
-    if (holder) {
-      throw new NameOnList(holder.name);
-    }
   }
 
   private create(request: Fields): ApiResponse {
@@ -591,6 +588,13 @@ export class PokerService {
    * under the name given or else the one they go by here. It is the whole of what was asked, so unlike
    * an arrival it is refused when the list can't oblige.
    */
+  /** Someone new under this name: added to the list, unless the name is the check's and the list has its player. */
+  private newcomer(name: string, now: number): KnownPlayer {
+    const holder = listedLike(this.players.list(), name);
+
+    return holder?.name === CHECK_PLAYER ? holder : this.players.add(name, now);
+  }
+
   private identify(tableId: string, auth: Auth, request: Fields): ApiResponse {
     const { member } = this.memberOf(tableId, auth);
     const who = whoOf(request);
@@ -600,7 +604,7 @@ export class PokerService {
       throw new ApiFailure('invalid', 'The request does not say who you are');
     }
 
-    const known = who.as === 'known' ? this.players.seen(who.id, now) : this.players.add(playerName(request.name ?? member.name), now);
+    const known = who.as === 'known' ? this.players.seen(who.id, now) : this.newcomer(playerName(request.name ?? member.name), now);
     if (!known) {
       throw new GameError('That player is no longer on the list. Pick again');
     }

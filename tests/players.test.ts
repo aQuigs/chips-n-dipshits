@@ -12,7 +12,7 @@ import { MemoryErrorLog } from '../src/server/memoryErrorLog.ts';
 import { MemoryPlayerStore } from '../src/server/memoryPlayerStore.ts';
 import { MemoryPresetStore } from '../src/server/memoryPresetStore.ts';
 import { MemoryStore } from '../src/server/memoryStore.ts';
-import { ListFull, NameOnList, SEEN_EVERY_MS } from '../src/server/playerStore.ts';
+import { CHECK_PLAYER, ListFull, NameOnList, SEEN_EVERY_MS } from '../src/server/playerStore.ts';
 import type { PlayerStore } from '../src/server/playerStore.ts';
 import { PokerService } from '../src/server/service.ts';
 import { StoreBusyError } from '../src/server/store.ts';
@@ -678,3 +678,41 @@ test('the list of players is handed to a page of another build, and saying who y
   assert.equal(failure(gate.handle({ op: 'identify', build: 'an-older-build', tableId: host.view.id, auth: ann.auth, who: NEW })).code, 'stale');
   assert.equal(listed().length, 1);
 });
+
+for (const [kind, game] of [
+  ['in memory', setup],
+  ['in the Sheet', deployed],
+] as const) {
+  test(`${kind}: the player the check of the deployed game plays as stays on the list and is never offered to a page, and the check comes back as them by their name`, () => {
+    const { players, listed, create, join, identify } = game();
+    const quigs = joined(create('Quigs', NEW));
+    const kept = () => players.list().filter((player) => player.name === CHECK_PLAYER);
+
+    // Its first run adds its player, as anyone new is added
+    const host = joined(create(CHECK_PLAYER, NEW));
+    const check = host.view.you.identity;
+    assert.ok(check);
+    assert.deepEqual(kept(), [{ id: check, name: CHECK_PLAYER }], 'the list itself keeps them');
+    assert.deepEqual(listed(), [{ id: quigs.view.you.identity, name: 'Quigs' }], 'and what a page is sent to pick from leaves them out');
+
+    // Its second browser is the same player: a member of their own at the table, under a number
+    const guest = joined(join(host.view.id, CHECK_PLAYER, NEW));
+    assert.equal(guest.view.you.identity, check);
+    assert.equal(guest.view.you.name, `${CHECK_PLAYER} 2`);
+    assert.notEqual(guest.auth.id, host.auth.id);
+
+    // Every later run comes in under the name again, with nothing on the list to pick, and is not turned away as its holder
+    assert.equal(joined(create(CHECK_PLAYER, NEW)).view.you.identity, check);
+    assert.equal(joined(create('live  CHECK', NEW)).view.you.identity, check, 'a name that only reads like it is theirs too, as it would be refused for');
+
+    // And so does a member who says who they are after joining
+    const late = joined(join(quigs.view.id, 'Late'));
+    assert.equal(viewOf(identify(quigs.view.id, late.auth, NEW, CHECK_PLAYER)).you.identity, check);
+
+    assert.equal(kept().length, 1, 'however often it runs, the list has the one');
+    assert.deepEqual(listed().map((player) => player.name), ['Quigs']);
+
+    // Anyone else's name is still its holder's alone
+    assert.equal(failure(create('Quigs', NEW)).error, new NameOnList('Quigs').message);
+  });
+}

@@ -3,8 +3,10 @@
  * friends will reach it. It is the check that the page Apps Script serves is the page that was
  * built, and that the script and its Sheet answer. It leaves one small table behind in the Sheet, a
  * Presets tab if there was none, with the presets in it as it found them, and in the Players tab the
- * one player it plays as, whom its first run adds and every later run picks from the list. Both of its
+ * one player it plays as, whom its first run adds and every later run comes back as. Both of its
  * browsers being that one player, its table is nobody's night, and it leaves nothing in the standings.
+ *
+ * With `--staging` it plays at the staging web app instead, which is the same script on the same Sheet.
  */
 import assert from 'node:assert/strict';
 import { mkdir, readFile } from 'node:fs/promises';
@@ -15,8 +17,9 @@ import type { Browser, FrameLocator, Page } from 'playwright';
 
 import { LIMITS } from '../src/engine/index.ts';
 import type { KnownPlayer, Preset } from '../src/engine/index.ts';
+import { CHECK_PLAYER } from '../src/server/playerStore.ts';
 import { buildOf } from './bundle.ts';
-import { readDeployment } from './deployment.ts';
+import { addressToCheck, readDeployment } from './deployment.ts';
 
 const OUT = fileURLToPath(new URL('../screenshots/', import.meta.url));
 const BUILT_PAGE = fileURLToPath(new URL('../dist/gas/index.html', import.meta.url));
@@ -24,9 +27,6 @@ const BUILT_PAGE = fileURLToPath(new URL('../dist/gas/index.html', import.meta.u
 // Apps Script answers in seconds, not milliseconds, and the first request wakes the script up
 const STEP_TIMEOUT_MS = 60_000;
 const APP_SCRIPT = /<script[^>]*>([\s\S]*?)<\/script>/g;
-
-// Both browsers come in as this one known player, so that a run a day does not fill the list with them
-const CHECK_PLAYER = 'Live check';
 
 interface Visitor {
   page: Page;
@@ -54,7 +54,14 @@ async function timed(what: string, step: () => Promise<unknown>): Promise<void> 
   console.log(`  ${what}: ${((Date.now() - started) / 1000).toFixed(1)} s`);
 }
 
-type ScriptAnswer = { ok: boolean; presets?: Preset[]; players?: KnownPlayer[]; units?: { players: { name: string }[] }[]; error?: string };
+type ScriptAnswer = {
+  ok: boolean;
+  presets?: Preset[];
+  players?: KnownPlayer[];
+  units?: { players: { name: string }[] }[];
+  view?: { members: { identity: string | null }[] };
+  error?: string;
+};
 
 /** Asks the script directly from inside the game's frame, the way the page itself does, as the page's build. */
 async function ask(visitor: Visitor, request: object): Promise<ScriptAnswer> {
@@ -66,11 +73,21 @@ async function ask(visitor: Visitor, request: object): Promise<ScriptAnswer> {
     .api(JSON.stringify({ ...${body}, build: window.CND_BUILD })))`) as Promise<ScriptAnswer>;
 }
 
-async function checkPlayers(visitor: Visitor): Promise<KnownPlayer[]> {
-  const answer = await ask(visitor, { op: 'players' });
-  assert.ok(answer.ok && answer.players, `the players could not be listed: ${answer.error}`);
+/**
+ * Both browsers are the one player the Players tab keeps for the check, which is that tab written by the
+ * first to come in and read back for the second, and the list friends pick from never offers them.
+ */
+async function checkPlayers(visitor: Visitor): Promise<void> {
+  const [id, token] = inAddress(visitor.page, 'me')!.split('.');
+  const table = await ask(visitor, { op: 'poll', tableId: inAddress(visitor.page, 'table'), auth: { id, token }, since: -1 });
+  assert.ok(table.ok && table.view, `the table could not be read: ${table.error}`);
 
-  return answer.players.filter((player) => player.name === CHECK_PLAYER);
+  const [first, ...others] = table.view.members.map((member) => member.identity);
+  assert.ok(first && others.length === 1 && others[0] === first, `the check's two browsers are not one known player: ${JSON.stringify([first, ...others])}`);
+
+  const list = await ask(visitor, { op: 'players' });
+  assert.ok(list.ok && list.players, `the players could not be listed: ${list.error}`);
+  assert.ok(!list.players.some((player) => player.name === CHECK_PLAYER), `${CHECK_PLAYER} is on the list friends pick from, which leaves the check's own player out`);
 }
 
 /** The standings answer from the real Sheet, whatever it has on record, and never have the check's own player in them. */
@@ -83,17 +100,12 @@ async function checkStandings(visitor: Visitor): Promise<void> {
 }
 
 /**
- * Answers "who are you?" as the check's one player: picked from the list when the Players tab has
- * them, which is the list read back from the real Sheet, and typed as someone new when it does not,
- * which is the tab being made and written to. `nameBox` is where a new player's name is typed.
+ * Answers "who are you?" as the check's one player, by their name typed as someone new: the list a
+ * page is offered leaves them out, and the server takes whoever comes in under that name for them.
+ * `nameBox` is where a new player's name is typed.
  */
 async function sayWho(visitor: Visitor, nameBox: string): Promise<void> {
-  if ((await checkPlayers(visitor)).length > 0) {
-    await visitor.app.locator(`.who-pill:text-is("${CHECK_PLAYER}")`).click();
-    await visitor.app.locator(nameBox).waitFor({ state: 'hidden' });
-  } else {
-    await visitor.app.locator(nameBox).fill(CHECK_PLAYER);
-  }
+  await visitor.app.locator(nameBox).fill(CHECK_PLAYER);
 }
 
 async function presetNames(visitor: Visitor): Promise<string[]> {
@@ -154,15 +166,18 @@ async function checkPresets(browser: Browser, url: string, host: Visitor, tableI
 const largestScript = (html: string) => [...html.matchAll(APP_SCRIPT)].map((found) => found[1]!).sort((a, b) => b.length - a.length)[0]!;
 const inAddress = (page: Page, name: string) => new URL(page.url()).searchParams.get(name);
 
-const deployment = await readDeployment();
-assert.ok(deployment, 'nothing has been deployed from this checkout; run npm run deploy first');
+const flags = process.argv.slice(2);
+assert.ok(flags.every((flag) => flag === '--staging'), `"${flags.join(' ')}" is nothing this understands; it takes --staging or nothing at all`);
+
+const staging = flags.length > 0;
+const address = addressToCheck(await readDeployment(), staging);
 
 await mkdir(OUT, { recursive: true });
 const browser = await chromium.launch();
 
 try {
-  console.log(`Checking ${deployment.url}`);
-  const host = await open(browser, deployment.url);
+  console.log(`Checking ${staging ? 'the staging web app at ' : ''}${address}`);
+  const host = await open(browser, address);
 
   await timed('front page', () => host.app.locator('#host-name').waitFor());
 
@@ -194,8 +209,7 @@ try {
     await guest.app.locator('.stage .table').waitFor();
   });
 
-  const listed = await checkPlayers(host);
-  assert.equal(listed.length, 1, `the Players tab has ${listed.length} players called ${CHECK_PLAYER}, and the check keeps exactly one`);
+  await checkPlayers(host);
 
   await timed('host sits down', async () => {
     await host.app.locator('[data-sit="0"]').click();
@@ -252,10 +266,10 @@ try {
   await host.app.locator('.seat.me').waitFor();
   await host.page.screenshot({ path: `${OUT}live-host-after.png` });
 
-  await checkPresets(browser, deployment.url, host, inAddress(host.page, 'table')!, inAddress(host.page, 'me')!);
+  await checkPresets(browser, address, host, inAddress(host.page, 'table')!, inAddress(host.page, 'me')!);
   await timed('standings from the Sheet', () => checkStandings(host));
 
-  console.log('The deployed game works. Pictures are in screenshots/live-*.png');
+  console.log(`${staging ? `The build works at the staging web app, ${address}.` : `The deployed game works at ${address}.`} Pictures are in screenshots/live-*.png`);
 } finally {
   await browser.close();
 }

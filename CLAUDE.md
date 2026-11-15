@@ -9,8 +9,8 @@ Multiplayer no-limit hold'em whose backend is a Google Sheet with an Apps Script
 - `npm run test:e2e`: plays a full game in headless browsers, about three minutes. Run after any change to `src/client`, then look at the pictures it leaves in `screenshots/`.
 - `npm run test:stall`: the screen checks on a rig as slow as a busy machine, about twenty minutes. Not run by CI; see "How a screen check is written".
 - `npm run dev`: the game on localhost with tables in memory.
-- `npm run deploy`: pushes the build to Apps Script. Outward-facing: only when asked.
-- `npm run check:live`: plays a short game at the deployed address. Run after every deploy; it adds a table to the real Sheet.
+- `npm run deploy`: puts the build at the address friends have. Outward-facing: only when asked. `-- --staging` puts it at a second web app of the same script instead, and `-- --new` is the only thing that ever sets up a game. `README.md` has the order.
+- `npm run check:live`: plays a short game at the deployed address, or with `-- --staging` at the staging one. Run after every deploy; it adds a table to the real Sheet.
 
 ## How the code is written
 
@@ -99,4 +99,5 @@ A check must pass on a machine too slow to keep up. `npm run test:stall -- "part
 - Creating or joining a table never fails because of the Players tab: the player gets in with no identity when the list can't be read or written, has no such player or is full (`arrival` and `enlisted` in `src/server/service.ts`). Only a new name the list already has is refused. Each step an arrival goes ahead without runs through `without`, which reports a failure by the step's name and never an answer (a full list, a name taken meanwhile). The table lets someone new in before the list is written to, never the other way around, so nobody is on the list for a request that came to nothing.
 - The owner edits the Players tab by hand. `SheetPlayerStore` reads it by position from one `getValues`, never by a header, skips a row it can't read without repairing it, and formats every cell before writing to it. Its cache entry is short-lived because a hand edit tells the cache nothing.
 - Apps Script strips what it reads as comments from the page's inline scripts, and reads a `//` inside a template literal as one. `scripts/bundle.ts` ships the script with no `//` or `/*` in it and fails the build when it can't; the stand-in in `tests/appsScriptBundle.test.ts` strips the same way.
-- `.clasp.json` and `.deployment.json` are per machine and ignored by git.
+- `.clasp.json` and `.deployment.json` are per machine and ignored by git, so a git worktree has neither: the deploy stops there and says which checkout holds them.
+- `scripts/deploy.ts` only wires clasp and the checkout's files to the steps in `scripts/deploySteps.ts`, which are tested on stand-ins for both (`tests/deploy.test.ts`). A new step, or a new thing a step may do to a web app, gets a test there.

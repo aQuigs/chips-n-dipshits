@@ -25,6 +25,13 @@ export interface PlayerStore {
   add(name: string, at: number): KnownPlayer;
 }
 
+/**
+ * The one player the check of the deployed game plays as, every time it runs. They are on the list like
+ * anyone, so that the check reads and writes the real list, but friends are never offered them: the
+ * list a page is sent leaves them out, and the name itself is how the check comes back as them.
+ */
+export const CHECK_PLAYER = 'Live check';
+
 /** A known player as a store keeps them, with when they were last seen, which the list is ordered by. */
 export interface KeptPlayer extends KnownPlayer {
   /** 0 when it is not known. */

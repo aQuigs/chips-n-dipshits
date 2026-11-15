@@ -169,13 +169,13 @@ You need Node 24 or newer and a Google account.
 1. `npm install`
 2. `npx clasp login`, and sign in with the Google account that should own the Sheet.
 3. Switch on the Apps Script API at <https://script.google.com/home/usersettings>.
-4. `npm run deploy`. The first run creates a Sheet named "Chips n' Dipshits" with its script and prints the game's address.
+4. `npm run deploy -- --new`. It creates a Sheet named "Chips n' Dipshits" with its script and prints the game's address. Only `--new` ever makes a game: without it, a checkout that is not linked to a script deploys nothing and says so.
 5. Open that address once while signed in as the owner and approve the permission prompt (Google warns that it hasn't verified the app, which is normal for a script of your own: Advanced, then go on). From then on anyone with the address can play, without a Google account. Until then visitors get "Access Denied".
 6. `npm run check:live` plays a short two-player game at the address and times each step.
 
 With several Google accounts signed in to one browser, Google tends to send these steps to the wrong one. A private window with only the owner's account avoids that.
 
-`npm run deploy` is also how an update goes live; the address stays the same. A page that was open through the update says "The game was updated" the next time it hears from the server, with a Reload button, and until it is reloaded nothing it sends changes a table. The reload comes back to the same table and seat.
+An update goes live by the steps under [Put an update live](#put-an-update-live); the address stays the same.
 
 The Sheet is the database, a tab for each kind of thing: Tables (every table, including the cards in play), Ledger, Hands, Presets (the group's saved settings, made the first time one is saved), Players (the players the game knows from night to night, made when the first one creates or joins a table), Results (what each night came to for each known player, made when the first night goes on record), Archive (tables that were put away, made when the first one is), and Errors (what went wrong, made the first time something does). Only people you trust not to peek should have access to it. Players never need access to the Sheet itself.
 
@@ -203,6 +203,31 @@ The Results tab is what the standings are read from: a row for each table and kn
 - A row the game cannot read is left out of the standings and left as it is; the Errors tab says how many and where (`store read results`).
 - The game goes by the tab as it was for up to five minutes after a change.
 - When this version is first deployed there is no Results tab. The first night that goes on record makes it; until then the standings say no night is on record.
+
+## Put an update live
+
+The checkout that deploys holds two files git ignores: `.clasp.json`, which links it to the game's script, and `.deployment.json`, which has the game's address on record. A git worktree starts without them. There the deploy stops, says which checkout holds them, and makes nothing: run it in that checkout, or copy both files over.
+
+Older code cannot open a table that newer code has saved, so new code is first tried at a second address of the same script, which friends don't have. Between nights, with the last night settled up:
+
+1. In the Sheet, name the version as it is now (File, Version history, Name current version). It is the way back.
+2. `npm run deploy -- --staging` builds the code for the staging address, pushes it, and has the staging web app serve it. The first time, it makes that web app and puts it on record under `staging` in `.deployment.json`. The friends' address is not touched: a web app serves the version of the script it was last given, a push changes no web app, and only step 4 gives theirs a new version. The command says which version theirs serves and checks it is the one it served before.
+3. `npm run check:live -- --staging` plays a short two-player game at the staging address and times each step. Run it straight after step 2: it compares what Google serves with the build in `dist/`, and `npm run build` in between rebuilds for the friends' address.
+4. `npm run deploy` builds the code for the friends' address, has it served there, prints `Live at` with that address, and removes the staging web app.
+5. `npm run check:live` plays the same short game at the friends' address.
+
+A page that was open through step 4 says "The game was updated" the next time it hears from the server, with a Reload button, and until it is reloaded nothing it sends changes a table. The reload comes back to the same table and seat.
+
+What the steps leave in the Sheet. The staging web app is the same script on the same Sheet, so the new code is at work on the real Sheet from step 3 on:
+
+- Steps 2 and 4 change code only and write nothing.
+- Each check leaves one small table in Tables with its lines in Ledger and Hands, a Presets tab if there was none, and the player Live check in Players, one row however often it runs. The list friends pick their name from never shows that player, and its table adds nothing to the standings.
+- Making its table does what making any table does under the new code: up to three tables nobody has played at for two weeks move to Archive, chips on them or not, and nights that were idle for three hours go on record in Results. Tabs the new code adds are made the first time they are written to.
+- No other table is opened or saved by a check. A friend's table is saved by the new code the first time something changes at it after step 4.
+
+Going back. Older code that meets a table saved by newer code answers "Something went wrong on the server" for that table and changes nothing; tables the newer code has not saved work as before. So the way back is for the whole game: deploy the older code (check it out, with the two files in place, and `npm run deploy`), then restore the Sheet to the version named in step 1. Everything since then is lost: tables made, hands played, players added, and a seat taken since is gone, so its link asks its player to join again. A restore brings back everything the game keeps but its cache, which is with the script and not in the Sheet: it holds each table the newer code touched for up to six hours after, and until that entry runs out the older code answers "Something went wrong on the server" for that table. A move made at the table, or someone joining it, replaces the entry at once. Nothing else is kept outside the Sheet: every seat's key is in its table's row, and the script has no properties and no timers.
+
+Google keeps 200 versions of a script. Staging makes one and going live another. When a deploy is refused for that, delete old versions in the Apps Script editor (Project History) and run it again.
 
 ## When something breaks
 
@@ -251,7 +276,7 @@ To see that it works on the live game, sit at a table, open the browser's develo
 | `npm run screenshots` | The same browser run, saving a picture of every screen, and of the table in every theme, to `screenshots/`. |
 | `npm run build` | Type-checks and writes `dist/gas` (what is pushed to Apps Script) and `dist/web` (the page for any static host). |
 | `npm run gallery` | Writes `dist/gallery.html`, a showcase of the themes with the app playing against bots in the page. |
-| `npm run check:live` | Plays a short game at the deployed address in real browsers and checks the page Google serves is the one that was built. Leaves one small table in the Sheet, and one player called Live check in the Players tab. Its tables add nothing to the standings. |
+| `npm run check:live` | Plays a short game at the deployed address in real browsers and checks the page Google serves is the one that was built. Leaves one small table in the Sheet, and one player called Live check in the Players tab, whom the list friends pick from leaves out. Its tables add nothing to the standings. With `-- --staging` it plays at the staging address. |
 
 ## How it is put together
 

@@ -52,6 +52,7 @@ import { createThemePicker } from './render/themePicker.ts';
 import { voiceLinkEl } from './render/voiceLink.ts';
 import type { Listed } from './render/whoField.ts';
 import type { Shape } from './render/table.ts';
+import { Arrivals } from './arrivals.ts';
 import { Attention } from './attention.ts';
 import { pageWays } from './pageAttention.ts';
 import { showStillOffered } from './showing.ts';
@@ -131,6 +132,12 @@ export class App {
 
   private readonly clock = new ServerClock();
   private readonly server: ServerLine;
+
+  /** Where a join or a new table is asked for, so that one whose answer is lost can be tried again without arriving twice. */
+  private readonly arrivals = new Arrivals(
+    (bytes) => crypto.getRandomValues(new Uint8Array(bytes)),
+    (request) => this.request(request),
+  );
 
   /** Which of the players the game knows this browser was last used as. */
   private readonly me: RememberedPlayer;
@@ -503,7 +510,7 @@ export class App {
 
   /** Resolves to whether the table was made. */
   private async createTable(as: Answer, config: Partial<TableConfig>): Promise<boolean> {
-    const response = await this.request({ op: 'create', ...as, config });
+    const response = await this.arrivals.ask({ op: 'create', ...as, config });
     if (response?.ok && response.kind === 'joined') {
       this.remember(response.view.id, response.auth);
       this.enterTable({ tableId: response.view.id, auth: response.auth }, response.view);
@@ -518,7 +525,7 @@ export class App {
 
   /** Resolves to whether the visitor is now somewhere other than the form they joined from. */
   private async joinTable(tableId: string, as: Answer): Promise<boolean> {
-    const response = await this.request({ op: 'join', tableId, ...as });
+    const response = await this.arrivals.ask({ op: 'join', tableId, ...as });
     if (response?.ok && response.kind === 'joined') {
       this.remember(tableId, response.auth);
       this.enterTable({ tableId, auth: response.auth }, response.view);

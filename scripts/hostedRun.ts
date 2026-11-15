@@ -1105,6 +1105,78 @@ try {
     await page.context().close();
   }
 
+  console.log('A join whose answer is lost is the same join when it is tried again, and the key the two go under is in neither the address, what the browser remembers, nor what the page reports of a failure');
+  {
+    // A game of its own, whose tables can be looked into
+    const tables = new MemoryStore();
+    const told = new MemoryErrorLog({ now: () => Date.now() });
+    const game = new PokerService({ store: tables, presets: new MemoryPresetStore(), players: new MemoryPlayerStore(seededRng(27)), clock: { now: () => Date.now() }, rng: seededRng(26), errors: told });
+    const own = await startDevServer({ port: 0, page: async () => html, service: game });
+
+    try {
+      const meant = 'A failure around a join';
+      const owner = await open(browser);
+      const id = await createTable(owner, own.url, 'Ivy');
+
+      const guest = await open(browser, meant);
+      const bodies: string[] = [];
+      const lost: { auth: { id: string; token: string } }[] = [];
+
+      await guest.route('**/api', async (route) => {
+        const body = route.request().postData() ?? '';
+        bodies.push(body);
+
+        if ((JSON.parse(body) as { op?: string }).op !== 'join' || lost.length > 0) {
+          return route.continue();
+        }
+
+        // The table lets the guest in, and the answer never arrives
+        lost.push((await (await route.fetch()).json()) as (typeof lost)[number]);
+
+        return route.abort('failed');
+      });
+
+      await guest.goto(`${own.url}?table=${id}`);
+      await guest.waitForSelector('[data-action="join-table"]:not([disabled])');
+      await guest.fill('#join-name', 'Jo');
+      await guest.click('[data-action="join-table"]');
+      await guest.waitForSelector('.toast:has-text("Could not join the table")');
+      assert.deepEqual(tables.read(id)!.members.map((member) => member.name), ['Ivy', 'Jo'], 'the table did not let the guest in the first time, so the case shows nothing');
+
+      const joins = () => bodies.filter((body) => body.includes('"op":"join"')).map((body) => (JSON.parse(body) as { key?: string }).key);
+      const key = joins()[0]!;
+      assert.match(String(key), /^[A-Za-z0-9_-]{22,64}$/, 'the join went without a key, or with one too short to be a secret');
+
+      const keptBy = (page: Page) => page.evaluate('JSON.stringify([location.href, { ...localStorage }, { ...sessionStorage }, document.cookie, document.documentElement.outerHTML])') as Promise<string>;
+      assert.ok(!(await keptBy(guest)).includes(key), 'the key of a join that has no answer is in the address, in what the browser remembers, or on the page');
+
+      // A failure while the join has no answer has nobody to be reported as
+      await throwIn(guest, meant);
+      await sleep(QUIET_MS);
+      assert.ok(!bodies.some((body) => body.includes('"op":"report"')), 'a page that is at no table reported');
+
+      await guest.waitForSelector('[data-action="join-table"]:not([disabled])');
+      await guest.click('[data-action="join-table"]');
+      await guest.waitForSelector('.stage .table');
+      assert.deepEqual(joins(), [key, key], 'the second asking went under another key than the first');
+      assert.deepEqual(tables.read(id)!.members.map((member) => member.name), ['Ivy', 'Jo'], 'trying again made the guest a second member');
+      assert.equal(inAddress(guest, 'me'), `${lost[0]!.auth.id}.${lost[0]!.auth.token}`, 'the guest is not the member the first asking made');
+
+      // A failure once the guest is in is reported as theirs, and says nothing of how they got in
+      await throwIn(guest, `${meant}, at the table`);
+      await until('the reports', () => told.rows.length === 2);
+      assert.deepEqual(told.rows.map((row) => [row.where, row.tableId]), [['page', id], ['page', id]]);
+      assert.ok(!JSON.stringify(told.rows).includes(key), 'the error log has the key of a join');
+      assert.deepEqual(bodies.filter((body) => body.includes(key) && !body.includes('"op":"join"')), [], 'a request that is not the join carries its key');
+      assert.ok(!(await keptBy(guest)).includes(key), 'the key outlived the join in the address, in what the browser remembers, or on the page');
+
+      await owner.context().close();
+      await guest.context().close();
+    } finally {
+      await own.close();
+    }
+  }
+
   console.log('Who are you: the first to arrive is asked only for a name, the page then says who it takes them for, "not me" asks again, a list that will not load stops nobody, and a seat is never touched by any of it');
   {
     // A game of its own, which starts out knowing nobody

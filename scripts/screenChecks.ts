@@ -10397,6 +10397,122 @@ const CHECKS: Check[] = [
     },
   ],
   [
+    'a join whose answer is lost is the same join when it is tried again, and so is a new table: the player is at the table once and on the list of players once, and the key the two askings go under is in nothing the page keeps, shows or sends besides; one who then says the name on the list is theirs is the member the first asking made',
+    async (rig) => {
+      const table = rig.table([{ name: 'Quigs', stack: 1000 }]);
+
+      type Sent = Record<string, unknown> & { op: string };
+      type Lost = { auth: { id: string }; view: { id: string } };
+
+      /** Writes down what a page sends, and loses the answer to its first request of one kind, after the server has acted on it. */
+      const losingFirst = async (page: Page, op: 'join' | 'create') => {
+        const sent: Sent[] = [];
+        const lost: Lost[] = [];
+
+        await page.route('**/api', async (route) => {
+          const request = JSON.parse(route.request().postData() ?? '{}') as Sent;
+          sent.push(request);
+
+          if (request.op !== op || lost.length > 0) {
+            return route.continue();
+          }
+
+          lost.push((await (await route.fetch()).json()) as Lost);
+
+          return route.abort('failed');
+        });
+
+        return { sent, lost, asked: () => sent.filter((request) => request.op === op) };
+      };
+
+      /** Everything a page keeps or shows that could give a key away: its address, what the browser remembers for it, and all it has drawn. */
+      const keptBy = (page: Page) => page.evaluate('JSON.stringify([location.href, { ...localStorage }, { ...sessionStorage }, document.cookie, document.documentElement.outerHTML])') as Promise<string>;
+      // Which member a page is at a table: the id its browser remembers the seat by
+      const memberAt = async (page: Page, tableId: string) => ((await page.evaluate(`localStorage.getItem('cnd.seat.${tableId}')`)) as string | null)?.split('.')[0];
+      const KEY = /^[A-Za-z0-9_-]{22,64}$/;
+
+      // A visitor follows the table's link and joins as Bob. The table lets him in and puts him on the list, and the answer never arrives
+      const visitor = await rig.page('desktop', 'a visitor');
+      const joining = await losingFirst(visitor, 'join');
+      await visitor.goto(`${rig.url}?table=${table.id}`);
+      await visitor.waitForSelector('[data-action="join-table"]:enabled');
+      await visitor.fill('#join-name', 'Bob');
+      await visitor.click('[data-action="join-table"]');
+      await toastTold(visitor, 'Could not join the table');
+      assert.deepEqual(table.view('Quigs').members.map((member) => member.name), ['Quigs', 'Bob'], 'the table did not let him in the first time, so the check shows nothing');
+
+      const joinKey = joining.asked()[0]!.key as string;
+      assert.match(String(joinKey), KEY, 'the join went without a key, or with one too short to be a secret');
+      assert.ok(!(await keptBy(visitor)).includes(joinKey), 'the key is in the address, in what the browser remembers, or on the page');
+
+      // The list of players, asked for again, now has the Bob his first asking made
+      await visitor.waitForSelector('.who-list .who-pill:has-text("Bob")');
+      await shot(visitor, 'join-answer-lost');
+
+      // He tries again, as the page told him to, and is the Bob the table already has
+      await visitor.waitForSelector('[data-action="join-table"]:enabled');
+      await visitor.click('[data-action="join-table"]');
+      await visitor.waitForSelector('.controls-slot .controls');
+      assert.deepEqual(table.view('Quigs').members.map((member) => member.name), ['Quigs', 'Bob'], 'trying again made him a second member');
+      assert.deepEqual(rig.players.list().map((player) => player.name), ['Bob']);
+      assert.equal(await memberAt(visitor, table.id), joining.lost[0]!.auth.id, 'he is not the member the first asking made');
+      assert.deepEqual(joining.asked().map((request) => request.key), [joinKey, joinKey], 'the second asking went under another key than the first');
+
+      // What his page sends next has nothing of the key, and neither has anything it keeps
+      table.act('Quigs', { type: 'chat', text: 'welcome' });
+      await visitor.waitForSelector('.feed li:has-text("welcome")');
+      await visitor.fill('#chat-input', 'thanks');
+      await visitor.press('#chat-input', 'Enter');
+      await visitor.waitForSelector('.feed li:has-text("thanks")');
+      assert.deepEqual(joining.sent.filter((request) => request.op !== 'join' && JSON.stringify(request).includes(joinKey)).map((request) => request.op), [], 'a request that is not the join carries its key');
+      assert.ok(!(await keptBy(visitor)).includes(joinKey), 'the key outlived the join in the address, in what the browser remembers, or on the page');
+
+      // Another whose answer is lost is told by the page that her name is on the list already, which is her first asking's doing.
+      // She says that is her, which it is, and is let in as the member that asking made, not turned away for having her own name
+      const second = await rig.page('desktop', 'a visitor');
+      const again = await losingFirst(second, 'join');
+      await second.goto(`${rig.url}?table=${table.id}`);
+      await second.waitForSelector('[data-action="join-table"]:enabled');
+      await second.fill('#join-name', 'Cy');
+      await second.click('[data-action="join-table"]');
+      await toastTold(second, 'Could not join the table');
+      await second.waitForSelector('[data-action="pick-alike"]');
+      assert.equal(await text(second, '.who-alike'), 'Cy is on the list already. I’m Cy');
+
+      await second.click('[data-action="pick-alike"]');
+      await second.click('[data-action="join-table"]');
+      await second.waitForSelector('.controls-slot .controls');
+      assert.deepEqual(table.view('Quigs').members.map((member) => member.name), ['Quigs', 'Bob', 'Cy']);
+      assert.equal(await memberAt(second, table.id), again.lost[0]!.auth.id, 'she is not the member the first asking made');
+      assert.deepEqual(rig.players.list().map((player) => player.name).sort(), ['Bob', 'Cy']);
+      assert.deepEqual((await toasts(second)).map((toast) => toast.text), ['Could not join the table. Check your connection and try again.'], 'she was told something went wrong after saying who she is');
+
+      // A new table whose answer is lost: tried again, it is the table that was made, and Zed is on the list once
+      const lobby = await rig.lobby('desktop');
+      const making = await losingFirst(lobby, 'create');
+      await lobby.fill('#host-name', 'Zed');
+      await lobby.click('[data-action="create-table"]');
+      await toastTold(lobby, 'Could not create the table');
+
+      const createKey = making.asked()[0]!.key as string;
+      assert.match(String(createKey), KEY);
+      assert.notEqual(createKey, joinKey, 'two arrivals went under one key');
+
+      await lobby.waitForSelector('[data-action="create-table"]:enabled');
+      await lobby.click('[data-action="create-table"]');
+      await lobby.waitForSelector('#table-link');
+      const made = making.lost[0]!;
+      assert.deepEqual([new URL(lobby.url()).searchParams.get('table'), await memberAt(lobby, made.view.id)], [made.view.id, made.auth.id], 'trying again made a second table');
+      assert.deepEqual(rig.players.list().map((player) => player.name).sort(), ['Bob', 'Cy', 'Zed']);
+      assert.deepEqual(making.asked().map((request) => request.key), [createKey, createKey]);
+      assert.ok(!(await keptBy(lobby)).includes(createKey), 'the key is in the address, in what the browser remembers, or on the page');
+
+      for (const page of [visitor, second, lobby]) {
+        await page.context().close();
+      }
+    },
+  ],
+  [
     'with three players known, the page asks who you are above the name, the most recently seen first: a tap picks a player and puts the name away, “Someone new” brings it back as typed, and joining as one of them makes you that player',
     async (rig) => {
       const [ann, bob, bigAl] = ['Ann', 'Bob', 'Big Al'].map((name, index) => rig.players.add(name, rig.now() + index * 1000));

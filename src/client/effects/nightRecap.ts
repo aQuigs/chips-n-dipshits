@@ -8,9 +8,10 @@ import { RECAP_GONE } from '../spoken.ts';
  * hold on the last hand's result (`Suspense`) before any of it is told: the recap never comes while a
  * river lies face down.
  *
- * When the night is played on, the recap that came that way goes again, and says why. A hand is on
- * its way with a clock on it, and whoever is first to act would be on that clock behind a dialog
- * they never opened.
+ * When the night is played on, the recap that came that way goes again, and says why, on every page
+ * it came to: a watcher's and a waiting player's as well. What it showed as the night's end is now
+ * only the night so far, a hand is on its way with a clock on it, and whoever is first to act would
+ * be on that clock behind a dialog they never opened.
  */
 export function nightRecap(): TableEffect {
   return {

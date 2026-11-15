@@ -139,16 +139,18 @@ test('an answer does not give up the key of an arrival asked in other words sinc
 
 test('a visitor whose join got no answer finds their name on the list, says that is them, and is the member the first asking made', async () => {
   const { arrivals, join, members, answers, sent, players } = game('answer lost');
+  const typed = '  big   CY ';
 
-  assert.equal(await arrivals.ask(join('Big Cy')), null);
+  assert.equal(await arrivals.ask(join(typed)), null);
 
-  // The list has them now, which the first asking did, and its name for them is what the page sends for the pick
-  const listed = players.list().find((player) => player.name === 'Big Cy')!;
+  // The list has them now, which the first asking did, under the name as the list keeps names: that is what the page sends for the pick
+  const listed = players.list().find((player) => player.name !== 'Quigs')!;
+  assert.equal(listed.name, 'big CY');
   const second = joined((await arrivals.ask(join(listed.name, { as: 'known', id: listed.id })))!);
 
   assert.deepEqual(second.auth, joined(answers[0]!).auth);
   assert.equal(second.view.you.identity, listed.id);
-  assert.deepEqual(members(), ['Quigs', 'Big Cy']);
+  assert.deepEqual(members(), ['Quigs', 'big CY']);
   assert.deepEqual(sent[1], sent[0], 'something other than the first asking was sent');
   assert.equal(sent.length, 2);
 });
@@ -168,14 +170,14 @@ test('the same for a new table: the host who says the name on the list is theirs
 
 test('when the name was on the list before, the first asking never having arrived, saying that is them joins them as that player, and no refusal is shown for it', async () => {
   const { arrivals, join, members, sent, players, keys } = game('never arrives');
-  const listed = players.add('Cy', NOW);
+  const listed = players.add('Big Cy', NOW);
 
-  // Sent before the page had the list; the list then shows the name
-  assert.equal(await arrivals.ask(join('cy')), null);
+  // Sent before the page had the list, in other capitals and with no space; the list then shows the name, which it reads as the same
+  assert.equal(await arrivals.ask(join('bigcy')), null);
   const second = joined((await arrivals.ask(join(listed.name, { as: 'known', id: listed.id })))!);
 
   assert.equal(second.view.you.identity, listed.id);
-  assert.deepEqual(members(), ['Quigs', 'Cy']);
+  assert.deepEqual(members(), ['Quigs', 'Big Cy']);
   assert.deepEqual(sent.map((request) => 'who' in request && request.who?.as), ['new', 'new', 'known']);
   assert.deepEqual([keys()[0] === keys()[1], keys()[1] === keys()[2]], [true, false]);
 });
@@ -215,6 +217,38 @@ test('a pick that is not the name the first asking gave, or is for another table
   assert.deepEqual(members(), ['Quigs', 'Bob', 'Ann', 'Eve']);
 });
 
+test('an arrival asked for somewhere else in between does not cost the one without an answer its key', async () => {
+  for (const back of ['in the same words', 'as the listed player'] as const) {
+    const { arrivals, join, members, answers, players, keys } = game('answer lost');
+
+    assert.equal(await arrivals.ask(join('Bob')), null);
+
+    // They try a table of their own instead, as the join screen offers, and are turned down for the name the lost join put on the list
+    assert.match(failure((await arrivals.ask({ op: 'create', name: 'Bob', who: NEW }))!).error, /already on the list of players/);
+
+    const bob = players.list().find((player) => player.name === 'Bob')!;
+    const again = joined((await arrivals.ask(back === 'in the same words' ? join('Bob') : join(bob.name, { as: 'known', id: bob.id })))!);
+
+    assert.deepEqual(again.auth, joined(answers[0]!).auth, back);
+    assert.deepEqual(members(), ['Quigs', 'Bob'], back);
+    assert.equal(keys()[2], keys()[0], back);
+  }
+});
+
+test('a listed player whose name the list has changed since this browser saw it is one arrival under either name', async () => {
+  const { arrivals, join, members, answers, players, sent } = game('answer lost');
+  const zed = players.add('Zed B', NOW);
+
+  // The browser remembers them as Zed and the join goes before the list is in; the list then gives the page the name it has now
+  assert.equal(await arrivals.ask(join('Zed', { as: 'known', id: zed.id })), null);
+  const second = joined((await arrivals.ask(join(zed.name, { as: 'known', id: zed.id })))!);
+
+  assert.deepEqual(second.auth, joined(answers[0]!).auth);
+  assert.deepEqual(members(), ['Quigs', 'Zed B']);
+  assert.deepEqual(sent[1], sent[0], 'something other than the first asking was sent');
+  assert.equal(sent.length, 2);
+});
+
 test('a key is one the server takes, and as hard to guess as the bytes it was made from', async () => {
   const wanted: number[] = [];
   const keysOf = async (random: (bytes: number) => Uint8Array, count: number) => {
@@ -240,7 +274,7 @@ test('a key is one the server takes, and as hard to guess as the bytes it was ma
 
   assert.ok(made.every((key) => askingOf(new MemoryArrivalKeys({ now: () => NOW }), key, 'words')), 'the server would refuse it, or take it for no key');
   assert.equal(new Set(made).size, made.length);
-  assert.ok(wanted.every((bytes) => bytes >= 16), 'made from fewer than 128 bits');
+  assert.ok(wanted.every((bytes) => bytes * 6 >= 128), 'made from fewer than 128 bits, at six to a byte');
 
   // Every byte the browser gives decides one symbol, and no symbol is likelier than another
   assert.equal(new Set(made.join('')).size, 64);

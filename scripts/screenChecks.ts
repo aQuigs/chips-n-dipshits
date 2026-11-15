@@ -7630,7 +7630,7 @@ const CHECKS: Check[] = [
     async (rig) => {
       const table = nightOfOneHand(rig);
       const acting = await table.open('Stu', 'desktop', SPOKEN);
-      const reading = await table.open('Big Al', 'phone');
+      const reading = await table.open('Big Al', 'phone', SPOKEN);
       const moves = movesSent(acting);
 
       table.act('Quigs', { type: 'endNight' });
@@ -7670,13 +7670,55 @@ const CHECKS: Check[] = [
       assert.equal((await toasts(acting)).filter((toast) => toast.text.includes('The night goes on')).length, 1, 'why the recap went was shown more than once');
       assert.deepEqual(moves, [], 'a move was made that the player never made');
 
-      // The one who opened it from the menu still has it, reading the night so far, and is told nothing
+      // The one who opened it from the menu still has it, reading the night so far, and is told nothing: that the page
+      // opened a recap by itself earlier, which they closed, makes the one they opened no less theirs
       assert.deepEqual(await texts(reading, '.dialog h2'), ['Tonight'], 'the recap a player opened from the menu was closed on them');
       assert.match(await text(reading, '.tonight-standing'), /^So far tonight/);
       assert.equal((await toasts(reading)).filter((toast) => toast.text.includes('The night goes on')).length, 0);
+      assert.deepEqual((await spoken(reading, before)).filter((line) => line.includes('The night goes on')), [], 'a player whose dialog stayed was told it went');
 
       await acting.context().close();
       await reading.context().close();
+    },
+  ],
+  [
+    'a recap taken away from under a hand being played back leaves the keyboard in the replay, which is what is in front of the viewer, and not on the bar it covers',
+    async (rig) => {
+      const table = nightOfOneHand(rig);
+      const page = await table.open('Big Al', 'desktop', SPOKEN);
+
+      // The hand asked for from the bar is still on its way when the night ends: the recap opens by itself, and the replay then opens over it
+      let fetched = (): void => undefined;
+      const onItsWay = new Promise<void>((resolve) => {
+        fetched = resolve;
+      });
+      await page.route('**/api', async (route) => {
+        if ((route.request().postData() ?? '').includes('"op":"history"')) {
+          await onItsWay;
+        }
+
+        return route.fallback();
+      });
+
+      await page.click('.controls [data-action="replay-last"]');
+      table.act('Quigs', { type: 'endNight' });
+      await page.waitForSelector(RECAP);
+      fetched();
+      await page.waitForSelector('.replay:not([hidden])');
+      assert.ok(await focusIn(page, '.replay'), `the replay opened with the keyboard on ${await focused(page)}`);
+      assert.equal(await page.locator(RECAP).count(), 1, 'the recap is not under the replay, so the check shows nothing');
+
+      // The night is played on with another player first to act, so the replay has no turn to make way for
+      table.act('Quigs', { type: 'playOn' });
+      table.dealNext();
+      assert.notEqual(table.view('Big Al').hand!.toAct, table.view('Big Al').you.seat);
+      await toastTold(page, RECAP_GONE);
+      await page.waitForSelector('.dialog', { state: 'detached' });
+
+      assert.equal(await page.locator('.replay:not([hidden])').count(), 1, 'the replay went with the recap');
+      assert.ok(await focusIn(page, '.replay'), `the keyboard is on ${await focused(page)}, behind the replay`);
+
+      await page.context().close();
     },
   ],
   [

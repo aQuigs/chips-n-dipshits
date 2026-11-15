@@ -8,6 +8,7 @@ import { timesText } from '../../engine/runVote.ts';
 import { straddlesAllowed } from '../../engine/straddles.ts';
 import type { Command, PassedOver } from '../../engine/types.ts';
 import type { HandView, SeatView, TableView } from '../../engine/view.ts';
+import { lastOnRecord } from '../handRecords.ts';
 import { HOTKEYS } from '../hotkeys.ts';
 import { choiceOn } from '../pendingChoice.ts';
 import { AHEAD_ORDER, aheadLabel } from '../preActions.ts';
@@ -80,6 +81,22 @@ function commandButton(spec: `button.${string}`, action: string, label: string, 
 function moveLabel(move: string, amount: number, table: Denominated): (HTMLElement | string)[] {
   // The space is for whoever reads the button as text; laid out, the two pieces are spaced by the button
   return [h('span', null, move), ' ', h('span.amount-of', { title: formatAmount(amount, table) }, shortAmount(amount, table, 'up'))];
+}
+
+/** The decision a move answers: which hand, and which turn of it. */
+const decisionOf = (hand: HandView): string => `${hand.number}.${hand.turn}`;
+
+/**
+ * Marks every button of a decision's bar with the decision it answers, and gives the bar back. A button
+ * for the next decision is another button, though it says the same and lies in the same place, and
+ * whatever tells controls apart across a redraw (the tap guard) takes it for a new one.
+ */
+function answering<Bar extends HTMLElement>(hand: HandView, bar: Bar): Bar {
+  for (const button of bar.querySelectorAll('button')) {
+    button.dataset.keep = decisionOf(hand);
+  }
+
+  return bar;
 }
 
 /**
@@ -346,28 +363,34 @@ function settlingOf(view: TableView, seat: SeatView, handlers: ControlHandlers):
   }
 }
 
-/** What the bar says to a player who asked to straddle and posted none in the hand on the table. */
-function passedOverText(view: TableView, passed: PassedOver): string {
-  const reason = (): string => {
+/**
+ * What the bar says to a player who asked to straddle and posted none in the hand on the table. A name
+ * in it is a piece of its own, which a bar with a height to keep cuts short: the whole of it is its title.
+ */
+function passedOverText(view: TableView, passed: PassedOver): (HTMLElement | string)[] {
+  const reason = (): (HTMLElement | string)[] => {
     switch (passed.why) {
       case 'two players':
-        return 'there are only two players';
+        return ['there are only two players'];
       case 'blind':
-        return 'you posted a blind';
-      case 'right':
-        return `${view.seats[passed.ahead]?.name ?? 'Another player'} had the right before you`;
+        return ['you posted a blind'];
+      case 'right': {
+        const name = view.seats[passed.ahead]?.name ?? 'Another player';
+
+        return [h('span.named', { title: name }, name), ' had the right before you'];
+      }
       case 'short':
-        return `you could not cover the ${formatAmount(passed.amount, view.config)}`;
+        return [`you could not cover the ${formatAmount(passed.amount, view.config)}`];
     }
   };
 
-  return `No straddle this hand: ${reason()}`;
+  return ['No straddle this hand: ', ...reason()];
 }
 
 /** A line the bar has for the viewer alone, under what everyone is waiting for: about blinds they owe, or a straddle they did not get to post. */
 interface OwnNote {
   about: 'owed' | 'straddle';
-  text: string;
+  text: (HTMLElement | string)[];
 }
 
 /** What tells the choices of a move ahead apart from the buttons of a turn, wherever one is looked for by its action. */
@@ -404,7 +427,8 @@ function aheadEl(view: TableView, hand: HandView, stack: number, handlers: Contr
 
     return h(
       `button.chip-btn.ahead-btn.ahead-${what}`,
-      { type: 'button', 'aria-pressed': String(on), 'data-action': `${AHEAD_ACTION}${what}`, disabled: !on && preActionFor(what, facing) === null, onclick: press },
+      // Its own words, amount and all: "Call 50" in the place of "Call 20" is another choice
+      { type: 'button', 'aria-pressed': String(on), 'data-action': `${AHEAD_ACTION}${what}`, 'data-keep': amount === null ? move : `${move} ${shortAmount(amount, view.config, 'up')}`, disabled: !on && preActionFor(what, facing) === null, onclick: press },
       h('span', null, words),
     );
   });
@@ -419,7 +443,8 @@ function waitingEl(text: string, view: TableView, own: OwnNote | null = null, ah
     'div.waiting',
     { class: ahead ? 'choosing' : '' },
     ahead,
-    text,
+    // Beside the choices the bar keeps the height of a turn, and its first line is cut short before it takes a second: the whole of it is its title
+    ahead ? h('span.waiting-for', { title: text }, text) : text,
     note.length > 0 ? h('div.next-hand', null, note.map((part) => h('span', null, part))) : null,
     own ? h(`div.own-note.${own.about}-note`, null, own.text) : null,
   );
@@ -428,7 +453,7 @@ function waitingEl(text: string, view: TableView, own: OwnNote | null = null, ah
 /** The viewer's own line: a player in a hand owes nothing, so there is never more than one thing to say. */
 function ownNote(owed: string | null, hand: HandView | null, view: TableView): OwnNote | null {
   if (owed) {
-    return { about: 'owed', text: owed };
+    return { about: 'owed', text: [owed] };
   }
 
   return hand?.passedOver ? { about: 'straddle', text: passedOverText(view, hand.passedOver) } : null;
@@ -448,11 +473,11 @@ function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandle
     // answered, whatever they were: this comes first, so the buttons of a kind of move added later go the same way
     main = waitingEl(waitingText(view, hand), view, own);
   } else if (hand?.options) {
-    main = turnPanel(view.config, hand, seat.stack, handlers);
+    main = answering(hand, turnPanel(view.config, hand, seat.stack, handlers));
   } else if (hand?.canAnswerChop) {
-    main = chopQuestion(view, hand, handlers);
+    main = answering(hand, chopQuestion(view, hand, handlers));
   } else if (hand?.canVote) {
-    main = runsQuestion(hand, handlers);
+    main = answering(hand, runsQuestion(hand, handlers));
   } else {
     const text = waiting === 'unconfirmed' ? `Waiting for the table to confirm your ${seat.lastAction ?? 'move'}…` : waitingText(view, hand);
 
@@ -519,14 +544,21 @@ function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandle
 }
 
 /**
- * The number of the last hand on record, for a seated player with no part in the one on the table:
- * out of it, or between hands. A hand goes on record when it is cleared away, so the one on the table
- * is never there to play back, and a player still in it has that one to play.
+ * The number of the hand just played, for a seated player with nothing left to play in the one on the
+ * table. With its result up that is the hand on the table itself, which is on record only once it is
+ * cleared away: the page waits for that (`App.replayHand`), since the hand before it is not the one
+ * anybody means. For a player out of a hand still being played, and between hands, it is the last one
+ * on record. A player still in a hand has that one to play.
  */
 function handToReplay(view: TableView, seat: SeatView): number | null {
   const hand = view.hand;
-  const last = hand ? hand.number - 1 : view.handCount;
+
+  if (hand?.stage === 'done') {
+    return hand.number;
+  }
+
   const free = !hand || !seat.inHand || seat.folded;
+  const last = lastOnRecord(view);
 
   return free && last > 0 ? last : null;
 }
@@ -544,7 +576,12 @@ function replayEl(view: TableView, seat: SeatView, handlers: ControlHandlers): H
     return null;
   }
 
-  return commandButton('button.chip-btn.replay-last', 'replay-last', `Replay hand #${number}`, () => handlers.replay(number));
+  const button = commandButton('button.chip-btn.replay-last', 'replay-last', `Replay hand #${number}`, () => handlers.replay(number));
+
+  // The button for another hand is another button
+  button.dataset.hand = String(number);
+
+  return button;
 }
 
 /**
@@ -562,6 +599,8 @@ function showCardsEl(view: TableView, seat: SeatView, handlers: ControlHandlers)
     const card = seat.cards![place]!;
     const button = commandButton('button.chip-btn.show-card', 'show-card', '', show([place]));
 
+    // Which hand's card, so the offer after the next hand is another button
+    button.dataset.keep = String(offer.hand);
     button.dataset.place = String(place);
     button.setAttribute('aria-label', `Show ${cardWords(card)}`);
     button.append(cardEl(card));

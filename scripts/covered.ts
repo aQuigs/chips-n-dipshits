@@ -52,6 +52,8 @@ export const MAY_BE_CUT: MayBeCut[] = [
   { is: '.feed-toggle .latest, .feed-toggle .latest *', whole: 'the opened chat' },
   { is: '.tag .name .detail', whole: 'title', orLeftOut: true },
   { is: '.sidepots', whole: 'title' },
+  { is: '.waiting.choosing .waiting-for', whole: 'title' },
+  { is: '.waiting.choosing .named', whole: 'title' },
 ];
 
 // The least of a name that may be left to read when it is cut short, in its own font size; a shorter one shows whole

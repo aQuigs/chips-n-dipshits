@@ -24,6 +24,20 @@
   display: none !important;
 }
 
+/*
+ * A control that has just come up where a different one lay takes no tap for a moment (tapGuard.ts):
+ * the finger that lands on it now was on its way to the other. It looks as it will, since the moment
+ * is shorter than it takes to wonder, and a key or a screen reader presses it all the same.
+ */
+.taps-settling {
+  pointer-events: none !important;
+}
+
+/* A dialog's backdrop that takes no tap yet: the dialog on it is judged by its own controls */
+.overlay.taps-settling > * {
+  pointer-events: auto;
+}
+
 /* Words for a screen reader alone */
 .unseen {
   position: absolute;
@@ -32,6 +46,12 @@
   overflow: hidden;
   clip-path: inset(50%);
   white-space: nowrap;
+}
+
+/* What the page says aloud stands after everything else on it: left there, its one pixel under the screen's bottom edge lets the whole page be dragged by it */
+.cnd > .unseen {
+  top: 0;
+  left: 0;
 }
 
 button,

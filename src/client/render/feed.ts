@@ -3,7 +3,7 @@ import type { TableView } from '../../engine/view.ts';
 import { chatLineShown } from '../senders.ts';
 import { cardText, h, marksCards } from '../ui.ts';
 import { createChatBox } from './chatBox.ts';
-import { chatLineEl, gifOf, showPicture } from './chatLine.ts';
+import { chatLineEl, gifOf, namesViewer, showPicture } from './chatLine.ts';
 
 // How close to the bottom still counts as following the conversation
 const FOLLOW_SLACK_PX = 40;
@@ -47,7 +47,9 @@ function latestText(entry: FeedEntry, current: FeedLook): (string | HTMLElement)
 export function createFeed(onChat: (text: string) => void, look: () => FeedLook, beside: HTMLElement | null = null): Feed {
   const list = h('ol.entries', { 'aria-live': 'polite' });
   const latest = h('span.latest');
-  const toggle = h('button.feed-toggle', { type: 'button', 'aria-expanded': 'false', 'aria-controls': 'feed-body' }, h('span.label', null, 'Chat'), latest);
+  // Up from when a line names the viewer with the list out of sight, shut or down for their turn, until they have the list in sight again
+  const named = h('span.named-you', { hidden: true }, h('span.unseen', null, 'A line names you. '), '@');
+  const toggle = h('button.feed-toggle', { type: 'button', 'aria-expanded': 'false', 'aria-controls': 'feed-body' }, h('span.label', null, 'Chat'), named, latest);
   let members: TableView['members'] = [];
   const box = createChatBox(onChat, () =>
     members
@@ -65,6 +67,7 @@ export function createFeed(onChat: (text: string) => void, look: () => FeedLook,
   });
 
   let lastSeq = 0;
+  let opened = false;
   let you = '';
   // Every line had, shown or not, so it can be drawn again for another look
   const had: FeedEntry[] = [];
@@ -134,6 +137,14 @@ export function createFeed(onChat: (text: string) => void, look: () => FeedLook,
     latest.replaceChildren(...(newest >= 0 ? latestText(had[newest]!, current) : []));
   };
 
+  // The list comes into sight when the chat is opened, and when it comes back up after a turn that took its room: at its newest line, as it opens, since out of sight it followed nothing
+  new IntersectionObserver((seen) => {
+    if (seen.some((one) => one.isIntersecting)) {
+      named.hidden = true;
+      list.scrollTop = list.scrollHeight;
+    }
+  }).observe(list);
+
   /** Notes how `entries` are drawn now, and gives back those that show. */
   const drawing = (entries: readonly FeedEntry[], current: FeedLook): FeedEntry[] => {
     entries.forEach((entry) => drawnAs.set(entry.seq, howDrawn(entry, current)));
@@ -156,6 +167,10 @@ export function createFeed(onChat: (text: string) => void, look: () => FeedLook,
       you = view.you.id;
       members = view.members;
 
+      // The lines a page opens with are not news
+      const arrived = opened;
+      opened = true;
+
       const fresh = view.feed.filter((entry) => entry.seq > lastSeq);
       if (fresh.length === 0) {
         return;
@@ -166,6 +181,11 @@ export function createFeed(onChat: (text: string) => void, look: () => FeedLook,
       had.splice(0, Math.max(0, had.length - MAX_ENTRIES)).forEach((gone) => drawnAs.delete(gone.seq));
 
       const current = look();
+
+      if (arrived && list.clientHeight === 0 && fresh.some((entry) => isShown(entry, current) && namesViewer(entry, you))) {
+        named.hidden = false;
+      }
+
       keepFollowing(() => {
         list.append(...drawing(fresh, current).map((entry) => lineEl(entry, current)));
 

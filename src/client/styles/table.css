@@ -167,7 +167,7 @@
   }
 
   /* Still placed across the table by `left`, now from the left edge of the row */
-  .table > .seat:is(.at-top, .at-bottom) {
+  .table .seat:is(.at-top, .at-bottom) {
     position: relative;
     top: auto;
     grid-column: 1;
@@ -176,13 +176,13 @@
   }
 
   /* At the very edge: a table this short has no share of its height to leave above or under them */
-  .table > .seat.at-top {
+  .table .seat.at-top {
     grid-row: 1;
     align-self: start;
     margin-top: 2px;
   }
 
-  .table > .seat.at-bottom {
+  .table .seat.at-bottom {
     grid-row: 3;
     align-self: end;
     margin-bottom: 2px;
@@ -192,13 +192,13 @@
    * As tall with a move or a chance written on them as without: these seats set where the middle and
    * the bets in front of them lie, which must not shift each time a line comes or goes.
    */
-  .table > .seat:is(.at-top, .at-bottom):not(.open) .plate {
+  .table .seat:is(.at-top, .at-bottom):not(.open) .plate {
     align-content: start;
     min-height: calc(var(--plate-lines) + 2px);
   }
 
   /* What a plate gives up above and below its lines, the middle of the table has for its boards and bets */
-  .table > .seat:not(.open) .plate {
+  .table .seat:not(.open) .plate {
     padding-block: 0.1em 0.15em;
   }
 
@@ -217,7 +217,7 @@
    * A bet from a seat along the top or the bottom lies at that edge of the middle's room, in line with
    * its seat: by a share of the height it would be on the cards of its own seat, the viewer's first.
    */
-  .table > .bet:is(.from-top, .from-bottom) {
+  .table .bet:is(.from-top, .from-bottom) {
     position: relative;
     top: auto;
     left: var(--seat-x);
@@ -227,11 +227,11 @@
     transform: translateX(-50%);
   }
 
-  .table > .bet.from-top {
+  .table .bet.from-top {
     align-self: start;
   }
 
-  .table > .bet.from-bottom {
+  .table .bet.from-bottom {
     align-self: end;
   }
 

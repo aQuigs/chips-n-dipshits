@@ -21,6 +21,18 @@
   background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
+/* On the chat's bar, which is all of the chat in sight while it is shut or down for the viewer's turn: a line named them and they have not had it in sight */
+.feed-toggle .named-you {
+  flex: none;
+  padding: 0 0.45em;
+  border-radius: var(--radius);
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
 /* The names offered after an @, over the bottom of the chat, just above the box */
 .say {
   position: relative;

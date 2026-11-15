@@ -4,9 +4,10 @@
  * The choices take the top of the bar and the waiting line goes to the bottom, where the buttons of a
  * turn come up: a tap meant for a choice that lands as the action arrives finds the bet sizes there,
  * which play nothing, never a move. `--ahead-height` is the room the choices take, by how many rows
- * the bar's shape lays them out in.
+ * the bar's shape lays them out in. It is kept on the slot the bar is drawn in, which beside a table
+ * lying down sizes itself by it (sideways.css).
  */
-.controls {
+.controls-slot {
   --ahead-row: 34px;
   --ahead-rows: 1;
   --ahead-gap: 6px;
@@ -15,7 +16,7 @@
 
 /* As tall as the chip buttons a finger gets */
 @media (pointer: coarse) {
-  .controls {
+  .controls-slot {
     --ahead-row: 40px;
   }
 }
@@ -28,6 +29,49 @@
 .controls.seated > .waiting.choosing {
   align-content: space-between;
   min-height: max(var(--turn-height), calc(var(--ahead-height) + 8px + 50px));
+}
+
+/*
+ * With the choices on it the bar has more to say than a turn's height holds at the usual size: who the
+ * table waits for, the hands to come and a straddle passed over, each at its longest, made it taller
+ * than the turn's, and the table jumped when the turn came. So beside the choices the rest is set
+ * closer: word of the hands to come runs on as one piece of text, the notes are a size smaller, and a
+ * name is cut short where it would take a line more, the whole of it in its title.
+ */
+.controls.seated > .waiting.choosing {
+  gap: 2px;
+}
+
+.waiting.choosing .waiting-for {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.waiting.choosing :is(.next-hand, .own-note) {
+  font-size: 13px;
+  line-height: 1.25;
+}
+
+.controls.seated > .waiting.choosing .next-hand {
+  display: block;
+}
+
+.waiting.choosing .next-hand span + span::before {
+  content: ' · ';
+}
+
+/* Only under the table of a phone standing up, the one bar where the whole name costs the note a line */
+@container app (max-width: 639.98px) {
+  .waiting.choosing .named {
+    display: inline-block;
+    max-width: 9ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    vertical-align: bottom;
+    white-space: nowrap;
+  }
 }
 
 /* A turn keeps the choices' room above its buttons even when it has nothing to show there, as a turn that can only call or fold */
@@ -128,7 +172,7 @@
 
 /* Beside the table the bar is narrow and tall: two to a row */
 @container app (min-width: 560px) and (max-height: 520px) {
-  .controls {
+  .controls-slot {
     --ahead-rows: 3;
   }
 

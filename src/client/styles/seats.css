@@ -110,7 +110,13 @@
   color: var(--muted);
 }
 
+/*
+ * A stack has most of the plate's side padding to itself as well: the longest one written out, nine
+ * characters, fits the narrowest plate in the page's own font with a pixel to spare, and in a wider font
+ * lost its cents to the three dots.
+ */
 .plate .stack {
+  margin-inline: -0.35em;
   overflow: hidden;
   color: var(--accent);
   font-weight: 700;

@@ -37,13 +37,16 @@ function wordsOf(entry: FeedEntry, you: string): (string | HTMLElement)[] {
   return parts.filter((part) => part !== '');
 }
 
+/** Whether a line names the viewer, said by someone else. */
+export const namesViewer = (entry: FeedEntry, you: string): boolean => (entry.mentions ?? []).some(([id]) => id === you) && entry.by !== you;
+
 /**
  * A line of the chat. One that names the viewer says so in words too, ahead of it, for a reader who
  * can't see the mark. A line that is a GIF's address is drawn as its link until the picture is put in
  * (`showPicture`), which the feed does only once the line is in sight.
  */
 export function chatLineEl(entry: FeedEntry, look: ChatLook): ChatLine {
-  const namesYou = (entry.mentions ?? []).some(([id]) => id === look.you) && entry.by !== look.you;
+  const namesYou = namesViewer(entry, look.you);
   const gif = gifOf(entry, look.pictures);
 
   const element = h(

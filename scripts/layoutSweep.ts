@@ -11,15 +11,18 @@ import assert from 'node:assert/strict';
 
 import type { Page } from 'playwright';
 
+import { TAPS_SETTLE_MS } from '../src/client/tapGuard.ts';
 import { BADGES, LIMITS, REACTION_LIFE_MS, REACTIONS_LIVE } from '../src/engine/index.ts';
 import type { Bounty, Card, Command, TableConfig, TableView } from '../src/engine/index.ts';
+import { HISTORY_LIMIT } from '../src/server/api.ts';
 
 import type { Check } from './checkRunner.ts';
 import { SCROLLS, telling, unreadable } from './covered.ts';
 import type { Finding } from './covered.ts';
-import { replayDrawn } from './pageSpies.ts';
-import { SCREENS, setStageHeight, WIDE_ASPECT } from './rig.ts';
+import { opsSent, replayDrawn } from './pageSpies.ts';
+import { boxes, Gate, overlap, SCREENS, setStageHeight, WIDE_ASPECT } from './rig.ts';
 import type { Rig, RigTable, ScreenName } from './rig.ts';
+import { cameUp, tellingOf, watched, watchTheBar } from './underTheFinger.ts';
 
 const VIEWER = 'Quigs';
 // The widest sixteen letters a name can be, which the sweep makes the host and the holder of the high hand, so the star and the trophy stand beside the name with the least room for them
@@ -39,6 +42,8 @@ const BIGGEST = STACKS.map(() => 1_000_000_000);
 const CENTS: Partial<TableConfig> = { unit: 'cents', smallBlind: 25, bigBlind: 50 };
 // What the first raise of the state with a bet from every seat is to, in cents
 const FIRST_RAISE = 1234;
+// The most a seat or a button writes out before it shortens an amount to a letter (`shortAmount`): nine characters, 99,999.99
+const LONGEST_WRITTEN_OUT = 9_999_999;
 
 const SEAT_COUNTS = [2, 6, 9];
 
@@ -87,6 +92,37 @@ function playOut(table: RigTable, move: (view: TableView) => Command): void {
 }
 
 const folding = (view: TableView): Command => ({ type: view.hand!.options!.canCheck ? 'check' : 'fold' });
+
+/** A table of cents with the viewer on the button, last to act: the first to act has raised, and the next is on the clock with the viewer behind them. */
+function waitingBehindTheLongestCall(rig: Rig, seats: number): RigTable {
+  const table = tableWithTrophy(rig, seats, BIGGEST, { actionSeconds: 30, ...CENTS });
+
+  table.deal({ button: 0, holes: holesFor(seats) });
+  table.act(NAMES[3]!, { type: 'raise', to: LONGEST_WRITTEN_OUT });
+
+  return table;
+}
+
+/**
+ * A table of cents with everything the bar says to a player who waits, each at its longest: the viewer,
+ * under the gun, asked to straddle and is passed over for the widest name, who straddles from the button;
+ * the night's last hands are counted, and the next hand is a bomb pot on two boards. Every stack is the
+ * longest a seat writes out in full, nine characters.
+ */
+function waitingWithEveryNote(rig: Rig, seats: number): RigTable {
+  const button = seats - 3;
+  const others = NAMES.filter((name) => name !== VIEWER && name !== WIDEST);
+  const seated = Array.from({ length: seats }, (_seat, seat) => (seat === 0 ? VIEWER : seat === button ? WIDEST : others.shift()!));
+  const table = rig.table(seated.map((name, seat) => ({ name, stack: LONGEST_WRITTEN_OUT, seat })), { actionSeconds: 30, ...CENTS, allowStraddle: true, allowButtonStraddle: true, bombPotAmount: 999_999, bombPotBoards: 'two' });
+
+  table.act(VIEWER, { type: 'setStraddle', kind: 'straddle', on: true });
+  table.act(WIDEST, { type: 'setStraddle', kind: 'button straddle', on: true });
+  table.deal({ button, holes: holesFor(seats) });
+  table.act(VIEWER, { type: 'setLastHands', hands: LIMITS.lastHands });
+  table.act(VIEWER, { type: 'setBombPot', on: true });
+
+  return table;
+}
 
 /** Something on the table that stays only a moment, which a look has to catch while it is up. */
 interface Fleeting {
@@ -188,6 +224,24 @@ const TABLE_STATES = {
     async onPage(page) {
       await page.locator('.presets button', { hasText: 'All in' }).click();
     },
+  },
+  choicesAhead: {
+    shows: 'the five moves to choose ahead of a turn, one of them set, facing the longest call a table of cents writes',
+    // With two seated the action is on one or the other: nobody waits behind a bet
+    seats: [6, 9],
+    build(rig, seats) {
+      const table = waitingBehindTheLongestCall(rig, seats);
+      const hand = table.view(VIEWER).hand!;
+
+      table.act(VIEWER, { type: 'preAct', what: 'call', hand: hand.number, street: hand.street, facing: hand.currentBet });
+
+      return table;
+    },
+  },
+  everyNote: {
+    shows: 'the bar of a player waiting, with the moves to choose ahead, the hands to come and a straddle passed over, each at its longest',
+    seats: [6, 9],
+    build: waitingWithEveryNote,
   },
   runsChoice: {
     shows: 'the choice of how many times to run it, with a side pot a player and every hand’s chance',
@@ -394,6 +448,34 @@ const SCROLL_TO_THE_END = `(() => {
 
 const pictureName = (said: string) => said.toLowerCase().replace(/[^a-z0-9]+/g, '-');
 
+/**
+ * A way a page can be set that changes the size of everything read on it, by a class or custom
+ * properties on its root.
+ */
+interface PageSetting {
+  /** Said of a look made with it; null for the page as it comes. */
+  name: string | null;
+  rootClass?: string;
+  rootStyle?: Record<string, string>;
+}
+
+/**
+ * The page as it comes is the one way today. A setting such as larger text is a line here: every look
+ * of the sweep, of the table and of every other screen, is then made with it too, and no check changes.
+ */
+const PAGE_SETTINGS: PageSetting[] = [{ name: null }];
+
+// Run in the page: puts a setting on the root, or takes it off again
+const setRoot = ({ rootClass, rootStyle = {} }: PageSetting, on: boolean) => `(() => {
+  const root = document.documentElement;
+
+  ${rootClass ? `root.classList.toggle(${JSON.stringify(rootClass)}, ${on});` : ''}
+
+  for (const [name, value] of ${JSON.stringify(Object.entries(rootStyle))}) {
+    ${on ? 'root.style.setProperty(name, value)' : 'root.style.removeProperty(name)'};
+  }
+})()`;
+
 /** What a sweep found, look by look, and the pictures of the looks that found something. */
 class Sweep {
   private readonly found: string[] = [];
@@ -405,8 +487,26 @@ class Sweep {
     this.name = name;
   }
 
-  /** Looks at the page as it stands, where `where` says which look this is. */
+  /** Looks at the page as it stands, once with each way a page can be set, where `where` says which look this is. */
   async look(page: Page, where: string, read: () => Promise<Finding[]> = () => unreadable(page)): Promise<void> {
+    for (const setting of PAGE_SETTINGS) {
+      const set = setting.rootClass !== undefined || setting.rootStyle !== undefined;
+
+      if (set) {
+        await page.evaluate(setRoot(setting, true));
+        await page.evaluate(NEXT_FRAME);
+      }
+
+      await this.lookOnce(page, [where, setting.name].filter(Boolean).join(', '), read);
+
+      if (set) {
+        await page.evaluate(setRoot(setting, false));
+        await page.evaluate(NEXT_FRAME);
+      }
+    }
+  }
+
+  private async lookOnce(page: Page, where: string, read: () => Promise<Finding[]>): Promise<void> {
     const findings = await read();
 
     if (findings.length === 0) {
@@ -713,7 +813,7 @@ const TABLE_GAINS_WITHOUT_THE_BUTTON = `(() => {
 
 /** The one known defect that was a thing missing, not a thing covered: a way from the table to the hand just played. */
 const replayFromTheBar = (picturesIn: string): Check => [
-  'a seated player out of the hand, or between hands, has the last hand again from the bar under the table, which costs the table none of its height; the button is gone while they play, under a phone’s open chat, beside word of the hands to come, and for a watcher',
+  'a seated player has the hand just played again from the bar under the table: the last on record while they are out of a hand or between hands, and the one whose result is up as soon as it is cleared away, never the one before it; the button costs the table none of its height, and is gone while they play, under a phone’s open chat, beside word of the hands to come, and for a watcher',
   async (rig) => {
     const table = tableWithTrophy(rig, 6, EVEN);
     table.join('Watcher');
@@ -726,13 +826,15 @@ const replayFromTheBar = (picturesIn: string): Check => [
     await page.waitForSelector('.controls .waiting');
     assert.equal(await page.locator(REPLAY_LAST).count(), 0, 'the bar offers a hand again to a player in the one on the table, where the buttons of their turn go');
 
-    const offers = async (number: number, when: string) => {
+    const asksFor = async (number: number, when: string) => {
       await page.waitForSelector(`${REPLAY_LAST}:has-text("Replay hand #${number}")`);
       await settled(page);
       assert.equal(await page.evaluate(TABLE_GAINS_WITHOUT_THE_BUTTON), 0, `the table gave up height to the button, ${when}`);
       await page.screenshot({ path: `${picturesIn}defect-replay-from-the-bar-${pictureName(when)}.png` });
 
       await page.locator(REPLAY_LAST).click();
+    };
+    const playsBack = async (number: number, when: string) => {
       await replayDrawn(page);
       assert.match((await page.locator('.replay-head h2').textContent()) ?? '', new RegExp(`^Hand #${number}(?!\\d)`), `the replay is of another hand than the bar said, ${when}`);
       await page.locator('.replay [data-replay="close"]').click();
@@ -740,7 +842,8 @@ const replayFromTheBar = (picturesIn: string): Check => [
     };
 
     table.play((view, name) => (name === VIEWER ? { type: 'fold' } : passive(view)), (view) => view.seats[0]!.folded);
-    await offers(1, 'out of the hand');
+    await asksFor(1, 'out of the hand');
+    await playsBack(1, 'out of the hand');
 
     // A phone's open chat has the height the bar kept for a turn, so the button's line would come out of the table's
     await page.locator('.feed-toggle').click();
@@ -755,13 +858,17 @@ const replayFromTheBar = (picturesIn: string): Check => [
     assert.equal(await desktop.evaluate(TABLE_GAINS_WITHOUT_THE_BUTTON), 0, 'the table gave up height to the button on the desktop');
     await desktop.close();
 
-    // A hand goes on record when it is cleared away: with its result still up, the last on record is the one before
+    // With its result up the hand on the table is the one just played, and it goes on record only when it is cleared
+    // away: asked for now, it plays back by itself then. The last on record meanwhile is the hand before it
     table.play(passive, (view) => view.hand!.stage === 'done');
     await page.waitForSelector('.message.result');
-    await offers(1, 'with the result of the hand up');
+    await asksFor(2, 'with the result of the hand up');
 
     table.play(() => null, (view) => view.hand === null);
-    await offers(2, 'between hands');
+    await playsBack(2, 'asked for with its result up');
+
+    await asksFor(2, 'between hands');
+    await playsBack(2, 'between hands');
 
     // Word of the hands to come has the height the button's line came out of
     table.act(WIDEST, { type: 'setLastHands', hands: LIMITS.lastHands });
@@ -771,6 +878,668 @@ const replayFromTheBar = (picturesIn: string): Check => [
     const watcher = await table.open('Watcher', 'smallPhone');
     await watcher.waitForSelector('.controls .waiting');
     assert.equal(await watcher.locator(REPLAY_LAST).count(), 0, 'a watcher’s bar, which keeps no height for a turn, grew a line');
+  },
+];
+
+// Run in the page: how far the open history is scrolled, and where on the screen the last line of its open hand is
+const READERS_PLACE = `(() => {
+  const lines = document.querySelector('.history details[open] pre').getBoundingClientRect();
+
+  return { scrolled: document.querySelector('.dialog-body').scrollTop, lastLineAt: Math.round(lines.bottom) };
+})()`;
+
+/** The history is what a player opens to look at the hand that just ended, in the seconds before that hand is on record. */
+const historyGainsTheHand: Check = [
+  'a hand history opened while a hand’s result is still up gains that hand when it is cleared away, without being shut and opened again; the hand its reader had open stays open and the line they were on stays where it was, though the list is full and the new hand pushes the oldest out',
+  async (rig) => {
+    const table = rig.table(players(3, EVEN), { actionSeconds: 30 });
+    const hands = (page: Page) => page.evaluate(`[...document.querySelectorAll('.history details')].map((hand) => hand.dataset.hand + (hand.open ? ' open' : ''))`) as Promise<string[]>;
+    const place = (page: Page) => page.evaluate(READERS_PLACE) as Promise<{ scrolled: number; lastLineAt: number }>;
+    const [newest, reading] = [HISTORY_LIMIT + 1, HISTORY_LIMIT - 10];
+
+    // As many hands on record as the history holds, and the result of one more up. Paused, so that none is dealt once that one is cleared away
+    table.dealNext();
+    table.play(folding, (view) => view.hand?.number === newest && view.hand.stage === 'done');
+    table.act(WIDEST, { type: 'pause' });
+
+    const page = await table.open(VIEWER, 'smallPhone');
+    await page.waitForSelector('.message.result');
+    await openFromMenu(page, 'history');
+    await page.locator(`.history details[data-hand="${reading}"] summary`).click();
+    assert.deepEqual([(await hands(page)).at(0), (await hands(page)).at(-1)], [String(HISTORY_LIMIT), '1'], 'the hand whose result is up is on record already, or the list is not full');
+
+    await page.evaluate(`document.querySelector('.history details[open] summary').scrollIntoView({ block: 'center' })`);
+    const before = await place(page);
+    assert.ok(before.scrolled > 0, 'the list is too short to scroll, so this shows nothing of the reader’s place');
+
+    table.play(() => null, (view) => view.hand === null);
+    await page.waitForSelector(`.history details[data-hand="${newest}"]`);
+
+    const after = await hands(page);
+    assert.deepEqual([after.at(0), after.at(-1), after.filter((hand) => hand.endsWith('open'))], [String(newest), '2', [`${reading} open`]]);
+    assert.equal((await place(page)).lastLineAt, before.lastLineAt, 'the hand added above moved the line its reader was on');
+  },
+];
+
+const AHEAD = '.ahead [data-action^="ahead-"]';
+
+/**
+ * Beside a table lying down the open chat goes under the bar, not over it, and gives the side up when
+ * the turn comes. Both are for the tap that lands as the action arrives: it must find what plays nothing.
+ */
+const choicesKeepTheirPlaces: Check = [
+  'on a phone lying down, opening the chat leaves the moves to choose ahead where they lay, and when the turn comes every button of it is in sight and none lies where a choice lay',
+  async (rig) => {
+    const table = waitingBehindTheLongestCall(rig, 9);
+    const page = await table.open(VIEWER, 'smallPhone');
+
+    await page.setViewportSize(LYING);
+    await page.waitForSelector(AHEAD);
+    await settled(page);
+    const choices = await boxes(page, AHEAD);
+    assert.equal(choices.length, 5, 'the five choices are not all drawn');
+
+    await page.locator('.feed-toggle').click();
+    await page.waitForSelector('.feed.open .say');
+    await settled(page);
+    assert.deepEqual(await boxes(page, AHEAD), choices, 'the choices moved when the chat was opened');
+
+    table.play((_view, name) => (name === VIEWER ? null : { type: 'fold' }), (view) => view.hand!.toAct === 0);
+    await page.waitForSelector('.turn [data-action="fold"]:enabled');
+    await settled(page);
+
+    const moves = await boxes(page, '.turn .buttons button');
+    const { height } = page.viewportSize()!;
+
+    assert.equal(moves.length, 3, 'the buttons of the turn are not all drawn');
+    assert.ok(moves.every((move) => move.top >= 0 && move.bottom <= height), `a button of the turn is out of sight with the chat open: ${JSON.stringify(moves)} on a screen ${height} high`);
+    assert.ok(!moves.some((move) => choices.some((choice) => overlap(move, choice))), `a button of the turn came up where a choice lay: ${JSON.stringify(moves)}, and the choices ${JSON.stringify(choices)}`);
+  },
+];
+
+// Run in the page: the lines of words in the bar that its slot's edge cuts through, which read as a fault where a line scrolled away whole does not
+const LINES_CUT_BY_THE_BARS_EDGE = `(() => {
+  const slot = document.querySelector('.controls-slot').getBoundingClientRect();
+
+  return [...document.querySelectorAll('.controls-slot .waiting > :not(.ahead)')]
+    .filter((line) => {
+      const box = line.getBoundingClientRect();
+
+      return box.height > 0 && box.top < slot.bottom - 1 && box.bottom > slot.bottom + 1;
+    })
+    .map((line) => line.textContent);
+})()`;
+
+// Run in the page: the buttons of the turn that are not whole on the screen
+const MOVES_OUT_OF_SIGHT = `[...document.querySelectorAll('.turn .buttons button')]
+  .filter((move) => {
+    const box = move.getBoundingClientRect();
+    const slot = document.querySelector('.controls-slot').getBoundingClientRect();
+
+    return box.top < slot.top - 1 || box.bottom > Math.min(slot.bottom, innerHeight) + 1;
+  })
+  .map((move) => move.textContent)`;
+
+// Run in the page: the moves of the turn that a tap somewhere on the chat would reach, where the chat lies over them
+const MOVES_REACHED_THROUGH_THE_CHAT = `(() => {
+  const chat = document.querySelector('.feed').getBoundingClientRect();
+  const reached = new Set();
+
+  for (let x = chat.left + 2; x < chat.right; x += 12) {
+    for (let y = chat.top + 2; y < chat.bottom; y += 12) {
+      const move = document.elementFromPoint(x, y)?.closest('.turn button');
+
+      if (move) {
+        reached.add(move.textContent);
+      }
+    }
+  }
+
+  return [...reached];
+})()`;
+
+// Run in the page: whether the chat's list is scrolled to its newest line
+const NEWEST_LINE_IN_SIGHT = `(() => {
+  const list = document.querySelector('.entries');
+
+  return list.clientHeight > 0 && list.lastElementChild.getBoundingClientRect().bottom <= list.getBoundingClientRect().bottom + 1;
+})()`;
+
+const UNSENT = 'half a line, not sent';
+
+/**
+ * Beside a table lying down there is no room for the chat and a turn's moves at once, and the moves win:
+ * the open chat goes down to its bar for the viewer's own turn and comes back by itself. What that must
+ * never cost is a line half typed, word that someone named the viewer, or a tap that lands on a move.
+ */
+const chatMakesWayForTheTurn = (picturesIn: string): Check => [
+  'beside a table lying down the open chat goes down to its bar for the viewer’s turn and comes back after it: a line half typed keeps it open until it is sent or left, and is still in the box afterwards; a line naming the viewer is marked on the bar until the chat is back; and when it goes down every move is in sight and none takes a tap where the chat’s box and Send lay',
+  async (rig) => {
+    const table = waitingBehindTheLongestCall(rig, 9);
+    const page = await table.open(VIEWER, 'smallPhone');
+    const chatShows = (shows: boolean) => page.waitForSelector('.feed.open .feed-body', { state: shows ? 'visible' : 'hidden' });
+    const wholeTurnInSight = async (when: string) => assert.deepEqual(await page.evaluate(MOVES_OUT_OF_SIGHT), [], `a move of the turn is out of sight ${when}`);
+    const picture = (of: string) => page.screenshot({ path: `${picturesIn}defect-the-chat-beside-a-table-lying-down-${pictureName(of)}.png` });
+
+    await page.setViewportSize(LYING);
+    await page.locator('.feed-toggle').click();
+    await chatShows(true);
+    await settled(page);
+    assert.deepEqual(await page.evaluate(LINES_CUT_BY_THE_BARS_EDGE), [], 'the chat’s edge cuts through a line of the bar above it');
+    await picture('open while waiting');
+
+    // Typing as the turn comes: the box is not taken from under the line, and a tap anywhere on the chat is the chat's
+    await page.locator('#chat-input').fill(UNSENT);
+    table.play(others({ type: 'fold' }), viewersTurn);
+    await page.waitForSelector('.turn [data-action="call"]:enabled');
+    await chatShows(true);
+    await settled(page);
+    assert.equal(await page.evaluate(`document.activeElement.id`), 'chat-input', 'the turn took the keyboard out of the chat’s box');
+    assert.deepEqual(await page.evaluate(MOVES_REACHED_THROUGH_THE_CHAT), [], 'a tap on the chat reaches a move of the turn under it');
+    await picture('kept open by a line half typed');
+
+    // Leaving the box lets the chat go down, and the turn has the side to itself
+    await page.evaluate(`document.activeElement.blur()`);
+    await chatShows(false);
+    await settled(page);
+    await wholeTurnInSight('once the chat’s box was left');
+    assert.ok(await page.locator('.feed-toggle .latest').isVisible(), 'the chat’s bar does not show its newest line while the chat is down');
+    assert.ok(await page.locator('.feed-toggle .named-you').isHidden(), 'the chat’s bar says a line names the viewer when none does');
+
+    // A line that names the viewer leaves its mark on the bar, which a later line does not take away
+    table.act(WIDEST, { type: 'chat', text: `@${VIEWER} are you there` });
+    await page.waitForSelector('.feed-toggle .named-you');
+    table.act(WIDEST, { type: 'chat', text: 'take your time' });
+    await page.waitForSelector('.feed-toggle .latest:has-text("take your time")');
+    await settled(page);
+    assert.ok(await page.locator('.feed-toggle .named-you').isVisible(), 'a later line took the mark of the one that names the viewer off the chat’s bar');
+    assert.deepEqual(await unreadable(page), [], 'the turn beside the chat’s bar with its mark');
+    await picture('down for the turn');
+
+    // The move made, the chat is back without a tap, with the line that was never sent
+    table.act(VIEWER, { type: 'call' });
+    await chatShows(true);
+    await page.waitForSelector('.feed-toggle .named-you', { state: 'hidden' });
+    await settled(page);
+    assert.equal(await page.locator('#chat-input').inputValue(), UNSENT, 'the line half typed was lost while the chat was down');
+    assert.ok(await page.evaluate(NEWEST_LINE_IN_SIGHT), 'the chat came back somewhere above the lines that arrived while it was down');
+    await picture('back after the move');
+
+    // The next turn comes with the keyboard in the box again, and this time the line is sent
+    await page.locator('#chat-input').focus();
+    table.play((view, name) => (name === VIEWER ? null : passive(view)), viewersTurn);
+    await page.waitForSelector('.turn [data-action="check"]:enabled');
+    await chatShows(true);
+    await settled(page);
+    await watchTheBar(page);
+
+    // Sent with a tap on Send, which takes the keyboard from the box as it lands: the chat must not go down under the tap
+    await page.locator('.say [type="submit"]').tap();
+    await chatShows(false);
+    await settled(page);
+    await wholeTurnInSight('once the line was sent');
+    assert.deepEqual((await cameUp(page)).flatMap(tellingOf), [], 'as the chat went down a control of the bar took a tap where one of the chat’s lay');
+    assert.ok(table.view(VIEWER).feed.some((entry) => entry.text === UNSENT), 'the line was not sent');
+  },
+];
+
+/**
+ * Where keys play the moves, a chat that went down with the keyboard in its box would hand the next
+ * letter typed to the table, and F folds. There the keyboard in the box keeps the chat open by itself.
+ */
+const keyboardInTheBoxKeepsTheChat: Check = [
+  'beside a table lying down on a device with a keyboard, the keyboard in the chat’s box keeps the chat open through the viewer’s turn, before a letter is typed and after a line is sent, so a letter typed is never a move’s key; leaving the box lets the chat go down, and every move is in sight',
+  async (rig) => {
+    const table = waitingBehindTheLongestCall(rig, 9);
+    const page = await table.open(VIEWER, 'desktop');
+    const chatShows = (shows: boolean) => page.waitForSelector('.feed.open .feed-body', { state: shows ? 'visible' : 'hidden' });
+    const inTheBox = async (when: string) => assert.ok(await page.evaluate(`document.activeElement.closest('.say') !== null`), `the keyboard was taken out of the chat’s box ${when}`);
+
+    await page.setViewportSize(LYING);
+    await page.locator('.feed-toggle').click();
+    await chatShows(true);
+    await page.locator('#chat-input').focus();
+
+    table.play(others({ type: 'fold' }), viewersTurn);
+    await page.waitForSelector('.turn [data-action="call"]:enabled');
+    await settled(page);
+    await chatShows(true);
+    await inTheBox('as the turn came');
+
+    // F is the key that folds
+    await page.keyboard.press('f');
+    assert.equal(await page.locator('#chat-input').inputValue(), 'f', 'a letter typed did not go into the chat’s box');
+
+    // Sent with a click on Send, which has the keyboard from then on: the chat must not go down under the click, or after it
+    await page.locator('.say [type="submit"]').click();
+    await page.waitForFunction(`document.querySelector('#chat-input').value === ''`);
+    await settled(page);
+    await chatShows(true);
+    await inTheBox('once the line was sent');
+    assert.ok(table.view(VIEWER).feed.some((entry) => entry.text === 'f'), 'the line was not sent');
+
+    await page.evaluate(`document.activeElement.blur()`);
+    await chatShows(false);
+    await settled(page);
+    assert.deepEqual(await page.evaluate(MOVES_OUT_OF_SIGHT), [], 'a move of the turn is out of sight once the chat’s box was left');
+    assert.ok(viewersTurn(table.view(VIEWER)), 'the viewer’s turn was played by what they typed');
+  },
+];
+
+/** A moment the game draws a part of the page anew, by itself: what a finger already on its way down lands on then is the question. */
+interface Arrival {
+  /** What happens, in words. */
+  when: string;
+  /** The table a moment before. */
+  build(rig: Rig): RigTable;
+  /** What brings it. */
+  step(table: RigTable): void;
+  /** On the page once it has come: a selector, worked out from the table as the step left it where nothing else tells this drawing from the one before. */
+  then: string | ((table: RigTable) => string);
+  /** The pages hear nothing until the step is all done, so one drawing gives way straight to the next: a slow phone, or a move that got no answer and is found by a later poll. */
+  inOneView?: boolean;
+  /** What commits for good among what comes up, by what it says: on every screen it takes no tap for the whole settle time from when it is drawn, whatever lay there. */
+  forGood?: string;
+}
+
+const TABLE_OF_SIX = 6;
+const others = (move: Command) => (_view: TableView, name: string) => (name === VIEWER ? null : move);
+const viewersTurn = (view: TableView) => view.hand!.toAct === 0;
+
+/** A hand with the viewer in the big blind, last to act before the flop; `raising` is what the first to act raises to. */
+function inTheBigBlind(rig: Rig, config: Partial<TableConfig>, raising?: (view: TableView) => number): RigTable {
+  const table = tableWithTrophy(rig, TABLE_OF_SIX, EVEN, { actionSeconds: 30, ...config });
+
+  table.deal({ button: TABLE_OF_SIX - 2, holes: holesFor(TABLE_OF_SIX) });
+
+  if (raising) {
+    table.act(WIDEST, { type: 'raise', to: raising(table.view(WIDEST)) });
+    table.play(others({ type: 'fold' }), viewersTurn);
+  }
+
+  return table;
+}
+
+/** The viewer on the button with a raise to them, the two blinds still to act behind. */
+function facingTheLongestCall(rig: Rig): RigTable {
+  const table = waitingBehindTheLongestCall(rig, TABLE_OF_SIX);
+
+  table.play(others({ type: 'fold' }), viewersTurn);
+
+  return table;
+}
+
+/** The viewer has raised from the big blind and waits: when the rest fold, the hand is theirs with both cards face down. */
+function raisedFromTheBigBlind(rig: Rig): RigTable {
+  const table = inTheBigBlind(rig, { rabbitHunting: true }, () => 60);
+
+  table.act(VIEWER, { type: 'raise', to: 200 });
+
+  return table;
+}
+
+const everyoneFolds = (table: RigTable) => table.play(others({ type: 'fold' }), (view) => view.hand!.stage === 'done');
+
+/** The viewer's call, a raise from the next to act and a fold from everyone after: the action is back on the viewer for another decision. */
+function callAndIsRaised(table: RigTable): void {
+  let raised = false;
+
+  table.act(VIEWER, { type: 'call' });
+  table.play((view, name) => {
+    if (name === VIEWER) {
+      return null;
+    }
+
+    if (raised) {
+      return { type: 'fold' };
+    }
+
+    raised = true;
+
+    return { type: 'raise', to: view.hand!.options!.minRaiseTo };
+  }, viewersTurn);
+}
+
+// The mark a move's button carries for the decision it answers: decisionOf in src/client/render/controls.ts
+const decisionMark = (table: RigTable) => `${table.view(VIEWER).hand!.number}.${table.view(VIEWER).hand!.turn}`;
+
+const RECAP = '.dialog[aria-label="Tonight"] .tonight-crown';
+
+/**
+ * Every way a part of the page is known to change by itself with controls on it. Something new that
+ * comes up by itself, in the bar, a dialog or a banner, gets a row here.
+ */
+const ARRIVALS: Arrival[] = [
+  {
+    when: 'the turn comes with a raise to call',
+    build: (rig) => waitingBehindTheLongestCall(rig, TABLE_OF_SIX),
+    step: (table) => table.play(others({ type: 'fold' }), viewersTurn),
+    then: '.turn [data-action="call"]:enabled',
+  },
+  {
+    when: 'the turn comes with nothing to call',
+    build: (rig) => inTheBigBlind(rig, {}),
+    step: (table) => table.play(others({ type: 'call' }), viewersTurn),
+    then: '.turn [data-action="check"]:enabled',
+  },
+  {
+    when: 'the viewer has called and the hand goes on',
+    build: facingTheLongestCall,
+    step: (table) => table.act(VIEWER, { type: 'call' }),
+    then: '.controls .waiting',
+  },
+  {
+    when: 'the viewer has folded and the hand goes on',
+    build: facingTheLongestCall,
+    step: (table) => table.act(VIEWER, { type: 'fold' }),
+    then: '.controls .waiting',
+  },
+  {
+    when: 'the viewer’s fold ends the hand',
+    build: (rig) => inTheBigBlind(rig, { rabbitHunting: true }, () => 60),
+    step: (table) => table.act(VIEWER, { type: 'fold' }),
+    then: '.message.result',
+  },
+  {
+    when: 'the viewer has called all in and is asked how many times to run it',
+    build: (rig) => inTheBigBlind(rig, { maxRuns: 3 }, (view) => view.hand!.options!.maxRaiseTo),
+    step: (table) => table.act(VIEWER, { type: 'call' }),
+    then: '.controls [data-action^="rit-"]',
+    forGood: 'Twice',
+  },
+  {
+    when: 'everyone folds to the viewer’s raise while they wait, and the offer to show a card comes',
+    build: raisedFromTheBigBlind,
+    step: everyoneFolds,
+    then: '.controls [data-action="show-card"]',
+    forGood: 'Show ',
+  },
+  {
+    when: 'the viewer’s turn is on screen, their call is made away from this page (their other device, the clock, a choice made ahead) and a raise behind it comes in the same view: one decision gives way straight to the next',
+    build: facingTheLongestCall,
+    step: callAndIsRaised,
+    then: (table) => `.turn [data-action="call"][data-keep="${decisionMark(table)}"]`,
+    inOneView: true,
+  },
+  {
+    when: 'the night is ended between hands and its recap opens by itself over the table',
+    build: (rig) => tableWithTrophy(rig, TABLE_OF_SIX, EVEN),
+    step: (table) => table.act(WIDEST, { type: 'endNight' }),
+    then: RECAP,
+  },
+];
+
+// A timer may fire a moment before its time
+const TIMER_SLACK_MS = 20;
+
+/**
+ * The checks of what comes up under a finger, one for each arrival, on every screen with the chat shut
+ * and open: a control that comes up where a different control lay must not be what a tap made in that
+ * moment reaches, and such a tap must do nothing at all. The page is tapped on every control it holds
+ * back, the moment it does (underTheFinger.ts).
+ */
+export const underTheFinger = (): Check[] =>
+  ARRIVALS.map((arrival): Check => [
+    `no control takes a tap where another control lay the moment before: ${arrival.when}, on a 360 and a 375 phone standing and lying, the chat shut and open, and on the desktop`,
+    async (rig) => {
+      const table = arrival.build(rig);
+      const screens = [...PHONES.flatMap((size) => [{ size, chat: false }, { size, chat: true }]), { size: null, chat: false }];
+
+      const pages = await Promise.all(
+        screens.map(async ({ size, chat }) => {
+          const page = await table.open(VIEWER, size ? 'smallPhone' : 'desktop');
+
+          if (size) {
+            await page.setViewportSize(size);
+          }
+
+          await page.waitForSelector('.controls-slot .controls');
+
+          if (chat) {
+            await page.locator('.feed-toggle').click();
+            await page.waitForSelector('.feed.open');
+          }
+
+          await settled(page);
+
+          const sent = opsSent(page);
+          const polls = arrival.inOneView ? await Gate.on(page, 'polls') : null;
+
+          await watchTheBar(page);
+          await polls?.close('requests');
+
+          return { page, sent, polls, where: `${size?.name ?? 'desktop'}${chat ? ', the chat open' : ''}` };
+        }),
+      );
+
+      arrival.step(table);
+      await Promise.all(pages.map(({ polls }) => polls?.open()));
+
+      const then = typeof arrival.then === 'string' ? arrival.then : arrival.then(table);
+      const wrong: string[] = [];
+      let cameUpAnywhere = 0;
+      let heldForGood = 0;
+
+      for (const { page, sent, where } of pages) {
+        await page.waitForSelector(then);
+        await settled(page);
+
+        const { found, held, liveAtOnce } = await watched(page);
+        const here = found.flatMap(tellingOf);
+        const forGood = arrival.forGood;
+
+        cameUpAnywhere += found.length;
+
+        if (sent.includes('act')) {
+          here.push('  a tap on a control that was held back reached the table all the same');
+        }
+
+        here.push(...held.filter((one) => one.sameLetGo === false).map((one) => `  ${one.what} is not the control it was once let go`));
+
+        if (forGood !== undefined) {
+          const commits = held.filter((one) => one.what.includes(forGood));
+
+          heldForGood += commits.length;
+          here.push(...liveAtOnce.filter((said) => said.includes(forGood)).map((said) => `  ${said} took a tap the moment it came up`));
+          here.push(...commits.filter((one) => one.lasted < TAPS_SETTLE_MS - TIMER_SLACK_MS).map((one) => `  ${one.what} was let go ${Math.round(one.lasted)} ms after it came up`));
+        }
+
+        wrong.push(...(here.length > 0 ? [`${where}:`, ...here] : []));
+      }
+
+      assert.equal(wrong.length, 0, `a tap lands on what it was not aimed at\n${wrong.join('\n')}`);
+      assert.ok(cameUpAnywhere > 0, 'nothing came up where another control lay, on any screen: the arrival no longer shows what it is here for');
+      assert.ok(arrival.forGood === undefined || heldForGood > 0, `“${arrival.forGood}” was held back on no screen: the arrival no longer shows what it is here for`);
+    },
+  ]);
+
+/** A tap of the player's own that brings another control up where the tapped one lay. The button tapped is switched off until the table answers, and is still what the second tap of two is on its way to. */
+interface OwnTap {
+  when: string;
+  build(rig: Rig): RigTable;
+  /** The button tapped. */
+  tap: string;
+  /** On the page once the table has answered. */
+  then: string;
+}
+
+const OWN_TAPS: OwnTap[] = [
+  {
+    when: 'one of two cards is shown and the offer of the other moves into its place',
+    build(rig) {
+      const table = raisedFromTheBigBlind(rig);
+
+      everyoneFolds(table);
+
+      return table;
+    },
+    tap: '.controls [data-action="show-card"][data-place="0"]',
+    then: '.show-cards:not(:has([data-place="0"])) [data-place="1"]',
+  },
+  {
+    when: 'a player sitting out says they are back and the switch to sit out comes up in its place',
+    build(rig) {
+      const table = tableWithTrophy(rig, TABLE_OF_SIX, EVEN);
+
+      table.act(VIEWER, { type: 'sitOut' });
+
+      return table;
+    },
+    tap: '.controls [data-action="sit-in"]',
+    then: '.controls [data-action="sit-out"]',
+  },
+];
+
+const secondTapFindsNothingNew = OWN_TAPS.map((own): Check => [
+  `the second tap of two lands on nothing the first one brought up: ${own.when}, on a 360 phone standing and lying`,
+  async (rig) => {
+    for (const size of [SMALL_STANDING, LYING]) {
+      const table = own.build(rig);
+      const page = await table.open(VIEWER, 'smallPhone');
+
+      await page.setViewportSize(size);
+      await page.waitForSelector(own.tap);
+      await settled(page);
+
+      const sent = opsSent(page);
+
+      await watchTheBar(page);
+      await page.locator(own.tap).tap();
+      await page.waitForSelector(own.then);
+
+      const { found } = await watched(page);
+
+      assert.ok(found.length > 0, `${size.name}: nothing came up where the tapped button lay: the tap no longer shows what it is here for`);
+      assert.deepEqual(found.flatMap(tellingOf), [], `${size.name}: a second tap lands on what the first one brought up`);
+      assert.equal(sent.filter((op) => op === 'act').length, 1, `${size.name}: the table was sent something other than the one tap`);
+      await page.close();
+    }
+  },
+]);
+
+/**
+ * The other side of the same rule: a tap is held back only where a different control lay, and only for
+ * a moment. A player who is ready when their turn comes must not be slowed, so the moves that come up
+ * over the words of the bar, as all of them do on a phone standing and on the desktop, are live at once,
+ * and a bar drawn again with the same buttons in the same places holds nothing back.
+ */
+const onlyWhatCameUpOverAnotherIsHeld: Check = [
+  `a turn’s Fold and Call take a tap the moment they come up over the bar’s words, on a 360 phone standing and on the desktop, and a bar drawn again on that turn with the same buttons in the same places holds nothing back; beside a table lying down the Raise that comes up where a switch lay takes no tap for ${TAPS_SETTLE_MS} ms and then does`,
+  async (rig) => {
+    const [arrival] = ARRIVALS;
+    const table = arrival!.build(rig);
+
+    const pages = await Promise.all(
+      [SMALL_STANDING, LYING, null].map(async (size) => {
+        const page = await table.open(VIEWER, size ? 'smallPhone' : 'desktop');
+
+        if (size) {
+          await page.setViewportSize(size);
+        }
+
+        await page.waitForSelector('.controls .waiting');
+        await settled(page);
+        await watchTheBar(page);
+
+        return { page, lying: size === LYING, where: size?.name ?? 'desktop' };
+      }),
+    );
+
+    arrival!.step(table);
+
+    for (const { page, lying, where } of pages) {
+      await page.waitForSelector(arrival!.then as string);
+
+      const { held, liveAtOnce } = await watched(page);
+
+      if (lying) {
+        const raise = held.filter((one) => one.what.includes('Raise'));
+
+        assert.ok(raise.length > 0, `${where}: Raise came up where “Sit out next hand” lay and was not held back: ${JSON.stringify(held)}`);
+        assert.deepEqual(raise.filter((one) => one.lasted < TAPS_SETTLE_MS - TIMER_SLACK_MS), [], `${where}: Raise was let go before the moment was over`);
+        continue;
+      }
+
+      assert.deepEqual(held.filter((one) => /Fold|Call|Raise/.test(one.what)), [], `${where}: a move of the turn was held back with no other control under it`);
+
+      for (const move of ['Fold', 'Call']) {
+        assert.ok(liveAtOnce.some((said) => said.includes(move)), `${where}: ${move} did not take a tap the moment it came up: ${JSON.stringify(liveAtOnce)}`);
+      }
+    }
+
+    // The viewer's own switch draws the bar again on their turn, every button where it was
+    const heldBefore = await Promise.all(pages.map(async ({ page }) => (await watched(page)).held.length));
+
+    table.act(VIEWER, { type: 'setStraddle', kind: 'straddle', on: true });
+
+    for (const [nth, { page, where }] of pages.entries()) {
+      await page.waitForSelector('.controls [data-action="straddle"][aria-checked="true"]');
+      assert.equal((await watched(page)).held.length, heldBefore[nth], `${where}: a button was held back when the bar was drawn again with every button where it was`);
+    }
+  },
+];
+
+// Run in the page: puts a box over the pot that a tap passes through, as a landed throw or a toast is, and says what a tap on it reaches
+const COVER_THE_POT = `(() => {
+  const pot = document.querySelector('.pot').getBoundingClientRect();
+  const cover = document.createElement('div');
+
+  cover.className = 'stand-in-for-a-decoration';
+  cover.style.cssText = 'position: fixed; z-index: 99999; pointer-events: none; background: rgb(0, 0, 0); left: ' + pot.left + 'px; top: ' + pot.top + 'px; width: ' + pot.width + 'px; height: ' + pot.height + 'px';
+  document.body.append(cover);
+
+  return document.elementFromPoint(pot.left + pot.width / 2, pot.top + pot.height / 2) === cover;
+})()`;
+
+/**
+ * The look, held to what it claims. Asking the page what is on top at a point leaves out everything a
+ * tap passes through, and the things most likely to lie on what is read are exactly those: a landed
+ * throw, a reaction's mark, a toast. The look makes every element take the tap while it looks.
+ */
+const lookSeesWhatATapPassesThrough: Check = [
+  'the look finds the pot unreadable under a box that taps pass through',
+  async (rig) => {
+    const table = tableWithTrophy(rig, TABLE_OF_SIX, EVEN);
+
+    table.dealNext({ holes: holesFor(TABLE_OF_SIX) });
+    const page = await table.open(VIEWER, 'desktop');
+    await page.waitForSelector('.pot');
+    await settled(page);
+    assert.deepEqual(await unreadable(page), [], 'the table is not clear to begin with');
+
+    assert.equal(await page.evaluate(COVER_THE_POT), false, 'a tap on the box reaches the box, so it is no stand-in for what a tap passes through');
+
+    const found = await unreadable(page);
+    assert.ok(found.some((one) => one.kind === 'covered' && one.what.includes('.pot') && one.by?.includes('stand-in-for-a-decoration')), `the pot under the box was not found: ${JSON.stringify(found)}`);
+  },
+];
+
+const STAGE_HEIGHT = `document.querySelector('.stage').getBoundingClientRect().height`;
+
+/** The bar that waits has more to say than the bar of a turn, and must not be the taller for it: the table would jump as the turn came. */
+const barKeepsTheTurnsHeight = (picturesIn: string): Check => [
+  'the bar of a player waiting with the moves to choose ahead, word of the hands to come and of a straddle passed over, each at its longest, is as tall as the bar of their turn, on a 360 phone and the desktop',
+  async (rig) => {
+    const table = waitingWithEveryNote(rig, 9);
+    const pages = [await table.open(VIEWER, 'smallPhone'), await table.open(VIEWER, 'desktop')];
+    const waiting: number[] = [];
+
+    for (const page of pages) {
+      await page.waitForSelector('.waiting.choosing .straddle-note');
+      assert.equal(await page.locator('.waiting.choosing .straddle-note .named').count(), 1, 'the straddle was passed over for another reason than a player’s right, so the note names nobody');
+      assert.equal(await page.locator('.waiting.choosing .next-hand span').count(), 2, 'the bar does not say both how many hands are left and that the next is a bomb pot');
+      await settled(page);
+      waiting.push((await page.evaluate(STAGE_HEIGHT)) as number);
+    }
+
+    await pages[0]!.screenshot({ path: `${picturesIn}defect-the-bar-of-a-player-waiting-with-every-note.png` });
+    table.play((_view, name) => (name === VIEWER ? null : { type: 'call' }), (view) => view.hand!.toAct === 0);
+
+    for (const [nth, page] of pages.entries()) {
+      await page.waitForSelector('.turn [data-action="fold"]:enabled');
+      await settled(page);
+      assert.equal(await page.evaluate(STAGE_HEIGHT), waiting[nth], `the table changed height as the turn came, ${nth === 0 ? 'on a 360 phone' : 'on the desktop'}`);
+    }
   },
 ];
 
@@ -825,5 +1594,5 @@ export function layoutSweep(picturesIn: string): Check[] {
     },
   ]);
 
-  return [...defects, replayFromTheBar(picturesIn), ...tables, ...screens];
+  return [...defects, replayFromTheBar(picturesIn), historyGainsTheHand, barKeepsTheTurnsHeight(picturesIn), choicesKeepTheirPlaces, chatMakesWayForTheTurn(picturesIn), keyboardInTheBoxKeepsTheChat, lookSeesWhatATapPassesThrough, ...underTheFinger(), ...secondTapFindsNothingNew, onlyWhatCameUpOverAnotherIsHeld, ...tables, ...screens];
 }

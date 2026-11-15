@@ -9,6 +9,7 @@ import type { ApiError, ApiRequest, ApiResponse, Auth } from '../server/api.ts';
 import { isRefusal, nextRetry, ServerClock, ServerLine, sleep, TableConnection } from './connection.ts';
 import type { SendOutcome, Session } from './connection.ts';
 import { TableEffects } from './effects.ts';
+import { lastOnRecord } from './handRecords.ts';
 import { HotkeyPresser } from './hotkeyPresser.ts';
 import { playerFor, RememberedPlayer } from './knownPlayers.ts';
 import type { Answer } from './knownPlayers.ts';
@@ -21,6 +22,7 @@ import { sendersShown } from './senders.ts';
 import { Motion, motionAbility } from './motion.ts';
 import { pageMotion, pageWatching } from './pageMotion.ts';
 import { pagePace } from './pagePace.ts';
+import { TapGuard } from './pageTapGuard.ts';
 import { noReplayLine, pageTicker } from './replayPlayer.ts';
 import { ReplayScreen } from './replayScreen.ts';
 import { neededBy } from './replayTurn.ts';
@@ -73,6 +75,8 @@ interface TableScreen {
   banners: Slot;
   stage: Slot;
   controls: Slot;
+  /** Holds back a tap on a control of the bar that came up where another lay a moment before. */
+  taps: TapGuard;
   overlay: Slot;
   modal: Modal;
   feed: Feed;
@@ -147,6 +151,9 @@ export class App {
 
   /** Whether the hand the bar's button asked to see again is still being fetched. */
   private fetchingReplay = false;
+
+  /** The hand the bar's button asked to see again before it was on record, played back as soon as it is. */
+  private replayWanted: number | null = null;
 
   /**
    * A member the address names whom this browser hasn't taken up as its own. The address may be the
@@ -573,7 +580,11 @@ export class App {
       picker.toggleElement,
     );
     const stage = new Slot(h('div.stage'));
-    const overlay = new Slot(h('div.overlay', { hidden: true }));
+    const bar = h('div.controls-slot');
+    // The parts whose controls come up by themselves have the guard. Not the table, drawn anew with every move and with none of its controls moving
+    const taps = new TapGuard();
+    taps.watchShape(bar);
+    const overlay = new Slot(h('div.overlay', { hidden: true }), taps);
     const motion = new Motion(pageMotion(stage.element), this.prefs, this.watching);
     const above = h('div.above');
     const marks = new ReactionMarks(above, stage.element);
@@ -594,9 +605,10 @@ export class App {
     });
     const screen: TableScreen = {
       topbar: new Slot(h('header.topbar')),
-      banners: new Slot(h('div.banners')),
+      banners: new Slot(h('div.banners'), taps),
       stage,
-      controls: new Slot(h('div.controls-slot')),
+      controls: new Slot(bar, taps),
+      taps,
       overlay,
       modal: new Modal(overlay.element),
       feed,
@@ -613,7 +625,10 @@ export class App {
       effects,
       shown: new ShownTable(motion, () => this.clock.now(), () => Date.now(), pagePace(), {
         draw: () => this.drawShown(),
-        tell: (change) => effects.run(change),
+        tell: (change) => {
+          effects.run(change);
+          this.replayOnceRecorded(change.view);
+        },
         say: (message) => this.toast(message),
       }),
       sizing: sizingMemory(),
@@ -650,6 +665,7 @@ export class App {
 
   private leaveTableScreen(): void {
     this.leaves += 1;
+    this.replayWanted = null;
     this.table?.close();
     this.table = null;
     this.screen?.resizeObserver.disconnect();
@@ -659,6 +675,7 @@ export class App {
     this.screen?.marks.dispose();
     this.screen?.picker.dispose();
     this.screen?.seatMoves.dispose();
+    this.screen?.taps.dispose();
     this.screen?.stopMutes();
     this.screen?.replay.close();
     this.screen = null;
@@ -734,7 +751,7 @@ export class App {
    */
   private showOutdated(): void {
     this.screen?.replay.close();
-    this.closeDialog();
+    this.closeDialog(true);
 
     // A move this page was showing as made may never be played, or was and its answer is now left unread:
     // the page cannot tell, so what stays behind the notice is the server's last word, and the reload shows the truth
@@ -1052,15 +1069,26 @@ export class App {
 
   // ---- Dialogs ----
 
-  private openDialog(dialog: Dialog): void {
+  /** `byItself` is for a dialog the game opens or closes, not the player: what that brings up under a finger takes no tap for a moment (`TapGuard`). */
+  private openDialog(dialog: Dialog, byItself = false): void {
     this.dialog = dialog;
     this.dialogOpens += 1;
-    this.drawDialog();
+    this.drawDialogAs(byItself);
   }
 
-  private closeDialog(): void {
+  private closeDialog(byItself = false): void {
     this.dialog = null;
-    this.drawDialog();
+    this.drawDialogAs(byItself);
+  }
+
+  private drawDialogAs(byItself: boolean): void {
+    const taps = this.screen?.taps;
+
+    if (byItself || !taps) {
+      this.drawDialog();
+    } else {
+      taps.byThePlayer(() => this.drawDialog());
+    }
   }
 
   private offerDialog(dialog: Dialog, still: (view: TableView) => boolean): void {
@@ -1078,6 +1106,13 @@ export class App {
     return this.server.outdated || this.dialog !== null || (this.screen?.seatMoves.active ?? false) || (this.screen?.replay.isOpen ?? false);
   }
 
+  /** Whether the viewer is part way through typing a line, which anything that opens by itself would take the keyboard from. */
+  private midLine(): boolean {
+    const field = document.activeElement;
+
+    return field instanceof HTMLInputElement && field.type === 'text' && field.value !== '';
+  }
+
   /**
    * Opens the dialog that is waiting, once the viewer is free for it (`DialogOffers`). An answer the
    * table still owes them counts as busy: it may be what makes the dialog moot. Tried on every tick.
@@ -1085,19 +1120,14 @@ export class App {
   private showOffered(): void {
     const offered = this.offered;
     const view = this.shownView();
-    if (!offered || !view || this.tableCovered() || this.sending > 0) {
-      return;
-    }
-
-    const field = document.activeElement;
-    if (field instanceof HTMLInputElement && field.type === 'text' && field.value !== '') {
+    if (!offered || !view || this.tableCovered() || this.sending > 0 || this.midLine()) {
       return;
     }
 
     this.offered = null;
 
     if (offered.still(view)) {
-      this.openDialog(offered.dialog);
+      this.openDialog(offered.dialog, true);
     }
   }
 
@@ -1120,11 +1150,19 @@ export class App {
       this.hotkeys.shown();
     }
 
-    screen.overlay.element.hidden = !covered;
+    // The page under a dialog is covered and uncovered as the dialog is drawn or emptied, not before: whoever is told of the redraw sees the page as it was, and then as it is
+    const cover = (covers: boolean) => {
+      screen.overlay.element.hidden = !covers;
+      screen.modal.update(covers);
+    };
 
     if (!dialog || !view) {
-      screen.overlay.draw(null, () => null);
-      screen.modal.update(false);
+      screen.overlay.draw(null, () => {
+        cover(false);
+
+        return null;
+      });
+
       return;
     }
 
@@ -1134,7 +1172,13 @@ export class App {
     const scrolled = this.dialogDrawn === this.dialogOpens ? (body()?.scrollTop ?? 0) : 0;
 
     // Drawn again for what changed at the table, a dialog stays where its reader had scrolled to
-    if (screen.overlay.draw([this.dialogOpens, dialogShows(dialog, view, handlers)], () => dialogEl(dialog, view, handlers)) && scrolled > 0) {
+    const redrawn = screen.overlay.draw([this.dialogOpens, dialogShows(dialog, view, handlers)], () => {
+      screen.overlay.element.hidden = false;
+
+      return dialogEl(dialog, view, handlers);
+    });
+
+    if (redrawn && scrolled > 0) {
       body()!.scrollTop = scrolled;
     }
 
@@ -1190,21 +1234,52 @@ export class App {
     screen.replay.show({ record, steps, table: view, kept: screen.dealt.of(view.you.id, record.number) });
   }
 
-  /** Plays hand number `number` back from the history, as the bar under the table asks for the hand just played, or says why it can't. */
-  private async replayHand(number: number): Promise<void> {
+  /**
+   * Plays hand number `number` back from the history, as the bar under the table asks for the hand just
+   * played, or says why it can't. A hand whose result is still up is not on record yet: it is played
+   * back as soon as a view says it is, some seconds on, and the viewer is told so meanwhile. The hand
+   * before it is on record, and is not the one they asked for. `unasked` is that later playing back,
+   * which no tap of this moment asks for.
+   */
+  private async replayHand(number: number, unasked = false): Promise<void> {
+    const asked = this.shownView();
+
+    if (asked && number > lastOnRecord(asked)) {
+      this.replayWanted = number;
+      this.toast(`Hand #${number} plays back as soon as it is cleared from the table.`);
+
+      return;
+    }
+
     // The bar can be drawn again while the hand is fetched, with its button live: a second tap adds nothing to the first
     if (this.fetchingReplay) {
       return;
     }
 
+    const leaves = this.leaves;
+
     this.fetchingReplay = true;
     const hands = await this.loadHistory().catch(() => null);
     this.fetchingReplay = false;
 
-    // They left the table meanwhile, or the game came to wait on them: a replay they asked for while free is not put over their move
     const view = this.shownView();
 
-    if (!view || neededBy(view)) {
+    // They left the table meanwhile, perhaps for another, whose hands have the same numbers
+    if (!view || leaves !== this.leaves) {
+      return;
+    }
+
+    // The game came to wait on them meanwhile: a replay they asked for while free is not put over their move
+    if (neededBy(view)) {
+      this.toast(`Your turn. Hand #${number} is in the hand history.`);
+
+      return;
+    }
+
+    // Seconds after the tap that asked for it, it takes the place of nothing they have opened since, nor the keyboard from a line half typed
+    if (unasked && (this.tableCovered() || this.midLine())) {
+      this.toast(`Hand #${number} is in the hand history.`);
+
       return;
     }
 
@@ -1226,13 +1301,23 @@ export class App {
     }
   }
 
+  /** Plays back the hand that was asked for before it was on record, once a view put on screen says it is there. */
+  private replayOnceRecorded(view: TableView): void {
+    const wanted = this.replayWanted;
+
+    if (wanted !== null && lastOnRecord(view) >= wanted) {
+      this.replayWanted = null;
+      void this.replayHand(wanted, true);
+    }
+  }
+
   /** Takes a hand being played back off the table, and the history it was opened from, for the game to have the viewer (`ReplaySetAside`). */
   private setReplayAside(): boolean {
     if (!this.screen?.replay.setAside()) {
       return false;
     }
 
-    this.closeDialog();
+    this.closeDialog(true);
 
     return true;
   }

@@ -76,10 +76,13 @@ export function holdWhile(button: HTMLButtonElement, action: () => Promise<unkno
  */
 export class Slot {
   readonly element: HTMLElement;
+  private readonly redrawn: Redrawn | undefined;
   private drawn: string | null = null;
 
-  constructor(element: HTMLElement) {
+  /** `redrawn` is told of every rebuild: a part whose controls come up by themselves, under a finger, is given the page's tap guard. */
+  constructor(element: HTMLElement, redrawn?: Redrawn) {
     this.element = element;
+    this.redrawn = redrawn;
   }
 
   /** `shows` is everything the content depends on; `build` runs only when that differs from last time. Says whether it ran. */
@@ -90,11 +93,38 @@ export class Slot {
     }
 
     this.drawn = signature;
+    this.redrawn?.leaving();
     this.element.replaceChildren();
     append(this.element, build());
+    this.redrawn?.drawn();
 
     return true;
   }
+}
+
+/** Told of every rebuild of a part, around it. */
+export interface Redrawn {
+  /** What is drawn is about to be taken away and is still on the page: the one moment to see where things lay. */
+  leaving(): void;
+  /** What replaces it is on the page. */
+  drawn(): void;
+}
+
+/**
+ * What a control is known by once its part is drawn anew and it is a new element: its id, else its tag
+ * with every `data-*`, `name` and `value` attribute. Never its class, what it says or where it lies.
+ */
+export function controlKey(control: Element): string {
+  if (control.id !== '') {
+    return `#${control.id}`;
+  }
+
+  const marks = [...control.attributes]
+    .filter(({ name }) => name.startsWith('data-') || name === 'name' || name === 'value')
+    .map(({ name, value }) => `${name}=${value}`)
+    .sort();
+
+  return [control.tagName, ...marks].join(' ');
 }
 
 const RANK_LABELS: Record<number, string> = { 10: '10', 11: 'J', 12: 'Q', 13: 'K', 14: 'A' };

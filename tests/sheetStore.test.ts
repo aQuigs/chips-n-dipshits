@@ -1,14 +1,14 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { addMember, AUTO_SHOWS, BADGES, createTable, DEFAULT_CONFIG, LIMITS, prettyCards, presetSettings, REACTIONS, REACTIONS_LIVE } from '../src/engine/index.ts';
+import { addMember, AUTO_SHOWS, BADGES, createTable, DEFAULT_CONFIG, LIMITS, prettyCards, presetSettings, REACTIONS, REACTIONS_LIVE, STATE_SCHEMA } from '../src/engine/index.ts';
 import type { Bounty, Effect, HandRecord, KnownPlayer, Rng, TableConfig, TableState } from '../src/engine/index.ts';
 import { ERRORS_TAB, REPORTS_PER_RUN, SheetErrorLog } from '../src/gas/sheetErrorLog.ts';
 import { SheetPlayerStore } from '../src/gas/sheetPlayerStore.ts';
 import { SheetPresetStore } from '../src/gas/sheetPresetStore.ts';
 import { TEXT, TIMESTAMP, WHOLE_NUMBER } from '../src/gas/sheets.ts';
 import type { SpreadsheetLike } from '../src/gas/sheets.ts';
-import { SheetStore } from '../src/gas/sheetStore.ts';
+import { peekKey, rowKey, SheetStore, stateKey } from '../src/gas/sheetStore.ts';
 import { ERROR_LIMITS, NOWHERE } from '../src/server/errorLog.ts';
 import type { ErrorLog } from '../src/server/errorLog.ts';
 import { MemoryErrorLog } from '../src/server/memoryErrorLog.ts';
@@ -251,7 +251,7 @@ test('a table too big for the cache is still stored and served, just from the sh
 
   save(store, state);
 
-  assert.equal(cache.get('state:ABC234'), null);
+  assert.equal(cache.get(stateKey('ABC234')), null);
   assert.deepEqual(store.peek('ABC234'), { version: 1, wakeAt: null });
   assert.deepEqual(store.read('ABC234'), state);
 });
@@ -266,7 +266,7 @@ test('a table that outgrows its row is refused, and the cache stops serving the 
   huge.feed.push({ seq: 1, at: 1, kind: 'chat', from: 'Host', text: 'x'.repeat(300_000) });
 
   assert.throws(() => save(store, huge), /more than its row can hold/);
-  assert.equal(cache.get('state:ABC234'), null);
+  assert.equal(cache.get(stateKey('ABC234')), null);
   assert.equal(store.read('ABC234')!.version, 1, 'the sheet still has the last good save');
 });
 
@@ -278,8 +278,8 @@ test('if the write to the sheet fails, the cache is dropped rather than left sta
   assert.throws(() => save(store, table('ABC234', 2)), /Spreadsheets failed/);
 
   assert.equal(lock.held, false);
-  assert.equal(cache.get('state:ABC234'), null);
-  assert.equal(cache.get('peek:ABC234'), null);
+  assert.equal(cache.get(stateKey('ABC234')), null);
+  assert.equal(cache.get(peekKey('ABC234')), null);
 });
 
 test('if the cache cannot be written after a save, the save still counts and the cache is dropped', () => {
@@ -289,7 +289,7 @@ test('if the cache cannot be written after a save, the save still counts and the
   cache.failNextWrite = true;
   save(store, table('ABC234', 2));
 
-  assert.equal(cache.get('state:ABC234'), null);
+  assert.equal(cache.get(stateKey('ABC234')), null);
   assert.equal(store.read('ABC234')!.version, 2, 'the sheet has the new save and the next read finds it');
 });
 
@@ -298,15 +298,41 @@ test('a cache that lost only one of a table\'s entries gets both back from the s
   save(store, table('ABC234', 3));
   const tables = spreadsheet.getSheetByName('Tables')!;
 
-  cache.entries.delete('peek:ABC234');
+  cache.entries.delete(peekKey('ABC234'));
   const readsBefore = tables.reads;
   assert.deepEqual(store.peek('ABC234'), { version: 3, wakeAt: null });
   assert.ok(tables.reads > readsBefore, 'the sheet was read');
-  assert.notEqual(cache.get('peek:ABC234'), null, 'so the next peek is answered by the cache');
+  assert.notEqual(cache.get(peekKey('ABC234')), null, 'so the next peek is answered by the cache');
 
   const readsAfter = tables.reads;
   store.peek('ABC234');
   assert.equal(tables.reads, readsAfter);
+});
+
+test('what code of another version left in the cache for a table is neither read nor replaced: each version keeps its tables under keys of its own', () => {
+  const { store, cache } = setup();
+  save(store, table('ABC234', 3));
+
+  // Under the keys the code before this one reads and writes: a table as a later version saved it, the news of it, and a row
+  const theirs = Object.fromEntries(
+    Object.entries({ state: JSON.stringify({ ...table('ABC234', 9), schema: STATE_SCHEMA + 1 }), peek: JSON.stringify({ version: 9, wakeAt: null }), row: '7' }).map(([kind, value]) => [`${kind}:ABC234`, value]),
+  );
+  for (const [key, value] of Object.entries(theirs)) {
+    cache.entries.set(key, value);
+  }
+
+  assert.equal(store.read('ABC234')!.version, 3, 'the table is the one this version saved');
+  assert.deepEqual(store.peek('ABC234'), { version: 3, wakeAt: null });
+
+  // A save, a table put out of the cache and a look for one that is not there all leave that code's entries as it left them
+  save(store, table('ABC234', 4));
+  store.read('NEVER2');
+  for (const [key, value] of Object.entries(theirs)) {
+    assert.equal(cache.entries.get(key), value, key);
+  }
+
+  const mine = [...cache.entries.keys()].filter((key) => /(ABC234|NEVER2)$/.test(key) && !(key in theirs));
+  assert.deepEqual(mine.sort(), [`peek:${STATE_SCHEMA}:ABC234`, `peek:${STATE_SCHEMA}:NEVER2`, `row:${STATE_SCHEMA}:ABC234`, `state:${STATE_SCHEMA}:ABC234`]);
 });
 
 test('a missing table is remembered briefly, and creating it clears that', () => {
@@ -314,7 +340,7 @@ test('a missing table is remembered briefly, and creating it clears that', () =>
 
   assert.equal(store.peek('ABC234'), null);
   assert.equal(store.read('ABC234'), null);
-  assert.equal(cache.get('peek:ABC234'), 'none');
+  assert.equal(cache.get(peekKey('ABC234')), 'none');
 
   const opensAfterFirstMiss = counts.opens;
   assert.equal(store.peek('ABC234'), null);
@@ -618,25 +644,25 @@ test('records left waiting by a table\'s last save are copied without anyone hav
   const { store, spreadsheet, cache, anotherRun } = setup();
   save(store, table('ABC234', 1), [buyIn(100)]);
   const { ledger, held, ledgerAmounts } = records(spreadsheet);
-  const settledFor = cache.seconds.get('state:ABC234')!;
+  const settledFor = cache.seconds.get(stateKey('ABC234'))!;
 
   ledger.refuseWritesAfter(0);
   save(store, table('ABC234', 2), [buyIn(-100)]);
-  assert.ok(cache.seconds.get('state:ABC234')! <= 60, 'the cache is told to let go soon, so that a reader comes back to the sheet');
-  assert.ok(cache.seconds.get('peek:ABC234')! <= 60);
+  assert.ok(cache.seconds.get(stateKey('ABC234'))! <= 60, 'the cache is told to let go soon, so that a reader comes back to the sheet');
+  assert.ok(cache.seconds.get(peekKey('ABC234'))! <= 60);
 
   // A reader that finds the cache empty retries, here while the tab is still failing
   cache.entries.clear();
   assert.equal(anotherRun().peek('ABC234')!.version, 2);
   assert.deepEqual(ledgerAmounts(), [100]);
-  assert.ok(cache.seconds.get('peek:ABC234')! <= 60);
+  assert.ok(cache.seconds.get(peekKey('ABC234'))! <= 60);
 
   ledger.acceptWrites();
   cache.entries.clear();
   assert.equal(anotherRun().read('ABC234')!.version, 2);
   assert.deepEqual(ledgerAmounts(), [100, -100]);
   assert.equal(held(), '');
-  assert.equal(cache.seconds.get('state:ABC234'), settledFor, 'and the cache keeps the table as long as usual again');
+  assert.equal(cache.seconds.get(stateKey('ABC234')), settledFor, 'and the cache keeps the table as long as usual again');
 
   // A request that changes nothing does the same when it comes first
   ledger.refuseWritesAfter(0);
@@ -1032,7 +1058,7 @@ test('after the longest night the fullest table still fits its row and the cache
   save(store, t.state);
 
   // Kept by the cache too, which is what spares every poll a read of the Sheet under the lock
-  assert.ok(cache.entries.has(`state:${t.state.id}`), 'the table was too big for the cache');
+  assert.ok(cache.entries.has(stateKey(t.state.id)), 'the table was too big for the cache');
 
   cache.entries.clear();
   assert.deepEqual(anotherRun().read(t.state.id), t.state, 'and it reads back from its row the same');
@@ -1205,7 +1231,7 @@ test('an old table moves to the Archive whole, with what tells it from the other
 
   const row = [...tables.cells[2]!];
   const others = [1, 3].map((index) => [...tables.cells[index]!]);
-  const cached = (id: string) => ['state', 'peek', 'row'].map((key) => cache.entries.has(`${key}:${id}`));
+  const cached = (id: string) => [stateKey, peekKey, rowKey].map((key) => cache.entries.has(key(id)));
   assert.deepEqual([cached('OLD222'), cached('NEW444')], [[true, true, true], [true, true, true]]);
 
   sweep();
@@ -1232,7 +1258,7 @@ test('an old table moves to the Archive whole, with what tells it from the other
 
   assert.deepEqual(cached('OLD222'), [false, false, false]);
   assert.deepEqual(cached('NEW444'), [true, true, true], 'a table still there keeps its entries');
-  assert.equal(cache.get('row:NEW444'), '4', 'and the row remembered for it is still its row');
+  assert.equal(cache.get(rowKey('NEW444')), '4', 'and the row remembered for it is still its row');
 
   assert.equal(anotherRun().read('OLD222'), null);
   assert.equal(anotherRun().read('NEW444')!.id, 'NEW444');
@@ -1754,8 +1780,8 @@ test('a table that was put away is known from the Archive, which is read once an
 
   assert.equal(anotherRun().peek('OLD222'), null);
   assert.equal(reads(), before + 1, 'the first look reads the Archive\'s ids');
-  assert.equal(cache.get('peek:OLD222'), 'away');
-  assert.equal(cache.seconds.get('peek:OLD222'), 30);
+  assert.equal(cache.get(peekKey('OLD222')), 'away');
+  assert.equal(cache.seconds.get(peekKey('OLD222')), 30);
 
   // Every poll of a page left open on it, and every question after it, for as long as the cache remembers
   for (let poll = 0; poll < 5; poll++) {
@@ -1766,7 +1792,7 @@ test('a table that was put away is known from the Archive, which is read once an
 
   assert.equal(anotherRun().peek('NEVER2'), null);
   assert.equal(reads(), before + 2);
-  assert.equal(cache.get('peek:NEVER2'), 'none');
+  assert.equal(cache.get(peekKey('NEVER2')), 'none');
   assert.equal(anotherRun().wasPutAway('NEVER2'), false);
   assert.equal(reads(), before + 2, 'a table that never was costs the Archive one look too');
 
@@ -1779,7 +1805,7 @@ test('a table that was put away is known from the Archive, which is read once an
   // And asked of a table that is there, whatever the cache has lost, it says no and notes nothing against it
   cache.entries.clear();
   assert.equal(anotherRun().wasPutAway('NEW333'), false);
-  assert.equal(cache.get('peek:NEW333'), null);
+  assert.equal(cache.get(peekKey('NEW333')), null);
   assert.equal(anotherRun().peek('NEW333')!.version, 1);
 });
 
@@ -1837,13 +1863,13 @@ test('a table put back by hand is a table again, and is not put away once more u
 
 test('a table put away whose cache entries outlived it, and a new table in its row: nothing asked of either reads or writes the other', () => {
   const { cache, tables, anotherRun, sweep } = aged({ OLD222: 20, LIVE33: 0 });
-  const entries = ['state:OLD222', 'peek:OLD222', 'row:OLD222'];
+  const entries = [stateKey('OLD222'), peekKey('OLD222'), rowKey('OLD222')];
   const outlived = entries.map((key) => cache.get(key)!);
-  assert.equal(cache.get('row:OLD222'), '2');
+  assert.equal(cache.get(rowKey('OLD222')), '2');
 
   sweep();
   save(anotherRun(), table('NEW444'));
-  assert.equal(cache.get('row:NEW444'), '2', 'the new table has taken the row the old one left');
+  assert.equal(cache.get(rowKey('NEW444')), '2', 'the new table has taken the row the old one left');
 
   // Everything the cache had of the old table is back, as if none of it had been removed: its row number
   // and the new table's now name the same row
@@ -1880,10 +1906,10 @@ test('a table put away whose cache entries outlived it, and a new table in its r
   assert.equal(anotherRun().transact('OLD222', (state) => ({ save: null, effects: [], result: state })), null);
 
   // And a wrong number for a table that is there sends the store to look for it, never to another table's row
-  cache.put('row:LIVE33', '2', 600);
+  cache.put(rowKey('LIVE33'), '2', 600);
   save(anotherRun(), table('LIVE33', 2));
   assert.deepEqual(tables.cells.slice(1).map((row) => [row[0], row[2]]), [['NEW444', '2'], ['LIVE33', '2']]);
-  assert.equal(cache.get('row:LIVE33'), '3');
+  assert.equal(cache.get(rowKey('LIVE33')), '3');
 });
 
 // ---- The two stores, held to each other ----

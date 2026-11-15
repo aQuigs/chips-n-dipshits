@@ -1,4 +1,4 @@
-import { asNumber, resultsOf, upgradeRecord } from '../engine/index.ts';
+import { asNumber, resultsOf, STATE_SCHEMA, upgradeRecord } from '../engine/index.ts';
 import type { Denominated, Effect, HandRecord, TableState } from '../engine/index.ts';
 import type { ErrorLog } from '../server/errorLog.ts';
 import { dueToLookAt, lastWordsOf, PUT_AWAY_AT_ONCE } from '../server/putAway.ts';
@@ -139,8 +139,17 @@ const AWAY = 'away';
 // Putting old tables away can wait for the next new table, so it does not queue for the lock as a move does
 const PUT_AWAY_LOCK_WAIT_MS = 1000;
 
+/**
+ * The script cache is one for every version of this code that is deployed: the one friends play on, one
+ * being tried at the staging address beside it, and an older one put back. A version that found a table
+ * another had cached would read a shape it does not know, and an older one refuses that table for as
+ * long as the entry lasts. So what is kept of tables goes under keys that name the schema, and each
+ * version reads and writes only its own.
+ */
+const ofThisSchema = (kind: string): string => `${kind}:${STATE_SCHEMA}`;
+
 // What the store remembers of the tables whose results it has seen to (`Settled`)
-const SETTLED_KEY = 'settled';
+const SETTLED_KEY = ofThisSchema('settled');
 
 const SAVED_TIME = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z$/;
 
@@ -150,9 +159,9 @@ const HAND_SCAN_PAGES = 10;
 
 const isGone = (peek: string | null) => peek === MISSING || peek === AWAY;
 
-const stateKey = (tableId: string) => `state:${tableId}`;
-const peekKey = (tableId: string) => `peek:${tableId}`;
-const rowKey = (tableId: string) => `row:${tableId}`;
+export const stateKey = (tableId: string) => `${ofThisSchema('state')}:${tableId}`;
+export const peekKey = (tableId: string) => `${ofThisSchema('peek')}:${tableId}`;
+export const rowKey = (tableId: string) => `${ofThisSchema('row')}:${tableId}`;
 
 /** An upper bound on the UTF-8 size of a string whose characters all fit in one UTF-16 unit or pair. */
 export function utf8Bytes(text: string): number {

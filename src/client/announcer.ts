@@ -17,7 +17,7 @@ export interface Announcer {
   alert(message: string): void;
 }
 
-// The account of the game keeps its last lines for whoever goes looking, and no more: the chat has all of them
+// The account of the game keeps its last lines for whoever goes looking, and no more than a view brings past that: the chat has all of them
 const LOG_LINES = 12;
 
 /**
@@ -32,7 +32,11 @@ export class PageAnnouncer implements Announcer {
   // Apart from the lines said for a screen reader alone, so that one of each in the same moment are both heard whole
   private readonly toastEl = h('p.unseen', { role: 'status' });
   private readonly alertEl = h('p.unseen', { role: 'alert' });
-  /** The regions that took a line in this turn of the page, where a second line joins the first instead of taking its place unheard. */
+  /**
+   * What was put on the page in this turn of it, which a screen reader has not been told yet: a region
+   * that took a line, where a second line joins the first instead of taking its place unheard, and
+   * each line of the account, which stays until the turn is over.
+   */
   private readonly fresh = new Set<HTMLElement>();
 
   /** `logLabel` names the account of the game for whoever comes across it while reading the page. */
@@ -46,9 +50,14 @@ export class PageAnnouncer implements Announcer {
   }
 
   log(lines: readonly string[]): void {
-    this.logEl.append(...lines.map((line) => h('div', null, line)));
+    const added = lines.map((line) => h('div', null, line));
 
-    while (this.logEl.childElementCount > LOG_LINES) {
+    this.logEl.append(...added);
+    this.keepFresh(added);
+
+    // Only lines of earlier turns make way. A line put in and taken out in one turn is never said, and
+    // a view that brings a whole hand at once, to a phone that was slow, has more lines than are kept
+    while (this.logEl.childElementCount > LOG_LINES && !this.fresh.has(this.logEl.firstElementChild as HTMLElement)) {
       this.logEl.firstElementChild!.remove();
     }
   }
@@ -76,8 +85,12 @@ export class PageAnnouncer implements Announcer {
     }
 
     region.replaceChildren(line);
-    this.fresh.add(region);
-    setTimeout(() => this.fresh.delete(region));
+    this.keepFresh([region]);
+  }
+
+  private keepFresh(put: HTMLElement[]): void {
+    put.forEach((element) => this.fresh.add(element));
+    setTimeout(() => put.forEach((element) => this.fresh.delete(element)));
   }
 
   /** Empties the account of the game, as when the table is left: what is found there is of the table the page is at. */

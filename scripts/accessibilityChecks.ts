@@ -168,13 +168,17 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
     },
   ],
   [
-    'someone watching hears the same hand with nobody’s cards but those shown, no turn and no stack, and reads the seats from seat 1 with a button on each open one',
+    'someone watching hears the same hand with nobody’s cards but those shown, no turn and no stack, and reads the seats from seat 1 with a button on each open one; a page that hears of the whole hand in one view says every line of it too',
     async (rig) => {
       const table = threeHanded(rig);
       const quigs = await listening(table, 'Quigs');
       const page = await listening(table, 'Kibitz');
+      // Another page of the watcher's, which hears nothing of the hand until it is over
+      const late = await listening(table, 'Kibitz');
+      const polls = await Gate.on(late, 'polls');
       const start = table.version;
 
+      await polls.close('requests');
       await playToShowdown(table, quigs);
       await heard(page, SHOWDOWN.at(-1)!, start);
 
@@ -209,6 +213,11 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
         ].join('\n'),
       );
       assert.doesNotMatch(JSON.stringify([said, await tree(page, '.app')]), /\b(seven|deuce) of/, 'a card nobody showed was said');
+
+      // More lines in one view than the account of the game keeps: each is said all the same
+      await polls.open();
+      await heard(late, SHOWDOWN.at(-1)!, start);
+      assert.deepEqual(await spoken(late, start), said, 'a page told of the whole hand at once did not say every line of it');
     },
   ],
   [

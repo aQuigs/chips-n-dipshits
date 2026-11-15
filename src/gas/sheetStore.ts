@@ -45,7 +45,7 @@ const STATE_CHUNKS = 6;
 const HELD_CHUNKS = 3;
 const STATE_COLUMN = 4;
 const HELD_COLUMN = STATE_COLUMN + STATE_CHUNKS;
-const TABLE_COLUMNS = HELD_COLUMN - 1 + HELD_CHUNKS;
+export const TABLE_COLUMNS = HELD_COLUMN - 1 + HELD_CHUNKS;
 
 const HEADERS: Record<SheetKey, string[]> = {
   tables: [

@@ -1,18 +1,23 @@
 /*
  * What `npm run deploy` does, as steps over the two things it touches: the script with Google, reached
- * through clasp, and this checkout's own files. Two rules hold on every path. An address is made only
+ * through clasp, and this checkout's own files. Three rules hold on every path. An address is made only
  * when asked for in so many words (`--new` for a game, `--staging` for a second web app to try code
- * at), and nothing is pushed to, changed or removed at an address this checkout has no record of.
+ * at). Nothing is pushed to or changed at an address this checkout has no record of. And no address is
+ * ever removed: a web app that is gone cannot be had back.
  */
-import { DEPLOYMENT_FILE, LINK_FILE, webAppUrlFor } from './deployment.ts';
-import type { Deployment, MainCheckout, WebApp } from './deployment.ts';
+import { DEPLOYMENT_FILE, DeployRefused, keptByNpm, LINK_FILE, WEB_APP_ID, webAppUrlFor } from './deployment.ts';
+import type { Deployment, LinkFilesElsewhere, StagingWebApp, WebApp } from './deployment.ts';
 
 export const TITLE = "Chips n' Dipshits";
 
-/** A web app the linked script has, and the version of the script it serves. */
+// How the staging web app is described with Google, which is what tells it from the friends' own when the record is in doubt
+const STAGING_TITLE = `${TITLE}, staging`;
+
+/** A web app the linked script has: the version of the script it serves, and how it was described when last given one. */
 export interface ListedWebApp {
   deploymentId: string;
   version: number;
+  description: string;
 }
 
 /** The game's script with Google. A web app serves one version of the script until it is given another. */
@@ -28,22 +33,21 @@ export interface Clasp {
    * is made only where there is none to start from.
    */
   createWebApp(description: string, version?: number): string;
-  /** Has one web app serve a new version of what was last pushed. Its address stays the same. */
-  updateWebApp(deploymentId: string, description: string): void;
-  /** Removes one web app. Its address stops working for good. */
-  removeWebApp(deploymentId: string): void;
+  /** Has one web app serve `version` of the script, or with none given a new version of what was last pushed. Its address stays the same. */
+  updateWebApp(deploymentId: string, description: string, version?: number): void;
 }
 
 /** This checkout's per-machine files and its build. */
 export interface Checkout {
-  /** Whether `.clasp.json` links this checkout to a script. */
+  /** Whether a `.clasp.json` of this checkout's own links it to a script. */
   linked(): boolean;
+  /** The record of where the game is, or null when there is none. A record that is there and cannot be trusted is an error, never none. */
   readDeployment(): Promise<Deployment | null>;
   writeDeployment(deployment: Deployment): Promise<void>;
-  /** Builds `dist/` for a web app at this address, or with '' for one that has no address yet. */
-  build(webAppUrl: string): Promise<void>;
-  /** The checkout this one is a git worktree of, if it is one. */
-  mainCheckout(): MainCheckout | null;
+  /** Builds `dist/` for a web app at this address, or with '' for one that has no address yet, and gives the build's id. */
+  build(webAppUrl: string): Promise<string>;
+  /** Where the two files are when this checkout lacks them: a folder above it, or the checkout it is a git worktree of. */
+  elsewhere(): LinkFilesElsewhere | null;
 }
 
 export interface DeployDeps {
@@ -56,17 +60,15 @@ export interface DeployDeps {
 /** `live` updates the address friends have, `staging` a second web app beside it, `new` sets up a game where there is none. */
 export type Mode = 'live' | 'staging' | 'new';
 
-/** The deploy stopped before doing what was asked, on purpose, and its message says what to do. */
-export class DeployRefused extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'DeployRefused';
-  }
-}
-
 const FLAGS: Record<string, Mode> = { '--new': 'new', '--staging': 'staging' };
 
-export function modeOf(args: readonly string[]): Mode {
+/** Which deploy was asked for. `env` is the environment npm ran the script in, which is where a flag npm kept shows. */
+export function modeOf(args: readonly string[], env: Record<string, string | undefined> = {}): Mode {
+  const kept = keptByNpm(Object.keys(FLAGS), env);
+  if (kept.length > 0) {
+    throw new DeployRefused(`npm kept ${kept.join(' and ')} for itself, so this was not told of it and did nothing. Put "--" before it: npm run deploy -- ${kept[0]}`);
+  }
+
   const unknown = args.filter((arg) => !(arg in FLAGS));
   if (unknown.length > 0) {
     throw new DeployRefused(`"${unknown.join(' ')}" is nothing this understands. It takes --staging, --new, or nothing at all.`);
@@ -79,15 +81,16 @@ export function modeOf(args: readonly string[]): Mode {
   return args.length === 1 ? FLAGS[args[0]!]! : 'live';
 }
 
-// Web app deployment ids all start this way
-const DEPLOYMENT_ID = /AKfycb[\w-]+/;
-const WHOLE_DEPLOYMENT_ID = new RegExp(`^${DEPLOYMENT_ID.source}$`);
+const ID_IN_OUTPUT = new RegExp(WEB_APP_ID.source.replace(/^\^|\$$/g, ''));
 
 /**
  * The script as the clasp command line reaches it. `run` runs clasp with these arguments and gives
- * what it printed.
+ * what it printed. Nothing here deletes a deployment: asked to delete without an id, clasp deletes
+ * the only web app a script has.
  */
 export function claspOver(run: (...args: string[]) => string): Clasp {
+  const atVersion = (version: number | undefined): string[] => (version === undefined ? [] : ['--versionNumber', String(version)]);
+
   return {
     createScript: (title) => void run('create-script', '--type', 'sheets', '--title', title, '--rootDir', 'dist/gas'),
 
@@ -95,54 +98,45 @@ export function claspOver(run: (...args: string[]) => string): Clasp {
 
     webApps: () => {
       const output = run('list-deployments', '--json');
-      const listed = JSON.parse(output.slice(output.indexOf('['), output.lastIndexOf(']') + 1)) as { deploymentId: string; versionNumber?: number }[];
+      const listed = JSON.parse(output.slice(output.indexOf('['), output.lastIndexOf(']') + 1)) as { deploymentId: string; versionNumber?: number; description?: string }[];
 
       // The one with no version is the script's own test address at @HEAD, never one that is handed out
-      return listed.flatMap((item) => (item.versionNumber === undefined ? [] : [{ deploymentId: item.deploymentId, version: item.versionNumber }]));
+      return listed.flatMap((item) => (item.versionNumber === undefined ? [] : [{ deploymentId: item.deploymentId, version: item.versionNumber, description: item.description ?? '' }]));
     },
 
     createWebApp: (description, version) => {
-      const atVersion = version === undefined ? [] : ['--versionNumber', String(version)];
-      const deploymentId = DEPLOYMENT_ID.exec(run('create-deployment', ...atVersion, '--description', description))?.[0];
+      const deploymentId = ID_IN_OUTPUT.exec(run('create-deployment', ...atVersion(version), '--description', description))?.[0];
       if (!deploymentId) {
-        throw new Error(`clasp did not report the id of the web app it made; run "npx clasp list-deployments" and put it in ${DEPLOYMENT_FILE}`);
+        throw new Error('clasp did not say which web app it made, so nothing was put on record. Run this again: it finds what the script has and says what to do.');
       }
 
       return deploymentId;
     },
 
-    updateWebApp: (deploymentId, description) => void run('update-deployment', deploymentId, '--description', description),
-
-    removeWebApp: (deploymentId) => {
-      // Asked to delete without an id, clasp deletes the script's only web app, which would be the friends' address
-      if (!WHOLE_DEPLOYMENT_ID.test(deploymentId)) {
-        throw new Error(`"${deploymentId}" is not the id of a web app, so nothing was removed`);
-      }
-
-      run('delete-deployment', deploymentId);
-    },
+    updateWebApp: (deploymentId, description, version) => void run('update-deployment', deploymentId, ...atVersion(version), '--description', description),
   };
 }
 
-const idsOf = (apps: readonly ListedWebApp[]): string => apps.map((app) => app.deploymentId).join(', ');
+const described = (apps: readonly ListedWebApp[]): string => apps.map((app) => `${app.deploymentId} ("${app.description}")`).join(', ');
 const webApps = (count: number): string => (count === 1 ? 'a web app' : `${count} web apps`);
+const isStaging = (app: ListedWebApp): boolean => app.description.startsWith(STAGING_TITLE);
 
-/** Where a worktree's missing files are, when the checkout it belongs to holds them: said, or nothing. */
-function inMainCheckout(main: MainCheckout | null): string {
-  const held = main ? [main.linked ? LINK_FILE : null, main.recorded ? DEPLOYMENT_FILE : null].filter((file) => file !== null) : [];
-
-  if (!main || held.length === 0) {
+/** Where this checkout's missing files are, when it is a worktree of a checkout that has them: said, or nothing. */
+function foundElsewhere(elsewhere: LinkFilesElsewhere | null): string {
+  if (!elsewhere) {
     return '';
   }
 
+  const held = [elsewhere.linked ? LINK_FILE : null, elsewhere.recorded ? DEPLOYMENT_FILE : null].filter((file) => file !== null);
+
   return (
-    ` This is a git worktree of ${main.path}, which holds ${held.join(' and ')}: git ignores ${held.length === 1 ? 'that file' : 'those files'}, so a worktree starts without ${held.length === 1 ? 'it' : 'them'}. ` +
+    ` This is a git worktree of ${elsewhere.path}, which holds ${held.join(' and ')}: git ignores ${held.length === 1 ? 'that file' : 'those files'}, so a worktree starts without ${held.length === 1 ? 'it' : 'them'}. ` +
     `To update the game that checkout deploys, run the deploy there, or copy ${LINK_FILE} and ${DEPLOYMENT_FILE} from there into this one.`
   );
 }
 
-function notLinked(main: MainCheckout | null): string {
-  const found = inMainCheckout(main);
+function notLinked(elsewhere: LinkFilesElsewhere | null): string {
+  const found = foundElsewhere(elsewhere);
 
   return (
     `This checkout is not linked to an Apps Script project (${LINK_FILE} is missing), so nothing was deployed and nothing was made.${found} ` +
@@ -150,16 +144,19 @@ function notLinked(main: MainCheckout | null): string {
   );
 }
 
-/** Builds for one web app, pushes that build and has the web app serve it. */
-async function publish({ clasp, checkout, say, now }: DeployDeps, app: WebApp, what: string): Promise<void> {
+/** Builds for one web app, pushes that build and has the web app serve it. Gives the build's id. */
+async function publish({ clasp, checkout, say, now }: DeployDeps, app: WebApp, title: string): Promise<string> {
   say(`Building for ${app.url} and pushing that build.`);
-  await checkout.build(app.url);
+
+  const build = await checkout.build(app.url);
   clasp.push();
-  clasp.updateWebApp(app.deploymentId, `${what}, deployed ${now().toISOString()}`);
+  clasp.updateWebApp(app.deploymentId, `${title}, deployed ${now().toISOString()}`);
+
+  return build;
 }
 
 /** Sets up a game where there is none: the Sheet and its script unless one is linked, and its web app. */
-async function setUp(deps: DeployDeps, linked: boolean, record: Deployment | null): Promise<void> {
+async function setUp(deps: DeployDeps, linked: boolean, record: Deployment | null, elsewhere: LinkFilesElsewhere | null): Promise<void> {
   const { clasp, checkout, say } = deps;
 
   if (record) {
@@ -171,25 +168,22 @@ async function setUp(deps: DeployDeps, linked: boolean, record: Deployment | nul
 
     if (existing.length > 0) {
       throw new DeployRefused(
-        `The linked script already has ${webApps(existing.length)} (${idsOf(existing)}), and --new makes an address only where there is none. ` +
+        `The linked script already has ${webApps(existing.length)}, and --new makes an address only where there is none: ${described(existing)}. ` +
           '"npm run deploy" without it puts the one it has on record.',
       );
     }
   } else {
-    const main = checkout.mainCheckout();
-
-    if (main && (main.linked || main.recorded)) {
-      say(`This is a git worktree of ${main.path}, which has a game of its own on record. What --new makes here is another game, beside that one.`);
+    if (elsewhere) {
+      say(`This is a git worktree of ${elsewhere.path}, which has a game of its own. What --new makes here is another game, beside that one.`);
     }
 
     say('Creating a new Sheet with its script, as --new asks.');
     clasp.createScript(TITLE);
-
-    // Creating the project downloads its starter files over the build
-    await checkout.build('');
   }
 
+  // Creating the project downloads its starter files over the build, and what was in `dist/` before may be for another address.
   // The page is told its own address, and that only exists once something is deployed
+  await checkout.build('');
   clasp.push();
 
   const deploymentId = clasp.createWebApp(TITLE);
@@ -208,19 +202,21 @@ async function putOnRecord({ clasp, checkout }: DeployDeps): Promise<never> {
     throw new DeployRefused('The linked script has no web app, so there is no address to update. "npm run deploy -- --new" gives it one, at a new address.');
   }
 
-  // Taking one of several would leave the links friends have on old code if it were the wrong one
-  if (existing.length > 1) {
+  // One made for staging is never the friends'. Taking one of several others would leave the links friends have on old code if it were the wrong one
+  const candidates = existing.filter((app) => !isStaging(app));
+
+  if (candidates.length !== 1) {
     throw new DeployRefused(
-      `The linked script has ${existing.length} web apps (${idsOf(existing)}) and this checkout has none of them on record. Put the one your friends use in ${DEPLOYMENT_FILE} as ` +
-        '{"deploymentId": "<id>", "url": "https://script.google.com/macros/s/<id>/exec"} and run this again.',
+      `The linked script has ${webApps(existing.length)} and this checkout has none on record: ${described(existing)}. ` +
+        `Put the one your friends use in ${DEPLOYMENT_FILE} as {"deploymentId": "<id>", "url": "https://script.google.com/macros/s/<id>/exec"}, with the same id in both places, and run this again.`,
     );
   }
 
-  const url = webAppUrlFor(existing[0]!.deploymentId);
-  await checkout.writeDeployment({ deploymentId: existing[0]!.deploymentId, url });
+  const url = webAppUrlFor(candidates[0]!.deploymentId);
+  await checkout.writeDeployment({ deploymentId: candidates[0]!.deploymentId, url });
 
   throw new DeployRefused(
-    `This checkout had no address on record, so the one web app the linked script has was put in ${DEPLOYMENT_FILE}: ${url}. Nothing was pushed. ` +
+    `This checkout had no address on record, so the ${existing.length === 1 ? 'one web app the linked script has' : "linked script's one web app that was not made for staging"} was put in ${DEPLOYMENT_FILE}: ${url}. Nothing was pushed. ` +
       'If that is the address your friends use, run this again to update it.',
   );
 }
@@ -228,20 +224,37 @@ async function putOnRecord({ clasp, checkout }: DeployDeps): Promise<never> {
 /** Puts this build on a second web app of the same script, and leaves the friends' address serving what it served. */
 async function stage(deps: DeployDeps, record: Deployment, live: ListedWebApp, listed: readonly ListedWebApp[]): Promise<void> {
   const { clasp, checkout, say } = deps;
+  const kept = listed.find((app) => app.deploymentId === record.staging?.deploymentId);
+  const strangers = listed.filter((app) => app !== live && app !== kept);
 
-  // Only a file changed by hand says this, and going on would put the staging build at the friends' address
-  if (record.staging?.deploymentId === live.deploymentId) {
+  // Only a file changed by hand says either of these, and going on would put the staging build where friends are
+  if (kept === live) {
     throw new DeployRefused(`${DEPLOYMENT_FILE} names the friends' address itself as the staging web app. Take "staging" out of it and run this again. Nothing was pushed.`);
   }
 
-  const kept = record.staging && listed.some((app) => app.deploymentId === record.staging!.deploymentId) ? record.staging : null;
-  const strangers = listed.filter((app) => app.deploymentId !== live.deploymentId && app.deploymentId !== kept?.deploymentId);
+  if (kept && !isStaging(kept)) {
+    throw new DeployRefused(
+      `The web app ${DEPLOYMENT_FILE} has under "staging" is not one this made for staging: Google has it described as "${kept.description}". ` +
+        'If it is the address your friends use, the two entries are the wrong way around. Nothing was pushed.',
+    );
+  }
+
+  // One this made for staging and lost track of: made from another checkout, or made with Google when its id never came back
+  if (!kept && strangers.length === 1 && isStaging(strangers[0]!)) {
+    const found = { deploymentId: strangers[0]!.deploymentId, url: webAppUrlFor(strangers[0]!.deploymentId) };
+
+    await checkout.writeDeployment({ deploymentId: record.deploymentId, url: record.url, staging: found });
+
+    throw new DeployRefused(
+      `The linked script has a staging web app this checkout had no record of, so it was put in ${DEPLOYMENT_FILE} under "staging": ${found.url}. Nothing was pushed. ` +
+        'Run this again to put this build there.',
+    );
+  }
 
   if (strangers.length > 0) {
     throw new DeployRefused(
-      `The linked script has ${webApps(strangers.length)} that this checkout has no record of (${idsOf(strangers)}), so no staging web app was made beside ${strangers.length === 1 ? 'it' : 'them'}. ` +
-        `If one is a staging web app made from another checkout, put it in ${DEPLOYMENT_FILE} under "staging" as {"deploymentId": "<id>", "url": "https://script.google.com/macros/s/<id>/exec"}; ` +
-        'if not, remove it with "npx clasp delete-deployment <id>". Then run this again.',
+      `The linked script has ${webApps(strangers.length)} that this checkout has no record of: ${described(strangers)}. Staging keeps one web app beside the friends' and never makes a third, so nothing was made and nothing was pushed. ` +
+        `If ${strangers.length === 1 ? 'it is' : 'they are'} not needed, archive ${strangers.length === 1 ? 'it' : 'them'} in the Apps Script editor under Deploy, Manage deployments, and run this again.`,
     );
   }
 
@@ -249,68 +262,101 @@ async function stage(deps: DeployDeps, record: Deployment, live: ListedWebApp, l
     say(`The staging web app on record (${record.staging.url}) is no longer one of the script's, so a new one is made.`);
   }
 
-  let staging = kept;
+  let staging: WebApp | undefined = kept && record.staging;
 
   if (!staging) {
     // It starts on the version friends are served, and gets the build for its own address below
-    const deploymentId = clasp.createWebApp(`${TITLE}, staging`, live.version);
+    const deploymentId = clasp.createWebApp(STAGING_TITLE, live.version);
 
     staging = { deploymentId, url: webAppUrlFor(deploymentId) };
-    await checkout.writeDeployment({ ...record, staging });
+    await checkout.writeDeployment({ deploymentId: record.deploymentId, url: record.url, staging });
   }
 
-  await publish(deps, staging, `${TITLE}, staging`);
+  const build = await publish(deps, staging, STAGING_TITLE);
+  await checkout.writeDeployment({ deploymentId: record.deploymentId, url: record.url, staging: { deploymentId: staging.deploymentId, url: staging.url, build } });
 
   const after = clasp.webApps().find((app) => app.deploymentId === live.deploymentId);
   if (after?.version !== live.version) {
     throw new Error(
       `The friends' address ${record.url} served version ${live.version} of the script before this and ${after ? `serves version ${after.version}` : 'is gone'} now, which staging must never bring about. ` +
-        'Look at the script\'s deployments in the Apps Script editor before doing anything else.',
+        "Look at the script's deployments in the Apps Script editor before doing anything else.",
     );
   }
 
   say(`\nStaging at ${staging.url}`);
   say(`The friends' address ${record.url} was not touched: it serves version ${live.version} of the script, as before.`);
-  say('Check it with "npm run check:live -- --staging". Then "npm run deploy" puts this code at the friends\' address and removes the staging web app.');
+  say('Check it with "npm run check:live -- --staging". Then "npm run deploy" puts this code at the friends\' address.');
 }
 
-/** Puts this build at the friends' address, then takes away the staging web app, which has done its work. */
-async function goLive(deps: DeployDeps, record: Deployment, listed: readonly ListedWebApp[]): Promise<void> {
-  const { clasp, checkout, say } = deps;
-  const { staging } = record;
+/** Says whether what is about to go live is what was tried at the staging address. Going live without is allowed, and said. */
+async function sayWhetherStaged({ checkout, say }: DeployDeps, staging: StagingWebApp | undefined): Promise<void> {
+  if (!staging?.build) {
+    say('Note: this build was not tried at the staging address first ("npm run deploy -- --staging", then "npm run check:live -- --staging").');
 
+    return;
+  }
+
+  // A build's id is a hash of the page and the script as built, so the same code built for the same address has the same id
+  const now = await checkout.build(staging.url);
+
+  say(now === staging.build ? `This is the code that was tried at the staging address (build ${now}).` : `Note: this is not the code that was last tried at the staging address. That was build ${staging.build}; built the same way, this is ${now}.`);
+}
+
+/**
+ * Puts this build at the friends' address, then has the staging web app serve that same version, so
+ * that the second address never runs older code on the Sheet than the first.
+ */
+async function goLive(deps: DeployDeps, record: Deployment, live: ListedWebApp, listed: readonly ListedWebApp[]): Promise<void> {
+  const { clasp, checkout, say, now } = deps;
+  const kept = listed.find((app) => app.deploymentId === record.staging?.deploymentId);
+  // The staging web app, when the one on record is still the script's and is one this made for staging
+  const staging = kept && kept !== live && isStaging(kept) ? record.staging : undefined;
+
+  await sayWhetherStaged(deps, staging);
   await publish(deps, record, TITLE);
   say(`\nLive at ${record.url}`);
 
-  if (staging && staging.deploymentId !== record.deploymentId) {
-    if (listed.some((app) => app.deploymentId === staging.deploymentId)) {
-      try {
-        clasp.removeWebApp(staging.deploymentId);
-      } catch (error) {
-        say(`The staging web app at ${staging.url} could not be removed (${error instanceof Error ? error.message : String(error)}). It stays on record, and the next deploy tries again.`);
-
-        return;
+  if (staging) {
+    try {
+      const served = clasp.webApps().find((app) => app.deploymentId === live.deploymentId)?.version;
+      if (served === undefined) {
+        throw new Error("the friends' web app is not among the script's");
       }
 
-      say(`Removed the staging web app at ${staging.url}.`);
-    } else {
-      say(`The staging web app on record (${staging.url}) was already gone.`);
+      clasp.updateWebApp(staging.deploymentId, `${STAGING_TITLE}, on the version live since ${now().toISOString()}`, served);
+      say(`The staging web app at ${staging.url} now serves that same version, ${served}.`);
+    } catch (error) {
+      say(`The staging web app at ${staging.url} could not be given the version that just went live (${error instanceof Error ? error.message : String(error)}). The next deploy tries again.`);
     }
+  } else if (record.staging) {
+    say(`The staging web app on record (${record.staging.url}) ${kept ? 'is not one this made for staging' : "is no longer one of the script's"}, so it was taken off the record and nothing was done to it.`);
   }
 
-  if (staging) {
-    await checkout.writeDeployment({ deploymentId: record.deploymentId, url: record.url });
+  if (record.staging) {
+    // What was tried there has gone live or been passed over: the next staging says anew what it tried
+    await checkout.writeDeployment({ deploymentId: record.deploymentId, url: record.url, ...(staging ? { staging: { deploymentId: staging.deploymentId, url: staging.url } } : {}) });
   }
 
-  const strangers = listed.filter((app) => app.deploymentId !== record.deploymentId && app.deploymentId !== staging?.deploymentId);
+  const strangers = listed.filter((app) => app !== live && !(staging && app === kept));
   if (strangers.length > 0) {
-    say(`The script also has ${webApps(strangers.length)} that this checkout has no record of (${idsOf(strangers)}), left as ${strangers.length === 1 ? 'it was' : 'they were'}.`);
+    say(`The script also has ${webApps(strangers.length)} that this checkout has no record of, left as ${strangers.length === 1 ? 'it was' : 'they were'}: ${described(strangers)}.`);
   }
 }
 
 export async function deploy(mode: Mode, deps: DeployDeps): Promise<void> {
   const { clasp, checkout } = deps;
   const linked = checkout.linked();
+  const elsewhere = linked ? null : checkout.elsewhere();
+
+  // clasp looks for its link file in the folders above the one it runs in, and takes the folder it finds it in for the
+  // project. From here it would push that folder's build, not this one's, and refuse to make a project under it
+  if (elsewhere?.above) {
+    throw new DeployRefused(
+      `This checkout has no ${LINK_FILE} of its own, and ${elsewhere.path}, a folder above it, has one. clasp would go by that one and push that folder's build, not this one's. ` +
+        `Copy ${LINK_FILE} and ${DEPLOYMENT_FILE} from there into this checkout, or run the deploy there. Nothing was deployed and nothing was made.`,
+    );
+  }
+
   const record = await checkout.readDeployment();
 
   // The two files are per machine and must describe the same script. Carrying on with one of them
@@ -318,16 +364,16 @@ export async function deploy(mode: Mode, deps: DeployDeps): Promise<void> {
   if (record && !linked) {
     throw new DeployRefused(
       `This checkout has the game's address on record (${DEPLOYMENT_FILE}, ${record.url}) but is not linked to its script: ${LINK_FILE} is missing, so nothing was deployed.` +
-        `${inMainCheckout(checkout.mainCheckout())} Restore ${LINK_FILE} for that script, or delete ${DEPLOYMENT_FILE} and run "npm run deploy -- --new" to set up a new game at a new address.`,
+        `${foundElsewhere(elsewhere)} Restore ${LINK_FILE} for that script, or delete ${DEPLOYMENT_FILE} and run "npm run deploy -- --new" to set up a new game at a new address.`,
     );
   }
 
   if (mode === 'new') {
-    return setUp(deps, linked, record);
+    return setUp(deps, linked, record, elsewhere);
   }
 
   if (!linked) {
-    throw new DeployRefused(notLinked(checkout.mainCheckout()));
+    throw new DeployRefused(notLinked(elsewhere));
   }
 
   if (!record) {
@@ -345,5 +391,12 @@ export async function deploy(mode: Mode, deps: DeployDeps): Promise<void> {
     );
   }
 
-  return mode === 'staging' ? stage(deps, record, live, listed) : goLive(deps, record, listed);
+  if (isStaging(live)) {
+    throw new DeployRefused(
+      `The web app ${DEPLOYMENT_FILE} has as the friends' address is one this made for staging: Google has it described as "${live.description}". ` +
+        'The two entries are the wrong way around, or the friends\' entry was replaced. Nothing was pushed.',
+    );
+  }
+
+  return mode === 'staging' ? stage(deps, record, live, listed) : goLive(deps, record, live, listed);
 }

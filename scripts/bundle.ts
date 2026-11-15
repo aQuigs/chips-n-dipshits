@@ -206,8 +206,9 @@ export async function buildFiles(webAppUrl: string, plugins: Plugin[] = []): Pro
   };
 }
 
-export async function buildAll(webAppUrl: string): Promise<void> {
-  const { files } = await buildFiles(webAppUrl);
+/** Writes the build to `dist/` and gives its id. */
+export async function buildAll(webAppUrl: string): Promise<string> {
+  const { id, files } = await buildFiles(webAppUrl);
 
   for (const [path, content] of Object.entries(files)) {
     const file = pathOf(`dist/${path}`);
@@ -215,4 +216,6 @@ export async function buildAll(webAppUrl: string): Promise<void> {
     await mkdir(dirname(file), { recursive: true });
     await writeFile(file, content);
   }
+
+  return id;
 }

@@ -4,27 +4,41 @@
  * overlap. A stand-in for Apps Script's host object is put in the page, on top of the local server.
  */
 import assert from 'node:assert/strict';
+import { readdirSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { fileURLToPath } from 'node:url';
 
 import { chromium } from 'playwright';
 import type { Browser, Page } from 'playwright';
 
 import { KEYS_SETTLE_MS } from '../src/client/hotkeys.ts';
 import { startDevServer } from '../src/dev/server.ts';
+import type { TableState } from '../src/engine/index.ts';
+import { ERRORS_TAB, SheetErrorLog } from '../src/gas/sheetErrorLog.ts';
+import { SheetPlayerStore } from '../src/gas/sheetPlayerStore.ts';
+import { SheetPresetStore } from '../src/gas/sheetPresetStore.ts';
+import { RESULTS_TAB, SheetResultStore } from '../src/gas/sheetResultStore.ts';
+import { SheetStore, TABLE_COLUMNS } from '../src/gas/sheetStore.ts';
 import { UNSTAMPED_BUILD } from '../src/server/build.ts';
 import { MemoryErrorLog } from '../src/server/memoryErrorLog.ts';
 import { MemoryPlayerStore } from '../src/server/memoryPlayerStore.ts';
 import { MemoryPresetStore } from '../src/server/memoryPresetStore.ts';
 import { MemoryStore } from '../src/server/memoryStore.ts';
-import { PUT_AWAY_AFTER_MS, PUT_AWAY_MESSAGE } from '../src/server/putAway.ts';
+import { PUT_AWAY_AFTER_MS, PUT_AWAY_AT_ONCE, PUT_AWAY_MESSAGE } from '../src/server/putAway.ts';
 import { PokerService } from '../src/server/service.ts';
+import { FakeCache, FakeLock, FakeSpreadsheet } from '../tests/fakes.ts';
 import { seededRng } from '../tests/helpers.ts';
 import { clientPage } from './bundle.ts';
+import { playCheck } from './liveCheckSteps.ts';
 import { answeredAfter, complaints, moveIn, movesSent, NOTICES, opsSent, ownComplaints, STILL, TITLES, toldOf } from './pageSpies.ts';
 import { Gate } from './rig.ts';
 import { STAND_IN_HOST } from './standInHost.ts';
 
+const PICTURES = fileURLToPath(new URL('../screenshots/', import.meta.url));
+
+// Tables as older code saved them, written once by scripts/goldenTables.ts
+const OLDER_TABLES = new URL('../tests/fixtures/tables/', import.meta.url);
 const STEP_TIMEOUT_MS = 20_000;
 const SLOW_POLL_MS = 1500;
 
@@ -1309,6 +1323,87 @@ try {
     await page.reload();
     assert.deepEqual(await drawnAs(), { theme: 'divebar', textSize: 'largest' }, 'what the player chose stands over what the device asks for');
     await page.context().close();
+  }
+
+  console.log("The live check's own game plays through, and on a Sheet of tables older code saved it changes no row of theirs but those of the tables it puts away");
+  {
+    // The store as it is deployed, on a Sheet the way a staging check finds it: every table saved by the code friends are still
+    // playing on, which cannot open one this code has saved. Some were left two weeks ago, some this afternoon, some are in play
+    const lock = new FakeLock();
+    const sheet = new FakeSpreadsheet(lock, {}, null, [ERRORS_TAB]);
+    const cache = new FakeCache();
+    const clock = { now: () => Date.now() };
+    const sheetErrors = new SheetErrorLog({ spreadsheet: () => sheet, cache, clock, build: UNSTAMPED_BUILD });
+    const deps = { spreadsheet: () => sheet, cache, lock, flush: () => {}, errors: sheetErrors };
+    const results = new SheetResultStore({ ...deps, clock });
+    const store = new SheetStore({ ...deps, results });
+    const rng = seededRng(17);
+    const game = new PokerService({ store, presets: new SheetPresetStore(deps), players: new SheetPlayerStore({ ...deps, rng }), results, clock, rng, errors: sheetErrors });
+
+    const HOUR_MS = 3_600_000;
+    const leftFor = (index: number) => (index < PUT_AWAY_AT_ONCE + 1 ? PUT_AWAY_AFTER_MS + (index + 1) * HOUR_MS : index < 9 ? 4 * HOUR_MS : 60_000);
+    const older = readdirSync(OLDER_TABLES).filter((file) => file.endsWith('.json'));
+
+    older.forEach((file, index) => {
+      // As its file has it, with no step taken toward this code's shape, under an id of its own
+      const state = { ...(JSON.parse(readFileSync(new URL(file, OLDER_TABLES), 'utf8')) as TableState), id: `OLD2${'ABCDEFGHJKLMNPQRSTUVWXYZ'[index]}2` };
+
+      store.transact(state.id, () => ({ save: state, at: Date.now() - leftFor(index), effects: [], result: null }));
+    });
+    cache.entries.clear();
+
+    const rowsOf = (tab: string) => {
+      const found = sheet.getSheetByName(tab);
+      const rows = found && found.getLastRow() > 1 ? found.getRange(2, 1, found.getLastRow() - 1, TABLE_COLUMNS).getValues() : [];
+
+      return new Map(rows.filter((row) => row[0] !== '').map((row) => [String(row[0]), JSON.stringify(row)]));
+    };
+    const before = rowsOf('Tables');
+    assert.equal(before.size, older.length);
+    assert.ok([...before.values()].every((row) => /\\"schema\\":[2-6],/.test(row)), 'every table is as older code saved it');
+
+    const checked = await startDevServer({ port: 0, page: async () => html, service: game });
+
+    try {
+      await playCheck({
+        address: checked.url,
+        open: async (url, phone = false) => {
+          const page = await open(browser);
+
+          if (phone) {
+            await page.setViewportSize({ width: 390, height: 844 });
+          }
+
+          await page.goto(url);
+
+          return { page, app: page };
+        },
+        picture: (name) => `${PICTURES}hosted-check-${name}.png`,
+        say: () => {},
+      });
+    } finally {
+      await checked.close();
+    }
+
+    const after = rowsOf('Tables');
+    const putAway = rowsOf('Archive');
+    const made = [...after.keys()].filter((id) => !before.has(id));
+
+    assert.equal(made.length, 1, 'the check made one table');
+    assert.equal(putAway.size, PUT_AWAY_AT_ONCE, 'and making it put away as many old tables as making any table does');
+
+    // The code friends are on can still open every table it could: a row is cell for cell what that code saved, in Tables or in the Archive
+    for (const [id, row] of before) {
+      assert.equal(putAway.get(id) ?? after.get(id), row, `the row of ${id} was changed`);
+      assert.equal(putAway.has(id), !after.has(id), `${id} is in one of the two tabs`);
+    }
+
+    // Nobody at those tables is a player the game knows, so the nights that went on record put nobody in the standings
+    const standings = sheet.getSheetByName(RESULTS_TAB);
+    assert.ok(!standings || standings.getLastRow() <= 1, 'a row went into Results');
+
+    const failures = sheet.getSheetByName(ERRORS_TAB);
+    assert.ok(!failures || failures.getLastRow() <= 1, `something failed on the way: ${failures?.shown(2, 2)}, ${failures?.shown(2, 4)}`);
   }
 
   console.log('The Apps Script-hosted page holds up');

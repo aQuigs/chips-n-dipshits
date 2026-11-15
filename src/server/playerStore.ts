@@ -32,6 +32,9 @@ export interface PlayerStore {
  */
 export const CHECK_PLAYER = 'Live check';
 
+/** Whether someone on the list is the check's player: by how the name reads, which is how the list tells its players apart. */
+export const isCheckPlayer = (player: { name: string }): boolean => listedLike([player], CHECK_PLAYER) !== null;
+
 /** A known player as a store keeps them, with when they were last seen, which the list is ordered by. */
 export interface KeptPlayer extends KnownPlayer {
   /** 0 when it is not known. */

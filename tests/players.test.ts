@@ -715,4 +715,12 @@ for (const [kind, game] of [
     // Anyone else's name is still its holder's alone
     assert.equal(failure(create('Quigs', NEW)).error, new NameOnList('Quigs').message);
   });
+
+  test(`${kind}: a row whose name only reads like the check's, as one retyped in the Sheet may, is the check's player all the same`, () => {
+    const { listed, create } = game();
+    const retyped = joined(create('LIVE CHECK', NEW)).view.you.identity;
+
+    assert.deepEqual(listed(), [], 'no page is offered them');
+    assert.equal(joined(create(CHECK_PLAYER, NEW)).view.you.identity, retyped, 'and the check is not told that its name is taken');
+  });
 }

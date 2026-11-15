@@ -206,24 +206,30 @@ The Results tab is what the standings are read from: a row for each table and kn
 
 ## Put an update live
 
-The checkout that deploys holds two files git ignores: `.clasp.json`, which links it to the game's script, and `.deployment.json`, which has the game's address on record. A git worktree starts without them. There the deploy stops, says which checkout holds them, and makes nothing: run it in that checkout, or copy both files over.
+The checkout that deploys holds two files git ignores: `.clasp.json`, which links it to the game's script, and `.deployment.json`, which has the game's address on record and the staging one's. A git worktree starts without them. There the deploy stops, says which checkout holds them, and makes nothing: run it in that checkout, or copy both files over. Copy both: clasp looks for `.clasp.json` in the folders above the one it runs in, so in a worktree kept inside the main checkout it would go by the main checkout's file and push the main checkout's build, and the deploy refuses to run that way.
 
-Older code cannot open a table that newer code has saved, so new code is first tried at a second address of the same script, which friends don't have. Between nights, with the last night settled up:
+Write a flag after `--`, as in `npm run deploy -- --staging`. Without the `--`, npm keeps the flag for itself; the deploy and the check notice and refuse, rather than do what they do with no flag.
 
-1. In the Sheet, name the version as it is now (File, Version history, Name current version). It is the way back.
-2. `npm run deploy -- --staging` builds the code for the staging address, pushes it, and has the staging web app serve it. The first time, it makes that web app and puts it on record under `staging` in `.deployment.json`. The friends' address is not touched: a web app serves the version of the script it was last given, a push changes no web app, and only step 4 gives theirs a new version. The command says which version theirs serves and checks it is the one it served before.
+Older code cannot open a table that newer code has saved, so new code is first tried at a second address of the same script, which friends don't have. Steps 1 to 3 change no table a friend has and can be run at any hour. Step 4 is for between nights, with the last night settled up.
+
+1. In the Sheet, name the version as it is now (File, Version history, Name current version). It is the way back. Name it again before step 4 if a night was played in between.
+2. `npm run deploy -- --staging` builds the code for the staging address, pushes it, and has the staging web app serve it. The first time, it makes that web app and puts it on record under `staging` in `.deployment.json`; it is the same one from then on, and no deploy ever removes a web app. The friends' address is not touched: a web app serves the version of the script it was last given, a push changes no web app, and only step 4 gives theirs a new version. The command says which version theirs serves and checks it is the one it served before.
 3. `npm run check:live -- --staging` plays a short two-player game at the staging address and times each step. Run it straight after step 2: it compares what Google serves with the build in `dist/`, and `npm run build` in between rebuilds for the friends' address.
-4. `npm run deploy` builds the code for the friends' address, has it served there, prints `Live at` with that address, and removes the staging web app.
+4. `npm run deploy` says whether the code is what step 2 put at the staging address, builds it for the friends' address, has it served there and prints `Live at` with that address. It then gives the staging web app that same version, so the second address never runs older code on the Sheet than the first.
 5. `npm run check:live` plays the same short game at the friends' address.
 
 A page that was open through step 4 says "The game was updated" the next time it hears from the server, with a Reload button, and until it is reloaded nothing it sends changes a table. The reload comes back to the same table and seat.
+
+Run one deploy at a time. Two at once, from two checkouts, can leave an address serving the other's build; the check after each step compares what is served with what was built and fails when that has happened.
 
 What the steps leave in the Sheet. The staging web app is the same script on the same Sheet, so the new code is at work on the real Sheet from step 3 on:
 
 - Steps 2 and 4 change code only and write nothing.
 - Each check leaves one small table in Tables with its lines in Ledger and Hands, a Presets tab if there was none, and the player Live check in Players, one row however often it runs. The list friends pick their name from never shows that player, and its table adds nothing to the standings.
-- Making its table does what making any table does under the new code: up to three tables nobody has played at for two weeks move to Archive, chips on them or not, and nights that were idle for three hours go on record in Results. Tabs the new code adds are made the first time they are written to.
-- No other table is opened or saved by a check. A friend's table is saved by the new code the first time something changes at it after step 4.
+- Making its table does what making any table does under the new code: up to three tables nobody has played at for two weeks move to Archive, chips on them or not. Code from before there was an Archive takes such a table for one that does not exist; it is brought back the way [Set it up](#set-it-up) describes, which works under either code.
+- Tables that were idle for three hours are read, and their nights go on record in Results for the players the game knows. None of those tables is saved.
+- No row of another table is changed by a check. A friend's table is saved by the new code the first time something changes at it after step 4.
+- Tabs the new code adds, and headers it adds to the tabs there were, are made the first time they are written to. Older code does not read them.
 
 Going back. Older code that meets a table saved by newer code answers "Something went wrong on the server" for that table and changes nothing; tables the newer code has not saved work as before. So the way back is for the whole game: deploy the older code (check it out, with the two files in place, and `npm run deploy`), then restore the Sheet to the version named in step 1. Everything since then is lost: tables made, hands played, players added, and a seat taken since is gone, so its link asks its player to join again. A restore brings back everything the game keeps but its cache, which is with the script and not in the Sheet: it holds each table the newer code touched for up to six hours after, and until that entry runs out the older code answers "Something went wrong on the server" for that table. A move made at the table, or someone joining it, replaces the entry at once. Nothing else is kept outside the Sheet: every seat's key is in its table's row, and the script has no properties and no timers.
 
@@ -271,7 +277,7 @@ To see that it works on the live game, sit at a table, open the browser's develo
 | --- | --- |
 | `npm run dev` | Runs the game at <http://127.0.0.1:8787> with tables kept in memory, reachable from this machine only. Open it in several windows to play against yourself. |
 | `npm test` | The rules, the request handling and the Sheet storage, against fakes. |
-| `npm run test:e2e` | Six players in real browsers through two hands, then the page served the way Apps Script serves it, with requests made to fail, then the screens where they are tightest: small phones, long chat, the largest stacks, and last every screen at its fullest, swept for anything a player reads that is covered or cut off. Needs `npx playwright install chromium` once. |
+| `npm run test:e2e` | Six players in real browsers through two hands, then the page served the way Apps Script serves it, with requests made to fail and the live check's own game played through, then the screens where they are tightest: small phones, long chat, the largest stacks, and last every screen at its fullest, swept for anything a player reads that is covered or cut off. Needs `npx playwright install chromium` once. |
 | `npm run test:stall` | The screen checks again, on a rig as slow as a machine too busy to keep up, each check once for either way a page can be slow. Deaf, a page hears nothing for five seconds after each step, a page the check is not waiting on for longer still, and then only how the table stands. Behind, it is given every view in order, each late. A check that passes only when the machine is quick fails here every time. Run it for the checks a change adds or alters before landing it (`npm run test:stall -- "part of a name" "part of another"`; `[deaf]` or `[behind]` in front of the start of a name runs it one way). The whole list takes about twenty minutes, so CI does not run it. |
 | `npm run screenshots` | The same browser run, saving a picture of every screen, and of the table in every theme, to `screenshots/`. |
 | `npm run build` | Type-checks and writes `dist/gas` (what is pushed to Apps Script) and `dist/web` (the page for any static host). |

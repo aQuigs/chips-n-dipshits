@@ -9,8 +9,8 @@ import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { buildAll } from './bundle.ts';
-import { claspOver, deploy, DeployRefused, modeOf } from './deploySteps.ts';
-import { LINK_FILE, mainCheckoutOf, readDeployment, writeDeployment } from './deployment.ts';
+import { claspOver, deploy, modeOf } from './deploySteps.ts';
+import { DeployRefused, LINK_FILE, linkFilesElsewhere, readDeployment, writeDeployment } from './deployment.ts';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
@@ -23,14 +23,14 @@ function clasp(...args: string[]): string {
 }
 
 try {
-  await deploy(modeOf(process.argv.slice(2)), {
+  await deploy(modeOf(process.argv.slice(2), process.env), {
     clasp: claspOver(clasp),
     checkout: {
       linked: () => existsSync(`${ROOT}${LINK_FILE}`),
       readDeployment,
       writeDeployment,
       build: buildAll,
-      mainCheckout: () => mainCheckoutOf(ROOT),
+      elsewhere: () => linkFilesElsewhere(ROOT),
     },
     say: (line) => console.log(line),
     now: () => new Date(),

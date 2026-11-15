@@ -4,7 +4,7 @@ import { HISTORY_LIMIT } from './api.ts';
 import type { ApiResponse, Auth, ErrorCode, Joined, UnitStandings, Who } from './api.ts';
 import { NOWHERE } from './errorLog.ts';
 import type { ErrorLog, Failure } from './errorLog.ts';
-import { CHECK_PLAYER, isPlayerId, NameOnList } from './playerStore.ts';
+import { isCheckPlayer, isPlayerId, NameOnList } from './playerStore.ts';
 import type { PlayerStore } from './playerStore.ts';
 import type { PresetStore } from './presetStore.ts';
 import { PUT_AWAY_MESSAGE } from './putAway.ts';
@@ -303,7 +303,7 @@ export class PokerService {
       case 'report':
         return this.reportFromPage(tableIdOf(request), authOf(request), request);
       case 'players':
-        return { ok: true, kind: 'players', players: this.players.list().filter((player) => player.name !== CHECK_PLAYER) };
+        return { ok: true, kind: 'players', players: this.players.list().filter((player) => !isCheckPlayer(player)) };
       case 'identify':
         return this.identify(tableIdOf(request), authOf(request), request);
       case 'standings':
@@ -383,7 +383,7 @@ export class PokerService {
     const name = playerName(request.name);
     const holder = this.without('server check name', tableId, () => listedLike(this.players.list(), name));
 
-    if (holder?.name === CHECK_PLAYER) {
+    if (holder && isCheckPlayer(holder)) {
       return { name: holder.name, identity: holder.id, keepsName: true, enlist: false };
     }
 
@@ -583,18 +583,18 @@ export class PokerService {
     return { ok: true, kind: 'reported' };
   }
 
+  /** Someone new under this name: added to the list, unless the name is the check's and the list has its player. */
+  private newcomer(name: string, now: number): KnownPlayer {
+    const holder = listedLike(this.players.list(), name);
+
+    return holder && isCheckPlayer(holder) ? holder : this.players.add(name, now);
+  }
+
   /**
    * A member says who they are on the list of players, after joining: someone on it, or someone new
    * under the name given or else the one they go by here. It is the whole of what was asked, so unlike
    * an arrival it is refused when the list can't oblige.
    */
-  /** Someone new under this name: added to the list, unless the name is the check's and the list has its player. */
-  private newcomer(name: string, now: number): KnownPlayer {
-    const holder = listedLike(this.players.list(), name);
-
-    return holder?.name === CHECK_PLAYER ? holder : this.players.add(name, now);
-  }
-
   private identify(tableId: string, auth: Auth, request: Fields): ApiResponse {
     const { member } = this.memberOf(tableId, auth);
     const who = whoOf(request);

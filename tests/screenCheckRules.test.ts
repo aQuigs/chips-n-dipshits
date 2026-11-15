@@ -8,7 +8,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
-const CHECKS = 'scripts/screenChecks.ts';
+const CHECKS = ['scripts/screenChecks.ts', 'scripts/accessibilityChecks.ts'];
 const CLIENT = 'src/client';
 
 /** The lines of a file that match, each with where it is, so a failure says what to change. */
@@ -18,21 +18,24 @@ function linesWith(path: string, pattern: RegExp): string[] {
     .flatMap((line, index) => (pattern.test(line) ? [`${path}:${index + 1}: ${line.trim().slice(0, 100)}`] : []));
 }
 
+/** The same over every file the screen checks are written in. */
+const checkLinesWith = (pattern: RegExp): string[] => CHECKS.flatMap((path) => linesWith(path, pattern));
+
 test('no screen check sets a page’s clock', () => {
-  assert.deepEqual(linesWith(CHECKS, /\.clock\.(setFixedTime|setSystemTime)\(/), [], 'the rig holds every page’s clock to its own: move time with rig.advance');
+  assert.deepEqual(checkLinesWith(/\.clock\.(setFixedTime|setSystemTime)\(/), [], 'the rig holds every page’s clock to its own: move time with rig.advance');
 });
 
 test('no screen check asks the screen for a toast', () => {
-  assert.deepEqual(linesWith(CHECKS, /\.toast\b/), [], 'a toast is gone from the screen in seconds: ask what the page told with toastTold or toasts (scripts/pageSpies.ts)');
+  assert.deepEqual(checkLinesWith(/\.toast\b/), [], 'a toast is gone from the screen in seconds: ask what the page told with toastTold or toasts (scripts/pageSpies.ts)');
 });
 
 test('no screen check empties what a page wrote down, or reads its moves but by the table’s version', () => {
-  assert.deepEqual(linesWith(CHECKS, /\b(flights|played|buzzes|notices|titles|toasts)\.(splice\(|shift\(|pop\(|length\s*=(?!=))/), [], 'a page that is behind brings the last step’s news after the emptying: ask for what one step brought');
-  assert.deepEqual(linesWith(CHECKS, /window\.flights\b/), [], 'ask with flightsSince(table.version from before the step), or flown(page, since) (scripts/pageSpies.ts)');
+  assert.deepEqual(checkLinesWith(/\b(flights|played|buzzes|notices|titles|toasts|spoken)\.(splice\(|shift\(|pop\(|length\s*=(?!=))/), [], 'a page that is behind brings the last step’s news after the emptying: ask for what one step brought');
+  assert.deepEqual(checkLinesWith(/window\.flights\b/), [], 'ask with flightsSince(table.version from before the step), or flown(page, since) (scripts/pageSpies.ts)');
 });
 
 test('no screen check gives a wait a timeout of its own', () => {
-  assert.deepEqual(linesWith(CHECKS, /\btimeout:/), [], 'the rig’s timeout is the one with room for a slow runner');
+  assert.deepEqual(checkLinesWith(/\btimeout:/), [], 'the rig’s timeout is the one with room for a slow runner');
 });
 
 test('the page tells the time by Date.now alone, which is what a rig holds', () => {

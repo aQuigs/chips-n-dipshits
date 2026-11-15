@@ -9,7 +9,7 @@ import type { Page } from 'playwright';
 
 import { THEMES } from '../src/client/themes.ts';
 import type { Command, TableConfig } from '../src/engine/index.ts';
-import { alike, controls, findings, focused, focusIn, heard, marked, SPOKEN, spoken, tree } from './a11y.ts';
+import { alike, controls, findings, focused, focusIn, heard, SPOKEN, spoken, tree } from './a11y.ts';
 import type { Check } from './checkRunner.ts';
 import { MOTION, movesSent } from './pageSpies.ts';
 import { Gate } from './rig.ts';
@@ -29,14 +29,8 @@ function threeHanded(rig: Rig, config: Partial<TableConfig> = {}): RigTable {
   return table;
 }
 
-/** A member's page that writes down what it says, with its clock held so that nothing the table tells it is ever old news. `init` runs in it too. */
-async function listening(table: RigTable, name: string, screen: ScreenName = 'desktop', init = '', options?: PageOptions): Promise<Page> {
-  const page = await table.open(name, screen, `${SPOKEN};${init}`, options);
-
-  await page.clock.setFixedTime(Date.now() - 60_000);
-
-  return page;
-}
+/** A member's page that writes down what it says. `init` runs in it too. */
+const listening = (table: RigTable, name: string, screen: ScreenName = 'desktop', init = '', options?: PageOptions): Promise<Page> => table.open(name, screen, `${SPOKEN};${init}`, options);
 
 /** Presses Tab until the keyboard is on what `selector` matches, and fails if it never gets there. */
 async function tabTo(page: Page, selector: string, key = 'Tab'): Promise<void> {
@@ -66,7 +60,7 @@ async function playToShowdown(table: RigTable, quigs: Page): Promise<void> {
   await heard(quigs, 'alert: Your turn. Check or bet. Pot 170 chips.');
 
   // The same words on the next street: heard again, since the first
-  const turn = await marked(quigs);
+  const turn = table.version;
 
   table.act('Quigs', { type: 'check' });
   table.act('Pam', { type: 'check' });
@@ -126,7 +120,7 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
     async (rig) => {
       const table = threeHanded(rig);
       const page = await listening(table, 'Quigs');
-      const start = await marked(page);
+      const start = table.version;
 
       await playToShowdown(table, page);
       await heard(page, 'log: You have 1,090 chips.', start);
@@ -179,7 +173,7 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
       const table = threeHanded(rig);
       const quigs = await listening(table, 'Quigs');
       const page = await listening(table, 'Kibitz');
-      const start = await marked(page);
+      const start = table.version;
 
       await playToShowdown(table, quigs);
       await heard(page, SHOWDOWN.at(-1)!, start);
@@ -262,7 +256,7 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
       table.act('Pam', { type: 'check' });
       await heard(page, 'alert: Your turn. Check or bet. Pot 210 chips.');
 
-      const turn = await marked(page);
+      const turn = table.version;
 
       await tabTo(page, '[data-action="check"]');
       await page.keyboard.press('Enter');
@@ -291,7 +285,7 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
       table.deal(ACES_OVER_KINGS);
       await heard(page, 'alert: Your turn. 10 to call. Pot 15 chips.');
 
-      const onTurn = await marked(page);
+      const onTurn = table.version;
 
       await page.focus('#raise-amount');
       await page.keyboard.press('ControlOrMeta+a');
@@ -342,7 +336,7 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
       twice.deal(ACES_OVER_KINGS);
       await heard(allIn, 'alert: Your turn. 10 to call. Pot 15 chips.');
 
-      const shoving = await marked(allIn);
+      const shoving = twice.version;
 
       twice.act('Quigs', { type: 'raise', to: 1000 });
       twice.act('Pam', { type: 'call' });
@@ -420,7 +414,7 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
         'log: You may show your cards. You may see the cards that would have come.',
       ]);
 
-      const folded = await marked(page);
+      const folded = hunts.version;
 
       await tabTo(page, '[data-action="show-card"][data-place="0"]');
       assert.equal(await page.evaluate('document.activeElement.getAttribute("aria-label")'), 'Show the ace of spades');
@@ -446,7 +440,7 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
       table.deal(ACES_OVER_KINGS);
       await heard(page, 'alert: Your turn. 10 to call. Pot 15 chips.');
 
-      const shoving = await marked(page);
+      const shoving = table.version;
 
       table.act('Quigs', { type: 'raise', to: 1000 });
       table.act('Pam', { type: 'call' });
@@ -463,13 +457,14 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
       assert.equal(table.view('Quigs').hand!.stage, 'done', 'the hand is not over at the table');
       await page.waitForSelector('.board-card.stand-in');
 
-      const faceDown = await marked(page);
+      // No view comes between the river lying face down and its being turned: what is said after is told from what was said before
+      const faceDown = await spoken(page, shoving);
 
-      assert.equal((await spoken(page, shoving)).at(-1), 'log: Turn: nine of clubs', 'something of the hand’s end was said with the river face down');
+      assert.equal(faceDown.at(-1), 'log: Turn: nine of clubs', 'something of the hand’s end was said with the river face down');
 
       await page.evaluate('window.holdAt = null; window.land()');
-      await heard(page, 'log: You have 2,010 chips.', faceDown);
-      assert.deepEqual(await spoken(page, faceDown), ['log: River: three of spades', 'log: Quigs wins 2,010 with pair of aces', 'log: You have 2,010 chips.']);
+      await heard(page, 'log: You have 2,010 chips.', shoving);
+      assert.deepEqual((await spoken(page, shoving)).slice(faceDown.length), ['log: River: three of spades', 'log: Quigs wins 2,010 with pair of aces', 'log: You have 2,010 chips.']);
     },
   ],
   [
@@ -478,7 +473,7 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
       const table = threeHanded(rig, { actionSeconds: 30 });
       const page = await listening(table, 'Quigs');
       const warnings = async () => ((await page.evaluate('window.spoken.map((said) => said.text)')) as string[]).filter((text) => text.includes('seconds left'));
-      // The page's clock is held, so it learns the time from what the table sends it: a line of chat, here
+      // A line of chat at each moment looked at: once the page has said it, it has looked at its clock since the rig moved it
       const withLeft = async (ms: number, line: string) => {
         rig.advance(table.view('Quigs').hand!.deadline! - ms - rig.now());
         table.act('Pam', { type: 'chat', text: line });
@@ -560,10 +555,12 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
       // A hand played back, opened from the keyboard, with the hand after it dealt underneath: Pam is on the button and first to act
       table.act('Quigs', { type: 'pause' });
       table.play(() => null, (view) => view.hand === null);
+      await table.heardBy(page);
       await page.focus('[data-action="menu"]');
       await page.keyboard.press('Enter');
       await tabTo(page, '.menu-item[data-action="history"]');
       await page.keyboard.press('Enter');
+      await page.waitForSelector('.history details[data-hand="1"] summary');
       await tabTo(page, '.history details[data-hand="1"] summary');
       await page.keyboard.press('Enter');
       await tabTo(page, '.history [data-action="replay"]');
@@ -573,7 +570,7 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
       assert.equal(await page.getAttribute('.replay', 'aria-label'), 'Replay of hand #1');
       assert.equal(await focusIn(page, '.replay'), true, 'the replay opened with the keyboard left behind it');
 
-      const replaying = await marked(page);
+      const replaying = table.version;
 
       table.dealNext();
       await heard(page, 'alert: Your turn. 10 to call. Pot 15 chips.', replaying);
@@ -791,6 +788,7 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
 
       table.deal(ACES_OVER_KINGS);
       await heard(host, 'alert: Your turn. 10 to call. Pot 15 chips.');
+      await phone.waitForSelector('.controls-slot .ahead');
       await sweep.over(host, 'the turn, desktop');
       await sweep.over(phone, 'waiting with a move to choose ahead, phone');
 
@@ -830,6 +828,10 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
       table.act('Pam', { type: 'ritVote', runs: 2 });
       await runOut(rig, table, host);
       await heard(host, 'log: You have 2,010 chips.');
+
+      for (const other of [phone, watcher]) {
+        await heard(other, 'log: Quigs wins 1,005 on the second board with flush, ace high');
+      }
       await sweep.over(host, 'two boards run and won, desktop');
       await sweep.over(phone, 'two boards run and lost, phone');
       await sweep.over(watcher, 'two boards run, watching');

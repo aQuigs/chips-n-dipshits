@@ -22,6 +22,8 @@ export interface Said {
    */
   how: 'log' | 'status' | 'alert' | 'drawn';
   text: string;
+  /** The version of its table the page had last been brought when it said the line: the view the line is for. */
+  version: number;
 }
 
 /**
@@ -35,7 +37,7 @@ export const SPOKEN = `(() => {
   const LIVE = '[role="log"], [role="status"], [role="alert"], [aria-live="polite"], [aria-live="assertive"]';
   const howOf = (region) => (region.getAttribute('role') === 'alert' || region.getAttribute('aria-live') === 'assertive' ? 'alert' : region.getAttribute('role') === 'log' ? 'log' : 'status');
   const silent = (region) => region.getClientRects().length === 0 || region.closest('[inert], [aria-hidden="true"]') !== null;
-  const say = (how, text) => text.trim() && window.spoken.push({ how, text: text.trim().replace(/\\s+/g, ' ') });
+  const say = (how, text) => text.trim() && window.spoken.push({ how, text: text.trim().replace(/\\s+/g, ' '), version: window.rig?.drawing ?? -1 });
 
   const added = (node) => {
     const element = node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
@@ -72,21 +74,20 @@ export const SPOKEN = `(() => {
 })()`;
 
 /**
- * How much a page has said so far: the place to read on from. Taken before the step whose words a check
- * is about, so that what is counted is tied to the step and never to what happened to be left in a list.
+ * What a page has said for a view of its table newer than version `since`, oldest first, as "how: words".
+ * `since` is `table.version` taken before the step whose words are asked for: a page that is behind still
+ * has the words of earlier steps to say, and they are not among these. With no version, all it ever said.
+ * The record is never emptied.
  */
-export const marked = (page: Page) => page.evaluate('window.spoken.length') as Promise<number>;
-
-/** Everything a page has said since `mark`, oldest first, as "how: words". The record is kept whole. */
-export async function spoken(page: Page, mark = 0): Promise<string[]> {
-  const said = (await page.evaluate(`window.spoken.slice(${mark})`)) as Said[];
+export async function spoken(page: Page, since = -Infinity): Promise<string[]> {
+  const said = (await page.evaluate(`window.spoken.filter((said) => said.version > ${since})`)) as Said[];
 
   return said.map(({ how, text }) => `${how}: ${text}`);
 }
 
-/** Resolves once a page has said this line, in the way given, since `mark`. */
-export const heard = (page: Page, line: string, mark = 0) =>
-  page.waitForFunction(`window.spoken.slice(${mark}).some((said) => said.how + ': ' + said.text === ${JSON.stringify(line)})`);
+/** Resolves once a page has said this line, in the way given, for a view of its table newer than `since`. */
+export const heard = (page: Page, line: string, since = -Infinity) =>
+  page.waitForFunction(`window.spoken.some((said) => said.version > ${since} && said.how + ': ' + said.text === ${JSON.stringify(line)})`);
 
 /** A rule the engine holds against a part of the page that is left standing, and why. */
 export interface Exception {

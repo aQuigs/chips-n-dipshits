@@ -80,6 +80,7 @@ A check must pass on a machine too slow to keep up. `npm run test:stall -- "part
 - A tap that sends a command other than a move (a reaction, a switch) is still on its way when the check's next line runs: make it with `answeredTo` (`scripts/pageSpies.ts`) before reading the rig's side or stepping it, as a move is made with `answeredAfter`.
 - What a page told in a toast is asked with `toastTold` or `toasts` (`scripts/pageSpies.ts`), never a selector: a toast is gone in 4.5 seconds and a busy machine looks later.
 - What a page set moving is asked for by step: `const before = table.version`, the step, then `flightsSince(before)` in the page or `flown(page, before)`. Never empty what a page wrote down: a page that is behind brings the last step's moves after the emptying.
+- What a page said to a screen reader is asked for the same way: `spoken(page, before)` for the lines, `heard(page, line, before)` to wait for one (`scripts/a11y.ts`).
 - No wait gets a `timeout` of its own: the rig's is the one with room for a slow runner and for a stalled run.
 - A check that fails prints, for each of its pages, what it showed against the table as the rig has it and what its spies wrote down (toasts, sounds, moves by version), and saves `screenshots/failed-*.png`. Read that before running it again.
 - `tests/screenCheckRules.test.ts` holds the script to the rules a pattern can find. A new class of race gets a helper and, where a pattern can find it, a line there.

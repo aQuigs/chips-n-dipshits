@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { answersOver, askRound, QUESTION, QUIET_MS, SETTLE_DEADLINE_MS, untilOnly } from '../scripts/answering.ts';
+import { answersOver, askRound, QUESTION, QUIET_ANSWERS, QUIET_MS, SETTLE_DEADLINE_MS, untilOnly } from '../scripts/answering.ts';
 import type { Answer } from '../scripts/answering.ts';
 
 const NEW = 'the build put there';
@@ -17,7 +17,7 @@ const URL = 'https://script.example/macros/s/abc/exec';
  * of those times after the start, the next call is answered that way. `silentUntil` is how long no
  * call is answered at all.
  */
-function address(strays: Record<number, Answer> = {}, { silentUntil = 0, otherwise = { build: NEW } as Answer } = {}) {
+function address(strays: Record<number, Answer> = {}, { silentUntil = 0, otherwise = { build: NEW } as Answer, roundMs = 0 } = {}) {
   let ms = 0;
   const due = Object.entries(strays)
     .map(([at, answer]) => ({ at: Number(at), answer }))
@@ -40,8 +40,9 @@ function address(strays: Record<number, Answer> = {}, { silentUntil = 0, otherwi
         },
       },
       now: () => new Date(ms),
+      // `roundMs` is how long a round's answers take to come, on top of the pause before it
       pause: async (length: number) => {
-        ms += length;
+        ms += length + roundMs;
       },
     },
   };
@@ -55,6 +56,22 @@ test('an address where only the build answers is taken to serve it alone after a
   assert.ok(elapsed() >= QUIET_MS && elapsed() < QUIET_MS + 1000, `it waited ${elapsed()} ms`);
   assert.ok(asked.length >= 100, `and asked ${asked.length} times in that stretch, several at a time`);
   assert.equal(asked.filter((at) => at === 0).length, 4);
+});
+
+test('a slow address is not taken to serve the build alone on a few answers, however long they took to come', async () => {
+  // A round of four answers every ten seconds: five of them fill the stretch, and tell too little
+  const { asking, asked, elapsed } = address({}, { roundMs: 10_000 });
+
+  assert.deepEqual(await untilOnly(NEW, URL, asking), { settled: true, heard: true, other: null });
+
+  assert.equal(asked.length, QUIET_ANSWERS, `it settled on ${asked.length} answers`);
+  assert.ok(elapsed() > 2 * QUIET_MS && elapsed() < SETTLE_DEADLINE_MS, `after ${elapsed()} ms`);
+
+  // And an answer from the build it had starts the count over, like the stretch
+  const strayed = address({ 100_000: { build: OLD } }, { roundMs: 10_000 });
+
+  assert.equal((await untilOnly(NEW, URL, strayed.asking)).settled, true);
+  assert.ok(strayed.asked.filter((at) => at > 100_000 + 10_250).length >= QUIET_ANSWERS, 'the answers before it count for nothing');
 });
 
 test('one answer from the build the address had starts the stretch over, however long the build was alone before it', async () => {

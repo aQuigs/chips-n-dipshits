@@ -22,10 +22,21 @@ export interface Asking {
   pause(ms: number): Promise<void>;
 }
 
-/** How long a build must have been the only one to answer before an address is taken to serve it alone. Strays were seen eight seconds apart. */
+/**
+ * How long a build must have been the only one to answer before an address is taken to serve it alone.
+ * Measured at a web app given a version five times: both versions answered for 40 to 58 s. Asked this
+ * way, the old one once stayed away for over 10 s in the middle of that, while a page went on hearing
+ * it for 22 s more, and never for 20 s. A page heard it up to 16 s after the last time this did.
+ */
 export const QUIET_MS = 45_000;
 
-/** How long the wait for that goes on before it is given up. Google was seen to take under a minute. */
+/**
+ * How many answers that stretch must hold at the least, so that a few slow ones cannot pass for it. At
+ * the second or so an answer takes it holds about 130. The 20 s that held when measured held about 40.
+ */
+export const QUIET_ANSWERS = 60;
+
+/** How long the wait goes on before it is given up. Its two real runs took 85 and 101 s. */
 export const SETTLE_DEADLINE_MS = 300_000;
 
 // A round is this many calls at once, and the next round follows this long after its last answer
@@ -59,7 +70,7 @@ export async function askRound(answers: Answers, url: string): Promise<Round> {
 
 /** How a wait for one build to be the only one answering came out. */
 export interface Settling {
-  /** Whether a whole stretch of calls was answered by the build and by nothing else. */
+  /** Whether a whole stretch of calls, and enough of them, was answered by the build and by nothing else. */
   settled: boolean;
   /** Whether the build answered at all. */
   heard: boolean;
@@ -68,13 +79,14 @@ export interface Settling {
 }
 
 /**
- * Asks an address round after round until `build` alone has answered for a whole stretch, or the
- * deadline. A call that got no answer starts the stretch over like one another build answered: it
- * shows nothing of which build would have.
+ * Asks an address round after round until `build` alone has answered for a whole stretch, of enough
+ * answers, or the deadline. A call that got no answer starts the stretch over like one another build
+ * answered: it shows nothing of which build would have.
  */
 export async function untilOnly(build: string, url: string, { answers, now, pause }: Asking): Promise<Settling> {
   const began = now().getTime();
   let heard = false;
+  let alone = 0;
   let other: { at: number; said: (seconds: number) => string } | null = null;
 
   for (;;) {
@@ -83,6 +95,7 @@ export async function untilOnly(build: string, url: string, { answers, now, paus
     const stray = builds.find((each) => each !== build);
 
     heard ||= builds.includes(build);
+    alone = stray === undefined && failed.length === 0 ? alone + AT_A_TIME : 0;
 
     if (stray !== undefined) {
       other = { at, said: (seconds) => `${named(stray)} answered ${seconds} s ago` };
@@ -90,7 +103,7 @@ export async function untilOnly(build: string, url: string, { answers, now, paus
       other = { at, said: (seconds) => `a call ${seconds} s ago got no answer (${failed.join(', ')})` };
     }
 
-    const settled = at - (other?.at ?? began) >= QUIET_MS;
+    const settled = at - (other?.at ?? began) >= QUIET_MS && alone >= QUIET_ANSWERS;
 
     if (settled || at - began >= SETTLE_DEADLINE_MS) {
       return { settled, heard, other: other && other.said(Math.round((at - other.at) / 1000)) };

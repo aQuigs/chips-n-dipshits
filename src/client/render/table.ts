@@ -49,17 +49,19 @@ const SEAT_SPOTS: Record<Shape, SeatSpot[]> = {
     [92, 65, 'middle'],
     [73, 97, 'bottom'],
   ],
+  // Four down each side, as far apart as they go: nearer together, a seat's cards are under the name of the hand shown by the
+  // seat above. The lowest stop short of the line under the viewer's seat, which three boards make as wide as the table
   tall: [
     [50, 99.5, 'bottom'],
-    [15, 79, 'middle'],
-    [14, 59, 'middle'],
-    [14, 39, 'middle'],
-    [15, 19, 'middle'],
+    [13, 85.5, 'middle'],
+    [12, 60.8, 'middle'],
+    [12, 36.2, 'middle'],
+    [13, 11.5, 'middle'],
     [50, 0.5, 'top'],
-    [85, 19, 'middle'],
-    [86, 39, 'middle'],
-    [86, 59, 'middle'],
-    [85, 79, 'middle'],
+    [87, 11.5, 'middle'],
+    [88, 36.2, 'middle'],
+    [88, 60.8, 'middle'],
+    [87, 85.5, 'middle'],
   ],
 };
 
@@ -99,24 +101,33 @@ export interface TableHandlers {
   muted?: ReadonlySet<string>;
 }
 
-function seatPlace(shape: Shape, slot: number): { class: string; style: Record<string, string> } {
+/** Where something lies on the table: the classes that say how it is held there, and the place itself. */
+interface Placed {
+  class: string;
+  style: Record<string, string>;
+}
+
+function seatPlace(shape: Shape, slot: number): Placed {
   const [x, y, anchor] = SEAT_SPOTS[shape][slot]!;
 
   // As custom properties, so the stylesheet can keep a seat near an edge from hanging off it
   return { class: `seat at-${anchor}`, style: { '--x': `${x}%`, '--y': `${y}%` } };
 }
 
-function betPlace(shape: Shape, slot: number): Record<string, string> {
+/**
+ * Where a bet lies, and by its classes where its seat is: along the top or the bottom, or at the left
+ * or the right in the upper or the lower half. A short table lays the bets of each out its own way (table.css).
+ */
+function betPlace(shape: Shape, slot: number): Placed {
   const [x, y, rowsOut] = BET_SPOTS[shape][slot]!;
-
-  if (rowsOut === undefined) {
-    return { left: `${x}%`, top: `${y}%` };
-  }
+  const [seatX, seatY, anchor] = SEAT_SPOTS[shape][slot]!;
+  const from = anchor === 'middle' ? `${seatX < 50 ? 'left' : 'right'} ${seatY < 50 ? 'upper' : 'lower'}` : anchor;
 
   // The boards and the pot keep their size on a short table, where a share of its height stops clearing them
-  const fromTheMiddle = `max(${Math.abs(y - 50)}%, var(--center-reach) + ${rowsOut} * var(--bet-row))`;
+  const top = rowsOut === undefined ? `${y}%` : `calc(50% ${y < 50 ? '-' : '+'} max(${Math.abs(y - 50)}%, var(--center-reach) + ${rowsOut} * var(--bet-row)))`;
 
-  return { left: `${x}%`, top: `calc(50% ${y < 50 ? '-' : '+'} ${fromTheMiddle})` };
+  // As custom properties, like a seat's, so the stylesheet can put a bet elsewhere where the table is short
+  return { class: `from-${from}`, style: { '--x': `${x}%`, '--y': top, '--seat-x': `${seatX}%`, '--seat-y': `${seatY}%` } };
 }
 
 const moveNote = (seat: number) => `Moves to seat ${seat + 1} after this hand`;
@@ -342,7 +353,7 @@ function seatEl(view: TableView, seat: SeatView, slot: number, shape: Shape, clo
     hand?.button === seat.seat ? dealerButtonEl('Dealer button') : null,
     vote,
     hint,
-    label ? h('div.tag', null, label) : null,
+    label ? h('div.tag.shown', { title: label }, nameEl(label)) : null,
   );
 
   const nodes = [seatNode];
@@ -356,9 +367,9 @@ function seatEl(view: TableView, seat: SeatView, slot: number, shape: Shape, clo
   return nodes;
 }
 
-/** A pile of chips as a bet is drawn: a chip and what it is worth, or the chip alone. `style` says where it lies. */
-function chipsEl(amount: number | undefined, table: Denominated, style: Record<string, string>): HTMLDivElement {
-  return h('div.bet', { class: amount === undefined ? 'bare' : '', style }, h('i.chip'), amount === undefined ? null : shortAmount(amount, table));
+/** A pile of chips as a bet is drawn: a chip and what it is worth, or the chip alone. `place` says where it lies. */
+function chipsEl(amount: number | undefined, table: Denominated, place: Placed): HTMLDivElement {
+  return h('div.bet', { class: [place.class, amount === undefined ? 'bare' : ''].join(' '), style: place.style }, h('i.chip'), amount === undefined ? null : shortAmount(amount, table));
 }
 
 function openSeatEl(view: TableView, seat: number, slot: number, shape: Shape, handlers: TableHandlers): HTMLElement {
@@ -483,7 +494,18 @@ const RESULT_LINES = 3;
 // A board's line has room for this many winners with what each took there
 const WINNERS_ON_A_LINE = 2;
 
-function resultLines(view: TableView, hand: HandView): string[] {
+/** A line of what the table says of a hand that is over. */
+interface ResultLine {
+  /** The boards it is about, in words and as the numbers the hand hint marks them by; null on a line about none. */
+  boards: { words: string; marks: string } | null;
+  says: string;
+}
+
+const BOARD_MARKS = ['①', '②', '③'];
+
+const said = (says: string): ResultLine => ({ boards: null, says });
+
+function resultLines(view: TableView, hand: HandView): ResultLine[] {
   const result = hand.result;
   if (!result) {
     return [];
@@ -491,21 +513,21 @@ function resultLines(view: TableView, hand: HandView): string[] {
 
   const nameAt = (seat: number) => view.seats[seat]?.name ?? 'Someone';
   if (result.chopped) {
-    return [`${nameAt(hand.sbSeat)} and ${nameAt(hand.bbSeat)} chop the blinds`];
+    return [said(`${nameAt(hand.sbSeat)} and ${nameAt(hand.bbSeat)} chop the blinds`)];
   }
 
   const amountOf = (chips: number) => formatAmount(chips, view.config);
   const runs = boardsWonOn(hand);
-  const lines: string[] = [];
+  const lines: ResultLine[] = [];
   let fits = true;
 
   for (const { boards, won } of boardsByWinners(result.pots.flatMap((pot) => pot.awards), runs)) {
-    const label = runs > 1 ? `${boardsName(boards, runs)}: ` : '';
+    const about = runs > 1 ? { words: `${boardsName(boards, runs)}: `, marks: boards.map((board) => BOARD_MARKS[board] ?? '').join('') } : null;
 
     // Several boards keep to a line each way they went: winners who split one, of a tie or of a side pot, are named with what each took and not their hands
     if (runs > 1 && won.size > 1) {
       fits &&= won.size <= WINNERS_ON_A_LINE;
-      lines.push(`${label}${[...won].map(([seat, amount]) => `${nameAt(seat)} +${amountOf(amount)}`).join(', ')}`);
+      lines.push({ boards: about, says: [...won].map(([seat, amount]) => `${nameAt(seat)} +${amountOf(amount)}`).join(', ') });
       continue;
     }
 
@@ -513,16 +535,16 @@ function resultLines(view: TableView, hand: HandView): string[] {
       // A line for boards won alike names no hand, which is one per board
       const made = boards.length === 1 ? result.hands.find((shown) => shown.seat === seat && shown.run === boards[0])?.name : undefined;
 
-      lines.push(`${label}${nameAt(seat)} wins ${amountOf(amount)}${made ? ` with ${midSentence(made)}` : ''}`);
+      lines.push({ boards: about, says: `${nameAt(seat)} wins ${amountOf(amount)}${made ? ` with ${midSentence(made)}` : ''}` });
     }
   }
 
   // Folded to a big blind that was the only chips in the hand, which went back to its player
   if (result.uncontested && lines.length === 0) {
-    lines.push(`Everyone folded to ${nameAt(result.winnings[0]!.seat)}`);
+    lines.push(said(`Everyone folded to ${nameAt(result.winnings[0]!.seat)}`));
   }
 
-  const bountyLine = result.bounty ? [bountyWords(nameAt(result.bounty.seat), result.bounty.hand, amountOf(sum(result.bounty.payments.map((payment) => payment.amount))))] : [];
+  const bountyLine = result.bounty ? [said(bountyWords(nameAt(result.bounty.seat), result.bounty.hand, amountOf(sum(result.bounty.payments.map((payment) => payment.amount)))))] : [];
 
   if (fits && lines.length + bountyLine.length <= RESULT_LINES) {
     return [...lines, ...bountyLine];
@@ -533,7 +555,12 @@ function resultLines(view: TableView, hand: HandView): string[] {
   const room = RESULT_LINES - bountyLine.length;
   const shown = winners.length > room ? [...winners.slice(0, room - 1), `and ${winners.length - room + 1} more win a share`] : winners;
 
-  return [...shown, ...bountyLine];
+  return [...shown.map(said), ...bountyLine];
+}
+
+/** A line of the result. The boards it is about are words a short table swaps for their numbers (table.css), which the words stay in the page under. */
+function resultLineEl({ boards, says }: ResultLine): HTMLElement {
+  return h('div', null, boards ? h('span.of-boards', { 'data-marks': boards.marks }, h('span.words', null, boards.words)) : null, says);
 }
 
 function messageEl(view: TableView, handlers: TableHandlers): HTMLElement | null {
@@ -544,7 +571,7 @@ function messageEl(view: TableView, handlers: TableHandlers): HTMLElement | null
   }
 
   if (hand?.stage === 'done') {
-    return h('div.message.result', null, resultLines(view, hand).map((line) => h('div', null, line)), rabbitEl(hand, handlers));
+    return h('div.message.result', null, resultLines(view, hand).map(resultLineEl), rabbitEl(hand, handlers));
   }
 
   if (hand) {
@@ -602,7 +629,7 @@ function potEl(table: Denominated, hand: HandView): HTMLElement | null {
   const sidePots = hand.pots.length > 1 && !betsOut;
   const breakdown = sidePots ? hand.pots.map((pot, index) => `${index === 0 ? 'Main' : `Side ${index}`} ${formatAmount(pot.amount, table)}`).join(' · ') : null;
 
-  return h('div.pot', null, h('span.label', null, hand.bombPot ? 'Bomb pot' : 'Pot'), formatAmount(hand.pot, table), breakdown ? h('div.sidepots', null, breakdown) : null);
+  return h('div.pot', null, h('span.label', null, hand.bombPot ? 'Bomb pot' : 'Pot'), formatAmount(hand.pot, table), breakdown ? h('div.sidepots', { title: breakdown }, breakdown) : null);
 }
 
 /**
@@ -679,9 +706,12 @@ export interface DrawnTable {
    * `amount` or bare, a seat's two cards face down, one card of a board face down, or a thrown thing
    * drawn as its emoji `mark`, laid out at `place` as the table would draw it there. It lies over
    * everything and under no finger, and taking it off again leaves the table as it was drawn. Null where
-   * there is no such place.
+   * there is no such place. Chips at a bet's place lie with their middle at `lay` when it is given: where
+   * the bet lay on the table before this one, which a seat grown or shrunk since has moved a bet's place from.
    */
-  standIn(what: 'chips' | 'cards' | 'card' | 'mark', place: Place, amount?: number, mark?: string): HTMLElement | null;
+  standIn(what: 'chips' | 'cards' | 'card' | 'mark', place: Place, amount?: number, mark?: string, lay?: Point): HTMLElement | null;
+  /** The middle of every bet the table draws, by seat. */
+  bets(): Map<number, Point>;
 }
 
 /** The table drawn in `stage` right now, or null while there is none. */
@@ -729,26 +759,27 @@ export function drawnTable(stage: Element): DrawnTable | null {
   const betSpot = (seat: number) => betPlace(drawing.shape, (seat - drawing.hero + drawing.seats) % drawing.seats);
 
   // Where a stand-in lies: a bet's own place for one, and for anything else the middle of what marks the place
-  const lies = (at: Place): Record<string, string> | null => {
+  const lies = (at: Place, lay?: Point): Placed | null => {
     if (at.at === 'bet') {
-      return betSpot(at.seat);
+      return lay ? { class: '', style: { '--x': `${lay.x}px`, '--y': `${lay.y}px` } } : betSpot(at.seat);
     }
 
     const spot = marker(at);
     const middle = spot && middleOf(spot);
 
-    return middle && { left: `${middle.x}px`, top: `${middle.y}px` };
+    return middle && { class: '', style: { left: `${middle.x}px`, top: `${middle.y}px` } };
   };
 
-  const standIn = (what: 'chips' | 'cards' | 'card' | 'mark', at: Place, amount?: number, mark?: string): HTMLElement | null => {
-    const style = lies(at);
-    if (!style) {
+  const standIn = (what: 'chips' | 'cards' | 'card' | 'mark', at: Place, amount?: number, mark?: string, lay?: Point): HTMLElement | null => {
+    const place = lies(at, lay);
+    if (!place) {
       return null;
     }
 
+    const { style } = place;
     const made =
       what === 'chips'
-        ? chipsEl(amount, drawing.config, style)
+        ? chipsEl(amount, drawing.config, place)
         : what === 'cards'
           ? h('div.hole', { style }, cardEl(null), cardEl(null))
           : what === 'mark'
@@ -781,5 +812,6 @@ export function drawnTable(stage: Element): DrawnTable | null {
     },
     middleOf,
     standIn,
+    bets: () => new Map([...element.querySelectorAll<HTMLElement>('.bet[data-bet]')].map((bet) => [Number(bet.dataset.bet), middleOf(bet)])),
   };
 }

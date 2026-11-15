@@ -80,6 +80,10 @@ class PageMotion implements MotionPlayer {
   private waiting: (() => void)[] = [];
   /** How big the stage was when what is in flight was measured. */
   private measured = { width: 0, height: 0 };
+  /** Where each bet lies on the table drawn now, by seat. */
+  private lying: { table: HTMLElement; bets: Map<number, Point> } | null = null;
+  /** Where each lay on the table before it. */
+  private lay = new Map<number, Point>();
   private readonly resized: ResizeObserver;
   private readonly redrawn: MutationObserver;
   private readonly onHide = () => document.hidden && this.cancel();
@@ -92,11 +96,21 @@ class PageMotion implements MotionPlayer {
       if (stage.clientWidth !== this.measured.width || stage.clientHeight !== this.measured.height) {
         this.cancel();
       }
+
+      // The bets moved with the room, on a table that was not drawn again for it
+      const table = drawnTable(stage);
+
+      if (this.lying && table?.element === this.lying.table) {
+        this.lying.bets = table.bets();
+      }
     });
     this.resized.observe(stage);
 
     // A table drawn again takes what was moving on the old one with it
-    this.redrawn = new MutationObserver(() => this.sweep());
+    this.redrawn = new MutationObserver(() => {
+      this.sweep();
+      this.noteBets(drawnTable(stage));
+    });
     this.redrawn.observe(stage, { childList: true });
 
     // A page out of sight stops its animations where they are, and would play the rest on coming back
@@ -110,6 +124,7 @@ class PageMotion implements MotionPlayer {
     }
 
     this.sweep();
+    this.noteBets(table);
 
     // What is moved again rests first, so a stand-in laid out by it is laid out where it rests
     for (const move of moves.filter((move) => LOOKS[move.name].mover === 'standing')) {
@@ -178,9 +193,25 @@ class PageMotion implements MotionPlayer {
     }
 
     const far = table.middle(move.to);
-    const element = far && move.from ? table.standIn(look.mover, move.from, move.amount, move.mark) : null;
+    const lay = move.from?.at === 'bet' ? this.lay.get(move.from.seat) : undefined;
+    const element = far && move.from ? table.standIn(look.mover, move.from, move.amount, move.mark, lay) : null;
 
     return element ? [{ name: move.name, element, look, far, ms, after: move.after }] : [];
+  }
+
+  /**
+   * Keeps where the bets of a table newly drawn lie, and where those of the one before it lay. A bet's
+   * place is set around the seats, and the view that takes a bet away can make a seat taller or shorter
+   * in the same draw: the chips that leave it then leave from where the bet was seen, not from where
+   * one would lie now. A new table is looked at before anything on it moves.
+   */
+  private noteBets(table: DrawnTable | null): void {
+    if (!table || table.element === this.lying?.table) {
+      return;
+    }
+
+    this.lay = this.lying?.bets ?? new Map();
+    this.lying = { table: table.element, bets: table.bets() };
   }
 
   /** The pieces of a burst of confetti, thrown from `from` toward the middle of the table and fanning out. */

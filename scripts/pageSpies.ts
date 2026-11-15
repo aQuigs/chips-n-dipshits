@@ -332,6 +332,9 @@ export async function answeredTo(page: Page, type: Command['type'], make: () => 
   return answer;
 }
 
+/** The replay's table at rest: drawn, with the chances of hands face up worked out for the cards on it. */
+export const replayDrawn = (page: Page) => page.waitForSelector('.replay:not([hidden]) .replay-stage:not([data-chances-pending]) .table');
+
 /** Resolves once the last line of a page's play-by-play is about this player: the view that says what they did has been drawn. */
 export const toldOf = (page: Page, name: string) => page.waitForFunction(`[...document.querySelectorAll('.feed li')].at(-1)?.textContent.startsWith(${JSON.stringify(`${name} `)})`);
 

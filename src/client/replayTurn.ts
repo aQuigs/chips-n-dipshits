@@ -17,6 +17,9 @@ export interface ReplaySetAside {
 /** Whether the viewer is being asked how many times to run it, which has a clock of its own and is nobody's turn. */
 const picking = (view: TableView | null) => view?.hand?.canVote ?? false;
 
+/** Whether the game is waiting on the viewer, for a decision or for a pick of how many times to run it. */
+export const neededBy = (view: TableView): boolean => turnOf(view, view.you.seat) !== null || picking(view);
+
 /**
  * What a view put on screen means for a hand being played back. It gets out of the way the moment the
  * game needs the viewer, for a decision or for a pick of how many times to run it: by itself, since a
@@ -30,5 +33,5 @@ export function replayAfter({ before, view }: Pick<TableChange, 'before' | 'view
     toast('Your turn. The replay will pick up where you left it.');
   }
 
-  replay.turn(turnOf(view, view.you.seat) !== null || picking(view));
+  replay.turn(neededBy(view));
 }

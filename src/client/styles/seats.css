@@ -44,11 +44,22 @@
   --seat-w: clamp(84px, 24cqmin, 150px);
 }
 
+/*
+ * Down the sides of a standing table a seat has the room out to the edge of the screen, and is that
+ * much wider on a phone: enough for a few letters of a long name beside a star and a trophy.
+ */
+.table.tall .seat.at-middle {
+  --seat-w: max(var(--seat-w-other), 80px);
+}
+
 .seat.me .hole {
   --card-w: clamp(32px, 9cqmin, 62px);
 }
 
 .plate {
+  /* The least of a long name that is left to read beside the marks after it */
+  --least-name: 3em;
+
   position: relative;
   z-index: 1;
   display: grid;
@@ -65,14 +76,22 @@
 
 .plate .name {
   display: flex;
+  flex-wrap: wrap;
   justify-content: center;
   overflow: hidden;
   font-weight: 700;
   white-space: nowrap;
 }
 
-/* The name gives way to the host's or a co-host's mark, which stays whole */
+/*
+ * The name gives way to the marks beside it, which stay whole, but only down to the room of a few
+ * letters: a seat with the host's star and the high hand's trophy would otherwise be down to one. Marks
+ * with no room left beside that much of the name go on a line under it.
+ */
 .plate .name > span:first-child {
+  flex: 1 1 var(--least-name);
+  max-width: max-content;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -200,8 +219,56 @@
   color: var(--text);
   font-size: 0.85em;
   font-weight: 600;
+  /* Set here, so a tag is as tall in every font and the seats down the side of a phone's table can count on it */
+  line-height: 1.25;
   text-align: center;
   text-wrap: balance;
+}
+
+/*
+ * Where the seats stand one under another with no room between them, a hand is named on one line: all
+ * of it when that fits, and otherwise its kind alone, "Straight" for "Straight, ace high", with the rest
+ * in the cards beside it and the whole name in the tag's title. What follows the kind wraps to a
+ * second line, which the tag is not tall enough to show. A standing table tall enough for its side
+ * seats with two lines under each names every hand in full.
+ */
+@container not ((min-height: 400px) and (max-aspect-ratio: 1 / 1)) {
+  .table.tall .seat.at-middle .tag.shown .name {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    max-height: 1.25em;
+    overflow: hidden;
+    white-space: pre;
+  }
+}
+
+/*
+ * A standing table with no height to spare has a quarter of it for each seat down its sides, with the
+ * line under it: the plates and the lines sit closer, and a name stays on the line of its marks.
+ */
+@container (max-height: 350px) {
+  /*
+   * Lying down, a seat at the side shares the edge of its room with the seat in the corner beside it.
+   * A line under either is kept to its own seat's width, on two lines when it must be, and a side seat
+   * is held by its top, so the line under it grows down into room that is its own and its cards stay put.
+   */
+  .table.wide .seat:not(.me) .tag {
+    max-width: 100%;
+  }
+
+  .table.wide .seat.at-middle {
+    top: calc(var(--y) * var(--side-spread) + var(--side-shift));
+    transform: translateX(-50%);
+  }
+
+  .table.tall .seat.at-middle .plate .name {
+    flex-wrap: nowrap;
+  }
+
+  .table.tall .seat.at-middle .tag {
+    margin-top: 0;
+  }
 }
 
 .seat.me .tag {
@@ -241,6 +308,8 @@
 
 .bet {
   position: absolute;
+  top: var(--y);
+  left: var(--x);
   display: flex;
   align-items: center;
   gap: 0.4em;

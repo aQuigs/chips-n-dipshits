@@ -40,9 +40,12 @@
   border-radius: var(--radius);
   background: var(--panel-raised);
   box-shadow: var(--shadow-raised);
+  /* For where the names are one line, swiped along (below) */
+  scrollbar-width: none;
 }
 
 .mention-list li {
+  flex: none;
   min-height: 36px;
   padding: 8px 12px;
   overflow: hidden;
@@ -55,4 +58,26 @@
 .mention-list li[aria-selected='true'] {
   background: var(--accent);
   color: var(--accent-ink);
+}
+
+/*
+ * Where a column of names has no room they go on one line, swiped along for the rest. On a player's own
+ * turn a phone's open chat is down to its box, with the moves close above it: a column would lie over
+ * Fold and Call. Beside a table lying down (sideways.css) the chat is a few lines tall at the least: a
+ * column would run off the top of the screen.
+ */
+@container app ((max-width: 899.98px) and (min-height: 521px)) or (max-width: 559.98px) {
+  .app:has(.turn) .mention-list {
+    display: flex;
+    width: calc(100% - 24px);
+    overflow-x: auto;
+  }
+}
+
+@container app (min-width: 560px) and (max-height: 520px) {
+  .mention-list {
+    display: flex;
+    width: calc(100% - 24px);
+    overflow-x: auto;
+  }
 }

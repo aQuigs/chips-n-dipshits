@@ -30,33 +30,10 @@
   color: var(--accent);
 }
 
-.standings-players,
-.standings-nights {
-  display: grid;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.standings-players > li,
-.standings-nights li {
-  border-bottom: 1px solid var(--line);
-}
-
-/* Where a player stands, their name in what the money leaves it, and what they did under all three */
+/* A player's line, as player-lines.css draws it, with where the player stands before the name, and what they did under the other three */
 .standings-players summary {
-  display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto auto;
-  align-items: baseline;
-  gap: 2px 10px;
-  padding: 10px 0;
-  cursor: pointer;
-  list-style: none;
   -webkit-tap-highlight-color: transparent;
-}
-
-.standings-players summary::-webkit-details-marker {
-  display: none;
 }
 
 .standings-players .place {
@@ -66,47 +43,6 @@
   text-align: right;
 }
 
-.standings-players .who,
-.standings-nights .when {
-  font-weight: 600;
-  overflow-wrap: anywhere;
-}
-
-.standings-players .me .who::after {
-  content: ' (you)';
-  color: var(--muted);
-  font-weight: 400;
-}
-
-.standings .net {
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
-.standings .up {
-  color: var(--good);
-}
-
-.standings .down {
-  color: var(--bad);
-}
-
-.standings-players .fold {
-  color: var(--muted);
-  font-size: 18px;
-  line-height: 1;
-}
-
-.standings-players details[open] .fold {
-  transform: rotate(180deg);
-}
-
-.standings .counts,
-.standings-nights .when small {
-  color: var(--muted);
-  font-weight: 400;
-}
-
 /* Under the name, clear of the place before it */
 .standings-players summary .counts,
 .standings-players summary .badges {
@@ -114,25 +50,22 @@
   margin-left: 0;
 }
 
-.standings-players dl {
+/* A player's nights, inside their line: a list of its own, whose money and counts are set as the line's are */
+.standings-nights {
   display: grid;
-  gap: 8px;
   margin: 0;
-  padding-bottom: 12px;
+  padding: 0;
+  list-style: none;
 }
 
-.standings-players dt {
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.standings-players dd {
-  margin: 0;
+.standings-nights .when {
+  font-weight: 600;
   overflow-wrap: anywhere;
 }
 
-.standings-cards {
-  white-space: nowrap;
+.standings-nights .when small {
+  color: var(--muted);
+  font-weight: 400;
 }
 
 .standings-player-nights {
@@ -148,6 +81,7 @@
   align-items: baseline;
   gap: 2px 10px;
   padding: 8px 0;
+  border-bottom: 1px solid var(--line);
 }
 
 .standings-nights li:last-child {

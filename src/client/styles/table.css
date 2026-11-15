@@ -126,6 +126,8 @@
   font-size: 1.05em;
   font-weight: 600;
   text-wrap: balance;
+  /* The longest name in a wide font is wider than the middle of a phone's table, and whole would be on the seats beside it */
+  overflow-wrap: anywhere;
 }
 
 .message.result {
@@ -150,17 +152,196 @@
 }
 
 /*
- * Lying on a phone, three boards, the pot and the viewer's hand named for each board leave no room for
- * the pots one by one; by then everyone is all in and nothing is left to bet, and the result says who
- * won which.
+ * A short table, as on a small phone: the seats along the top, the middle, and the seats along the
+ * bottom are laid out one under another, so the middle has exactly the room those seats leave it,
+ * however many lines each has grown to. Placed by shares of the height, as on a taller table, the
+ * boards and the pot are under the viewer's own cards as soon as a seat has a line more.
  */
 @container (max-height: 350px) {
+  .table {
+    /* How tall the lines of a plate are with every one of them written: name, stack, and a move or a chance */
+    --plate-lines: 3.775em;
+
+    display: grid;
+    grid-template: auto minmax(0, 1fr) auto / minmax(0, 1fr);
+  }
+
+  /* Still placed across the table by `left`, now from the left edge of the row */
+  .table > .seat:is(.at-top, .at-bottom) {
+    position: relative;
+    top: auto;
+    grid-column: 1;
+    justify-self: start;
+    transform: translateX(-50%);
+  }
+
+  /* At the very edge: a table this short has no share of its height to leave above or under them */
+  .table > .seat.at-top {
+    grid-row: 1;
+    align-self: start;
+    margin-top: 2px;
+  }
+
+  .table > .seat.at-bottom {
+    grid-row: 3;
+    align-self: end;
+    margin-bottom: 2px;
+  }
+
+  /*
+   * As tall with a move or a chance written on them as without: these seats set where the middle and
+   * the bets in front of them lie, which must not shift each time a line comes or goes.
+   */
+  .table > .seat:is(.at-top, .at-bottom):not(.open) .plate {
+    align-content: start;
+    min-height: calc(var(--plate-lines) + 2px);
+  }
+
+  /* What a plate gives up above and below its lines, the middle of the table has for its boards and bets */
+  .table > .seat:not(.open) .plate {
+    padding-block: 0.1em 0.15em;
+  }
+
+  /* Lying down, the middle is in the middle of that room. Standing up it stays where the bets of the side seats are set around it */
+  .table.wide > .center {
+    position: relative;
+    top: auto;
+    left: auto;
+    grid-area: 2 / 1;
+    place-self: center;
+    gap: 2px;
+    transform: none;
+  }
+
+  /*
+   * A bet from a seat along the top or the bottom lies at that edge of the middle's room, in line with
+   * its seat: by a share of the height it would be on the cards of its own seat, the viewer's first.
+   */
+  .table > .bet:is(.from-top, .from-bottom) {
+    position: relative;
+    top: auto;
+    left: var(--seat-x);
+    grid-area: 2 / 1;
+    justify-self: start;
+    margin-block: 2px;
+    transform: translateX(-50%);
+  }
+
+  .table > .bet.from-top {
+    align-self: start;
+  }
+
+  .table > .bet.from-bottom {
+    align-self: end;
+  }
+
+  /*
+   * Lying down, the two seats at each side are held by their tops (seats.css), this far apart, and are
+   * this tall with every line of their plates: what a bet from one of them is placed by.
+   */
+  .table.wide {
+    --side-spread: 1.1;
+    --side-shift: -20.5%;
+    --side-seat-h: calc(var(--card-w) * 1.008 + var(--plate-lines));
+  }
+
+  /*
+   * A bet from a seat at the side keeps to its seat: under the upper of the two, in the gap to the
+   * lower, and beside the cards of the lower, which lie face down for as long as a bet is out. Further
+   * toward the middle it would be on a board or the pot as soon as it, or the pot, is a long one.
+   */
+  .table.wide > .bet:is(.from-left, .from-right) {
+    top: calc(var(--seat-y) * var(--side-spread) + var(--side-shift) + var(--from-seat-top));
+    transform: translateX(-50%);
+  }
+
+  .table.wide > .bet.upper {
+    --from-seat-top: calc(var(--side-seat-h) + 2px);
+  }
+
+  .table.wide > .bet.lower {
+    --from-seat-top: 3px;
+  }
+
+  /*
+   * One column as wide as the middle and no wider, or the pots one by one would stretch it to their
+   * whole line. Over its boards it keeps what the hand hint lifts a card that plays by (hand-hint.css),
+   * so a lifted card comes no nearer a bet than one that lies.
+   */
+  .table.wide > .center {
+    grid-template-columns: minmax(0, 1fr);
+    padding-top: calc(var(--board-card-w) * 0.16);
+  }
+
+  /* Two boards and the bets over and under them have the room to the line on the smallest phone */
+  .table.wide[data-boards='2'] .pot {
+    font-size: 1em;
+  }
+
+  /* The pots one by one go on the pot's own line, as far as it has room for them after the pot: all of them are in the title, and the result says who won which */
+  .table.wide .pot {
+    display: flex;
+    align-items: baseline;
+    justify-content: center;
+    max-width: 100%;
+    white-space: nowrap;
+  }
+
+  .table.wide .sidepots {
+    flex: 0 1 auto;
+    min-width: 0;
+    margin-left: 0.8em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /*
+   * Three boards are as tall as the middle of a lying table has room for, so the pot stands beside
+   * them, where the felt is bare once nobody has a bet out, and the pots one by one go unsaid.
+   */
+  .table.wide[data-boards='3'] .center {
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  }
+
+  .table.wide[data-boards='3'] .boards {
+    grid-column: 2;
+  }
+
+  /* From the boards outward, so a pot too long for the room beside them runs toward the seats and not onto a card */
+  .table.wide[data-boards='3'] .pot {
+    display: block;
+    grid-column: 3;
+    place-self: center start;
+    max-width: none;
+    margin-left: 0.6em;
+    font-size: 1em;
+    text-align: center;
+  }
+
+  .table.wide[data-boards='3'] .pot .label {
+    display: block;
+    margin-right: 0;
+  }
+
   .table.wide[data-boards='3'] .sidepots {
     display: none;
   }
 
-  /* The hint's line a board lifts the viewer's cards higher still */
-  .table.wide[data-boards='3']:has(.seat.me .hint.per-board) .center {
-    top: 45%;
+  .table.wide[data-boards='3'] .message {
+    grid-column: 1 / -1;
+  }
+
+  /*
+   * Three boards leave their result a few lines under them. Which boards a line is about is said there by
+   * their numbers, as the hand hint marks them. The words stay in the line, set too small to see, for a
+   * screen reader and for anything that reads the line's text; the numbers are for the eye alone.
+   */
+  .table.wide[data-boards='3'] .message.result .of-boards::before {
+    content: attr(data-marks) ' ';
+    content: attr(data-marks) ' ' / '';
+  }
+
+  .table.wide[data-boards='3'] .message.result .of-boards .words {
+    font-size: 0;
   }
 }

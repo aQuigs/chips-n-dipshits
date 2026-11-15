@@ -398,6 +398,9 @@ export const SCREENS = {
 
 export type ScreenName = keyof typeof SCREENS;
 
+/** How much wider than tall a table must be to lie down: WIDE_ASPECT in src/client/render/table.ts. */
+export const WIDE_ASPECT = 1.15;
+
 export interface RigPlayer {
   name: string;
   stack: number;

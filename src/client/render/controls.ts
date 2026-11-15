@@ -24,6 +24,8 @@ export interface ControlHandlers {
   openRebuy(): void;
   /** Opens the player's own choice of straddles, at a table that allows more than one kind. */
   openStraddles(): void;
+  /** Plays hand number `hand` back over the table, from the history. Resolves once it is up, or once the viewer has been told why not. */
+  replay(hand: number): Promise<unknown>;
   sizing: Sizing;
 }
 
@@ -438,12 +440,13 @@ function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandle
   const room = view.config.maxBuyIn - seat.stack - seat.pendingAdd;
   // With the night over no hand is coming to settle anything in; the seat still says who is waiting
   const settling = nightOver(view) ? { note: null, buttons: [] } : settlingOf(view, seat, handlers);
+  const own = ownNote(settling.note, hand, view);
 
   let main: HTMLElement;
   if (waiting === 'sent') {
     // A move of theirs is out that the page shows nothing of. The buttons that made it are gone until the table has
     // answered, whatever they were: this comes first, so the buttons of a kind of move added later go the same way
-    main = waitingEl(waitingText(view, hand), view, ownNote(settling.note, hand, view));
+    main = waitingEl(waitingText(view, hand), view, own);
   } else if (hand?.options) {
     main = turnPanel(view.config, hand, seat.stack, handlers);
   } else if (hand?.canAnswerChop) {
@@ -453,7 +456,7 @@ function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandle
   } else {
     const text = waiting === 'unconfirmed' ? `Waiting for the table to confirm your ${seat.lastAction ?? 'move'}…` : waitingText(view, hand);
 
-    main = waitingEl(text, view, ownNote(settling.note, hand, view), hand && aheadEl(view, hand, seat.stack, handlers));
+    main = waitingEl(text, view, own, hand && aheadEl(view, hand, seat.stack, handlers));
   }
 
   const showCards = showCardsEl(view, seat, handlers);
@@ -463,9 +466,11 @@ function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandle
     return h('div.controls.seated', null, h('div.waiting', null, 'You leave your seat when this hand ends'), h('div.extras', null, showCards));
   }
 
+  const replay = own ? null : replayEl(view, seat, handlers);
+
   // Sitting out, straddling and adding chips are all for hands that are not coming
   if (nightOver(view)) {
-    return h('div.controls.seated', null, main);
+    return h('div.controls.seated', null, main, replay);
   }
 
   const extras: HTMLElement[] = [];
@@ -510,7 +515,36 @@ function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandle
     extras.push(h('button.chip-btn', { type: 'button', class: seat.stack === 0 ? 'strong' : '', 'data-action': 'rebuy', onclick: handlers.openRebuy }, 'Add chips'));
   }
 
-  return h('div.controls.seated', null, main, h('div.extras', null, extras));
+  return h('div.controls.seated', null, main, replay, h('div.extras', null, extras));
+}
+
+/**
+ * The number of the last hand on record, for a seated player with no part in the one on the table:
+ * out of it, or between hands. A hand goes on record when it is cleared away, so the one on the table
+ * is never there to play back, and a player still in it has that one to play.
+ */
+function handToReplay(view: TableView, seat: SeatView): number | null {
+  const hand = view.hand;
+  const last = hand ? hand.number - 1 : view.handCount;
+  const free = !hand || !seat.inHand || seat.folded;
+
+  return free && last > 0 ? last : null;
+}
+
+/**
+ * A button to see the last hand again. Its line comes out of the height the bar keeps for a turn
+ * (controls.css), the one room at the table nothing else is using while the player has no move to
+ * make, so the table gives up nothing for it. That holds while the bar says one thing: word of the
+ * hands to come needs the height itself, as a line for the player alone does, and the button is left out.
+ */
+function replayEl(view: TableView, seat: SeatView, handlers: ControlHandlers): HTMLElement | null {
+  const number = handToReplay(view, seat);
+
+  if (number === null || nextHandNote(view).length > 0) {
+    return null;
+  }
+
+  return commandButton('button.chip-btn.replay-last', 'replay-last', `Replay hand #${number}`, () => handlers.replay(number));
 }
 
 /**
@@ -589,7 +623,7 @@ export function controlsSignature(view: TableView): string {
     seat && [seat.stack, seat.pendingAdd, seat.sittingOut, seat.away, seat.straddles, seat.alwaysChop, seat.leaving, seat.owesBigBlind, seat.owesSmallBlind, seat.comesIn, seat.shown],
     hand && [hand.number, hand.stage, hand.street, hand.toAct, hand.turn, hand.currentBet, hand.pot, hand.options, hand.canOfferChop, hand.canAnswerChop, hand.canVote, hand.canShow, hand.passedOver],
     [hand?.ahead, view.preAction],
-    [view.running, view.nextHandAt !== null, view.handCount === 0, nightOver(view), hand?.stage === 'done' && onLastHand(view)],
+    [view.running, view.nextHandAt !== null, view.handCount === 0, nightOver(view), hand?.stage === 'done' && onLastHand(view), seat && handToReplay(view, seat)],
     view.requests.filter((request) => request.playerId === view.you.id),
     [straddlesAllowed(view.config).map((kind) => kind.what), view.config.allowChop, view.config.maxBuyIn, view.config.smallBlind, view.config.bigBlind],
     nextHandNote(view),

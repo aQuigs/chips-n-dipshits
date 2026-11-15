@@ -21,8 +21,9 @@ import { sendersShown } from './senders.ts';
 import { Motion, motionAbility } from './motion.ts';
 import { pageMotion, pageWatching } from './pageMotion.ts';
 import { pagePace } from './pagePace.ts';
-import { pageTicker } from './replayPlayer.ts';
+import { noReplayLine, pageTicker } from './replayPlayer.ts';
 import { ReplayScreen } from './replayScreen.ts';
+import { neededBy } from './replayTurn.ts';
 import { ReactionMarks } from './reactionMarks.ts';
 import { ReactionPicker } from './render/reactionPicker.ts';
 import type { Platform } from './platform.ts';
@@ -143,6 +144,9 @@ export class App {
 
   /** How many commands are on their way to the table with no answer yet. */
   private sending = 0;
+
+  /** Whether the hand the bar's button asked to see again is still being fetched. */
+  private fetchingReplay = false;
 
   /**
    * A member the address names whom this browser hasn't taken up as its own. The address may be the
@@ -879,6 +883,7 @@ export class App {
           showCards: (hand, places) => this.showCards(hand, places),
           openRebuy: () => this.openDialog({ kind: 'rebuy' }),
           openStraddles: () => this.openDialog({ kind: 'straddles' }),
+          replay: (hand) => this.replayHand(hand),
           sizing: screen.sizing,
         },
         waiting,
@@ -934,7 +939,7 @@ export class App {
       h('button.icon.menu-button', { type: 'button', 'aria-label': 'Menu', 'data-action': 'menu', onclick: () => this.openDialog({ kind: 'menu' }) }, '☰', waiting > 0 ? h('span.dot', null, String(waiting)) : null),
       // The ante takes the place of the word: a small phone has no room for both beside the hand's number.
       // It is a piece of its own, so where there is no room for it either it moves to the next line whole
-      h('div.title', null, h('b', null, view.config.name), ante ? h('span', null, `${blinds} `, h('span.ante', null, `· ${ante}`)) : h('span', null, `${blinds} hold’em`)),
+      h('div.title', null, h('b', { title: view.config.name }, view.config.name), ante ? h('span', null, `${blinds} `, h('span.ante', null, `· ${ante}`)) : h('span', null, `${blinds} hold’em`)),
       state ? h('span.pill', null, state) : null,
       voiceLinkEl(view.config.voiceLink),
       h('button.btn.small', { type: 'button', 'data-action': 'invite', onclick: () => this.openDialog({ kind: 'invite' }) }, 'Invite'),
@@ -1183,6 +1188,42 @@ export class App {
     }
 
     screen.replay.show({ record, steps, table: view, kept: screen.dealt.of(view.you.id, record.number) });
+  }
+
+  /** Plays hand number `number` back from the history, as the bar under the table asks for the hand just played, or says why it can't. */
+  private async replayHand(number: number): Promise<void> {
+    // The bar can be drawn again while the hand is fetched, with its button live: a second tap adds nothing to the first
+    if (this.fetchingReplay) {
+      return;
+    }
+
+    this.fetchingReplay = true;
+    const hands = await this.loadHistory().catch(() => null);
+    this.fetchingReplay = false;
+
+    // They left the table meanwhile, or the game came to wait on them: a replay they asked for while free is not put over their move
+    const view = this.shownView();
+
+    if (!view || neededBy(view)) {
+      return;
+    }
+
+    const record = hands?.find((hand) => hand.number === number);
+
+    if (!record) {
+      this.toast(hands ? `Hand #${number} is not in the history yet. Try again in a moment.` : 'Could not load the hand. Try again, or open the hand history from the menu.');
+
+      return;
+    }
+
+    // The same line the history has in place of its button, for a hand whose record does not tell it
+    const refusal = noReplayLine(record, view.config);
+
+    if (refusal === null) {
+      this.openReplay(record);
+    } else {
+      this.toast(refusal);
+    }
   }
 
   /** Takes a hand being played back off the table, and the history it was opened from, for the game to have the viewer (`ReplaySetAside`). */

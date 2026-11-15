@@ -1,6 +1,9 @@
 /* ---- Table screen layout ---- */
 
 .app {
+  /* The least height a phone's table can be read at with every seat taken: what a seated player's table has on a 360 by 640 screen */
+  --stage-floor: 44cqb;
+
   display: grid;
   grid-template:
     'top' auto
@@ -65,6 +68,17 @@
   font-size: 12px;
   font-weight: 600;
   white-space: nowrap;
+}
+
+/* On a small phone what the bar gives up between its parts goes to the table's name, which a wide font leaves the least of */
+@container app (max-width: 420px) {
+  .topbar {
+    gap: 8px;
+  }
+
+  .pill {
+    padding-inline: 8px;
+  }
 }
 
 .dot {

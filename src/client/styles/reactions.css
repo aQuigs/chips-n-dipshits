@@ -25,6 +25,17 @@
   filter: drop-shadow(0 2px 3px rgb(0 0 0 / 45%));
 }
 
+/*
+ * On the viewer's own seat a mark stands lower, with no more than its top edge over the plate's, and
+ * does not rise before it goes: at no moment is it over the rank or the suit of the cards the viewer
+ * plays by. It lies on their own name and stack.
+ */
+.seat-reaction.own {
+  --rise: 0;
+
+  transform: translate(-50%, -4%);
+}
+
 .seat-reaction.moving.popped {
   animation: reaction-pop var(--stays) ease-out both;
 }
@@ -53,12 +64,12 @@
 
   85% {
     opacity: 1;
-    translate: 0 -25%;
+    translate: 0 calc(var(--rise, 1) * -25%);
   }
 
   100% {
     opacity: 0;
-    translate: 0 -35%;
+    translate: 0 calc(var(--rise, 1) * -35%);
   }
 }
 

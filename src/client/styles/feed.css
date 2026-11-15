@@ -55,7 +55,6 @@
 
 .feed.open .feed-body {
   display: grid;
-  height: 38cqb;
 }
 
 /*
@@ -64,8 +63,26 @@
  * one line. With the chat closed the bar is as tall as ever, so the table doesn't jump between turns.
  */
 @container app ((max-width: 899.98px) and (min-height: 521px)) or (max-width: 559.98px) {
+  /*
+   * The table keeps the height it needs to be read, and the chat has what is left, up to its usual
+   * share: on a small phone that is a few lines while the viewer waits and the box to type in during
+   * their turn. A table squeezed under the chat would have its seats over its cards.
+   */
+  .app:has(.feed.open) {
+    grid-template-rows: auto auto minmax(var(--stage-floor), 1fr) auto minmax(0, auto);
+  }
+
+  .feed.open {
+    max-height: calc(41px + 38cqb);
+  }
+
   .app:has(.feed.open) .controls {
     --turn-height: 0px;
+  }
+
+  /* With no height kept for a turn, the line of the button to see the last hand again would come out of the table's */
+  .app:has(.feed.open) .controls > .replay-last {
+    display: none;
   }
 
   .app:has(.feed.open) .extras {
@@ -139,6 +156,5 @@
   .feed .feed-body,
   .feed.open .feed-body {
     display: grid;
-    height: auto;
   }
 }

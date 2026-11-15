@@ -29,12 +29,13 @@ import { cardWords } from '../src/engine/handNames.ts';
 import type { Bounty, Card, Command, KnownPlayer, PreActionKind, Straddle, TableConfig, TableView } from '../src/engine/index.ts';
 import { PUT_AWAY_AFTER_MS, PUT_AWAY_MESSAGE } from '../src/server/putAway.ts';
 import { contrast } from '../tests/colorVision.ts';
-import { boxes, Gate, overlap, Rig, RigTable, SCREENS, setStageHeight, squeezed, textBoxes } from './rig.ts';
+import { boxes, Gate, overlap, Rig, RigTable, SCREENS, setStageHeight, squeezed, textBoxes, WIDE_ASPECT } from './rig.ts';
 import type { Box, RigDeal, RigPlayer, ScreenName } from './rig.ts';
-import { answeredAfter, answeredTo, complaints, flightsSince, LISTEN, MOTION, movesSent, NOTICES, opsSent, ownComplaints, soundOf, SPOTS, TITLES, toastTold, toasts, toldOf } from './pageSpies.ts';
+import { answeredAfter, answeredTo, complaints, flightsSince, LISTEN, MOTION, movesSent, NOTICES, opsSent, ownComplaints, replayDrawn, soundOf, SPOTS, TITLES, toastTold, toasts, toldOf } from './pageSpies.ts';
 import type { Flight, Spots } from './pageSpies.ts';
 import { STAND_IN_HOST } from './standInHost.ts';
 import { runChecks } from './checkRunner.ts';
+import { layoutSweep } from './layoutSweep.ts';
 
 const OUT = fileURLToPath(new URL('../screenshots/', import.meta.url));
 
@@ -144,9 +145,6 @@ const FACE_DOWN = '.seat:not(.me) .card.back';
 
 const CENTS = { unit: 'cents', smallBlind: 25, bigBlind: 50 } as const;
 const PHONE_AND_DESKTOP = ['phone', 'desktop'] as const;
-
-// How much wider than tall a table must be to lie down: WIDE_ASPECT in src/client/render/table.ts
-const WIDE_ASPECT = 1.15;
 
 // The least height at which a phone's table stands up
 const JUST_STANDING = Math.ceil(SCREENS.phone.width / WIDE_ASPECT) + 1;
@@ -1865,9 +1863,6 @@ const replayCount = (page: Page) => text(page, '.replay-count');
 
 /** The lines the replay says for the step it is at. */
 const replayLines = (page: Page) => texts(page, '.replay-line > div');
-
-/** The replay's table at rest: drawn, with the chances of hands face up worked out for the cards on it. */
-const replayDrawn = (page: Page) => page.waitForSelector('.replay:not([hidden]) .replay-stage:not([data-chances-pending]) .table');
 
 /** What the replay's table shows, read off the page: each seat's stack, cards and line, the boards, the bets, the pot and the result. */
 const replayTable = (page: Page) =>
@@ -12426,7 +12421,8 @@ await mkdir(OUT, { recursive: true });
 // Told to stop, Playwright closes the browsers and leaves the script running, and the workers would launch new ones and go on
 process.once('SIGTERM', () => process.exit(143));
 
-const passed = await runChecks(CHECKS, { only: process.argv.slice(2), picturesIn: OUT });
+// After the checks of one thing each, every screen at its fullest held to one question: whether anything a player reads is covered
+const passed = await runChecks([...CHECKS, ...layoutSweep(OUT)], { only: process.argv.slice(2), picturesIn: OUT });
 
 // Ended outright once the report is out: a check that was stopped may have left a timer behind that would keep the script going
 process.stdout.write('', () => process.exit(passed ? 0 : 1));

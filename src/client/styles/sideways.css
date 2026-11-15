@@ -9,6 +9,32 @@
       'feed controls' auto / minmax(0, 1fr) minmax(240px, 32%);
   }
 
+  /*
+   * An open chat stands beside the table, over what the bar says while the viewer waits: under the table
+   * it would take a third of the screen's height from a table with none to give, and leave a strip with
+   * its seats on its cards. The bar keeps what it needs, and the chat has the rest, never under a few lines.
+   *
+   * On the viewer's own turn the moves need that side to themselves, or they are scrolled out of sight
+   * with the clock running: until the move is made the chat is its bar under the table, as when it is
+   * shut, with its newest line in it. Someone typing in it keeps it open: taking the box from under them
+   * would send the rest of their line to the page, where a letter is a move's key.
+   */
+  .app:has(.feed.open):is(:not(:has(.turn)), :has(.feed-body:focus-within)) {
+    grid-template:
+      'top top' auto
+      'banners banners' auto
+      'stage feed' minmax(8.5em, 1fr)
+      'stage controls' minmax(0, auto) / minmax(0, 1fr) minmax(240px, 32%);
+  }
+
+  .app:is(:not(:has(.turn)), :has(.feed-body:focus-within)) .feed.open {
+    border-left: 1px solid var(--line);
+  }
+
+  .app:has(.turn) .feed.open .feed-body:not(:focus-within) {
+    display: none;
+  }
+
   .topbar {
     padding-block: 4px;
   }

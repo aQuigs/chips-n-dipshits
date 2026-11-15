@@ -65,9 +65,14 @@ export class ReactionMarks implements SeatMarks {
 
     for (const seat of new Set(this.showing.map(({ mark }) => mark.seat))) {
       const here = this.showing.filter(({ mark }) => mark.seat === seat);
-      const plate = this.stage.querySelector(`.table .seat[data-seat="${seat}"] .plate`)?.getBoundingClientRect();
+      const seatEl = this.stage.querySelector(`.table .seat[data-seat="${seat}"]`);
+      const plate = seatEl?.querySelector('.plate')?.getBoundingClientRect();
 
-      here.forEach(({ element }) => (element.hidden = !plate));
+      here.forEach(({ element }) => {
+        element.hidden = !plate;
+        // On the viewer's own seat a mark is held lower, off their cards (reactions.css)
+        element.classList.toggle('own', seatEl?.classList.contains('me') ?? false);
+      });
       if (!plate) {
         continue;
       }

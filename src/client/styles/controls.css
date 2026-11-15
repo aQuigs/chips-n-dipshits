@@ -9,19 +9,23 @@
 .controls {
   /* Bet sizing, a gap, the action buttons: the room a turn takes */
   --turn-height: 140px;
+  --bar-gap: 8px;
+  /* How tall the bar's small buttons are (widgets.css), for what is worked out from a line of them */
+  --chip-height: 34px;
 
   display: grid;
-  gap: 8px;
+  gap: var(--bar-gap);
   width: 100%;
   max-width: 880px;
   margin-inline: auto;
   padding: 10px 12px;
 }
 
-/* The taller size buttons a finger gets make a turn that much taller */
+/* The taller size buttons a finger gets make a turn that much taller, and the small buttons are taller too (seats.css) */
 @media (pointer: coarse) {
   .controls {
     --turn-height: 146px;
+    --chip-height: 40px;
   }
 }
 
@@ -43,7 +47,22 @@
   place-items: center;
   align-content: center;
   gap: 4px;
+  /* A name of one long word breaks before it runs out of the bar, which is narrow beside a table lying down */
+  overflow-wrap: anywhere;
   text-align: center;
+}
+
+/*
+ * A player with no part in the hand can see the last one again, from a button on a line that comes out
+ * of the height kept for a turn: the bar is as tall with it as without, so the table gives up nothing
+ * for it. Under a phone's open chat no height is kept, and the button is left out (feed.css).
+ */
+.controls > .replay-last {
+  justify-self: center;
+}
+
+.controls.seated:has(> .replay-last) > .waiting {
+  min-height: calc(var(--turn-height) - var(--chip-height) - var(--bar-gap));
 }
 
 .turn .buttons,
@@ -84,8 +103,7 @@
 
 .amount {
   display: grid;
-  /* Wide enough for the ten digits of the largest stack a table allows */
-  grid-template-columns: minmax(0, 1fr) 132px;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
 }
@@ -120,6 +138,8 @@
 }
 
 .amount input[type='text'] {
+  /* Wide enough for the largest stack a table allows, ten digits and the point of a table of cents, in whatever font the digits are set */
+  width: max(132px, 11ch + 18px);
   min-height: 40px;
   padding: 0 8px;
   border: 1px solid var(--line);

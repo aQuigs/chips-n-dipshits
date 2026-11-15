@@ -63,6 +63,8 @@ export function createChatBox(onChat: (text: string) => void, people: () => read
 
   const mark = () => {
     list.querySelectorAll('li').forEach((option, index) => option.setAttribute('aria-selected', String(index === active)));
+    // Where the names are on one line that is swiped along (mentions.css), the one the keys picked is brought into sight
+    list.children[active]?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 
     if (open) {
       input.setAttribute('aria-activedescendant', optionId(active));

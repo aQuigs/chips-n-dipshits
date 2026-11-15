@@ -1,0 +1,100 @@
+/*
+ * ---- A list of players, a line each that unfolds to the player's numbers ----
+ *
+ * The night's list (tonight.css) and the standings' (standings.css) are both made of these. Each file
+ * keeps what is its own: the columns of a line, and what stands in them besides the name and the money.
+ */
+
+:is(.tonight-players, .standings-players) {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* The players' own lines: a list inside one, of badges or of nights, draws its own */
+:is(.tonight-players, .standings-players) > li {
+  border-bottom: 1px solid var(--line);
+}
+
+/* The name gets what the money leaves it, and wraps there; what the player did runs under both */
+:is(.tonight-players, .standings-players) summary {
+  display: grid;
+  align-items: baseline;
+  gap: 2px 10px;
+  padding: 10px 0;
+  cursor: pointer;
+  list-style: none;
+}
+
+:is(.tonight-players, .standings-players) summary::-webkit-details-marker {
+  display: none;
+}
+
+:is(.tonight-players, .standings-players) .who {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+:is(.tonight-players, .standings-players) .me .who::after {
+  content: ' (you)';
+  color: var(--muted);
+  font-weight: 400;
+}
+
+:is(.tonight-players, .standings-players) .who small,
+:is(.tonight-players, .standings-players) .counts {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+:is(.tonight-players, .standings-players) .net {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+:is(.tonight-players, .standings-players) .up {
+  color: var(--good);
+}
+
+:is(.tonight-players, .standings-players) .down {
+  color: var(--bad);
+}
+
+:is(.tonight-players, .standings-players) .fold {
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1;
+}
+
+:is(.tonight-players, .standings-players) details[open] .fold {
+  transform: rotate(180deg);
+}
+
+/* What a line unfolds to, and the night's leaders over the list, set the same way: each number under what it counts */
+.tonight-leaders,
+:is(.tonight-players, .standings-players) dl {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+:is(.tonight-players, .standings-players) dl {
+  padding-bottom: 12px;
+}
+
+:is(.tonight-leaders, .tonight-players, .standings-players) dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+:is(.tonight-leaders, .tonight-players, .standings-players) dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* The cards of a best hand stay together */
+.tonight-cards,
+.standings-cards {
+  white-space: nowrap;
+}

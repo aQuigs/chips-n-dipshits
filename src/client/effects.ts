@@ -32,6 +32,12 @@ export interface DialogOffers {
    * whose time has passed stays shut. One that is open already is left as it is.
    */
   offer(dialog: Dialog, still: (view: TableView) => boolean): void;
+  /**
+   * Takes away a dialog of this kind that an offer opened, so that the table is in front of the
+   * viewer again, and puts the keyboard on the bar under it. One the viewer opened themselves is
+   * theirs, and stays. Says whether one was taken away.
+   */
+  withdraw(kind: Dialog['kind']): boolean;
 }
 
 export interface EffectContext {

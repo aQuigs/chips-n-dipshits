@@ -347,6 +347,9 @@ export function resultSaid({ before, view, events }: Pick<TableChange, 'before' 
 /** The viewer's clock is running down. */
 export const timeSaid = (seconds: number): string => `${seconds} seconds left.`;
 
+/** Why the night's recap, which nobody asked for, is gone again: said and shown as it goes, with where to find it. */
+export const RECAP_GONE = 'The night goes on. Its numbers so far are under Tonight in the menu.';
+
 /** Why a hand is being played back by itself, some seconds after it was asked for: the keyboard goes into it from wherever it was. */
 export const replayOpenedSaid = (hand: number): string => `Hand #${hand} is cleared from the table. Playing it back, as you asked.`;
 

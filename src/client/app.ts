@@ -145,6 +145,9 @@ export class App {
   /** Takes the standings off a screen that has no table, while they are up over one. */
   private closeStandings: (() => void) | null = null;
   private dialog: Dialog | null = null;
+
+  /** Whether the page put the dialog on screen in front of the viewer by itself, which is what lets it take that dialog away again. */
+  private dialogOpenedItself = false;
   private dialogOpens = 0;
 
   /** The opening that the dialog on screen was drawn for. */
@@ -612,7 +615,7 @@ export class App {
       attention: this.attention,
       motion,
       marks,
-      dialogs: { offer: (dialog, still) => this.offerDialog(dialog, still) },
+      dialogs: { offer: (dialog, still) => this.offerDialog(dialog, still), withdraw: (kind) => this.withdrawDialog(kind) },
       dealt,
       replay: { setAside: () => this.setReplayAside(), turn: (mine) => replay.turn(mine) },
       toast: (message) => this.toast(message),
@@ -1136,6 +1139,7 @@ export class App {
   /** `byItself` is for a dialog the game opens or closes, not the player: what that brings up under a finger takes no tap for a moment (`TapGuard`). */
   private openDialog(dialog: Dialog, byItself = false): void {
     this.dialog = dialog;
+    this.dialogOpenedItself = byItself;
     this.dialogOpens += 1;
     this.drawDialogAs(byItself);
   }
@@ -1163,6 +1167,22 @@ export class App {
 
     this.offered = { dialog, still };
     this.showOffered();
+  }
+
+  /**
+   * Takes away a dialog the page opened by itself (`DialogOffers.withdraw`). A dialog that closes hands
+   * the keyboard back to where it was, or to the menu: here it goes to the bar, since the table is
+   * what the viewer is being given back.
+   */
+  private withdrawDialog(kind: Dialog['kind']): boolean {
+    if (this.dialog?.kind !== kind || !this.dialogOpenedItself) {
+      return false;
+    }
+
+    this.closeDialog(true);
+    this.screen?.controls.element.focus({ preventScroll: true });
+
+    return true;
   }
 
   /** Whether something is in front of the table: a dialog, a seat being picked, or word that the page is out of date. */

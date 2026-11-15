@@ -1246,6 +1246,8 @@ interface Arrival {
   forGood?: string;
   /** What the player has open on the page when it comes. */
   open?(page: Page): Promise<void>;
+  /** What the table does first, with every page open and before anything is watched, that each page answers by itself: `shows` is on a page that has. */
+  first?: { step(table: RigTable): void; shows: string };
   /** What is gone from the page once it has come. */
   gone?: string;
   /** Moves it uncovers, by what they say, each of which is held back on some screen: a wrong tap there is a move. */
@@ -1404,6 +1406,19 @@ const ARRIVALS: Arrival[] = [
     then: RECAP,
   },
   {
+    when: 'the recap that opened by itself when the night ended goes by itself as the night is played on, in the view that deals a hand with the viewer first to act',
+    build: (rig) => tableWithTrophy(rig, TABLE_OF_SIX, EVEN, { actionSeconds: 30 }),
+    first: { step: (table) => table.act(WIDEST, { type: 'endNight' }), shows: RECAP },
+    step(table) {
+      table.act(WIDEST, { type: 'playOn' });
+      table.deal({ button: TABLE_OF_SIX - 3, holes: holesFor(TABLE_OF_SIX) });
+    },
+    then: '.turn [data-action="call"]:enabled',
+    inOneView: true,
+    gone: '.dialog[aria-label="Tonight"]',
+    uncovers: ['Fold', 'Call'],
+  },
+  {
     when: 'a replay opened from the hand history is set aside as the action reaches the viewer, and closes by itself with the history over the turn’s buttons',
     build: (rig) => waitingBehindTheLongestCall(rig, TABLE_OF_SIX),
     async open(page) {
@@ -1535,7 +1550,7 @@ export const underTheFinger = (): Check[] =>
       const table = arrival.build(rig);
       const screens = [...PHONES.flatMap((size) => [{ size, chat: false }, { size, chat: true }]), { size: null, chat: false }];
 
-      const pages = await Promise.all(
+      const opened = await Promise.all(
         screens.map(async ({ size, chat }) => {
           const page = await table.open(VIEWER, size ? 'smallPhone' : 'desktop');
 
@@ -1553,6 +1568,19 @@ export const underTheFinger = (): Check[] =>
           await settled(page);
           await arrival.open?.(page);
 
+          return { page, size, chat };
+        }),
+      );
+
+      if (arrival.first) {
+        const { step, shows } = arrival.first;
+
+        step(table);
+        await Promise.all(opened.map(({ page }) => page.waitForSelector(shows).then(() => settled(page))));
+      }
+
+      const pages = await Promise.all(
+        opened.map(async ({ page, size, chat }) => {
           const sent = opsSent(page);
           const polls = arrival.inOneView ? await Gate.on(page, 'polls') : null;
 

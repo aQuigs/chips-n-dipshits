@@ -21,7 +21,7 @@ import { KEYS_SETTLE_MS } from '../src/client/hotkeys.ts';
 import { UNCONFIRMED_AFTER_MS } from '../src/client/pendingMove.ts';
 import { STEP_MS } from '../src/client/replayPlayer.ts';
 import { RECIPES } from '../src/client/soundRecipes.ts';
-import { cardSaid } from '../src/client/spoken.ts';
+import { cardSaid, RECAP_GONE } from '../src/client/spoken.ts';
 import { spotsOf } from '../src/client/tableChances.ts';
 import { THEMES } from '../src/client/themes.ts';
 import { shortAmount, signedAmount } from '../src/engine/amounts.ts';
@@ -35,6 +35,7 @@ import type { Box, RigDeal, RigPlayer, ScreenName } from './rig.ts';
 import { answeredAfter, answeredTo, complaints, flightsSince, LISTEN, MOTION, movesSent, NOTICES, opsSent, ownComplaints, replayDrawn, soundOf, SPOTS, TITLES, toastTold, toasts, toldOf } from './pageSpies.ts';
 import type { Flight, Spots } from './pageSpies.ts';
 import { STAND_IN_HOST } from './standInHost.ts';
+import { focused, focusIn, heard, SPOKEN, spoken } from './a11y.ts';
 import { ACCESSIBILITY_CHECKS } from './accessibilityChecks.ts';
 import { runChecks } from './checkRunner.ts';
 import { layoutSweep } from './layoutSweep.ts';
@@ -7622,6 +7623,60 @@ const CHECKS: Check[] = [
 
       await host.context().close();
       await typing.context().close();
+    },
+  ],
+  [
+    'a recap the page opened by itself goes by itself when the night is played on, so that nobody is on the clock behind a dialog they never opened: the player is told why once, in words and aloud, the keyboard is on the bar, and a bet half typed after it is kept through what the table says next; a recap the player opened from the menu stays',
+    async (rig) => {
+      const table = nightOfOneHand(rig);
+      const acting = await table.open('Stu', 'desktop', SPOKEN);
+      const reading = await table.open('Big Al', 'phone');
+      const moves = movesSent(acting);
+
+      table.act('Quigs', { type: 'endNight' });
+      await acting.waitForSelector(RECAP);
+      await reading.waitForSelector(RECAP);
+
+      // One closes the recap that came by itself and opens the night's numbers again from the menu: that dialog is theirs
+      await reading.tap('.dialog [data-action="close"]');
+      await openTonight(reading, 'phone', '.tonight-crown');
+
+      // The host plays on, and the next hand is dealt with Stu on the button, first to act
+      const before = table.version;
+      table.act('Quigs', { type: 'playOn' });
+      table.dealNext();
+      assert.equal(table.view('Stu').hand!.toAct, table.view('Stu').you.seat);
+
+      await acting.waitForSelector('.turn [data-action="call"]', { state: 'attached' });
+      assert.deepEqual(await texts(acting, '.dialog h2'), [], 'the recap the page opened by itself is still up, over a player who is on the clock');
+      await acting.waitForSelector('.turn [data-action="call"]:enabled');
+
+      // Told why it went, where a toast is shown and where one is said
+      assert.equal((await toastTold(acting, 'The night goes on')).text, RECAP_GONE);
+      await heard(acting, `status: ${RECAP_GONE}`, before);
+      await shot(acting, 'recap-goes-when-the-night-is-played-on');
+
+      // The keyboard is where the turn is, not on the menu, which a dialog that is closed hands it to
+      assert.ok(await focusIn(acting, '.controls-slot'), `the keyboard is on ${await focused(acting)}, not on the bar`);
+
+      // A bet half typed now is kept through what the table says next, which closes nothing and says nothing a second time
+      await tapsLive(acting);
+      await acting.fill('#raise-amount', '4');
+      table.act('Zed', { type: 'chat', text: 'deal me in next week' });
+      await acting.waitForSelector('.feed li:has-text("deal me in next week")');
+      await reading.waitForSelector('.feed li:has-text("deal me in next week")', { state: 'attached' });
+      assert.equal(await acting.inputValue('#raise-amount'), '4', 'the bet being typed was lost');
+      assert.equal((await spoken(acting, before)).filter((line) => line.includes('The night goes on')).length, 1, 'why the recap went was said more than once');
+      assert.equal((await toasts(acting)).filter((toast) => toast.text.includes('The night goes on')).length, 1, 'why the recap went was shown more than once');
+      assert.deepEqual(moves, [], 'a move was made that the player never made');
+
+      // The one who opened it from the menu still has it, reading the night so far, and is told nothing
+      assert.deepEqual(await texts(reading, '.dialog h2'), ['Tonight'], 'the recap a player opened from the menu was closed on them');
+      assert.match(await text(reading, '.tonight-standing'), /^So far tonight/);
+      assert.equal((await toasts(reading)).filter((toast) => toast.text.includes('The night goes on')).length, 0);
+
+      await acting.context().close();
+      await reading.context().close();
     },
   ],
   [

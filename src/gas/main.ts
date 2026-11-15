@@ -2,6 +2,7 @@ import { BuildGate } from '../server/build.ts';
 import { ByteRng } from '../server/byteRng.ts';
 import { failureOf, PokerService } from '../server/service.ts';
 import type { ApiError, Built } from '../server/api.ts';
+import { CacheArrivalKeys } from './cacheArrivalKeys.ts';
 import { SheetErrorLog } from './sheetErrorLog.ts';
 import { SheetPlayerStore } from './sheetPlayerStore.ts';
 import { SheetPresetStore } from './sheetPresetStore.ts';
@@ -72,6 +73,7 @@ function service(): BuildGate {
       store: new SheetStore({ spreadsheet, cache, lock, flush, errors: errors(), results }),
       presets: new SheetPresetStore({ spreadsheet, lock, flush }),
       players: new SheetPlayerStore({ spreadsheet, cache, lock, flush, rng, errors: errors() }),
+      arrivals: new CacheArrivalKeys({ cache }),
       results,
       clock,
       rng,

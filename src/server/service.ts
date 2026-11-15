@@ -2,6 +2,8 @@ import { addMember, applyCommand, createTable, GameError, listedLike, NewerTable
 import type { Arriving, Command, Ctx, KnownPlayer, Member, Preset, Rng, TableState, Unit } from '../engine/index.ts';
 import { HISTORY_LIMIT } from './api.ts';
 import type { ApiResponse, Auth, ErrorCode, Joined, UnitStandings, Who } from './api.ts';
+import { askingOf, MemoryArrivalKeys } from './arrivalKeys.ts';
+import type { ArrivalKeys, Asking, KeptArrival } from './arrivalKeys.ts';
 import { NOWHERE } from './errorLog.ts';
 import type { ErrorLog, Failure } from './errorLog.ts';
 import { isCheckPlayer, isPlayerId, NameOnList } from './playerStore.ts';
@@ -12,7 +14,7 @@ import type { LastWords } from './putAway.ts';
 import { NO_RESULTS } from './resultStore.ts';
 import type { ResultStore } from './resultStore.ts';
 import { StoreBusyError } from './store.ts';
-import type { TableStore } from './store.ts';
+import type { TableStore, Txn } from './store.ts';
 
 export interface Clock {
   now(): number;
@@ -22,6 +24,8 @@ export interface ServiceDeps {
   store: TableStore;
   presets: PresetStore;
   players: PlayerStore;
+  /** Where answered arrivals are remembered by their keys. Left out, in memory, which is no memory at all where each request gets a process of its own. */
+  arrivals?: ArrivalKeys;
   /** Where the players' records over time are read from; the store of tables is what writes them. Left out, nobody's record is kept. */
   results?: ResultStore;
   clock: Clock;
@@ -132,6 +136,16 @@ interface Arrival extends Arriving {
   enlist: boolean;
 }
 
+/**
+ * The answer an arrival was given, from the table as it now stands, or null when the table holds no
+ * such member. What is kept under a key is kept before the table is saved, so it may name a member of
+ * a save that failed, or one since removed: neither is anyone to answer with.
+ */
+function arrivedAs(state: TableState | null, kept: KeptArrival, now: number): Joined | null {
+  const member = state?.id === kept.tableId ? state.members.find((m) => m.id === kept.memberId) : undefined;
+
+  return state && member ? { ok: true, kind: 'joined', auth: { id: member.id, token: member.token }, view: viewFor(state, member.id, now) } : null;
+}
 
 /** Anyone with the game's address may list the presets, so they are handed out holding only what presets keep. */
 function presetsAnswer(presets: Preset[]): ApiResponse {
@@ -182,6 +196,7 @@ export class PokerService {
   private readonly store: TableStore;
   private readonly presets: PresetStore;
   private readonly players: PlayerStore;
+  private readonly arrivals: ArrivalKeys;
   private readonly results: ResultStore;
   private readonly clock: Clock;
   private readonly rng: Rng;
@@ -191,6 +206,7 @@ export class PokerService {
     this.store = deps.store;
     this.presets = deps.presets;
     this.players = deps.players;
+    this.arrivals = deps.arrivals ?? new MemoryArrivalKeys(deps.clock);
     this.results = deps.results ?? NO_RESULTS;
     this.clock = deps.clock;
     this.rng = deps.rng;
@@ -446,37 +462,101 @@ export class PokerService {
     return told ?? joined;
   }
 
-  private create(request: Fields): ApiResponse {
-    const arriving = this.arrival(request, null);
-
-    for (let attempt = 0; attempt < CREATE_ATTEMPTS; attempt++) {
-      const tableId = randomId(this.rng, TABLE_ID_LENGTH);
-
-      const created = this.store.transact(tableId, (existing) => {
-        if (existing) {
-          return { save: null, effects: [], result: null };
-        }
-
-        const ctx = this.ctx();
-        const { state, host } = createTable(tableId, arriving.name, request.config, ctx, arriving);
-        state.version = 1;
-
-        const auth: Auth = { id: host.id, token: host.token };
-
-        return { save: state, at: ctx.now, effects: ctx.effects, result: { auth, view: viewFor(state, host.id, ctx.now) } };
-      });
-
-      if (created) {
-        // A new table is rare and already a write to the store, so it is when the old ones are seen to
-        this.putAwayOldTables();
-
-        const joined: Joined = { ok: true, kind: 'joined', ...created };
-
-        return arriving.enlist ? this.enlisted(tableId, joined) : joined;
-      }
+  /**
+   * Answers a join or a new table once, however many times it is asked under one key: an asking that
+   * was answered before is given that answer, and `arrive` lets in one that was not. `arrive` looks
+   * for the key again with its table in hand, which is what makes one arrival of two askings that
+   * came together, and keeps it there.
+   */
+  private once(request: Fields, tableId: string | null, arrive: (arriving: Arrival, asking: Asking | null) => ApiResponse): ApiResponse {
+    const asking = askingOf(this.arrivals, request.key, JSON.stringify([request.op, tableId, request.name, whoOf(request), request.config]));
+    if (asking === undefined) {
+      throw new ApiFailure('invalid', 'Malformed request');
     }
 
-    throw new Error(`No free table id after ${CREATE_ATTEMPTS} attempts`);
+    try {
+      // Before anything is asked of the request itself: by now the list of players may have its name, put there by the first asking
+      const before = this.answeredBefore(asking);
+      if (before) {
+        return before;
+      }
+
+      let arriving: Arrival;
+      try {
+        arriving = this.arrival(request, tableId);
+      } catch (error) {
+        // The list may have the name because this very arrival put it there, let in a moment ago by an asking that came with this one
+        const meanwhile = error instanceof NameOnList ? this.answeredBefore(asking) : null;
+        if (meanwhile) {
+          return meanwhile;
+        }
+
+        throw error;
+      }
+
+      return arrive(arriving, asking);
+    } finally {
+      for (const { where, error } of asking?.failures() ?? []) {
+        this.failed({ where, error, tableId });
+      }
+    }
+  }
+
+  /** What an earlier asking of this request was answered, when the member it made is still at their table. */
+  private answeredBefore(asking: Asking | null): Joined | null {
+    const kept = asking?.kept() ?? null;
+
+    return kept ? arrivedAs(this.store.read(kept.tableId), kept, this.clock.now()) : null;
+  }
+
+  private create(request: Fields): ApiResponse {
+    return this.once(request, null, (arriving, asking) => {
+      // Tables a key named that were never saved, which is what an asking whose save failed leaves under it
+      const neverSaved = new Set<string>();
+
+      for (let attempt = 0; attempt < CREATE_ATTEMPTS; attempt++) {
+        const tableId = randomId(this.rng, TABLE_ID_LENGTH);
+
+        const outcome = this.store.transact(tableId, (existing): Txn<{ created: Pick<Joined, 'auth' | 'view'> } | { elsewhere: KeptArrival } | null> => {
+          if (existing) {
+            return { save: null, effects: [], result: null };
+          }
+
+          // Another table is not read with this one in hand, so one the key names is looked at once this is let go
+          const kept = asking?.kept() ?? null;
+          if (kept && !neverSaved.has(kept.tableId)) {
+            return { save: null, effects: [], result: { elsewhere: kept } };
+          }
+
+          const ctx = this.ctx();
+          const { state, host } = createTable(tableId, arriving.name, request.config, ctx, arriving);
+          state.version = 1;
+          asking?.keep(tableId, host.id);
+
+          const auth: Auth = { id: host.id, token: host.token };
+
+          return { save: state, at: ctx.now, effects: ctx.effects, result: { created: { auth, view: viewFor(state, host.id, ctx.now) } } };
+        });
+
+        if (outcome && 'elsewhere' in outcome) {
+          const made = arrivedAs(this.store.read(outcome.elsewhere.tableId), outcome.elsewhere, this.clock.now());
+          if (made) {
+            return made;
+          }
+
+          neverSaved.add(outcome.elsewhere.tableId);
+        } else if (outcome) {
+          // A new table is rare and already a write to the store, so it is when the old ones are seen to
+          this.putAwayOldTables();
+
+          const joined: Joined = { ok: true, kind: 'joined', ...outcome.created };
+
+          return arriving.enlist ? this.enlisted(tableId, joined) : joined;
+        }
+      }
+
+      throw new Error(`No free table id after ${CREATE_ATTEMPTS} attempts`);
+    });
   }
 
   private info(tableId: string): ApiResponse {
@@ -501,15 +581,23 @@ export class PokerService {
   }
 
   private join(tableId: string, request: Fields): ApiResponse {
-    const arriving = this.arrival(request, tableId);
+    return this.once(request, tableId, (arriving, asking) => {
+      const { joined, anew } = this.mutate(tableId, (state, ctx): { joined: Joined; anew: boolean } => {
+        const kept = asking?.kept() ?? null;
+        const already = kept && arrivedAs(state, kept, ctx.now);
+        if (already) {
+          return { joined: already, anew: false };
+        }
 
-    const joined = this.mutate(tableId, (state, ctx): Joined => {
-      const member = addMember(state, arriving.name, ctx, arriving);
+        const member = addMember(state, arriving.name, ctx, arriving);
+        asking?.keep(tableId, member.id);
 
-      return { ok: true, kind: 'joined', auth: { id: member.id, token: member.token }, view: viewFor(state, member.id, ctx.now) };
+        return { joined: { ok: true, kind: 'joined', auth: { id: member.id, token: member.token }, view: viewFor(state, member.id, ctx.now) }, anew: true };
+      });
+
+      // Only the asking that made the member tells the list of players of them
+      return anew && arriving.enlist ? this.enlisted(tableId, joined) : joined;
     });
-
-    return arriving.enlist ? this.enlisted(tableId, joined) : joined;
   }
 
   private poll(tableId: string, auth: Auth, since: unknown): ApiResponse {
@@ -593,11 +681,15 @@ export class PokerService {
     return { ok: true, kind: 'reported' };
   }
 
-  /** Someone new under this name: added to the list, unless the name is the check's and the list has its player. */
-  private newcomer(name: string, now: number): KnownPlayer {
+  /**
+   * A member as someone new under this name: added to the list, unless they are on it. That is so of
+   * the check's player, whom anyone under its name is, and of a member who is the listed player of
+   * that name already: theirs is a request sent again when its answer never came.
+   */
+  private newcomer(member: Member, name: string, now: number): KnownPlayer {
     const holder = listedLike(this.players.list(), name);
 
-    return holder && isCheckPlayer(holder) ? holder : this.players.add(name, now);
+    return holder && (isCheckPlayer(holder) || holder.id === member.identity) ? holder : this.players.add(name, now);
   }
 
   /**
@@ -614,7 +706,7 @@ export class PokerService {
       throw new ApiFailure('invalid', 'The request does not say who you are');
     }
 
-    const known = who.as === 'known' ? this.players.seen(who.id, now) : this.newcomer(playerName(request.name ?? member.name), now);
+    const known = who.as === 'known' ? this.players.seen(who.id, now) : this.newcomer(member, playerName(request.name ?? member.name), now);
     if (!known) {
       throw new GameError('That player is no longer on the list. Pick again');
     }

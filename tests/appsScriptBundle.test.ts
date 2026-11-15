@@ -84,6 +84,7 @@ interface DeployedScript {
   doGet(event: unknown): FakeHtmlOutput;
   doPost(event: unknown): { content: string; mimeType: string };
   spreadsheet: FakeSpreadsheet;
+  cache: FakeCache;
   /** The id of the build that was deployed, which its page sends with every request. */
   build: string;
 }
@@ -128,7 +129,7 @@ async function deploy(): Promise<DeployedScript> {
 
   vm.runInContext(code, context);
 
-  return { api: context.api, doGet: context.doGet, doPost: context.doPost, spreadsheet, build: id };
+  return { api: context.api, doGet: context.doGet, doPost: context.doPost, spreadsheet, cache, build: id };
 }
 
 /** Asks as the page of the same build does. */
@@ -170,6 +171,22 @@ test('the script pushed to Apps Script plays a hand using nothing but Apps Scrip
 
   assert.ok(script.spreadsheet.getSheetByName('Tables'), 'the table was saved to the Sheet');
   assert.ok(script.spreadsheet.getSheetByName('Ledger'), 'the buy-ins were written to the ledger');
+});
+
+test('the script pushed to Apps Script answers an arrival asked again under its key as it did the first time, from what it kept in the script cache', async () => {
+  const script = await deploy();
+  const key = 'k3Y-of_one-request-0001';
+
+  const created = call(script, { op: 'create', name: 'Host', key });
+  assert.ok(created.ok && created.kind === 'joined');
+
+  // Every run of the script starts with an empty memory, so only the cache can be what a later run finds
+  assert.deepEqual([...script.cache.entries.keys()].filter((entry) => entry.includes(key)), [`arrival:${key}`]);
+
+  const again = call(script, { op: 'create', name: 'Host', key });
+  assert.ok(again.ok && again.kind === 'joined');
+  assert.deepEqual([again.view.id, again.auth], [created.view.id, created.auth]);
+  assert.equal(script.spreadsheet.sheets.get('Tables')!.cells.length, 2, 'one table under the headings');
 });
 
 test('a held poll gives up after the time it was asked to wait', async () => {

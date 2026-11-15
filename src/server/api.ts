@@ -47,10 +47,14 @@ export type ApiRequest =
   /**
    * `name` is what the member is called, and for a known player it is the list's name for them as the
    * page had it, used when the list can't be asked. Without `who` the member is nobody the list knows.
+   *
+   * `key` is one the page makes up for this arrival and sends again with it when no answer came. Asked
+   * again under its key in the same words, an arrival is answered with the member the first asking
+   * made. Without one, asking twice is arriving twice.
    */
-  | { op: 'create'; name: string; who?: Who; config?: Partial<TableConfig> }
+  | { op: 'create'; name: string; who?: Who; config?: Partial<TableConfig>; key?: string }
   | { op: 'info'; tableId: string }
-  | { op: 'join'; tableId: string; name: string; who?: Who }
+  | { op: 'join'; tableId: string; name: string; who?: Who; key?: string }
   | {
       op: 'poll';
       tableId: string;

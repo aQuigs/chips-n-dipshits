@@ -15,6 +15,7 @@ import type { Browser, Page } from 'playwright';
 import { KEYS_SETTLE_MS } from '../src/client/hotkeys.ts';
 import { startDevServer } from '../src/dev/server.ts';
 import type { TableState } from '../src/engine/index.ts';
+import { CacheArrivalKeys } from '../src/gas/cacheArrivalKeys.ts';
 import { ERRORS_TAB, SheetErrorLog } from '../src/gas/sheetErrorLog.ts';
 import { SheetPlayerStore } from '../src/gas/sheetPlayerStore.ts';
 import { SheetPresetStore } from '../src/gas/sheetPresetStore.ts';
@@ -1338,7 +1339,7 @@ try {
     const results = new SheetResultStore({ ...deps, clock });
     const store = new SheetStore({ ...deps, results });
     const rng = seededRng(17);
-    const game = new PokerService({ store, presets: new SheetPresetStore(deps), players: new SheetPlayerStore({ ...deps, rng }), results, clock, rng, errors: sheetErrors });
+    const game = new PokerService({ store, presets: new SheetPresetStore(deps), players: new SheetPlayerStore({ ...deps, rng }), arrivals: new CacheArrivalKeys({ cache }), results, clock, rng, errors: sheetErrors });
 
     const HOUR_MS = 3_600_000;
     const leftFor = (index: number) => (index < PUT_AWAY_AT_ONCE + 1 ? PUT_AWAY_AFTER_MS + (index + 1) * HOUR_MS : index < 9 ? 4 * HOUR_MS : 60_000);

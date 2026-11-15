@@ -637,6 +637,29 @@ test('a member can say who they are after joining, as someone on the list or som
   assert.equal(viewOf(identify(tableId, cy.auth, known(annNow.you.identity!))).you.identity, annNow.you.identity);
 });
 
+test('a member who says again that they are someone new, as a page does when no answer came, is who they already are, and the list hears of them once', () => {
+  const { create, join, identify, listed } = setup();
+  const host = joined(create('Host'));
+  const tableId = host.view.id;
+  const ann = joined(join(tableId, 'Ann'));
+  const cy = joined(join(tableId, 'Cy'));
+
+  const first = viewOf(identify(tableId, ann.auth, NEW));
+  const again = viewOf(identify(tableId, ann.auth, NEW));
+
+  assert.equal(again.you.identity, first.you.identity);
+  assert.deepEqual(listed().map((player) => player.name), ['Ann']);
+
+  // Under another name than the one they go by here, and however it is typed
+  const cyrus = viewOf(identify(tableId, cy.auth, NEW, 'Cyrus')).you.identity;
+  assert.equal(viewOf(identify(tableId, cy.auth, NEW, ' cyrus ')).you.identity, cyrus);
+  assert.deepEqual(listed().map((player) => player.name).sort(), ['Ann', 'Cyrus']);
+
+  // The name stays its holder's alone: anyone else who asks for it is told whose it is
+  assert.equal(failure(identify(tableId, cy.auth, NEW, 'Ann')).error, new NameOnList('Ann').message);
+  assert.equal(failure(identify(tableId, host.auth, NEW, 'Cyrus')).error, new NameOnList('Cyrus').message);
+});
+
 test('saying who you are is refused when it cannot be done, and never without the member\'s own token', () => {
   const busy: PlayerStore = {
     list: () => [],

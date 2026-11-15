@@ -81,6 +81,7 @@ function stallAsked(): number {
 class Stall {
   private readonly ms: number;
   private steppedAt = -Infinity;
+  private over = false;
 
   /** For each page, how many things the check has asked of it and not yet got. */
   private readonly asked = new Map<string, { pending: number }>();
@@ -94,9 +95,16 @@ class Stall {
     this.steppedAt = performance.now();
   }
 
+  /** The rig is closing: whatever is still held back is let go at once, to a page that is gone. */
+  end(): void {
+    this.over = true;
+  }
+
   /**
    * Counts whatever the check asks of a page from now on, a wait, a read or a tap, as the check waiting
-   * on that page until it has its answer. `id` is what the page's requests carry in `PAGE_HEADER`.
+   * on that page until it has its answer. Only what is asked of the page itself: a wait through a
+   * locator is not seen, and its page hears as one not waited on, later and no worse.
+   * `id` is what the page's requests carry in `PAGE_HEADER`.
    */
   watch(page: Page, id: string): void {
     const asked = { pending: 0 };
@@ -132,7 +140,7 @@ class Stall {
 
     await sleep(STALLED_ANSWER_MS);
 
-    for (;;) {
+    while (!this.over) {
       const waitedOn = !asked || asked.pending > 0;
       const left = this.steppedAt + (waitedOn ? 1 : UNWATCHED_STALLS) * this.ms + (poll ? POLL_LAST_MS : 0) - performance.now();
 
@@ -415,6 +423,8 @@ export class Rig {
   /** Whose page each is, for telling of it. */
   private readonly whose = new Map<Page, string>();
   private readonly stall: Stall | null;
+  /** How many pages have been asked for, which names each to a stalled rig's server. */
+  private opened = 0;
   private tellingTheTime = false;
   private closing: Promise<void> | null = null;
 
@@ -520,7 +530,7 @@ export class Rig {
   /** A browser page on a screen of the given size, with nothing in it yet and its table kept still. `who` names it when it throws. */
   async page(screen: ScreenName, who: string, { moving = false }: PageOptions = {}): Promise<Page> {
     const touch = screen !== 'desktop';
-    const id = String(this.contexts.length);
+    const id = String((this.opened += 1));
     const context = await this.context({ viewport: SCREENS[screen], ...(touch ? { deviceScaleFactor: 2, isMobile: true, hasTouch: true } : {}), ...(this.stall ? { extraHTTPHeaders: { [PAGE_HEADER]: id } } : {}) });
     const page = await context.newPage();
 
@@ -651,6 +661,8 @@ export class Rig {
 
   /** Closes this rig's pages and its server. The browser stays open, for the rig of the next check. */
   close(): Promise<void> {
+    this.stall?.end();
+
     // A context that will not close has lost its browser, and went with it
     this.closing ??= Promise.all(this.contexts.map((context) => context.close().catch(() => undefined))).then(() => this.server.close());
 

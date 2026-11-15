@@ -37,7 +37,8 @@ export interface Toast {
  * It also keeps what a check would otherwise have to catch while it lasts: every toast the page tells
  * (`window.rig.toasts`), and the version of the newest table the page has taken up (`window.rig.version`),
  * set once the page is done with the answer that brought it, which it is before any timer of its runs.
- * A page loaded again starts both afresh.
+ * The answer to a poll counts only while that poll is the page's latest: one it has asked again since
+ * is one it throws away. A page loaded again starts both afresh.
  */
 export const RIG_PAGE = (now: number) => `(() => {
   const rig = { now: ${now}, version: -1, toasts: [] };
@@ -48,7 +49,7 @@ export const RIG_PAGE = (now: number) => `(() => {
   window.rig = rig;
   Date.now = () => rig.now;
 
-  const heard = (answer) => {
+  const heard = (answer, thrownAway) => {
     const view = answer?.view;
     const now = view?.now ?? answer?.now;
 
@@ -56,20 +57,26 @@ export const RIG_PAGE = (now: number) => `(() => {
       rig.clock(now);
     }
 
-    if (typeof view?.version === 'number') {
+    if (typeof view?.version === 'number' && !thrownAway) {
       setTimeout(() => (rig.version = Math.max(rig.version, view.version)), 0);
     }
   };
 
+  let polls = 0;
   const send = window.fetch;
   window.fetch = async (...args) => {
+    const body = args[1]?.body;
+    const poll = typeof body === 'string' && body.includes('"op":"poll"') ? ++polls : null;
     const response = await send(...args);
     const json = response.json.bind(response);
     const text = response.text.bind(response);
 
+    // A page that has asked for news again since, as it does when it comes back into sight, throws this answer away
+    const thrownAway = () => poll !== null && poll !== polls;
+
     response.json = async () => {
       const answer = await json();
-      heard(answer);
+      heard(answer, thrownAway());
 
       return answer;
     };
@@ -77,7 +84,7 @@ export const RIG_PAGE = (now: number) => `(() => {
       const body = await text();
 
       try {
-        heard(JSON.parse(body));
+        heard(JSON.parse(body), thrownAway());
       } catch {
         // Not an answer of the game's
       }
@@ -89,10 +96,12 @@ export const RIG_PAGE = (now: number) => `(() => {
   };
 
   new MutationObserver((changes) => {
-    for (const { target } of changes) {
-      if (target instanceof Element && target.classList.contains('toast')) {
+    for (const { target, addedNodes } of changes) {
+      if (target instanceof Element && target.classList.contains('toast') && addedNodes.length > 0) {
         const { left, top, right, bottom } = target.getBoundingClientRect();
-        rig.toasts.push({ text: target.textContent, box: { left, top, right, bottom }, squeezed: target.scrollWidth > target.clientWidth + 1 });
+
+        // The words this change put there: told two in one go, the toast itself has only the second's by now
+        rig.toasts.push({ text: [...addedNodes].map((node) => node.textContent).join(''), box: { left, top, right, bottom }, squeezed: target.scrollWidth > target.clientWidth + 1 });
       }
     }
   }).observe(document, { subtree: true, childList: true });
@@ -416,7 +425,8 @@ export interface Flight {
  * Setting `window.holdAt` to a share of a move stops every move from then on at that point of its own
  * time, in the air, until `window.land()` lets them all finish; with `window.holdOnly` set to a move's
  * name, only moves of that name, for a check that holds one thing while the page goes on with another
- * in its own time. `window.frame` counts the page's frames.
+ * in its own time. `window.held` is every move stopped so and not yet let go, kept from the moment it
+ * began: the page takes one off with the table it flew over. `window.frame` counts the page's frames.
  * `window.inFlight` holds every animation that has not yet told whoever waits on it that it ended: one
  * cut short by a table drawn again is still there while that draw is looked at, though the stage by
  * then says it is still.
@@ -435,6 +445,7 @@ export const MOTION = `(() => {
   requestAnimationFrame(count);
 
   const held = [];
+  window.held = held;
   const animate = Element.prototype.animate;
   const around = ${AROUND};
   const seatOf = ${SEAT_OF};

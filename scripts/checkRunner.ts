@@ -38,6 +38,9 @@ const LIMIT_MS = 90_000 + 150 * STALL_MS;
 
 // Enough to look at the pages of a check that was stopped and close them
 const GRACE_MS = 20_000;
+
+// What Playwright says of anything still asked of a page when the page is closed
+const CLOSED_UNDER_IT = 'Target page, context or browser has been closed';
 const SLOWEST_SHOWN = 5;
 
 /** How many checks run at once: CHECK_WORKERS when it is set. */
@@ -170,9 +173,19 @@ export async function runChecks(checks: readonly Check[], { only, picturesIn }: 
     },
   }));
 
+  // A check that fails between starting a wait and getting to it leaves the wait behind. Closing its pages
+  // then fails that wait with nobody to hear it, which Node would end the whole run for, every other check's report with it
+  const leftBehind = (reason: unknown) => {
+    if (!String((reason as Error | undefined)?.message).includes(CLOSED_UNDER_IT)) {
+      throw reason;
+    }
+  };
+
+  process.on('unhandledRejection', leftBehind);
   const results = await runPool(tasks, workers, { limitMs: LIMIT_MS, graceMs: GRACE_MS, report: (result, index) => process.stdout.write(account(result, index)) });
 
   await Promise.all(workers.map(({ browser }) => browser.close()));
+  process.off('unhandledRejection', leftBehind);
 
   const failures = results.flatMap((result, index) => (result.outcome === 'passed' ? [] : [account(result, index)]));
   const slowest = [...results].sort((a, b) => b.ms - a.ms).slice(0, SLOWEST_SHOWN);

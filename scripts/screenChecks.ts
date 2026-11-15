@@ -18,6 +18,7 @@ import { MOST_MOVE_MS, MOST_VIEW_MS, STEP_GAP_MS } from '../src/client/handMoves
 import { MOVE_MS } from '../src/client/motion.ts';
 import type { MoveName } from '../src/client/motion.ts';
 import { KEYS_SETTLE_MS } from '../src/client/hotkeys.ts';
+import { UNCONFIRMED_AFTER_MS } from '../src/client/pendingMove.ts';
 import { STEP_MS } from '../src/client/replayPlayer.ts';
 import { RECIPES } from '../src/client/soundRecipes.ts';
 import { spotsOf } from '../src/client/tableChances.ts';
@@ -2319,14 +2320,13 @@ const CHECKS: Check[] = [
 
       await page.waitForSelector('.message.result');
       await dealt(page);
-      await page.evaluate(`window.thrown = document.getAnimations().filter((animation) => animation.id === 'throw')`);
 
       const began = (await page.evaluate('window.flights.map((flight) => flight.name)')) as string[];
-      assert.equal(began.filter((name) => name === 'throw').length, 2, 'two throws');
       assert.ok(began.includes('facedown') && began.lastIndexOf('throw') < began.indexOf('chips'), `the throws were not in the air while the river lay face down: ${began.join(', ')}`);
       assert.equal(await page.locator('.board-card.stand-in').count(), 0, 'the river is still face down');
       // Still in the air, or taken off with the table they flew over when it was drawn again: never landed, which would end the check's hold
-      assert.deepEqual(await page.evaluate('window.thrown.map((animation) => animation.playState)').then((states) => (states as string[]).filter((state) => state === 'finished')), []);
+      const thrown = (await page.evaluate('window.held.map((animation) => animation.playState)')) as string[];
+      assert.deepEqual([thrown.length, thrown.filter((state) => state === 'finished')], [2, []], `the two throws the check held: ${thrown.join(', ')}`);
       await page.evaluate('window.land()');
     },
   ],
@@ -12307,9 +12307,9 @@ const CHECKS: Check[] = [
     },
   ],
   [
-    'a page of the rig tells the time by the rig’s clock alone: it stands still through a real wait, goes on with the clock when the check moves it, with news or with none, and is the rig’s again once a page loaded anew has heard from the table',
+    'a page of the rig tells the time by the rig’s clock alone: it stands still through a real wait, goes on with the clock when the check moves it, with news or with none, is the rig’s again once a page loaded anew has heard from the table, and is what a move’s wait for its answer is counted by',
     async (rig) => {
-      const table = rig.table(['Quigs', 'Pam', 'Sam'].map((name) => ({ name, stack: 1000 })), { actionSeconds: 30 });
+      const table = rig.table(['Quigs', 'Pam', 'Sam'].map((name) => ({ name, stack: 1000 })), { actionSeconds: 60 });
       table.deal({ button: 0 });
 
       const page = await table.open('Quigs', 'phone');
@@ -12350,6 +12350,20 @@ const CHECKS: Check[] = [
       rig.advance(5000);
       await counted(whole - 20);
       assert.equal(await pageTime(), rig.now());
+
+      // How long a move has gone unanswered is the device's own time, which on a rig is the rig's as well:
+      // a second short of when the page says so it says nothing, however long the check takes to look
+      const moves = await Gate.on(page, 'moves');
+      await moves.close('requests');
+      await page.tap('.turn [data-action="fold"]');
+      await moves.holding();
+      rig.advance(UNCONFIRMED_AFTER_MS - 1000);
+      await page.waitForFunction(`Date.now() === ${rig.now()}`);
+      await page.waitForTimeout(3 * OFFER_TICK_MS);
+      assert.equal(await page.locator('.stage[data-unconfirmed]').count(), 0, 'a move is marked as unconfirmed before its time');
+
+      rig.advance(1000);
+      await page.waitForSelector('.stage[data-unconfirmed]');
     },
   ],
 ];

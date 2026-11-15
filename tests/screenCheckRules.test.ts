@@ -34,5 +34,6 @@ test('the page tells the time by Date.now alone, which is what a rig holds', () 
   const sources = readdirSync(`${ROOT}${PAGE}`, { recursive: true, encoding: 'utf8' }).filter((name) => name.endsWith('.ts'));
   assert.ok(sources.length > 50, 'the page’s sources were not found');
 
-  assert.deepEqual(sources.flatMap((name) => linesWith(`${PAGE}/${name}`, /\bnew Date\(|\bDate\(\)|performance\.timeOrigin/)), [], 'a page that read the time another way would run ahead of a rig’s clock');
+  // With nothing in the brackets a Date is the time now, which is what the rig cannot hold; made from a time it is only that time written out
+  assert.deepEqual(sources.flatMap((name) => linesWith(`${PAGE}/${name}`, /\bnew Date\(\s*\)|\bnew Date\b(?!\()|(?<!new )\bDate\(\s*\)|performance\.timeOrigin/)), [], 'a page that read the time another way would run ahead of a rig’s clock');
 });

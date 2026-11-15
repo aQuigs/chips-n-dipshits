@@ -1415,10 +1415,14 @@ test('a table with records still on their way to the Ledger is put away once the
   assert.deepEqual(ledger.cells.slice(1).map((row) => row[4]), [1, 500]);
 });
 
-/** Ledger lines of another table, more than a retry at the table would look back through. */
+/** Hundreds of Ledger lines and hands of another table, written below whatever was there. */
 function manyLinesSince(store: TableStore): void {
   for (let version = 1; version <= 3; version++) {
-    save(store, table('BUSY22', version), Array.from({ length: 200 }, (_line, index) => buyIn(index + 1, 'BUSY22')));
+    save(
+      store,
+      table('BUSY22', version),
+      Array.from({ length: 200 }, (_line, index): Effect[] => [buyIn(index + 1, 'BUSY22'), { type: 'hand', record: handRecord('BUSY22', version * 200 + index) }]).flat(),
+    );
   }
 }
 
@@ -1439,6 +1443,99 @@ test('a record that reached its tab long ago, though its row still says it is wa
   assert.deepEqual(idsIn(archive()), ['OLD222']);
   assert.equal(ledger.cells.filter((row) => row[6] === 'OLD222:1:0').length, 1);
   assert.equal(ledger.getLastRow(), 602);
+});
+
+test('a record that reached its tab long ago, though its row still says it is waiting, is not written again when someone comes back to its table', () => {
+  const { store, spreadsheet, tables, failFlush } = aged({});
+
+  // The line landed and the push after it failed. Another table then wrote hundreds of lines below it
+  failFlush(2);
+  save(store, table('OLD222'), [buyIn(100, 'OLD222')]);
+  assert.match(String(tables.cells[1]![9]), /"id":"OLD222:1:0"/);
+
+  manyLinesSince(store);
+  const ledger = spreadsheet.getSheetByName('Ledger')!;
+  assert.equal(ledger.getLastRow(), 602);
+
+  // Days later, but before the table is old enough to be put away, a player makes a move at it
+  save(store, table('OLD222', 2));
+
+  assert.equal(ledger.cells.filter((row) => row[6] === 'OLD222:1:0').length, 1, 'the buy-in is in the Ledger once');
+  assert.equal(ledger.getLastRow(), 602);
+  assert.equal(tables.cells[1]!.slice(9, 12).join(''), '', 'and the row no longer lists it');
+});
+
+/** A hand of table OLD222 that reached the Hands tab while its row still lists it, under hundreds of another table's hands. */
+function handLandedLongAgo() {
+  const context = aged({});
+
+  context.failFlush(2);
+  save(context.store, table('OLD222'), [{ type: 'hand', record: handRecord('OLD222', 1) }]);
+  assert.match(String(context.tables.cells[1]![9]), /"id":"OLD222:1:0"/);
+
+  manyLinesSince(context.store);
+  const hands = context.spreadsheet.getSheetByName('Hands')!;
+  assert.equal(hands.getLastRow(), 602);
+
+  return { ...context, hands, timesWritten: () => hands.cells.filter((row) => row[5] === 'OLD222:1:0').length, listed: () => context.tables.cells[1]!.slice(9, 12).join('') };
+}
+
+test('a hand that reached its tab long ago, though its row still says it is waiting, is not written again when a page next asks for its table', () => {
+  const { store, cache, hands, timesWritten, listed } = handLandedLongAgo();
+
+  // The cache keeps a table with records waiting for a minute only, so the next poll reads the row
+  cache.entries.clear();
+  store.read('OLD222');
+
+  assert.equal(timesWritten(), 1);
+  assert.equal(hands.getLastRow(), 602);
+  assert.equal(listed(), '');
+});
+
+test('a hand that reached its tab long ago, though its row still says it is waiting, is not written again by a request that changes nothing', () => {
+  const { store, hands, timesWritten, listed } = handLandedLongAgo();
+
+  store.transact('OLD222', () => ({ save: null, effects: [], result: null }));
+
+  assert.equal(timesWritten(), 1);
+  assert.equal(hands.getLastRow(), 602);
+  assert.equal(listed(), '');
+});
+
+test('a record whose tab cannot be read for whether it is there already stays waiting and is not written, and goes out once when the tab can be read', () => {
+  const { store, spreadsheet, failFlush } = setup();
+  save(store, table('ABC234', 1), [buyIn(1000)]);
+  const { ledger, held, ledgerAmounts } = records(spreadsheet);
+
+  // This line landed, and its row still lists it
+  failFlush(2);
+  save(store, table('ABC234', 2), [buyIn(200)]);
+  assert.deepEqual(ledgerAmounts(), [1000, 200]);
+  assert.match(held(), /"id":"ABC234:2:0"/);
+
+  // A line late is put right by the next try; a line twice by nobody
+  ledger.refuseReadsAfter(0);
+  save(store, table('ABC234', 3), [buyIn(300)]);
+  assert.deepEqual(ledgerAmounts(), [1000, 200], 'nothing is written to a tab that could not be looked through');
+  assert.match(held(), /"id":"ABC234:2:0".*"id":"ABC234:3:0"/, 'both wait in the row');
+
+  ledger.acceptReads();
+  save(store, table('ABC234', 4));
+  assert.deepEqual(ledgerAmounts(), [1000, 200, 300]);
+  assert.equal(held(), '');
+});
+
+test('a save with nothing waiting in its row writes its records without reading their tabs', () => {
+  const { store, spreadsheet } = setup();
+  save(store, table('ABC234', 1), [buyIn(1000), { type: 'hand', record: handRecord('ABC234', 1) }]);
+  const { ledger, ledgerAmounts } = records(spreadsheet);
+  const hands = spreadsheet.getSheetByName('Hands')!;
+  const reads = [ledger.reads, hands.reads];
+
+  save(store, table('ABC234', 2), [buyIn(200), { type: 'hand', record: handRecord('ABC234', 2) }]);
+
+  assert.deepEqual(ledgerAmounts(), [1000, 200]);
+  assert.deepEqual([ledger.reads, hands.reads], reads);
 });
 
 test('last words that reached their tab in a sweep that then failed are not written again by the sweep that finishes it, however much later', () => {

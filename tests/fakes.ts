@@ -56,6 +56,7 @@ export class FakeSheet implements SheetLike {
   /** The rows the tab has, written to or not, which deleting rows takes away from and appending past adds to. */
   maxRows = NEW_TAB_ROWS;
   private writesAllowed = Infinity;
+  private readsAllowed = Infinity;
   private readonly lock: FakeLock | null;
   private readonly rowLimit: number;
   private readonly calls: Calls | null;
@@ -87,6 +88,15 @@ export class FakeSheet implements SheetLike {
 
   acceptWrites(): void {
     this.writesAllowed = Infinity;
+  }
+
+  /** Makes reads of the tab's cells fail, as the service does when it cannot reach the document, once `count` more have gone through. */
+  refuseReadsAfter(count: number): void {
+    this.readsAllowed = count;
+  }
+
+  acceptReads(): void {
+    this.readsAllowed = Infinity;
   }
 
   getLastRow(): number {
@@ -121,6 +131,12 @@ export class FakeSheet implements SheetLike {
     return {
       getValues: (): unknown[][] => {
         this.note('getValues');
+
+        if (this.readsAllowed <= 0) {
+          throw new Error('Service Spreadsheets failed while accessing the document');
+        }
+
+        this.readsAllowed -= 1;
         this.reads += 1;
 
         return Array.from({ length: numRows }, (_line, i) =>

@@ -119,12 +119,13 @@ const CACHE_SECONDS = 21_600;
 // reader goes to the sheet and the copy is tried again, even if nobody at the table ever acts again
 const RETRY_SECONDS = 60;
 
-// How far up a tab a record being retried is looked for, in case it did arrive the first time. A record never
-// tried is not looked for at all, and one of a table being put away through the whole tab: it was last tried
-// when the table was last played at, and everything written since lies below it
-const NEVER_TRIED = 0;
-const RETRY_SCAN_ROWS = 500;
-const WHOLE_TAB = Infinity;
+/**
+ * Whether records being copied to their tabs may have been tried before. One that was may be there
+ * already, since a write that reported failure can have landed all the same, and it may lie under any
+ * number of rows other tables have written since. So it is looked for through its whole tab before it
+ * is written again; a first copy is written without a look, which keeps that read off every ordinary save.
+ */
+type Attempt = 'first' | 'again';
 
 // The cache takes 100 KB per key; leave headroom. A table past this is still saved, but every poll then reads it from the sheet under the lock
 export const CACHE_VALUE_BYTES = 95_000;
@@ -407,7 +408,7 @@ export class SheetStore implements TableStore {
 
         this.persist(txn.save, txn.at, found ? found.row : null, found ? found.held : [], fresh);
       } else if (found && found.held.length > 0) {
-        this.copyOut(found.row, found.held, RETRY_SCAN_ROWS, found.state);
+        this.copyOut(found.row, found.held, 'again', found.state);
       }
 
       return txn.result;
@@ -545,7 +546,7 @@ export class SheetStore implements TableStore {
         return null;
       }
 
-      const settled = found.held.length === 0 || this.copyOut(found.row, found.held, RETRY_SCAN_ROWS, found.state);
+      const settled = found.held.length === 0 || this.copyOut(found.row, found.held, 'again', found.state);
       this.remember(found.state, found.row, settled);
 
       return found.state;
@@ -603,7 +604,7 @@ export class SheetStore implements TableStore {
       throw error;
     }
 
-    const settled = held.length === 0 || this.copyOut(row, held, leftOver.length > 0 ? RETRY_SCAN_ROWS : NEVER_TRIED, state);
+    const settled = held.length === 0 || this.copyOut(row, held, leftOver.length > 0 ? 'again' : 'first', state);
 
     // The save itself succeeded, so a cache that can't be refreshed is only emptied, not treated as a failure of the request
     try {
@@ -656,11 +657,10 @@ export class SheetStore implements TableStore {
    * night ended, then takes them off the row. Whatever can't be written stays held and is tried again the next time the row is read, so a
    * failing write costs no record and never holds up the game. Returns whether the row is now clear.
    *
-   * `triedWithin` says how many rows back in their tabs some of these may have been tried before. A
-   * write that reported failure may have landed all the same, so they are looked for there first and
-   * not written twice.
+   * A record that may have been tried before is looked for in its tab first (`Attempt`). If that look
+   * fails the record waits like any other: late is put right by the next try, twice by nobody.
    */
-  private copyOut(row: number, held: Held[], triedWithin: number, state: TableState): boolean {
+  private copyOut(row: number, held: Held[], attempt: Attempt, state: TableState): boolean {
     const waiting: Held[] = [];
     const table = state.config;
     const noted = this.noter(state.id);
@@ -678,7 +678,7 @@ export class SheetStore implements TableStore {
         }
 
         const { sheet, idColumn } = kind;
-        const arrived = this.recentIds(sheet, idColumn, triedWithin);
+        const arrived = attempt === 'again' ? this.idsIn(sheet, idColumn) : new Set<string>();
         const fresh = mine.filter((item) => !arrived.has(item.id)) as (Held & { record: Extract<Recorded, { type: RowOfItsOwn['type'] }> })[];
 
         // The Ledger tab gained the columns for chips moved between players after Sheets were in use. Only such a
@@ -713,16 +713,15 @@ export class SheetStore implements TableStore {
     return waiting.length === 0;
   }
 
-  /** The ids of the records in the last `rows` rows of a tab. */
-  private recentIds(key: SheetKey, idColumn: number, rows: number): Set<string> {
+  /** The id of every record in a tab: one read of its id column, however long the tab has grown. */
+  private idsIn(key: SheetKey, idColumn: number): Set<string> {
     const sheet = this.sheet(key);
-    const lastRow = rows > 0 ? sheet.getLastRow() : 0;
+    const lastRow = sheet.getLastRow();
     if (lastRow < FIRST_DATA_ROW) {
       return new Set();
     }
 
-    const firstRow = Math.max(FIRST_DATA_ROW, lastRow - rows + 1);
-    const ids = sheet.getRange(firstRow, idColumn, lastRow - firstRow + 1, 1).getValues();
+    const ids = sheet.getRange(FIRST_DATA_ROW, idColumn, lastRow - FIRST_DATA_ROW + 1, 1).getValues();
 
     return new Set(ids.map((row) => String(row[0])));
   }
@@ -982,7 +981,7 @@ export class SheetStore implements TableStore {
       this.deps.flush();
     }
 
-    return this.copyOut(row, all, WHOLE_TAB, state);
+    return this.copyOut(row, all, 'again', state);
   }
 
   /** The Archive tab, which the first table to be put away makes. Until then there is none, which is nothing put away. */

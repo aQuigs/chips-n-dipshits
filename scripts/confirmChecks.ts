@@ -14,15 +14,14 @@ import type { Command } from '../src/engine/index.ts';
 import { focusIn } from './a11y.ts';
 import { Sweep, tabTo } from './accessibilityChecks.ts';
 import type { Check } from './checkRunner.ts';
-import { letGoEarly, passive, playOut } from './layoutSweep.ts';
-import { answeredTo, commandsSent } from './pageSpies.ts';
-import { CANCEL, CLOSE, dialogNamed, EIGHT, fromMenu, HOST, keyboardOn, more, named, noDialog, on, playersFromTheKeyboard, row, seated, seatedAndWatched, WATCHER } from './playersDialog.ts';
+import { letGoEarly, passive, pastAHold, playOut } from './layoutSweep.ts';
+import { answeredTo, buttonNow, commandsSent } from './pageSpies.ts';
+import { ANSWER, CANCEL, CLOSE, dialogNamed, EIGHT, fromMenu, HOST, keyboardOn, more, named, noDialog, on, playersFromTheKeyboard, row, seated, seatedAndWatched, WATCHER } from './playersDialog.ts';
 import { Gate } from './rig.ts';
 import type { RigTable } from './rig.ts';
 import { namedByTheWatch, tapsLive, tellingOf, watched, watchTheBar } from './underTheFinger.ts';
 
 const SHUFFLE = '.dialog [data-action="shuffle"]';
-const ANSWER = '.dialog [data-action="confirm"]';
 const END_NIGHT = '.dialog [data-action="end-night"]';
 
 const scrolled = (page: Page) => page.evaluate(`document.querySelector('.dialog-body').scrollTop`) as Promise<number>;
@@ -403,6 +402,11 @@ const standing = (table: RigTable) => {
  * The watch notes every control that comes up where a different one lay, asks what a tap there reaches,
  * and taps each control the page holds back the moment it does, which is that second tap
  * (underTheFinger.ts): nothing may come of it under the button that was tapped.
+ *
+ * Cancel and the ✕ close at the tap. An answer that sends stays where it is, switched off, until the table
+ * has answered, and the second tap is on a button that cannot be pressed. The table's answer then closes the
+ * question a second or two after the tap, under a finger that may be anywhere over it by then: everything
+ * that comes up where something else lay waits, from when it comes up and not from the tap.
  */
 const secondTapOnAnAnswer = ANSWERS.map((answered): Check => [
   `the second tap of two on a question’s button presses nothing of the dialog that comes back, with eight players seated: ${answered.what}, at ${SIZES.map((size) => size.name).join(', ')}`,
@@ -439,27 +443,36 @@ const secondTapOnAnAnswer = ANSWERS.map((answered): Check => [
       await gate?.close('requests');
       await watchTheBar(page, true);
       await page.locator(answered.tap).tap();
+
+      if (gate) {
+        await gate.holding();
+        assert.equal(await page.getAttribute('.overlay [role$="dialog"]', 'aria-label'), title, `${size.name}: the question went before the table had answered`);
+        assert.equal((await buttonNow(page, answered.tap)).held, true, `${size.name}: the answer can be pressed again while the table has not answered`);
+        assert.deepEqual((await watched(page)).found, [], `${size.name}: something came up under the finger while the answer was on its way`);
+        assert.deepEqual(standing(table), before, `${size.name}: the table changed before the answer reached it`);
+
+        // The table takes longer than a button is held back for: a wait counted from the tap would be over when its answer comes
+        await pastAHold(page);
+        await gate.open();
+      }
+
       await dialogNamed(page, from);
-      await gate?.holding();
 
-      // The dialog is back and the table has heard nothing yet: what lies under the tapped button now is what a second tap finds
+      // By the viewer's own doing only what lies where they tapped waits; by the table's answer, everything that came up where something else lay
       const back = await watched(page);
-      const under = back.found.filter((one) => one.aimedAt === tapped);
-      const waited = back.held.filter((one) => under.some((came) => came.cameUp === one.what));
+      const cameUp = gate ? back.found : back.found.filter((one) => one.aimedAt === tapped);
+      const waited = back.held.filter((one) => cameUp.some((came) => came.cameUp === one.what));
 
-      cameUpAnywhere += under.length;
-      assert.deepEqual(under.flatMap(tellingOf), [], `${size.name}: a second tap lands on what the first one brought back`);
-      assert.deepEqual(under.filter((came) => !waited.some((one) => one.what === came.cameUp)), [], `${size.name}: something under ${tapped} was not held back`);
-      assert.deepEqual(letGoEarly(waited), [], `${size.name}: something under ${tapped} was let go before ${TAPS_SETTLE_MS} ms were over`);
-      assert.deepEqual(standing(table), before, `${size.name}: the table changed before the answer reached it`);
+      cameUpAnywhere += cameUp.filter((one) => one.aimedAt === tapped).length;
+      assert.deepEqual(cameUp.flatMap(tellingOf), [], `${size.name}: a tap lands on what came back where the question lay`);
+      assert.deepEqual(cameUp.filter((came) => !waited.some((one) => one.what === came.cameUp)), [], `${size.name}: something that came up where the question lay was not held back`);
+      assert.deepEqual(letGoEarly(waited), [], `${size.name}: something that came up where the question lay was let go before ${TAPS_SETTLE_MS} ms were over`);
 
-      await gate?.open();
+      if (!gate) {
+        assert.deepEqual(standing(table), before, `${size.name}: the table changed though nothing was sent`);
+      }
+
       await answered.answered?.(page);
-
-      // The table's answer draws the list anew, with a row gone or a button changed. That is the game's doing, and nothing it moves takes a tap
-      const moved = (await watched(page)).found.slice(back.found.length);
-
-      assert.deepEqual(moved.flatMap(tellingOf), [], `${size.name}: a tap lands on what the table’s answer moved`);
       assert.equal(await page.getAttribute('.overlay [role$="dialog"]', 'aria-label'), from, `${size.name}: a tap held back opened something all the same`);
       assert.deepEqual(sent, answered.sends ? [answered.sends] : [], `${size.name}: the table was sent something other than the one answer`);
       await page.context().close();
@@ -513,7 +526,7 @@ const keyboardComesBack: Check = [
     await dialogNamed(page, 'Players');
     assert.equal(await keyboardOn(page), 'Remove, Stu', 'Cancel left the keyboard elsewhere than on the button that opened the question');
 
-    // Answered, with the answer stopped on its way to the table: the row is there yet, and the keyboard on its button
+    // Answered, with the answer stopped on its way to the table: the question stays, its answer switched off and saying what it is doing
     const gate = await Gate.on(page, 'hosting');
 
     await gate.close('requests');
@@ -521,17 +534,28 @@ const keyboardComesBack: Check = [
     await tabTo(page, ANSWER);
     await page.keyboard.down('Enter');
     await gate.holding();
-    await dialogNamed(page, 'Players');
 
-    // The key is still down, and repeats on the button the keyboard came back to
+    // The key is still down, and repeats on a button that cannot be pressed
     await page.keyboard.down('Enter');
     await page.keyboard.down('Enter');
     await page.keyboard.up('Enter');
-    assert.equal(await page.getAttribute('.overlay [role$="dialog"]', 'aria-label'), 'Players', 'Enter held down on the answer asked the question again');
-    assert.equal(await keyboardOn(page), 'Remove, Stu', 'the answer left the keyboard elsewhere than on the button that opened the question');
+    assert.equal(await page.getAttribute('.overlay [role$="dialog"]', 'aria-label'), 'Remove Stu?', 'the question went before the table had answered');
+    assert.deepEqual(await buttonNow(page, ANSWER), { says: 'Removing…', held: true }, 'the answer does not say that it was heard');
+    // A button that cannot be pressed loses the keyboard to nothing, in the browser's own time: never to the page behind the question
+    assert.equal(await page.evaluate(`document.activeElement === document.body || document.activeElement.closest('.dialog') !== null`), true, 'with the answer switched off the keyboard is on the page behind the question');
 
-    // The next row is folded, and its own button to remove takes no keyboard: the one that unfolds it stands for it
+    // News of the table comes while the question waits, and the dialog takes up the keyboard it finds on nothing. Refused then, the answer is back and has the keyboard, as before the press
+    table.act(WATCHER, { type: 'chat', text: 'gl' });
+    await table.heardBy(page);
+    await gate.refuse();
+    await page.waitForSelector(`${ANSWER}:enabled`);
+    assert.equal(await page.evaluate(`document.activeElement === document.querySelector(${JSON.stringify(ANSWER)})`), true, 'refused, the answer is back and the keyboard is not on it');
+
+    // The table's answer closes the question, on a list without the player. The next row is folded, and its own button to remove takes no keyboard: the one that unfolds it stands for it
+    await page.keyboard.press('Enter');
+    await gate.holding();
     await gate.open();
+    await dialogNamed(page, 'Players');
     await page.waitForSelector(seated('Stu'), { state: 'detached' });
     assert.equal(await keyboardOn(page), 'More, Big Al', 'with the player gone the keyboard is not on the next row');
     assert.equal(await unfolded('Big Al'), 'false', 'the next row unfolded by itself');
@@ -546,6 +570,7 @@ const keyboardComesBack: Check = [
     await dialogNamed(page, 'Remove Big Al?');
     await tabTo(page, ANSWER);
     await page.keyboard.press('Enter');
+    await dialogNamed(page, 'Players');
     await page.waitForSelector(seated('Big Al'), { state: 'detached' });
     assert.equal(await keyboardOn(page), 'More, Pocket Pam');
 
@@ -553,6 +578,7 @@ const keyboardComesBack: Check = [
     await asks(WATCHER);
     await tabTo(page, ANSWER);
     await page.keyboard.press('Enter');
+    await dialogNamed(page, 'Players');
     await page.waitForSelector(row(WATCHER), { state: 'detached' });
     assert.equal(await keyboardOn(page), 'More, Mo', 'with the last row gone the keyboard is not on the row before');
 

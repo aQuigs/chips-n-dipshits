@@ -359,6 +359,28 @@ export async function answeredTo(page: Page, type: Command['type'], make: () => 
   return answer;
 }
 
+/** What a button shows, and whether it is held for an answer: switched off and marked as busy (`holdWhile` in src/client/ui.ts). */
+export interface ButtonNow {
+  says: string;
+  held: boolean;
+}
+
+/**
+ * A button as it is now. One that sends something has two things to say in the same place (`sends` in
+ * src/client/ui.ts), and its text is always the first: what it says here is read off which of the two is
+ * painted, so a held button whose words did not change is seen as that.
+ */
+export const buttonNow = (page: Page, selector: string): Promise<ButtonNow> =>
+  page.locator(selector).evaluate((button) => {
+    const styleOf = (part: unknown, pseudo?: string) => button.ownerDocument.defaultView.getComputedStyle(part, pseudo);
+    const painted = [...button.querySelectorAll('.sends > *')].filter((part) => styleOf(part).visibility === 'visible');
+
+    return {
+      says: painted.length > 0 ? painted.map((part) => part.textContent || styleOf(part, '::before').content.replace(/^"|"$/g, '')).join(' and ') : button.innerText.trim(),
+      held: button.disabled && button.getAttribute('aria-busy') === 'true',
+    };
+  });
+
 /** The replay's table at rest: drawn, with the chances of hands face up worked out for the cards on it. */
 export const replayDrawn = (page: Page) => page.waitForSelector('.replay:not([hidden]) .replay-stage:not([data-chances-pending]) .table');
 

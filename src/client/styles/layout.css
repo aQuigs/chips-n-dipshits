@@ -145,9 +145,21 @@
   font-size: calc(14px * var(--text-scale));
 }
 
+/*
+ * The words get 140 px at the least and never less than their longest word: a name of one long word
+ * takes the row for itself, the buttons going under it, rather than run on under them. One too long
+ * even for the row breaks.
+ */
 .banner > span {
-  flex: 1;
-  min-width: 140px;
+  flex: 1 1 140px;
+  max-width: 100%;
+  overflow-wrap: break-word;
+}
+
+/* A request's two answers go under its words together, never one of them alone */
+.banner > .answers {
+  display: flex;
+  gap: 8px;
 }
 
 .banner.warn {

@@ -13,6 +13,8 @@ import { CHOICES, FLEETING, MOVES } from '../src/client/connection.ts';
 import { GIF_HOSTS } from '../src/client/gifs.ts';
 import { startDevServer } from '../src/dev/server.ts';
 import type { Answering, DevServer } from '../src/dev/server.ts';
+import { HANDLERS } from '../src/engine/commands/index.ts';
+import { isHostLevel } from '../src/engine/hosts.ts';
 import { onTheClock } from '../src/engine/index.ts';
 import type { Command, Hand, TableConfig, TableState, TableView } from '../src/engine/index.ts';
 import type { ApiRequest, ApiResponse, Auth } from '../src/server/api.ts';
@@ -884,14 +886,21 @@ export class RigBrowser {
   }
 }
 
-/** Which of a page's requests a gate stands in the way of: the moves of a hand, the choices of a move ahead of a turn, the polls for news of the table, reactions, showing cards after a hand, or asking for the list of known players, the standings, or one player's nights. */
-export type Gated = 'moves' | 'choices' | 'polls' | 'reactions' | 'shows' | 'hosting' | 'players' | 'presets' | 'standings' | 'nights' | 'creates';
+/**
+ * Which of a page's requests a gate stands in the way of: the moves of a hand, the choices of a move ahead of a turn, the polls for news of the table, reactions,
+ * showing cards after a hand, what whoever runs the table sends to run it (`hosting`), what a player asks of it, a seat, chips or to stand up (`asking`), or asking for the
+ * list of known players, the standings, or one player's nights.
+ */
+export type Gated = 'moves' | 'choices' | 'polls' | 'reactions' | 'shows' | 'hosting' | 'asking' | 'players' | 'presets' | 'standings' | 'nights' | 'creates';
 
 /** The requests a gate stops that are not commands, by what they ask for. */
 const GATED_OPS: Partial<Record<Gated, ApiRequest['op']>> = { polls: 'poll', players: 'players', presets: 'presets', standings: 'standings', nights: 'nights', creates: 'create' };
 
+// What only whoever runs the table may send, as the engine has it
+const HOSTING = new Set((Object.keys(HANDLERS) as Command['type'][]).filter((type) => isHostLevel(HANDLERS[type].by)));
+
 /** The commands a gate for each other kind of request stops. */
-const GATED_COMMANDS: Partial<Record<Gated, ReadonlySet<Command['type']>>> = { moves: MOVES, choices: CHOICES, reactions: FLEETING, shows: new Set(['showCards']), hosting: new Set(['kick', 'setCohost', 'transferHost']) };
+const GATED_COMMANDS: Partial<Record<Gated, ReadonlySet<Command['type']>>> = { moves: MOVES, choices: CHOICES, reactions: FLEETING, shows: new Set(['showCards']), hosting: HOSTING, asking: new Set(['requestSeat', 'requestRebuy', 'cancelRequest', 'standUp']) };
 
 /** Where a closed gate stops things: on their way to the server, which then has heard nothing, or on the way back from it. */
 export type GateSide = 'requests' | 'answers';

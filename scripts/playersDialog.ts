@@ -32,6 +32,7 @@ export const seated = (name: string) => on(name, 'set-stack');
 // A row's button as a screen reader names it, in plain CSS, which is what the page itself can be asked with
 export const named = (says: string, name: string) => `.dialog button[aria-label="${says}, ${name}"]`;
 
+export const ANSWER = '.dialog [data-action="confirm"]';
 export const CANCEL = '.dialog .buttons button:not([data-action])';
 export const CLOSE = '.dialog [data-action="close"]';
 

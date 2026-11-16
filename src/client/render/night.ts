@@ -17,6 +17,15 @@ export function startText(view: TableView): string {
   return view.handCount === 0 ? 'Start the game' : 'Resume the game';
 }
 
+/** What the same button says it is doing while the table has not answered. */
+export function startingText(view: TableView): string {
+  if (view.hand) {
+    return 'Calling it off…';
+  }
+
+  return view.handCount === 0 ? 'Starting…' : 'Resuming…';
+}
+
 const hands = (count: number) => `${count} more hand${count === 1 ? '' : 's'}`;
 
 /**

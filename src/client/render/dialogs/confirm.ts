@@ -1,6 +1,6 @@
 import type { Command } from '../../../engine/types.ts';
-import { h } from '../../ui.ts';
-import { frame } from './dialog.ts';
+import { h, heldTogether, sendingButton, sends } from '../../ui.ts';
+import { frame, sendAndLeave } from './dialog.ts';
 import type { DialogHandlers, DialogKind } from './dialog.ts';
 
 /** What is being asked, and the command that saying yes sends. */
@@ -8,6 +8,8 @@ interface Question {
   title: string;
   body: string;
   action: string;
+  /** What the button says while the table has not answered. */
+  doing: string;
   command: Command;
   /**
    * Yes takes a seat, chips or the table from someone, and no one tap gives it back: its button is drawn
@@ -18,35 +20,15 @@ interface Question {
   toTable?: boolean;
 }
 
+/**
+ * The question stays up with its answer held until the table has answered, and is left then: whoever said
+ * yes sees that it was heard, and what they come back to is the table or the list as the answer left it.
+ * Cancel is held with it, since it can take nothing back by then; the dialog can still be closed.
+ */
 function confirm(question: Question, handlers: DialogHandlers): HTMLElement {
-  return frame(
-    question.title,
-    handlers,
-    h('p', null, question.body),
-    h(
-      'div.buttons',
-      null,
-      h('button.btn', { type: 'button', onclick: handlers.close }, 'Cancel'),
-      h(
-        'button.btn',
-        {
-          type: 'button',
-          class: question.danger ? 'danger' : 'primary',
-          'data-action': 'confirm',
-          onclick: () => {
-            void handlers.send(question.command);
+  const yes = sendingButton('button.btn', { class: question.danger ? 'danger' : 'primary', 'data-action': 'confirm' }, sends(question.action, question.doing), sendAndLeave(handlers, question.command, question.toTable));
 
-            if (question.toTable) {
-              handlers.toTable();
-            } else {
-              handlers.close();
-            }
-          },
-        },
-        question.action,
-      ),
-    ),
-  );
+  return frame(question.title, handlers, h('p', null, question.body), h('div.buttons', null, heldTogether(h('button.btn', { type: 'button', onclick: handlers.close }, 'Cancel'), yes)));
 }
 
 export const confirmDialog: DialogKind<'confirm', Question> = {

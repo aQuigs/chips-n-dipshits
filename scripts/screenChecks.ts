@@ -38,6 +38,7 @@ import type { Flight, Spots } from './pageSpies.ts';
 import { STAND_IN_HOST } from './standInHost.ts';
 import { focused, focusIn, heard, SPOKEN, spoken } from './a11y.ts';
 import { ACCESSIBILITY_CHECKS } from './accessibilityChecks.ts';
+import { BUSY_CHECKS } from './busyChecks.ts';
 import { runChecks } from './checkRunner.ts';
 import { layoutSweep } from './layoutSweep.ts';
 import { confirmChecks } from './confirmChecks.ts';
@@ -7835,14 +7836,7 @@ const CHECKS: Check[] = [
       const host = await table.open('Quigs', 'desktop');
       const typing = await table.open('Stu', 'desktop');
 
-      // The answer to starting play again takes its time, as it does from Apps Script
-      await host.route('**/api', async (route) => {
-        if ((JSON.parse(route.request().postData() ?? '{}') as { command?: Command }).command?.type === 'playOn') {
-          await new Promise((resolve) => setTimeout(resolve, 3 * OFFER_TICK_MS));
-        }
-
-        await route.continue();
-      });
+      const answers = await Gate.on(host, 'hosting');
 
       // The host is in the Players dialog and a player is typing when the night ends
       await host.click('[data-action="menu"]');
@@ -7882,8 +7876,13 @@ const CHECKS: Check[] = [
       rig.advance(1000);
       table.act('Quigs', { type: 'endNight' });
       await typing.waitForSelector('.message.night-over');
+      // The answer to starting play again takes its time, as it does from Apps Script. The menu waits for it, its line saying so, and the recap stays behind it
+      await answers.close('requests');
       await host.click('.menu [data-action="keep-playing"]');
-      await assertNoDialogComes(host, 'the recap opened on the host while the table had yet to answer that play goes on');
+      await answers.holding();
+      await assertNoDialogComes(host, 'the recap opened on the host while the table had yet to answer that play goes on', table.view('Quigs').config.name);
+      await answers.open();
+      await host.waitForSelector('.menu', { state: 'detached' });
       await host.waitForSelector('.message.night-over', { state: 'detached' });
       await assertNoDialogComes(host, 'the recap of a night that was started again came up after all');
 
@@ -13929,6 +13928,7 @@ const CHECKS: Check[] = [
   ...ownClockChecks(OUT),
   ...PLAYERS_CHECKS,
   ...tableSaysChecks(OUT),
+  ...BUSY_CHECKS,
 ];
 
 await mkdir(OUT, { recursive: true });

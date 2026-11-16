@@ -20,7 +20,7 @@ import { showOffer } from '../showing.ts';
 import type { Waiting } from '../shownTable.ts';
 import { amountSaid, LABELS, NOT_ON_OFFER, sizedSaid } from '../spoken.ts';
 import { standingOf, standingSays } from '../standing.ts';
-import { cardEl, h, holdWhile } from '../ui.ts';
+import { cardEl, h, holdWhile, sendingButton } from '../ui.ts';
 import type { Child } from '../ui.ts';
 import { lastHandsText, nightOver, onLastHand } from './night.ts';
 
@@ -78,14 +78,6 @@ const PRESETS: SizePreset[] = [
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
-}
-
-/** A button for something other than a move in the hand. It waits for its own answer before it can be pressed again. */
-function commandButton(spec: `button.${string}`, action: string, label: Child, send: () => Promise<unknown>): HTMLButtonElement {
-  const button = h(spec, { type: 'button', 'data-action': action }, label);
-  button.addEventListener('click', () => holdWhile(button, send));
-
-  return button;
 }
 
 /** What a move button says: the move and its amount as two pieces, so a narrow button breaks between them instead of cutting the amount off. */
@@ -389,8 +381,8 @@ function settlingOf(view: TableView, seat: SeatView, handlers: ControlHandlers):
   const owed = formatAmount(amount, view.config);
 
   // Short, since they share a line of a phone: the note above them says the rest
-  const post = (label: string) => commandButton('button.chip-btn', 'post-blinds', label, () => handlers.send({ type: 'comeIn', post: true }));
-  const wait = (spec: `button.${string}`) => commandButton(spec, 'wait-for-blind', 'Wait for big blind', () => handlers.send({ type: 'comeIn', post: false }));
+  const post = (label: string) => sendingButton('button.chip-btn', { 'data-action': 'post-blinds' }, label, () => handlers.send({ type: 'comeIn', post: true }));
+  const wait = (spec: `button.${string}`) => sendingButton(spec, { 'data-action': 'wait-for-blind' }, 'Wait for big blind', () => handlers.send({ type: 'comeIn', post: false }));
 
   if (amount === 0) {
     return { note: null, buttons: [] };
@@ -581,7 +573,7 @@ function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandle
   if (!seat.sittingOut && !seat.away) {
     extras.push(toggle(fitted({ full: 'Sit out next hand', brief: 'Sit out' }), false, 'sit-out', () => handlers.send({ type: 'sitOut' })));
   } else if (settling.buttons.length === 0) {
-    extras.push(commandButton('button.chip-btn.strong', 'sit-in', "I'm back", () => handlers.send({ type: 'sitIn' })));
+    extras.push(sendingButton('button.chip-btn.strong', { 'data-action': 'sit-in' }, "I'm back", () => handlers.send({ type: 'sitIn' })));
   }
 
   const standing = standingOf(view);
@@ -644,7 +636,7 @@ function replayEl(view: TableView, seat: SeatView, handlers: ControlHandlers): H
     return null;
   }
 
-  const button = commandButton('button.chip-btn.replay-last', 'replay-last', fitted({ full: `Replay hand #${number}`, brief: 'Replay' }), () => handlers.replay(number));
+  const button = sendingButton('button.chip-btn.replay-last', { 'data-action': 'replay-last' }, fitted({ full: `Replay hand #${number}`, brief: 'Replay' }), () => handlers.replay(number));
 
   // The button for another hand is another button
   button.dataset.hand = String(number);
@@ -665,7 +657,7 @@ function showCardsEl(view: TableView, seat: SeatView, handlers: ControlHandlers)
   const show = (places: number[]) => () => handlers.showCards(offer.hand, places);
   const buttons = offer.places.map((place) => {
     const card = seat.cards![place]!;
-    const button = commandButton('button.chip-btn.show-card', 'show-card', '', show([place]));
+    const button = sendingButton('button.chip-btn.show-card', { 'data-action': 'show-card' }, '', show([place]));
 
     // Which hand's card, so the offer after the next hand is another button
     button.dataset.keep = String(offer.hand);
@@ -679,7 +671,7 @@ function showCardsEl(view: TableView, seat: SeatView, handlers: ControlHandlers)
   });
 
   if (offer.places.length > 1) {
-    const both = commandButton('button.chip-btn', 'show', 'Both', show(offer.places));
+    const both = sendingButton('button.chip-btn', { 'data-action': 'show' }, 'Both', show(offer.places));
 
     // Which hand's cards, as on the button for each
     both.dataset.keep = String(offer.hand);
@@ -711,7 +703,7 @@ export function controlsEl(view: TableView, handlers: ControlHandlers, waiting: 
       'div.controls',
       null,
       waitingEl(`Asked the host for seat ${myRequest.seat + 1} with ${formatAmount(myRequest.amount, view.config)}`, view),
-      h(`div.extras.${FIT_ROW}`, null, commandButton('button.chip-btn', 'cancel-request', 'Cancel request', () => handlers.send({ type: 'cancelRequest' }))),
+      h(`div.extras.${FIT_ROW}`, null, sendingButton('button.chip-btn', { 'data-action': 'cancel-request' }, 'Cancel request', () => handlers.send({ type: 'cancelRequest' }))),
     );
   }
 

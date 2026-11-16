@@ -1,7 +1,7 @@
 import { editableAmount, formatAmount } from '../../../engine/amounts.ts';
 import type { TableView } from '../../../engine/view.ts';
 import { offeredToAdd, roomToAdd } from '../../buyIns.ts';
-import { h } from '../../ui.ts';
+import { h, sends } from '../../ui.ts';
 import { amountInput, amountOf } from '../forms.ts';
 import { nightOver } from '../night.ts';
 import { hostOrCohost } from '../roles.ts';
@@ -32,7 +32,7 @@ function rebuy(view: TableView, handlers: DialogHandlers): HTMLElement {
     h(
       'form',
       {
-        onsubmit: (event: Event) => submit(event, handlers, { type: 'requestRebuy', amount: amountOf(event.target as HTMLFormElement, AMOUNT, view.config) }, handlers.close),
+        onsubmit: (event: Event) => submit(event, handlers, { type: 'requestRebuy', amount: amountOf(event.target as HTMLFormElement, AMOUNT, view.config) }),
       },
       h(
         'div.field',
@@ -42,7 +42,7 @@ function rebuy(view: TableView, handlers: DialogHandlers): HTMLElement {
         h('small', null, `Up to ${most}, which brings you to the table maximum`),
       ),
       h('p.note', null, hostOrCohost(view) ? 'Chips arrive when the current hand is over.' : 'The host approves it, and the chips arrive when the current hand is over.'),
-      h('button.btn.primary', { type: 'submit', 'data-action': 'confirm-rebuy' }, 'Add chips'),
+      h('button.btn.primary', { type: 'submit', 'data-action': 'confirm-rebuy' }, sends('Add chips', hostOrCohost(view) ? 'Adding…' : 'Asking the host…')),
     ),
   );
 }

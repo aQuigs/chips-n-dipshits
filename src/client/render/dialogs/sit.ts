@@ -1,7 +1,7 @@
 import { formatAmount } from '../../../engine/amounts.ts';
 import type { TableView } from '../../../engine/view.ts';
 import { suggestedBuyIn } from '../../buyIns.ts';
-import { h } from '../../ui.ts';
+import { h, sends } from '../../ui.ts';
 import { amountField, amountOf } from '../forms.ts';
 import { nightOver } from '../night.ts';
 import { hostOrCohost } from '../roles.ts';
@@ -17,11 +17,11 @@ function sit(view: TableView, seat: number, handlers: DialogHandlers): HTMLEleme
     h(
       'form',
       {
-        onsubmit: (event: Event) => submit(event, handlers, { type: 'requestSeat', seat, buyIn: amountOf(event.target as HTMLFormElement, 'buy-in', view.config) }, handlers.close),
+        onsubmit: (event: Event) => submit(event, handlers, { type: 'requestSeat', seat, buyIn: amountOf(event.target as HTMLFormElement, 'buy-in', view.config) }),
       },
       amountField('buy-in', 'Buy-in', suggestedBuyIn(view.config), view.config, minBuyIn, maxBuyIn, `From ${formatAmount(minBuyIn, view.config)} to ${formatAmount(maxBuyIn, view.config)}${unit === 'chips' ? ' chips' : ''}`),
       hostOrCohost(view) ? null : h('p.note', null, 'The host approves seats, so you sit down once they say yes.'),
-      h('button.btn.primary', { type: 'submit', 'data-action': 'confirm-sit' }, 'Sit down'),
+      h('button.btn.primary', { type: 'submit', 'data-action': 'confirm-sit' }, sends('Sit down', hostOrCohost(view) ? 'Sitting down…' : 'Asking the host…')),
     ),
   );
 }

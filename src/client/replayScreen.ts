@@ -38,7 +38,7 @@ export interface ReplayHost {
 }
 
 // What nobody can do at a table that is being played back
-const NO_HANDLERS = { onStart: () => undefined, onPlayOn: () => undefined, onHunt: () => undefined };
+const NO_HANDLERS = { onStart: () => Promise.resolve(), onPlayOn: () => Promise.resolve(), onHunt: () => undefined };
 
 /** What marks a part of the hand on the bar: its first letter, and for a board run after the first, which would share one with a street, its number. */
 function markOf(part: string): string {

@@ -7,7 +7,7 @@ import { stakesText } from '../../engine/stakes.ts';
 import type { KnownPlayer, TableConfig } from '../../engine/types.ts';
 import type { TableInfo } from '../../server/api.ts';
 import type { Answer } from '../knownPlayers.ts';
-import { h } from '../ui.ts';
+import { h, holdWhile, sends } from '../ui.ts';
 import { configForm } from './configForm.ts';
 import { inputOf } from './forms.ts';
 import { whoField } from './whoField.ts';
@@ -70,28 +70,10 @@ function themeSection(themePicker: HTMLElement): HTMLElement {
   return h('section.theme-section', null, h('h2', null, 'Theme'), themePicker);
 }
 
-/**
- * Runs a form's action with its button showing that it is under way. The form itself stays as it is,
- * so nothing typed is lost if the attempt fails, and it can't be sent twice.
- */
-async function whilePending(button: HTMLButtonElement, label: string, action: () => Promise<void>): Promise<void> {
-  const idle = button.textContent;
-
-  button.disabled = true;
-  button.textContent = label;
-
-  try {
-    await action();
-  } finally {
-    button.disabled = false;
-    button.textContent = idle;
-  }
-}
-
 /** The front door: start a table, or go to one with its code. `left` is the table the visitor came here from, to which the way back comes first. */
 export function lobbyEl(visitor: Visitor, themePicker: HTMLElement, left: TableLeft | null, handlers: LobbyHandlers): LobbyScreen {
   const who = whoField('host-name', visitor.name, visitor.player);
-  const createButton = h('button.btn.primary', { type: 'submit', 'data-action': 'create-table' }, 'Create table');
+  const createButton = h('button.btn.primary', { type: 'submit', 'data-action': 'create-table' }, sends('Create table', 'Setting up…'));
 
   // The table's name starts out with the apostrophe the page's own title has
   const usual: TableConfig = { ...startingConfig(), name: 'Chips n’ Dipshits' };
@@ -135,7 +117,8 @@ export function lobbyEl(visitor: Visitor, themePicker: HTMLElement, left: TableL
       onsubmit: (event: Event) => {
         event.preventDefault();
 
-        void whilePending(createButton, 'Setting up…', async () => {
+        // The form itself stays as it is, so nothing typed is lost if the attempt fails, and it cannot be sent twice
+        holdWhile(createButton, async () => {
           if (await handlers.create(who.answer(), settings.read(create))) {
             // The server's words name something the host changed, which may be folded away by now
             handlers.byItself(() => settings.unfold(Object.keys(settings.changed(create)) as ConfigKey[]));
@@ -222,14 +205,14 @@ export function lobbyEl(visitor: Visitor, themePicker: HTMLElement, left: TableL
 export function joinScreen(tableId: string, visitor: Visitor, themePicker: HTMLElement, handlers: JoinHandlers): JoinScreen {
   const who = whoField('join-name', visitor.name, visitor.player);
   const about = h('div.about', null, h('h2', null, `Table ${tableId}`), h('p.note', null, 'Looking for the table…'));
-  const joinButton = h('button.btn.primary', { type: 'submit', disabled: true, 'data-action': 'join-table' }, 'Join table');
+  const joinButton = h('button.btn.primary', { type: 'submit', disabled: true, 'data-action': 'join-table' }, sends('Join table', 'Joining…'));
 
   const form = h(
     'form.card-panel',
     {
       onsubmit: (event: Event) => {
         event.preventDefault();
-        void whilePending(joinButton, 'Joining…', () => handlers.join(who.answer()));
+        holdWhile(joinButton, () => handlers.join(who.answer()));
       },
     },
     about,

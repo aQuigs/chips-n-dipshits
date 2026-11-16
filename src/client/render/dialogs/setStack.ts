@@ -1,5 +1,5 @@
 import type { TableView } from '../../../engine/view.ts';
-import { h } from '../../ui.ts';
+import { h, sends } from '../../ui.ts';
 import { amountField, amountOf } from '../forms.ts';
 import { hostOrCohost } from '../roles.ts';
 import { frame, submit } from './dialog.ts';
@@ -15,10 +15,10 @@ function setStack(view: TableView, playerId: string, handlers: DialogHandlers): 
       'form',
       {
         onsubmit: (event: Event) =>
-          submit(event, handlers, { type: 'setStack', playerId, stack: amountOf(event.target as HTMLFormElement, 'new-stack', view.config) }, handlers.close),
+          submit(event, handlers, { type: 'setStack', playerId, stack: amountOf(event.target as HTMLFormElement, 'new-stack', view.config) }),
       },
       amountField('new-stack', 'Chips', seat?.stack ?? 0, view.config, 0, undefined, 'The difference counts as chips bought or cashed out, so the ledger still adds up. Only works between hands.'),
-      h('button.btn.primary', { type: 'submit' }, 'Set stack'),
+      h('button.btn.primary', { type: 'submit' }, sends('Set stack', 'Setting…')),
     ),
   );
 }

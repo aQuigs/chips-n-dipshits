@@ -18,6 +18,13 @@ export interface DialogHandlers {
   toTable(): void;
   /** Leaves the dialog: for the one it was opened from when that one has its viewer back (`comesBack`), else for the table. */
   close(): void;
+  /**
+   * Leaves the dialog on the table's answer to what it asked, as `close` does, or as `toTable` does when
+   * `forTable`; and only while it is still the dialog on the screen. The answer comes a second or two after
+   * the tap that asked: what the dialog uncovers by then is no doing of its viewer's, whose finger may be on
+   * its way to the same place again, and takes no tap for a moment (`TapGuard`).
+   */
+  answered(forTable?: boolean): void;
   /** Makes a change to the open dialog that the game and not the viewer brings about, as on an answer from the table: what comes up under a finger takes no tap for a moment (`TapGuard`). */
   byItself(change: () => void): void;
   /**
@@ -175,12 +182,29 @@ export function copyOnClick(button: HTMLButtonElement, field: HTMLInputElement |
 }
 
 /**
- * Sends what a form asks for. A refusal leaves the form as it was typed, with the reason in a toast,
- * instead of costing the player their entries; `refused` is then told, for a form that has to bring
- * what was refused into sight. With no answer the table may have taken it all the same, so the form
- * moves on rather than invite a second try: the host adding chips twice would get them twice.
+ * What a press in a dialog does that sends `command`: once the table has answered, the dialog is left
+ * (`answered`, for the table when `forTable`). A refusal leaves the dialog as it was, with the reason in
+ * a toast. With no answer the table may have taken it all the same and is being asked what happened, so
+ * the dialog is left rather than invite a second try: the host adding chips twice would get them twice.
  */
-export function submit(event: Event, handlers: DialogHandlers, command: Command, then: () => void, refused?: () => void): void {
+export const sendAndLeave =
+  (handlers: DialogHandlers, command: Command, forTable = false) =>
+  async (): Promise<SendOutcome> => {
+    const outcome = await handlers.send(command);
+
+    if (outcome !== 'refused') {
+      handlers.answered(forTable);
+    }
+
+    return outcome;
+  };
+
+/**
+ * Sends what a form asks for, its button held, and leaves the dialog on the answer (`sendAndLeave`). After
+ * a refusal the form is as it was typed, and `refused` is told, for a form that has to bring what was
+ * refused into sight.
+ */
+export function submit(event: Event, handlers: DialogHandlers, command: Command, refused?: () => void): void {
   event.preventDefault();
 
   // Among the form's own controls, wherever they stand: its button may be in the dialog's foot
@@ -188,17 +212,9 @@ export function submit(event: Event, handlers: DialogHandlers, command: Command,
   const button = controls.find((control): control is HTMLButtonElement => control instanceof HTMLButtonElement && control.type === 'submit')!;
 
   holdWhile(button, async () => {
-    const outcome = await handlers.send(command);
-
-    // If the dialog was closed while the answer was on its way, there is nothing left to move on from
-    if (!button.isConnected) {
-      return;
-    }
-
-    if (outcome === 'refused') {
+    // A dialog closed while the answer was on its way has nothing left to bring into sight
+    if ((await sendAndLeave(handlers, command)()) === 'refused' && button.isConnected) {
       refused?.();
-    } else {
-      then();
     }
   });
 }

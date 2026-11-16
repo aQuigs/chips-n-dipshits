@@ -1,6 +1,6 @@
 import { formatAmount } from '../../../engine/amounts.ts';
 import type { SeatView, TableView } from '../../../engine/view.ts';
-import { h } from '../../ui.ts';
+import { h, heldTogether, sendingButton, sends } from '../../ui.ts';
 import type { Child } from '../../ui.ts';
 import { roleOf } from '../../../engine/hosts.ts';
 import { requestText } from '../../spoken.ts';
@@ -37,8 +37,10 @@ function players(view: TableView, handlers: DialogHandlers, unfolded: Set<string
       h('span.who', null, h('b', null, request.name), ` ${requestText(request, view.config)}`),
       rowActions(
         { id: request.playerId, name: request.name },
-        h('button.btn.small.primary', { type: 'button', 'data-action': 'approve', onclick: () => void handlers.send({ type: 'approve', playerId: request.playerId }) }, 'Approve'),
-        h('button.btn.small', { type: 'button', 'data-action': 'deny', onclick: () => void handlers.send({ type: 'deny', playerId: request.playerId }) }, 'Deny'),
+        ...heldTogether(
+          sendingButton('button.btn.small.primary', { 'data-action': 'approve' }, sends('Approve', 'Approving…'), () => handlers.send({ type: 'approve', playerId: request.playerId })),
+          sendingButton('button.btn.small', { 'data-action': 'deny' }, sends('Deny', 'Denying…'), () => handlers.send({ type: 'deny', playerId: request.playerId })),
+        ),
       ),
     ),
   );
@@ -50,7 +52,7 @@ function players(view: TableView, handlers: DialogHandlers, unfolded: Set<string
     }
 
     const cohost = roleOf(view, playerId) === 'cohost'
-      ? h('button.btn.small', { type: 'button', 'data-action': 'end-cohost', onclick: () => void handlers.send({ type: 'setCohost', playerId, on: false }) }, 'End co-host')
+      ? sendingButton('button.btn.small', { 'data-action': 'end-cohost' }, sends('End co-host', 'Ending…'), () => handlers.send({ type: 'setCohost', playerId, on: false }))
       : h(
           'button.btn.small',
           {
@@ -62,6 +64,7 @@ function players(view: TableView, handlers: DialogHandlers, unfolded: Set<string
                 title: `Make ${name} a co-host?`,
                 body: 'They can approve players, start and pause the game, change settings, adjust stacks, transfer chips between players and remove players, just as you can. You can end it at any time.',
                 action: 'Make co-host',
+                doing: 'Making…',
                 command: { type: 'setCohost', playerId, on: true },
               }),
           },
@@ -79,6 +82,7 @@ function players(view: TableView, handlers: DialogHandlers, unfolded: Set<string
             title: `Make ${name} the host?`,
             body: 'They take over the table, and you stay on as a co-host until they say otherwise.',
             action: 'Hand over',
+            doing: 'Handing over…',
             command: { type: 'transferHost', playerId },
             danger: true,
           }),
@@ -99,7 +103,7 @@ function players(view: TableView, handlers: DialogHandlers, unfolded: Set<string
           {
             type: 'button',
             'data-action': 'remove',
-            onclick: () => handlers.open({ kind: 'confirm', title: `Remove ${name}?`, body, action: 'Remove', command: { type: 'kick', playerId }, danger: true }),
+            onclick: () => handlers.open({ kind: 'confirm', title: `Remove ${name}?`, body, action: 'Remove', doing: 'Removing…', command: { type: 'kick', playerId }, danger: true }),
           },
           'Remove',
         );
@@ -153,7 +157,7 @@ function players(view: TableView, handlers: DialogHandlers, unfolded: Set<string
   // Only to an open seat, not for a player already on their way out, and not while a shuffle is coming. A move that waits can be taken back
   const move = (seat: SeatView) => {
     if (seat.moveTo !== null) {
-      return h('button.btn.small', { type: 'button', 'data-action': 'keep-seat', onclick: () => void handlers.send({ type: 'moveSeat', playerId: seat.playerId, seat: seat.seat }) }, 'Stay put');
+      return sendingButton('button.btn.small', { 'data-action': 'keep-seat' }, sends('Stay put', 'Staying…'), () => handlers.send({ type: 'moveSeat', playerId: seat.playerId, seat: seat.seat }));
     }
 
     return view.seats.includes(null) && !seat.leaving && !view.shuffleAfterHand
@@ -180,7 +184,7 @@ function players(view: TableView, handlers: DialogHandlers, unfolded: Set<string
       [
         h('button.btn.small', { type: 'button', 'data-action': 'set-stack', onclick: () => handlers.open({ kind: 'setStack', playerId: player.id }) }, 'Set stack'),
         move(seat),
-        owing ? h('button.btn.small', { type: 'button', 'data-action': 'forgive-blinds', onclick: () => void handlers.send({ type: 'forgiveBlinds', playerId: player.id }) }, 'Forgive blinds') : null,
+        owing ? sendingButton('button.btn.small', { 'data-action': 'forgive-blinds' }, sends('Forgive blinds', 'Forgiving…'), () => handlers.send({ type: 'forgiveBlinds', playerId: player.id })) : null,
       ],
       [roleButtons(player), remove(player, 'They lose their seat and their chips are cashed out in the ledger. They can ask for a seat again.', false)],
     );
@@ -220,6 +224,7 @@ function players(view: TableView, handlers: DialogHandlers, unfolded: Set<string
                 title: 'Shuffle the seats?',
                 body: 'Everyone seated gets a random seat among those taken, with their chips. The open seats stay open, and the dealer button is drawn again for the next hand. During a hand, this happens when it ends.',
                 action: 'Shuffle',
+                doing: 'Shuffling…',
                 command: { type: 'shuffleSeats' },
               }),
           },

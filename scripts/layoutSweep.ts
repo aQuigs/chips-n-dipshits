@@ -20,9 +20,10 @@ import type { Check } from './checkRunner.ts';
 import { SCROLLS, telling, unreadable } from './covered.ts';
 import type { Finding } from './covered.ts';
 import { answeredTo, opsSent, replayDrawn } from './pageSpies.ts';
+import { row } from './playersDialog.ts';
 import { boxes, Gate, overlap, SCREENS, setStageHeight, STALL_MS, WIDE_ASPECT } from './rig.ts';
-import type { Rig, RigTable, ScreenName } from './rig.ts';
-import { cameUp, namedByTheWatch, tapsLive, tellingOf, watched, watchTheBar } from './underTheFinger.ts';
+import type { Gated, Rig, RigTable, ScreenName } from './rig.ts';
+import { cameUp, namedByTheWatch, namedOutsideDialogs, tapsLive, tellingOf, watched, watchTheBar } from './underTheFinger.ts';
 import type { Held } from './underTheFinger.ts';
 
 const VIEWER = 'Quigs';
@@ -998,6 +999,68 @@ const SCREEN_STATES: ScreenState[] = [
       table.act(WIDEST, { type: 'shuffleSeats' });
       await host.locator('.dialog .shuffle-note').scrollIntoViewIfNeeded();
       await look(host, 'Players, a shuffle waiting for the hand to end');
+    },
+  },
+  {
+    shows: 'buttons held for the table’s answer, each saying what it is doing: Resume on the felt, Approve on the banner of a request under the widest name, where a held button only dims, Approve in the list of players, the answer that hands the table over, a line of the menu, a number of Last hands, Save in the table settings, and for a player Add chips as it asks the host',
+    async walk(rig, screen, look) {
+      // The viewer hosts, between hands with the game paused
+      const table = hosting(rig);
+      const host = await table.open(VIEWER, screen);
+      const answers = await Gate.on(host, 'hosting');
+
+      // Nothing the walk presses reaches the table: every button stays as it is while its answer is on the way, which is what is looked at
+      const held = async (button: string) => {
+        await host.locator(button).click();
+        await host.waitForSelector(`${button}[aria-busy="true"]`);
+      };
+
+      await answers.close('requests');
+      await held('.stage [data-action="start"]');
+      await look(host, 'the felt, its button held');
+
+      // The widest name a watcher can have asks for a seat: one word, which takes the banner's row, the buttons going under it
+      asksForASeat(table, WIDE_WATCHER, 7);
+      await held('.banners [data-action="approve"]');
+      await look(host, 'the banner of a request, its button held');
+
+      await openFromMenu(host, 'players');
+      await held(`${row(WIDE_WATCHER)} [data-action="approve"]`);
+      await look(host, 'Players, Approve held');
+
+      // Of the answers that share a line with Cancel, the one with the most to say while it is held
+      await host.locator(`${row(NAMES[2]!)} [data-action="more"]`).click();
+      await host.locator(`${row(NAMES[2]!)} [data-action="make-host"]`).click();
+      await held('.dialog [data-action="confirm"]');
+      await look(host, 'a question, its answer held');
+
+      // Cancel is held with the answer, and the question is closed as any dialog is, for the list it was asked from
+      await host.locator('.dialog [data-action="close"]').click();
+      await host.waitForSelector('.dialog[aria-label="Players"]');
+      await host.locator('.dialog [data-action="close"]').click();
+      await openTheMenu(host);
+      await held('.menu [data-action="start"]');
+      await look(host, 'the menu, a line held');
+
+      await host.locator('.dialog [data-action="close"]').click();
+      await openFromMenu(host, 'lastHands');
+      await held(`.dialog [data-hands="${LIMITS.lastHands}"]`);
+      await look(host, 'Last hands, a number held');
+
+      await host.locator('.dialog [data-action="close"]').click();
+      await openFromMenu(host, 'settings');
+      await held('.dialog [data-action="save-settings"]');
+      await look(host, 'the table settings, Save held');
+
+      // What a player's own button says while it asks the host is the longest of them all
+      const player = await table.open(WIDEST, screen);
+      const asked = await Gate.on(player, 'asking');
+
+      await asked.close('requests');
+      await player.locator(ADD_CHIPS).click();
+      await player.locator('.dialog [data-action="confirm-rebuy"]').click();
+      await player.waitForSelector('.dialog [data-action="confirm-rebuy"][aria-busy="true"]');
+      await look(player, 'Add chips, asking the host');
     },
   },
   {
@@ -2315,6 +2378,29 @@ const COMMITS_AFTER: CommitsAfter[] = [
  * for longer than a hold, the one wait of a length of time in these checks, and the button still waits
  * its whole time from when it is drawn.
  */
+/** Resolves once more time has passed on the page than a control that came up under a finger is held for. */
+export const pastAHold = (page: Page) => page.evaluate(`new Promise((done) => setTimeout(done, ${TAPS_SETTLE_MS + KEPT_PAST_A_HOLD_MS}))`);
+
+/**
+ * Taps `tap` with the page watched, and keeps the table's answer and its news from the page for longer
+ * than a hold: what the answer then brings up is held from when it comes, or not at all. `meanwhile`
+ * looks at the page while it waits.
+ */
+async function answeredPastAHold(page: Page, asks: Gated, tap: string, meanwhile?: () => Promise<void>): Promise<void> {
+  const answers = await Gate.on(page, asks);
+  const polls = await Gate.on(page, 'polls');
+
+  await watchTheBar(page);
+  await answers.close('answers');
+  await polls.close('requests');
+  await page.locator(tap).tap();
+  await answers.holding();
+  await meanwhile?.();
+  await pastAHold(page);
+  await answers.open();
+  await polls.open();
+}
+
 const commitsWaitFromWhenTheyAreDrawn: Check = [
   `a button whose tap cannot be taken back takes no tap for ${TAPS_SETTLE_MS} ms from when it is drawn, however long the answer that brought it took: ${COMMITS_AFTER.map((one) => one.what).join(', and ')}`,
   async (rig) => {
@@ -2326,17 +2412,7 @@ const commitsWaitFromWhenTheyAreDrawn: Check = [
       await page.waitForSelector(`${tap}:enabled`);
       await settled(page);
 
-      const answers = await Gate.on(page, asks);
-      const polls = await Gate.on(page, 'polls');
-
-      await watchTheBar(page);
-      await answers.close('answers');
-      await polls.close('requests');
-      await page.locator(tap).tap();
-      await answers.holding();
-      await page.evaluate(`new Promise((done) => setTimeout(done, ${TAPS_SETTLE_MS + KEPT_PAST_A_HOLD_MS}))`);
-      await answers.open();
-      await polls.open();
+      await answeredPastAHold(page, asks, tap);
       await page.waitForSelector(then);
 
       const { found, held, liveAtOnce } = await watched(page);
@@ -2350,6 +2426,99 @@ const commitsWaitFromWhenTheyAreDrawn: Check = [
     }
   },
 ];
+
+/** A dialog that stays while what its button sent is on its way, and that the table's answer closes. */
+interface ClosesOnItsAnswer {
+  when: string;
+  build(rig: Rig): RigTable;
+  /** Brings up the dialog and the button. */
+  open(page: Page): Promise<void>;
+  /** The button whose answer closes the dialog. */
+  tap: string;
+  /** The requests the tap makes, held at a gate. */
+  asks: 'hosting' | 'asking';
+  /** The one screen it is tapped on, when that is not each standing phone a dialog is a sheet on. */
+  phone?: Size;
+}
+
+const CLOSES_ON_ITS_ANSWER: ClosesOnItsAnswer[] = [
+  {
+    when: 'Add chips asked of the host, whose sheet lies over the bar',
+    build: (rig) => betweenHands(rig),
+    open: async (page) => {
+      await page.locator(ADD_CHIPS).click();
+      await page.waitForSelector('.dialog #rebuy-amount');
+    },
+    tap: '.dialog [data-action="confirm-rebuy"]',
+    asks: 'asking',
+  },
+  {
+    when: 'Resume the game in a host’s menu, which lies over the table and the bar',
+    build: hosting,
+    open: openTheMenu,
+    tap: '.menu [data-action="start"]',
+    asks: 'hosting',
+  },
+  {
+    // Lying down a dialog stands in the middle of the screen, over the seats and the felt
+    when: 'the question before standing up, answered, on a 360 phone lying down',
+    build: (rig) => betweenHands(rig),
+    phone: LYING,
+    open: async (page) => {
+      await openFromMenu(page, 'stand');
+      await page.waitForSelector('.dialog [data-action="confirm"]');
+    },
+    tap: '.dialog [data-action="confirm"]',
+    asks: 'asking',
+  },
+];
+
+/**
+ * A dialog that sends something stays up, its button switched off, until the table answers, and closes
+ * then: a second or two after the tap at the deployed server, under a finger that may be anywhere over it.
+ * A hold counted from the tap would be long over. So the close is the table's doing and not the
+ * viewer's (`answered` in src/client/render/dialogs/dialog.ts): everything it uncovers where a control
+ * of the dialog lay, its backdrop among them, waits its whole time from when it comes up. The answer is
+ * kept back for longer than a hold, as for `commitsWaitFromWhenTheyAreDrawn`.
+ */
+const whatAnAnswerUncoversWaits = CLOSES_ON_ITS_ANSWER.map((own): Check => [
+  `what a dialog uncovers as the table’s answer closes it takes no tap for ${TAPS_SETTLE_MS} ms from then, however long the answer took: ${own.when}${own.phone ? '' : ', on a 360 and a 390 phone'}`,
+  async (rig) => {
+    for (const size of own.phone ? [own.phone] : SHEET_PHONES) {
+      const table = own.build(rig);
+      const page = await table.open(VIEWER, 'smallPhone');
+
+      await page.setViewportSize(size);
+      await page.waitForSelector(`${ADD_CHIPS}, ${CHIPS_ASKED}`);
+      await settled(page);
+      await own.open(page);
+      await page.waitForSelector(own.tap);
+      await tapsLive(page);
+
+      const sent = opsSent(page);
+
+      await answeredPastAHold(page, own.asks, own.tap, async () => {
+        assert.deepEqual((await watched(page)).found, [], `${size.name}: something came up under the finger while the answer was on its way`);
+        assert.equal(await page.locator('.overlay .dialog').count(), 1, `${size.name}: the dialog went before the table had answered`);
+      });
+      await page.waitForSelector('.overlay .dialog', { state: 'detached' });
+
+      // The answer draws the dialog anew before it closes it, in one step with no tap between: only what is left on the page was uncovered
+      const { found, held } = await watched(page);
+      const left = await namedOutsideDialogs(page);
+      const uncovered = found.filter((came) => left.includes(came.cameUp));
+      const waited = held.filter((one) => uncovered.some((came) => came.cameUp === one.what));
+      const notHeld = uncovered.filter((came) => !waited.some((one) => one.what === came.cameUp)).map((came) => came.cameUp);
+
+      assert.ok(uncovered.length > 0, `${size.name}: nothing came up where a control of the dialog lay: the tap no longer shows what it is here for`);
+      assert.deepEqual(found.flatMap(tellingOf), [], `${size.name}: a tap lands on what the dialog uncovered`);
+      assert.deepEqual([...new Set(notHeld)], [], `${size.name}: uncovered where a control of the dialog lay, and not held back`);
+      assert.deepEqual(letGoEarly(waited), [], `${size.name}: something the dialog uncovered was let go before its time`);
+      assert.equal(sent.filter((op) => op === 'act').length, 1, `${size.name}: the table was sent something other than the one tap`);
+      await page.close();
+    }
+  },
+]);
 
 // Run in the page: taps where the first request's Approve lies, the moment the banners are next drawn anew
 const TAP_THE_FIRST_APPROVE_AS_THE_BANNERS_CHANGE = `(() => {
@@ -3081,5 +3250,5 @@ export function layoutSweep(picturesIn: string): Check[] {
     },
   ]);
 
-  return [...defects, replayFromTheBar(picturesIn), historyGainsTheHand, barKeepsTheTurnsHeight(picturesIn), barRowsKeepToOneLine(picturesIn), choicesKeepTheirPlaces, chatMakesWayForTheTurn(picturesIn), keyboardInTheBoxKeepsTheChat, lookSeesWhatATapPassesThrough, toastKeepsClear, ...underTheFinger(), ...secondTapFindsNothingNew, ...secondTapPressesNothingOfADialog, commitsWaitFromWhenTheyAreDrawn, aRowThatMovesUpIsHeld, aHoldRunsFromWhenThePageIsFree, aHoldRunsOutOnTime, aPageInTheBackgroundLetsGo, onlyWhatCameUpOverAnotherIsHeld, marksFollowTheTableTurned, ...tables, ...screens];
+  return [...defects, replayFromTheBar(picturesIn), historyGainsTheHand, barKeepsTheTurnsHeight(picturesIn), barRowsKeepToOneLine(picturesIn), choicesKeepTheirPlaces, chatMakesWayForTheTurn(picturesIn), keyboardInTheBoxKeepsTheChat, lookSeesWhatATapPassesThrough, toastKeepsClear, ...underTheFinger(), ...secondTapFindsNothingNew, ...secondTapPressesNothingOfADialog, commitsWaitFromWhenTheyAreDrawn, ...whatAnAnswerUncoversWaits, aRowThatMovesUpIsHeld, aHoldRunsFromWhenThePageIsFree, aHoldRunsOutOnTime, aPageInTheBackgroundLetsGo, onlyWhatCameUpOverAnotherIsHeld, marksFollowTheTableTurned, ...tables, ...screens];
 }

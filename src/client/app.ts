@@ -65,7 +65,7 @@ import { LABELS, menuLabel, replayOpenedSaid, requestText, timeSaid } from './sp
 import { fontsUrl, themeById } from './themes.ts';
 import { TimeWarning } from './timeWarning.ts';
 import { pageTouch } from './pageTouch.ts';
-import { h, holdWhile, secondsUntil, Slot } from './ui.ts';
+import { h, heldTogether, secondsUntil, sendingButton, Slot } from './ui.ts';
 import { pageSounds } from './webAudioSounds.ts';
 
 const COUNTDOWN_TICK_MS = 250;
@@ -1141,14 +1141,12 @@ export class App {
         const what = requestText(request, view.config);
         // Each says whose request it answers: several can be up at once, and a screen reader lands on a button without its line.
         // And each carries whose it is: the next row's buttons moving up into this one's place are other buttons, to the tap
-        // guard and to the keyboard alike
-        const approve = h('button.btn.small.primary', { type: 'button', 'data-action': 'approve', 'data-player': request.playerId, 'aria-label': `Approve ${request.name}` }, 'Approve');
-        const deny = h('button.btn.small', { type: 'button', 'data-action': 'deny', 'data-player': request.playerId, 'aria-label': `Deny ${request.name}` }, 'Deny');
+        // guard and to the keyboard alike. Held, a button here only dims: the room what it is doing would take is the request's
+        // own words', and on a small phone at the largest text the table's under them
+        const answer = (action: 'approve' | 'deny', spec: `button.${string}`, says: string) =>
+          sendingButton(spec, { 'data-action': action, 'data-player': request.playerId, 'aria-label': `${says} ${request.name}` }, says, () => this.send({ type: action, playerId: request.playerId }));
 
-        approve.addEventListener('click', () => holdWhile(approve, () => this.send({ type: 'approve', playerId: request.playerId })));
-        deny.addEventListener('click', () => holdWhile(deny, () => this.send({ type: 'deny', playerId: request.playerId })));
-
-        return h('div.banner', null, h('span', null, h('b', null, request.name), ` ${what}`), approve, deny);
+        return h('div.banner', null, h('span', null, h('b', null, request.name), ` ${what}`), h('div.answers', null, heldTogether(answer('approve', 'button.btn.small.primary', 'Approve'), answer('deny', 'button.btn.small', 'Deny'))));
       }),
     ]);
 
@@ -1178,8 +1176,8 @@ export class App {
         this.clock.offset,
         {
           onSit: (seat) => this.openDialog({ kind: 'sit', seat }),
-          onStart: () => void this.send({ type: 'start' }),
-          onPlayOn: () => void this.send({ type: 'playOn' }),
+          onStart: () => this.send({ type: 'start' }),
+          onPlayOn: () => this.send({ type: 'playOn' }),
           onHunt: (hand) => void this.hunt(hand),
           moving: screen.seatMoves.tableHandlers(),
           muted: new Set(muted),
@@ -1286,12 +1284,15 @@ export class App {
     this.drawDialogAs(byItself);
   }
 
-  /** The viewer closes or answers the dialog on screen: back to the dialog it was opened from, when that one has them back, and else to the table. */
-  private leaveDialog(): void {
+  /**
+   * The dialog on screen is closed by its viewer, or `byItself` by the table's answer to what it asked: back to the
+   * dialog it was opened from, when that one has them back, and else to the table.
+   */
+  private leaveDialog(byItself = false): void {
     const back = this.dialogsBehind.pop();
 
     if (!back) {
-      this.closeDialog();
+      this.closeDialog(byItself);
 
       return;
     }
@@ -1299,7 +1300,7 @@ export class App {
     this.dialog = back.dialog;
     this.dialogOpenedItself = false;
     this.dialogOpens += 1;
-    this.drawDialogAs(false, back);
+    this.drawDialogAs(byItself, back);
   }
 
   /** The dialog on screen, as its viewer leaves it for one they open from it. */
@@ -1455,6 +1456,18 @@ export class App {
       open: (next) => this.openDialog(next, false, dialog),
       close: () => this.leaveDialog(),
       toTable: () => this.closeDialog(),
+      answered: (forTable = false) => {
+        // Closed by its viewer while the answer was on its way, there is nothing left to leave
+        if (this.dialog !== dialog) {
+          return;
+        }
+
+        if (forTable) {
+          this.closeDialog(true);
+        } else {
+          this.leaveDialog(true);
+        }
+      },
       byItself: (change) => this.screen!.taps.byItself(change),
       byThePlayer: (change) => this.screen!.taps.byThePlayer(change),
       copy: (text) => this.copy(text),

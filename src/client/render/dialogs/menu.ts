@@ -1,47 +1,57 @@
+import type { Command } from '../../../engine/types.ts';
 import type { TableView } from '../../../engine/view.ts';
-import { h } from '../../ui.ts';
-import { nightOver, startText } from '../night.ts';
+import { h, holdWhile, sends } from '../../ui.ts';
+import { nightOver, startingText, startText } from '../night.ts';
 import { hostOrCohost } from '../roles.ts';
-import { everyone, frame, MENU_GROUPS, seated } from './dialog.ts';
+import { everyone, frame, MENU_GROUPS, seated, sendAndLeave } from './dialog.ts';
 import type { DialogHandlers, DialogKind, MenuEntry } from './dialog.ts';
 import type { Dialog } from './index.ts';
 
-/** Something the menu does itself, with no dialog of its own behind it. */
-export interface MenuAction {
+/** Something the menu does itself, with no dialog of its own behind it: it opens or leaves for something, or it sends at once. */
+export type MenuAction = MenuPick | MenuSend;
+
+interface MenuLine {
   /** Names the entry on the page, as a dialog's kind names its own. */
   action: string;
   menu: MenuEntry;
+}
+
+export interface MenuPick extends MenuLine {
   pick(handlers: DialogHandlers): void;
 }
 
-export const pauseGame: MenuAction = {
+/**
+ * A line that sends its command the moment it is pressed. It stays where it is, held and saying what it
+ * is doing, until the table has answered, and the menu is left for the table then.
+ */
+export interface MenuSend extends MenuLine {
+  sends: Command;
+  /** What the line says while the table has not answered, in the words for where the table stands when those differ. */
+  doing: string | ((view: TableView) => string);
+}
+
+export const pauseGame: MenuSend = {
   action: 'pause',
   menu: { group: 'run', label: 'Pause the game', who: (view) => hostOrCohost(view) && view.running },
-  pick(handlers) {
-    void handlers.send({ type: 'pause' });
-    handlers.close();
-  },
+  sends: { type: 'pause' },
+  doing: 'Pausing…',
 };
 
-export const startGame: MenuAction = {
+export const startGame: MenuSend = {
   action: 'start',
   menu: { group: 'run', label: startText, who: (view) => hostOrCohost(view) && !view.running && !nightOver(view) },
-  pick(handlers) {
-    void handlers.send({ type: 'start' });
-    handlers.close();
-  },
+  sends: { type: 'start' },
+  doing: startingText,
 };
 
-export const keepPlaying: MenuAction = {
+export const keepPlaying: MenuSend = {
   action: 'keep-playing',
   menu: { group: 'run', label: 'Keep playing', who: (view) => hostOrCohost(view) && nightOver(view) },
-  pick(handlers) {
-    void handlers.send({ type: 'playOn' });
-    handlers.close();
-  },
+  sends: { type: 'playOn' },
+  doing: 'Playing on…',
 };
 
-export const standUp: MenuAction = {
+export const standUp: MenuPick = {
   action: 'stand',
   menu: { group: 'leave', label: 'Stand up', who: seated },
   pick: (handlers) =>
@@ -50,12 +60,13 @@ export const standUp: MenuAction = {
       title: 'Stand up?',
       body: 'You leave your seat and your chips are cashed out in the ledger. If you are in a hand, it is folded.',
       action: 'Stand up',
+      doing: 'Standing up…',
       command: { type: 'standUp' },
       danger: true,
     }),
 };
 
-export const toLobby: MenuAction = {
+export const toLobby: MenuPick = {
   action: 'lobby',
   // Said beside the way out that costs a seat, which this one does not
   menu: { group: 'leave', label: 'Back to the lobby', who: everyone, state: (view) => (seated(view) ? 'Your seat stays yours' : null) },
@@ -65,9 +76,13 @@ export const toLobby: MenuAction = {
 interface Line {
   action: string;
   label: string;
+  /** What the line says while the table has not answered, for a line that sends at a press, and null for one that opens something. */
+  doing: string | null;
   state: string | null;
-  pick(): void;
+  pick(line: HTMLButtonElement): void;
 }
+
+const inWordsFor = (view: TableView, words: string | ((view: TableView) => string)): string => (typeof words === 'string' ? words : words(view));
 
 /** The lines this viewer gets, in the order given. */
 function lines(items: readonly (DialogKind | MenuAction)[], view: TableView, handlers: DialogHandlers): Line[] {
@@ -77,7 +92,11 @@ function lines(items: readonly (DialogKind | MenuAction)[], view: TableView, han
       return [];
     }
 
-    const line = { label: typeof entry.label === 'string' ? entry.label : entry.label(view), state: entry.state?.(view, handlers) ?? null };
+    const line = { label: inWordsFor(view, entry.label), doing: null, state: entry.state?.(view, handlers) ?? null };
+
+    if ('sends' in item) {
+      return [{ ...line, action: item.action, doing: inWordsFor(view, item.doing), pick: (pressed) => holdWhile(pressed, sendAndLeave(handlers, item.sends, true)) }];
+    }
 
     if ('pick' in item) {
       return [{ ...line, action: item.action, pick: () => item.pick(handlers) }];
@@ -120,7 +139,14 @@ export function menuDialog(items: readonly (DialogKind | MenuAction)[]): DialogK
                 'div.menu-group',
                 null,
                 // The space is for whoever hears the line read out: the label and how things stand are two things
-                lines.map(({ action, label, state, pick }) => h('button.menu-item', { type: 'button', 'data-action': action, onclick: pick }, h('span', null, label), state ? [' ', h('small', null, state)] : null)),
+                lines.map(({ action, label, doing, state, pick }) =>
+                  h(
+                    'button.menu-item',
+                    { type: 'button', 'data-action': action, onclick: (event: Event) => pick(event.currentTarget as HTMLButtonElement) },
+                    doing === null ? h('span', null, label) : sends(label, doing),
+                    state ? [' ', h('small', null, state)] : null,
+                  ),
+                ),
               ),
             ),
           ),

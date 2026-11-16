@@ -62,30 +62,109 @@ export function h(spec: string, props?: Props | null, ...children: Child[]): HTM
   return element;
 }
 
+/**
+ * What a button that sends something says, and with it, unseen in the same place until the button is held
+ * (`holdWhile`), what it says it is doing while the table has not answered. Both have their room from the
+ * start, so that pressing the button moves nothing beside it. The second is drawn by the style sheet and
+ * is no part of the button's text: whoever reads a button by its words, a row that names its buttons or a
+ * check, reads what it says.
+ */
+export function sends(says: string, doing: string): HTMLElement {
+  return h('span.sends', null, h('span', null, says), h('span.doing', { 'data-says': doing }));
+}
+
+/** A press that is not answered yet, and a button it holds: another element once its part has been drawn anew (`Slot`). */
+interface Hold {
+  button: HTMLButtonElement;
+  /** Whether it is the button that was pressed, or one that is held with it (`heldTogether`). */
+  pressed: boolean;
+}
+
+const holds = new Set<Hold>();
+
+const together = new WeakMap<HTMLButtonElement, HTMLButtonElement[]>();
+
+/**
+ * Buttons that answer one and the same thing, as a question's two answers or Approve and Deny of one
+ * request: while one of them is held for the table's answer (`holdWhile`), none of the others can be
+ * pressed. What was pressed has gone out, so a Cancel beside it would cancel nothing, and a second
+ * answer would race the first.
+ */
+export function heldTogether(...buttons: HTMLButtonElement[]): HTMLButtonElement[] {
+  for (const button of buttons) {
+    together.set(button, buttons);
+  }
+
+  return buttons;
+}
+
 // The button that had the keyboard when it was held. A button that cannot be pressed loses the keyboard to
 // nothing, so it is owed back: to that button when it is free again, or to the one drawn in its place (`Slot`)
 let heldWithKeyboard: HTMLButtonElement | null = null;
 
-/** Runs what a button was pressed for, and keeps it from being pressed again until that has finished. */
+// Held, a button cannot be pressed, and the one that was pressed shows the other thing it has to say (`sends`, widgets.css)
+function setHeld({ button, pressed }: Hold, held: boolean): void {
+  button.disabled = held;
+
+  if (held && pressed) {
+    button.setAttribute('aria-busy', 'true');
+  } else {
+    button.removeAttribute('aria-busy');
+  }
+}
+
+// The keyboard is on nothing, or where a dialog puts it meanwhile when it finds it on nothing (`Modal`)
+function keyboardIsFree(button: HTMLButtonElement): boolean {
+  const on = document.activeElement;
+
+  return on === document.body || (on instanceof HTMLElement && on.tabIndex < 0 && on.contains(button));
+}
+
+/**
+ * Runs what a button was pressed for, and keeps it from being pressed again until that has finished:
+ * switched off, and saying what it is doing when it has that to say (`sends`). The buttons that answer
+ * the same thing are switched off with it (`heldTogether`). However the action ends, they are as they
+ * were again, unless what it did has taken them off the page.
+ */
 export function holdWhile(button: HTMLButtonElement, action: () => Promise<unknown>): void {
+  // One that is switched off for a reason of its own stays out of it: the end of the hold would switch it on
+  const beside = (together.get(button) ?? []).filter((other) => other !== button && !other.disabled);
+  const pressed: Hold = { button, pressed: true };
+  const held = [pressed, ...beside.map((other) => ({ button: other, pressed: false }))];
+
   if (document.activeElement === button) {
     heldWithKeyboard = button;
   }
 
-  button.disabled = true;
+  for (const hold of held) {
+    holds.add(hold);
+    setHeld(hold, true);
+  }
 
   void action().finally(() => {
-    button.disabled = false;
+    for (const hold of held) {
+      holds.delete(hold);
+      setHeld(hold, false);
+    }
 
-    if (heldWithKeyboard === button) {
+    if (heldWithKeyboard === pressed.button) {
       heldWithKeyboard = null;
 
       // Still there, and the keyboard has gone nowhere else since
-      if (button.isConnected && document.activeElement === document.body) {
-        button.focus({ preventScroll: true });
+      if (pressed.button.isConnected && keyboardIsFree(pressed.button)) {
+        pressed.button.focus({ preventScroll: true });
       }
     }
   });
+}
+
+/** A button for something that is sent and answered: held from the press until `press` has finished (`holdWhile`). */
+export function sendingButton(spec: `button.${string}`, props: Props, label: Child, press: () => Promise<unknown>): HTMLButtonElement {
+  const button = h(spec, { type: 'button', ...props }, label);
+
+  button.addEventListener('click', () => holdWhile(button, press));
+
+  return button;
 }
 
 const alike = (within: Element, key: string): Element[] => [...within.querySelectorAll('*')].filter((element) => controlKey(element) === key);
@@ -102,6 +181,9 @@ const alike = (within: Element, key: string): Element[] => [...within.querySelec
  * What was being typed into that control goes with the keyboard when the control says what it is
  * for (`data-keep`) and the one built in its place is for the same: a bet half typed for one decision
  * is kept through a rebuild, and never carried to the next decision.
+ *
+ * A button that is held for an answer (`holdWhile`) is held still in what was built: the table's news
+ * drawing its part anew does not make a press that is still on its way pressable a second time.
  */
 export class Slot {
   readonly element: HTMLElement;
@@ -126,6 +208,7 @@ export class Slot {
     }
 
     const putBack = this.keyboardKept();
+    const holdAgain = this.holdsKept();
 
     this.drawn = signature;
     this.redrawn?.leaving();
@@ -134,9 +217,51 @@ export class Slot {
     settle?.();
     // Before `redrawn` looks: a bet put back in its box changes what the button beside it says, and with that where things lie
     putBack?.();
+    // After the keyboard: it goes to the button as built, and is owed back to it once the hold is over
+    holdAgain();
     this.redrawn?.drawn();
 
     return true;
+  }
+
+  /**
+   * The way to find `control` again in what is built in its place: the control with its marks
+   * (`controlKey`), and of several alike, as a button on each row of a list, the same one only while
+   * there are as many as there were.
+   */
+  private again(control: Element): () => Element | undefined {
+    const key = controlKey(control);
+    const before = alike(this.element, key);
+    const nth = before.indexOf(control);
+
+    return () => {
+      const after = alike(this.element, key);
+
+      return after.length === before.length ? after[nth] : undefined;
+    };
+  }
+
+  /** The way to hold, in what is built, every button that is held in here now. */
+  private holdsKept(): () => void {
+    const kept = [...holds].filter((hold) => this.element.contains(hold.button)).map((hold) => ({ hold, again: this.again(hold.button) }));
+
+    return () => {
+      for (const { hold, again } of kept) {
+        const button = again();
+
+        // Gone with what the press did, or built switched off for a reason of its own, there is nothing left on the page to hold
+        if (!(button instanceof HTMLButtonElement) || button.disabled) {
+          continue;
+        }
+
+        if (heldWithKeyboard === hold.button) {
+          heldWithKeyboard = button;
+        }
+
+        hold.button = button;
+        setHeld(hold, true);
+      }
+    };
   }
 
   /** The way to put the keyboard back where it is now once the content has been replaced, or null when it is not in here. */
@@ -146,15 +271,11 @@ export class Slot {
       return null;
     }
 
-    const key = controlKey(held);
-    const before = alike(this.element, key);
-    const nth = before.indexOf(held);
+    const found = this.again(held);
     const typed = held instanceof HTMLInputElement && held.dataset.keep !== undefined ? { value: held.value, for: held.dataset.keep } : null;
 
     return () => {
-      const after = alike(this.element, key);
-      // Several alike, as a button on each row of a list: the same one only while there are as many as there were
-      const again = after.length === before.length ? after[nth] : undefined;
+      const again = found();
       const target = again instanceof HTMLElement && !again.matches(':disabled') ? again : this.element.hasAttribute('tabindex') ? this.element : null;
 
       target?.focus({ preventScroll: true });

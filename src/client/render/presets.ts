@@ -2,7 +2,7 @@ import { matchingPreset, presetName, sameName } from '../../engine/presets.ts';
 import type { Preset } from '../../engine/presets.ts';
 import type { TableConfig } from '../../engine/types.ts';
 import { LIMITS } from '../../engine/validate.ts';
-import { h, holdWhile } from '../ui.ts';
+import { h, holdWhile, sendingButton, sends } from '../ui.ts';
 import { foldSection } from './foldSection.ts';
 
 export interface PresetHandlers {
@@ -52,7 +52,7 @@ export function presetsPanel(table: TableConfig, handlers: PresetHandlers, form:
   let asking: Asking = null;
 
   const nameInput = h('input', { type: 'text', id: 'preset-name', name: 'preset-name', maxlength: LIMITS.presetNameLength, required: true, autocomplete: 'off', placeholder: 'Friday 25/50' });
-  const saveButton = h('button.btn', { type: 'submit', 'data-action': 'save-preset' }, 'Save as preset');
+  const saveButton = h('button.btn', { type: 'submit', 'data-action': 'save-preset' }, sends('Save as preset', 'Saving…'));
   const playing = h('p.note', { hidden: true });
   // Saving a preset and saving the table are two things: said where one could be taken for the other
   const unsaved = h('p.note', { hidden: true, 'data-says': 'table-unchanged' }, 'A preset keeps what this form holds now. The table itself is unchanged until you press Save.');
@@ -112,7 +112,7 @@ export function presetsPanel(table: TableConfig, handlers: PresetHandlers, form:
 
     if (asking?.kind === 'replace') {
       const name = asking.name;
-      const replace = h('button.btn.small.primary', { type: 'button', 'data-action': 'replace-preset' }, 'Replace');
+      const replace = h('button.btn.small.primary', { type: 'button', 'data-action': 'replace-preset' }, sends('Replace', 'Replacing…'));
 
       replace.addEventListener('click', () => save(replace, name, true));
       question.append(
@@ -134,9 +134,7 @@ export function presetsPanel(table: TableConfig, handlers: PresetHandlers, form:
     list.replaceChildren(
       ...presets.map((preset) => {
         if (asking?.kind === 'delete' && sameName(asking.name, preset.name)) {
-          const confirm = h('button.btn.small.danger', { type: 'button', 'data-action': 'confirm-delete-preset' }, 'Delete');
-
-          confirm.addEventListener('click', () => holdWhile(confirm, async () => show(await handlers.remove(preset.name), `Deleted ${preset.name}.`)));
+          const confirm = sendingButton('button.btn.small.danger', { 'data-action': 'confirm-delete-preset' }, sends('Delete', 'Deleting…'), async () => show(await handlers.remove(preset.name), `Deleted ${preset.name}.`));
 
           return h(
             'li.asking',

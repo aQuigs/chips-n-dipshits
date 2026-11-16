@@ -3,7 +3,7 @@ import type { ConfigKey } from '../../../engine/config.ts';
 import { CONFIG_SECTION_KEYS } from '../../../engine/configSections.ts';
 import { stakesText } from '../../../engine/stakes.ts';
 import type { TableView } from '../../../engine/view.ts';
-import { h } from '../../ui.ts';
+import { h, sends } from '../../ui.ts';
 import { configForm } from '../configForm.ts';
 import { presetsPanel } from '../presets.ts';
 import { hostOrCohost } from '../roles.ts';
@@ -37,7 +37,7 @@ function settings(view: TableView, handlers: DialogHandlers): HTMLElement {
         const sent = fields.changed(form);
 
         // The table's words name a setting that was sent, which may be folded away by now
-        submit(event, handlers, { type: 'updateConfig', config: sent }, handlers.close, () => handlers.byItself(() => fields.unfold(Object.keys(sent) as ConfigKey[])));
+        submit(event, handlers, { type: 'updateConfig', config: sent }, () => handlers.byItself(() => fields.unfold(Object.keys(sent) as ConfigKey[])));
       },
     },
     fields.sections,
@@ -52,7 +52,7 @@ function settings(view: TableView, handlers: DialogHandlers): HTMLElement {
   return footed(
     frame('Table settings', handlers, h('div.sections', null, form, presets.element)),
     waits,
-    h('button.btn.primary', { type: 'submit', form: FORM_ID, 'data-action': 'save-settings' }, 'Save'),
+    h('button.btn.primary', { type: 'submit', form: FORM_ID, 'data-action': 'save-settings' }, sends('Save', 'Saving…')),
   );
 }
 

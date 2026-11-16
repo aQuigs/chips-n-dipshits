@@ -266,6 +266,10 @@ export async function watched(page: Page): Promise<Watched> {
 /** What the watch names the control at `selector` by, in what it has seen: a check that looks for one control there asks for it by this. */
 export const namedByTheWatch = (page: Page, selector: string) => page.evaluate(`(${NAMED})(document.querySelector(${JSON.stringify(selector)}))`) as Promise<string>;
 
+/** What the watch names each control by that is on the page now and in no dialog: all that a dialog can have uncovered by going. */
+export const namedOutsideDialogs = (page: Page) =>
+  page.evaluate(`[...document.querySelectorAll(${JSON.stringify(TAPPED)})].filter((control) => !control.closest(${JSON.stringify(BACKDROP)})).map(${NAMED})`) as Promise<string[]>;
+
 /** Every control that has come up where a different one lay, since the watch began. */
 export const cameUp = async (page: Page): Promise<CameUp[]> => (await watched(page)).found;
 

@@ -11,8 +11,8 @@ import type { HandView, Holding, SeatView, TableView } from '../../engine/view.t
 import type { BoardCard, Place } from '../motion.ts';
 import { boardSaid, hintSaid, LABELS, openSeatSaid, potSaid, seatSaid, seatsLabel } from '../spoken.ts';
 import type { ShownChances } from '../tableChances.ts';
-import { cardEl, h } from '../ui.ts';
-import { nightOver, startText } from './night.ts';
+import { cardEl, h, sendingButton, sends } from '../ui.ts';
+import { nightOver, startingText, startText } from './night.ts';
 import { highHandMark } from './highHand.ts';
 import { MUTED_MARK } from '../mutes.ts';
 import { hostOrCohost, roleMark } from './roles.ts';
@@ -91,8 +91,9 @@ const ACTION_LABELS: Record<string, string> = {
 export interface TableHandlers {
   /** Left out where no seat can be taken: a table that shows a hand being played back. */
   onSit?(seat: number): void;
-  onStart(): void;
-  onPlayOn(): void;
+  /** Resolves once the table has answered, as `onPlayOn` does: their buttons are held until then. */
+  onStart(): Promise<unknown>;
+  onPlayOn(): Promise<unknown>;
   /** Asks to see the cards hand number `hand` would have dealt (rabbit hunting). */
   onHunt(hand: number): void;
   /** While the host picks a new seat for a player: who, and where a pick goes. */
@@ -611,7 +612,7 @@ function messageEl(view: TableView, handlers: TableHandlers): HTMLElement | null
       'div.message.night-over',
       null,
       h('div', null, 'The night is over'),
-      hostOrCohost(view) ? h('button.btn.primary', { type: 'button', 'data-action': 'play-on', onclick: handlers.onPlayOn }, 'Keep playing') : null,
+      hostOrCohost(view) ? sendingButton('button.btn.primary', { 'data-action': 'play-on' }, sends('Keep playing', 'Playing on…'), handlers.onPlayOn) : null,
     );
   }
 
@@ -627,7 +628,7 @@ function messageEl(view: TableView, handlers: TableHandlers): HTMLElement | null
         'div.message',
         null,
         h('div', null, seated < 2 ? 'Share the invite link, then start once two players are seated.' : 'Everyone ready?'),
-        h('button.btn.primary', { type: 'button', 'data-action': 'start', onclick: handlers.onStart }, startText(view)),
+        sendingButton('button.btn.primary', { 'data-action': 'start' }, sends(startText(view), startingText(view)), handlers.onStart),
       );
     }
 

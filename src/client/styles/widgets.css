@@ -40,6 +40,46 @@
   color: var(--bad-ink);
 }
 
+/*
+ * The two things a button that sends has to say (`sends` in ui.ts), in one place. What it is doing may
+ * reach into the button's padding, 12 px at the least, so a button of one short word, as Deny, is hardly
+ * wider for it; in a button as wide as its column, longer words stay in the middle.
+ */
+.sends {
+  display: inline-grid;
+  grid-template-columns: minmax(0, auto);
+  max-width: 100%;
+}
+
+.sends > * {
+  grid-area: 1 / 1;
+}
+
+.btn .sends,
+.chip-btn .sends {
+  justify-items: center;
+}
+
+.sends > .doing {
+  visibility: hidden;
+}
+
+.sends > .doing::before {
+  content: attr(data-says);
+}
+
+.btn .sends > .doing {
+  margin-inline: -8px;
+}
+
+button[aria-busy='true'] .sends > :first-child {
+  visibility: hidden;
+}
+
+button[aria-busy='true'] .sends > .doing {
+  visibility: visible;
+}
+
 .icon {
   position: relative;
   display: grid;

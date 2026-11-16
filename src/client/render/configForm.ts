@@ -28,8 +28,6 @@ export interface ConfigFormOptions {
   open(section: ConfigSection): boolean;
   /** The section the form leads with, ahead of the registry's order. */
   first?: ConfigSection;
-  /** Told when a choice has started the amounts over: what the last fill brought is no longer all there. */
-  startedOver?(): void;
   /** Told whenever what the fields hold may have changed, with what of it their user has changed (`changed`). */
   edited?(changed: Partial<TableConfig>): void;
 }
@@ -227,8 +225,6 @@ export function configForm(values: TableConfig, options: ConfigFormOptions): Con
     for (const part of parts.values()) {
       part.element.open ||= part.element.querySelector(':invalid') !== null;
     }
-
-    options.startedOver?.();
   };
 
   const draw = (key: ConfigKey, value: SettingValue | readonly BountyRow[] = table[key]): HTMLElement => {

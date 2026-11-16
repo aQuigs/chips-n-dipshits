@@ -336,6 +336,7 @@ export class App {
         return went === 'refused';
       },
       byItself: (change) => taps.byItself(change),
+      say: (message) => this.announcer.status(message),
       openTable: (code) => this.openTable(code.trim().toUpperCase()),
       standings: () => this.showStandings(),
     });

@@ -876,10 +876,10 @@ export class RigBrowser {
 }
 
 /** Which of a page's requests a gate stands in the way of: the moves of a hand, the choices of a move ahead of a turn, the polls for news of the table, reactions, showing cards after a hand, or asking for the list of known players, the standings, or one player's nights. */
-export type Gated = 'moves' | 'choices' | 'polls' | 'reactions' | 'shows' | 'players' | 'standings' | 'nights';
+export type Gated = 'moves' | 'choices' | 'polls' | 'reactions' | 'shows' | 'players' | 'presets' | 'standings' | 'nights';
 
 /** The requests a gate stops that are not commands, by what they ask for. */
-const GATED_OPS: Partial<Record<Gated, ApiRequest['op']>> = { polls: 'poll', players: 'players', standings: 'standings', nights: 'nights' };
+const GATED_OPS: Partial<Record<Gated, ApiRequest['op']>> = { polls: 'poll', players: 'players', presets: 'presets', standings: 'standings', nights: 'nights' };
 
 /** The commands a gate for each other kind of request stops. */
 const GATED_COMMANDS: Partial<Record<Gated, ReadonlySet<Command['type']>>> = { moves: MOVES, choices: CHOICES, reactions: FLEETING, shows: new Set(['showCards']) };

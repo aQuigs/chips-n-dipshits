@@ -1440,19 +1440,31 @@ const AS_MUCH_IN_SIGHT_AS_FITS = `(section) => {
   return part.open && heading.top >= room.top - 1 && Math.min(whole.bottom, room.bottom) - heading.top >= Math.min(whole.height, room.height) - 1;
 }`;
 
-// Run in the page before a section folds or unfolds by itself: writes down, the moment it does, the controls matching
-// `comesUp` (its own fields unless said) that lie where a control matching `lay` was, which of them take a tap, and what
-// a tap reaches in the middle of what one of them covers of such a place
+// Run in the page before a part of it folds, unfolds or comes into sight by itself: writes down, the moment it does, the
+// controls matching `comesUp` (its own fields unless said) that have come to lie in sight where a different control matching
+// `lay` was, which of them take a tap, and what a tap reaches in the middle of what one of them covers of such a place
 const WHAT_COMES_UP_UNDER = `(({ changing, lay, comesUp = changing + ' input' }) => {
-  const were = [...document.querySelectorAll(lay)].map((control) => control.getBoundingClientRect());
-  const covered = (box) =>
-    were
-      .map((was) => ({ left: Math.max(box.left, was.left), right: Math.min(box.right, was.right), top: Math.max(box.top, was.top), bottom: Math.min(box.bottom, was.bottom) }))
-      .find((both) => both.right - both.left > 2 && both.bottom - both.top > 2);
-  const named = ({ control }) => control.id || control.name || control.dataset.action;
+  // A field of a folded section has a box all the same, and is under no finger
+  const drawn = (selector) => [...document.querySelectorAll(selector)].filter((control) => control.checkVisibility());
+  const were = drawn(lay).map((control) => ({ control, was: control.getBoundingClientRect() }));
+  const inSight = ({ left, right, top, bottom }) => (left + right) / 2 > 0 && (left + right) / 2 < innerWidth && (top + bottom) / 2 > 0 && (top + bottom) / 2 < innerHeight;
+  const covered = (control) => {
+    const box = control.getBoundingClientRect();
+    const own = were.find((other) => other.control === control)?.was;
+
+    if (own && Math.abs(own.top - box.top) < 1 && Math.abs(own.left - box.left) < 1) {
+      return undefined;
+    }
+
+    return were
+      .filter((other) => other.control !== control)
+      .map(({ was }) => ({ left: Math.max(box.left, was.left), right: Math.min(box.right, was.right), top: Math.max(box.top, was.top), bottom: Math.min(box.bottom, was.bottom) }))
+      .find((both) => both.right - both.left > 2 && both.bottom - both.top > 2 && inSight(both));
+  };
+  const named = ({ control }) => control.id || control.name || control.dataset.action || control.dataset.section || control.tagName;
 
   new MutationObserver((_changes, watch) => {
-    const arrived = [...document.querySelectorAll(comesUp)].map((control) => ({ control, at: covered(control.getBoundingClientRect()) })).filter(({ at }) => at);
+    const arrived = drawn(comesUp).map((control) => ({ control, at: covered(control) })).filter(({ at }) => at);
     const reached = arrived.map(({ at }) => document.elementFromPoint((at.left + at.right) / 2, (at.top + at.bottom) / 2)?.closest('label, input, button, summary, a')).find(Boolean);
 
     watch.disconnect();
@@ -1461,7 +1473,7 @@ const WHAT_COMES_UP_UNDER = `(({ changing, lay, comesUp = changing + ' input' })
       live: arrived.filter(({ control }) => getComputedStyle(control).pointerEvents !== 'none').map(named),
       tapReaches: reached ? reached.tagName + ' ' + reached.textContent.trim().slice(0, 30) : null,
     };
-  }).observe(document.querySelector(changing), { attributes: true, attributeFilter: ['open'] });
+  }).observe(document.querySelector(changing), { attributes: true, attributeFilter: ['open', 'hidden'] });
 })`;
 
 /** What `WHAT_COMES_UP_UNDER` wrote down. */
@@ -5248,7 +5260,7 @@ const CHECKS: Check[] = [
     },
   ],
   [
-    'the form for a new table offers the presets there are, picking one fills the form and warns of what it could not keep, and the table made from it plays its stakes',
+    'the form for a new table offers the presets there are, what their list brings to where something else lay takes no press for a moment, picking one fills the form and warns of what it could not keep, and the table made from it plays its stakes',
     async (rig) => {
       try {
         const keep = (name: string, config: Partial<TableConfig>, extra: Record<string, unknown> = {}) =>
@@ -5262,8 +5274,32 @@ const CHECKS: Check[] = [
           await none.context().close();
 
           keep('Friday 25/50', { smallBlind: 25, bigBlind: 50, minBuyIn: 1000, maxBuyIn: 5000 });
-          const one = await rig.lobby(screen);
+
+          // The list comes when the server has answered, with the form already up and maybe a finger on its way to it
+          const one = await rig.page(screen, 'a host on a slow line');
+          const list = await Gate.on(one, 'presets');
+
+          await list.close('requests');
+          await one.goto(rig.url);
+          await one.waitForSelector('#host-name');
+          await one.evaluate('document.fonts.ready.then(() => undefined)');
+          await list.holding();
+          const controls = '.start-table :is(input, select, summary, button)';
+
+          await one.evaluate(`${WHAT_COMES_UP_UNDER}(${JSON.stringify({ changing: '.preset-pick', lay: controls, comesUp: controls })})`);
+          await list.open();
           await one.waitForSelector('#new-table-preset');
+
+          const pushed = (await one.evaluate('window.__cameUpUnder')) as CameUpUnder;
+
+          // On the second phone the players to pick from, whom the first screen's table left, have the form's fields under the fold
+          if (screen !== 'phone') {
+            assert.ok(pushed.arrived.length > 0, 'the list of presets brought nothing to where something else lay: the check no longer shows what it is here for');
+          }
+
+          assert.deepEqual(pushed.live, [], 'what the list of presets brought to where something else lay takes a press at once');
+          assert.equal(pushed.tapReaches, null, 'a press for what lay there lands on what the list of presets brought');
+          await tapsLive(one);
           assert.deepEqual(await texts(one, '#new-table-preset option'), ['The usual settings', 'Friday 25/50']);
           assert.equal(await one.inputValue('#new-table-preset'), '', 'a preset was picked for the host');
           assert.deepEqual(await stakes(one), ['chips', '10', '20', '400', '2000']);
@@ -5322,9 +5358,9 @@ const CHECKS: Check[] = [
           await assertNoSidewaysScroll(page);
           await shot(page, `presets-outdated-${screen}`);
 
-          // The amounts start over with what the table plays with, and the warning with them: it may have been of one
+          // The amounts start over with what the table plays with, and the clock is no amount: what the preset could not keep of it still stands
           await press(await unfolded(page, '#new-table-unit label:has-text("Dollars and cents")'));
-          assert.deepEqual(await texts(page, '.preset-notes p'), [], 'the form still warns of the preset, with its amounts started over');
+          assert.deepEqual(await texts(page, '.preset-notes p'), ['The action clock went back to 30: the preset’s is no longer allowed.'], 'the warning of a setting that did not start over went with the amounts');
 
           await page.selectOption('#new-table-preset', { label: 'The usual settings' });
           assert.deepEqual(await stakes(page), ['chips', '10', '20', '400', '2000']);
@@ -13146,7 +13182,8 @@ const CHECKS: Check[] = [
   [
     'the form for a new table has every setting of the table settings and opens on the table and its stakes, the rest folded under what it holds with Create table right after; a wider screen stands its sections side by side, and a desktop has Create table within a quarter of a screen; a table’s code is asked for first on every screen, on one row; and a table made with nothing touched plays the usual settings',
     async (rig) => {
-      for (const screen of ['smallPhone', 'phoneSideways', 'desktop'] as const) {
+      // The desktop first: how far down Create table lies is said of a new host, asked for a name, and each screen's table leaves a player to pick from
+      for (const screen of ['desktop', 'smallPhone', 'phoneSideways'] as const) {
         const page = await rig.lobby(screen);
         const press = pressOn(page, screen);
 
@@ -13186,10 +13223,11 @@ const CHECKS: Check[] = [
         if (screen === 'desktop') {
           const [create] = await boxes(page, '[data-action="create-table"]');
 
+          assert.equal(await page.getAttribute('.who-ask', 'data-who'), 'name', 'the host is given players to pick from: how far down Create table lies is no longer a new host’s');
           assert.ok(create!.bottom <= SCREENS.desktop.height * 1.25, `Create table is more than a quarter of a screen under the first one on a desktop: ${JSON.stringify(create)}`);
         }
 
-        assert.deepEqual(await squeezed(page, '.lobby h2, .lobby summary h3, .lobby .holds, .lobby .card-panel .note'), [], 'a heading, a folded line or a note is cut off');
+        assert.deepEqual(await squeezed(page, '.lobby h2, #table-code, .lobby summary h3, .lobby .holds, .lobby .card-panel .note'), [], 'a heading, the box for a table’s code, a folded line or a note is cut off');
         await assertNoSidewaysScroll(page);
         await page.locator('[data-action="create-table"]').scrollIntoViewIfNeeded();
         await shot(page, `new-table-form-${screen}`);
@@ -13266,6 +13304,7 @@ const CHECKS: Check[] = [
           assert.deepEqual(await texts(page, '.preset-notes p'), [], 'a preset whose every value is still allowed came with a warning');
           assert.deepEqual([await page.inputValue('#new-table-name'), await page.inputValue('#new-table-voice-link')], ['Friday Night', 'https://discord.gg/abc'], 'the call typed in was thrown away');
           assert.equal(await focused(page), '#new-table-preset', 'the keyboard left the list of presets when the form folded');
+          assert.equal(await text(page, '[role="status"]:has-text("Filled in")'), 'Filled in from Friday 25/50.', 'a screen reader is not told that the preset filled the form');
 
           await page.locator(`${LOBBY_SECTION('house')} > summary`).scrollIntoViewIfNeeded();
           assert.deepEqual(await squeezed(page, '.lobby .holds'), [], 'part of what the form says of the preset is cut off');
@@ -13274,6 +13313,7 @@ const CHECKS: Check[] = [
 
           await pick('The usual settings');
           assert.deepEqual(await unfoldedOnes(), ['table', 'stakes']);
+          assert.equal(await text(page, '[role="status"]:has-text("usual")'), 'Back to the usual settings.', 'a screen reader is not told that the form is back to the usual settings');
           assert.equal(await page.locator('#new-table-unit input:enabled:visible').count(), 2, 'with no preset picked, what the table plays with is out of sight');
 
           // Opened by hand, a section stays open when a preset is picked

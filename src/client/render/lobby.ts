@@ -33,6 +33,8 @@ export interface LobbyHandlers {
   create(as: Answer, config: Partial<TableConfig>): Promise<boolean>;
   /** Makes a change to the screen that the game and not the visitor brings about, as on the server's answer: what comes up under a finger takes no tap for a moment (`TapGuard`). */
   byItself(change: () => void): void;
+  /** Says a line to a screen reader alone, of a change the page itself shows the eye. */
+  say(message: string): void;
   openTable(code: string): void;
   /** Shows the standings over this screen, which stays as it is underneath. */
   standings(): void;
@@ -99,8 +101,6 @@ export function lobbyEl(visitor: Visitor, themePicker: HTMLElement, handlers: Lo
     creating: true,
     first: 'table',
     open: (section) => section === 'table' || (section === 'stakes' && !preset),
-    // A warning may speak of an amount that has started over since
-    startedOver: () => notes.replaceChildren(),
   });
 
   // The sections it opens on, and the folded rest as one stack: a wide screen stands them side by side
@@ -118,6 +118,9 @@ export function lobbyEl(visitor: Visitor, themePicker: HTMLElement, handlers: Lo
       settings.fill(create, Object.fromEntries(PRESET_KEYS.map((key) => [key, used.config[key]])));
       notes.replaceChildren(...used.notes.map((note) => h('p.note.warn', null, note)));
     });
+
+    // The eye has the fields and the lines of the folded sections to go by
+    handlers.say(chosen ? `Filled in from ${chosen.name}.` : 'Back to the usual settings.');
   };
 
   const create: HTMLFormElement = h(
@@ -189,8 +192,11 @@ export function lobbyEl(visitor: Visitor, themePicker: HTMLElement, handlers: Lo
         presets.map((preset, index) => h('option', { value: String(index) }, preset.name)),
       );
 
-      presetPick.replaceChildren(h('label.field', { for: 'new-table-preset' }, h('span', null, 'Start from'), select), notes);
-      presetPick.hidden = false;
+      // The list comes when the server has answered, with the form up and maybe a finger on its way to a field it pushes down
+      handlers.byItself(() => {
+        presetPick.replaceChildren(h('label.field', { for: 'new-table-preset' }, h('span', null, 'Start from'), select), notes);
+        presetPick.hidden = false;
+      });
     },
   };
 }

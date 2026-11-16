@@ -10,9 +10,11 @@ import type { Page } from 'playwright';
 
 import { betStops } from '../src/client/betStops.ts';
 import { SPOKEN_HOLDS_MS } from '../src/client/chatBar.ts';
+import { formatAmount } from '../src/engine/amounts.ts';
 import type { Check } from './checkRunner.ts';
 import { telling, unreadable } from './covered.ts';
 import { NEXT_FRAME, TEXT_SIZES } from './layoutSweep.ts';
+import { answeredAfter } from './pageSpies.ts';
 import { boxes, squeezed } from './rig.ts';
 import type { Rig, RigTable } from './rig.ts';
 
@@ -280,7 +282,7 @@ const RAISE = '.turn [data-action="raise"]';
 /** What the button that raises says, on one line however its words are laid out. */
 const raiseSays = async (page: Page): Promise<string> => (await page.innerText(RAISE)).replace(/\s+/g, ' ').trim();
 
-/** Puts the slider on each of its stops in turn, as a drag across it does, and gives what the box beside it then reads. */
+/** Puts the slider on each of its stops in turn, as a drag across it does, and gives what the box beside it then reads: the amount as the table writes it, the box being at rest. */
 const EVERY_STOP = `(() => {
   const slider = document.querySelector('${SLIDER}');
   const box = document.querySelector('${BOX}');
@@ -314,17 +316,18 @@ const sliderStopsAtWholeBlinds: Check = [
     const stopsOf = (least: number, most: number) => {
       const stops = betStops(least, most, STAKES);
 
-      return Array.from({ length: stops.last + 1 }, (_, stop) => String(stops.amountAt(stop)));
+      return Array.from({ length: stops.last + 1 }, (_, stop) => stops.amountAt(stop));
     };
 
     // 2,000 behind at 10/20: from 40 to 2,000, every one a whole big blind
     const { table, page } = await sizing(rig, 2000);
+    const written = (amounts: number[]) => amounts.map((amount) => formatAmount(amount, table.view(VIEWER).config));
     const read = (await page.evaluate(EVERY_STOP)) as string[];
 
-    assert.deepEqual(read, stopsOf(40, 2000));
-    assert.deepEqual([read[0], read[1], read.at(-2), read.at(-1)], ['40', '60', '1980', '2000']);
+    assert.deepEqual(read, written(stopsOf(40, 2000)));
+    assert.deepEqual([read[0], read[1], read.at(-2), read.at(-1)], ['40', '60', '1,980', '2,000']);
     assert.ok(
-      read.every((amount) => Number(amount) % STAKES.bigBlind === 0),
+      stopsOf(40, 2000).every((amount) => amount % STAKES.bigBlind === 0),
       'a stop is no whole big blind',
     );
     assert.equal(await raiseSays(page), 'All in 2,000', 'the last stop is not all in');
@@ -338,9 +341,9 @@ const sliderStopsAtWholeBlinds: Check = [
     assert.equal(await raiseSays(page), 'Raise to 60');
     assert.equal(await page.getAttribute(SLIDER, 'aria-valuetext'), '60 chips', 'the slider says its stop’s number, not the amount');
     await page.keyboard.press('End');
-    assert.equal(await page.inputValue(BOX), '2000');
+    assert.equal(await page.inputValue(BOX), '2,000');
     await page.keyboard.press('ArrowLeft');
-    assert.equal(await page.inputValue(BOX), '1980');
+    assert.equal(await page.inputValue(BOX), '1,980');
 
     // The box takes any amount, and the slider stands at the stop nearest it and goes on from there in whole blinds
     await page.fill(BOX, '711');
@@ -350,6 +353,11 @@ const sliderStopsAtWholeBlinds: Check = [
     await page.keyboard.press('ArrowRight');
     assert.equal(await page.inputValue(BOX), '740');
 
+    // An amount with its comma, as the box reads one that is pasted: the slider follows it the same
+    await page.fill(BOX, '1,255');
+    assert.equal(await raiseSays(page), 'Raise to 1,255');
+    assert.equal(await page.inputValue(SLIDER), '61', '1,255 is nearest 1,260, the 61st stop after 40');
+
     // A size button's amount is its own: half the pot here is 50, between two stops
     await page.click('.presets button:text-is("½ pot")');
     assert.equal(await page.inputValue(BOX), '50');
@@ -358,16 +366,15 @@ const sliderStopsAtWholeBlinds: Check = [
     // What is played is the amount of the stop
     await page.locator(SLIDER).fill('3');
     assert.equal(await raiseSays(page), 'Raise to 100');
-    await page.click(RAISE);
-    await page.waitForSelector('.controls .turn', { state: 'detached' });
+    await answeredAfter(page, () => page.click(RAISE));
     assert.match(table.view(HOST).feed.at(-1)!.text, new RegExp(`^${VIEWER} raises to 100$`));
 
     // 1,007 behind: every stop but the last is a whole big blind, and the last is every chip
     const odd = await sizing(rig, 1007);
     const oddStops = (await odd.page.evaluate(EVERY_STOP)) as string[];
 
-    assert.deepEqual(oddStops, stopsOf(40, 1007));
-    assert.deepEqual(oddStops.slice(-2), ['1000', '1007']);
+    assert.deepEqual(oddStops, written(stopsOf(40, 1007)));
+    assert.deepEqual(oddStops.slice(-2), ['1,000', '1,007']);
     assert.equal(await raiseSays(odd.page), 'All in 1,007');
 
     // 150 behind: fewer than ten big blinds between the ends, so the small blind is the step

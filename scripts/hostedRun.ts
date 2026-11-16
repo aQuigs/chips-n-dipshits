@@ -331,14 +331,21 @@ try {
   {
     assert.match(await host.innerText('.controls .waiting'), /not started/);
 
-    await host.click('.message [data-action="start"]');
+    // Alone at the table the host is offered to invite, not to start. A start asked all the same, as a page from before this could, is taken
+    await host.waitForSelector('.message [data-action="invite-players"]');
+    assert.equal(await host.locator('.message [data-action="start"]').count(), 0);
+
+    const [id, token] = hostMember.split('.');
+    const started = await fetch(`${server.url}api`, { method: 'POST', body: JSON.stringify({ op: 'act', tableId, auth: { id, token }, command: { type: 'start' }, build: UNSTAMPED_BUILD }) });
+
+    assert.equal(((await started.json()) as { ok: boolean }).ok, true);
     await host.waitForSelector('.message:has-text("Waiting for at least two")');
     await host.waitForSelector('.controls .waiting:has-text("Waiting for at least two")');
 
     // Pausing a game that has dealt no hand puts both back to "not started"
     await host.click('[data-action="menu"]');
     await host.click('.menu [data-action="pause"]');
-    await host.waitForSelector('.message [data-action="start"]:has-text("Start the game")');
+    await host.waitForSelector('.message [data-action="invite-players"]');
     await host.waitForSelector('.controls .waiting:has-text("not started")');
   }
 

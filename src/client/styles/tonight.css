@@ -65,6 +65,12 @@
 /* The viewer's own payments, a line each, over the button to the whole list */
 .tonight-settle {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   justify-items: start;
   gap: 6px;
+}
+
+/* The longest name with the largest sum is wider than a phone: it breaks where it must, and the dialog keeps its width */
+.tonight-settle b {
+  overflow-wrap: anywhere;
 }

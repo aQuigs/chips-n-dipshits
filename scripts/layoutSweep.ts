@@ -416,6 +416,17 @@ const TABLE_STATES = {
     },
     onPage: (page, table) => turnedDownAsThePageLooksOn(page, table, { type: 'requestSeat', seat: 0, buyIn: LONGEST_WRITTEN_OUT }),
   },
+  nightOver: {
+    shows: 'the bar of a player with the night over: who pays whom, the night to look over and the last hand to see again',
+    seats: [9],
+    build(rig, seats) {
+      const table = tableWithTrophy(rig, seats, EVEN);
+
+      table.act(WIDEST, { type: 'endNight' });
+
+      return table;
+    },
+  },
 } satisfies Record<string, TableState>;
 
 interface Size {

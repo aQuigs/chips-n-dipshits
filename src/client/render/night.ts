@@ -4,6 +4,19 @@ export const nightOver = (view: TableView): boolean => view.nightEndedAt !== nul
 
 export const onLastHand = (view: TableView): boolean => view.hand !== null && view.handsLeft === 0;
 
+/**
+ * What starting the dealing is called from where the game stands, on the table's own button and in the
+ * menu alike. With a hand still on the table the game was paused during it and plays it out, so
+ * starting only takes the pause back.
+ */
+export function startText(view: TableView): string {
+  if (view.hand) {
+    return 'Call off the pause';
+  }
+
+  return view.handCount === 0 ? 'Start the game' : 'Resume the game';
+}
+
 const hands = (count: number) => `${count} more hand${count === 1 ? '' : 's'}`;
 
 /**

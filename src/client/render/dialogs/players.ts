@@ -165,9 +165,10 @@ function players(view: TableView, handlers: DialogHandlers): HTMLElement {
 export const playersDialog: DialogKind<'players'> = {
   kind: 'players',
   menu: {
+    group: 'run',
     label: 'Players',
     who: hostOrCohost,
-    note: (view) => (view.requests.length > 0 ? `${view.requests.length} waiting for you` : 'Approve, adjust stacks, transfer chips, move, remove'),
+    state: (view) => (view.requests.length > 0 ? `${view.requests.length} waiting for you` : null),
   },
   // Stacks move with every bet. Redrawn that often, a button here would be gone before a tap on it landed,
   // so during a hand the list keeps the stacks it was drawn with

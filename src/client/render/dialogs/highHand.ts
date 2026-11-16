@@ -49,9 +49,10 @@ function payHighHand(view: TableView, handlers: DialogHandlers): HTMLElement {
 export const highHandDialog: DialogKind<'highHand'> = {
   kind: 'highHand',
   menu: {
+    group: 'run',
     label: 'Pay the high hand',
     who: (view) => hostOrCohost(view) && view.config.highHandBonus > 0 && view.tonight.highHand.next !== null,
-    note: (view) => {
+    state: (view) => {
       const { due } = view.tonight.highHand;
 
       if (view.hand) {

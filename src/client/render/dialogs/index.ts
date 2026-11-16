@@ -28,32 +28,33 @@ export type { DialogHandlers } from './dialog.ts';
 
 /**
  * Every dialog, and the things the menu does without one. A new dialog is a file in this folder and a
- * line here. Where it stands in this list is where its entry stands in the menu; one that has no
- * entry can stand anywhere. One to a line: .gitattributes joins the lines two branches add to this file.
+ * line here. Its entry says which part of the menu it stands in, and where it stands in this list is
+ * where it stands in that part; one that has no entry can stand anywhere. One to a line:
+ * .gitattributes joins the lines two branches add to this file.
  */
 const REGISTERED = [
-  inviteDialog,
-  ledgerDialog,
-  tonightDialog,
-  standingsDialog,
-  historyDialog,
+  pauseGame,
+  startGame,
+  keepPlaying,
   playersDialog,
-  shuffleSeats,
   callBombPot,
   callOffBombPot,
   lastHandsDialog,
   highHandDialog,
   settingsDialog,
-  pauseGame,
-  startGame,
-  keepPlaying,
-  whoDialog,
-  themeDialog,
-  preferencesDialog,
-  muteDialog,
+  shuffleSeats,
+  ledgerDialog,
+  tonightDialog,
+  historyDialog,
+  standingsDialog,
   autoShowDialog,
+  muteDialog,
+  preferencesDialog,
+  themeDialog,
+  whoDialog,
   standUp,
   toLobby,
+  inviteDialog,
   sitDialog,
   rebuyDialog,
   setStackDialog,

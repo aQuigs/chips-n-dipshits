@@ -55,11 +55,7 @@ function lastHands(view: TableView, handlers: DialogHandlers): HTMLElement {
 
 export const lastHandsDialog: DialogKind<'lastHands'> = {
   kind: 'lastHands',
-  menu: {
-    label: 'Last hands',
-    who: (view) => hostOrCohost(view) && !nightOver(view),
-    note: (view) => lastHandsText(view) ?? 'Call how many hands are left, or end the night',
-  },
+  menu: { group: 'run', label: 'Last hands', who: (view) => hostOrCohost(view) && !nightOver(view), state: lastHandsText },
   // The hand on the table is what the count is from, so a new one is a new dialog
   shows: (view) => [view.hand !== null, view.handCount, view.handsLeft],
   draw: lastHands,

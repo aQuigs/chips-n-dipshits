@@ -104,7 +104,7 @@ function history(table: Denominated, handlers: DialogHandlers, opening: object):
 
 export const historyDialog: DialogKind<'history'> = {
   kind: 'history',
-  menu: { label: 'Hand history', who: everyone },
+  menu: { group: 'scores', label: 'Hand history', who: everyone },
   // Hands are added to the record while the dialog is open, most of all the one whose result its reader came to look at
   shows: (view) => lastOnRecord(view),
   draw: (view, handlers, opening) => history(view.config, handlers, opening as object),

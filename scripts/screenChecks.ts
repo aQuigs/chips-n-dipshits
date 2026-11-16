@@ -39,6 +39,7 @@ import { focused, focusIn, heard, SPOKEN, spoken } from './a11y.ts';
 import { ACCESSIBILITY_CHECKS } from './accessibilityChecks.ts';
 import { runChecks } from './checkRunner.ts';
 import { layoutSweep } from './layoutSweep.ts';
+import { menuChecks } from './menuChecks.ts';
 import { tapsLive } from './underTheFinger.ts';
 
 const OUT = fileURLToPath(new URL('../screenshots/', import.meta.url));
@@ -4093,7 +4094,7 @@ const CHECKS: Check[] = [
 
       const page = await table.open('Quigs', 'phone');
       await page.tap('[data-action="menu"]');
-      assert.equal(await text(page, '.menu [data-action="shuffle"] small'), 'Everyone gets a random seat');
+      assert.equal(await text(page, '.menu [data-action="shuffle"]'), 'Shuffle seats');
       await page.tap('.menu [data-action="shuffle"]');
       assert.equal(await text(page, '.dialog h2'), 'Shuffle the seats?');
       assertOnScreen(await boxes(page, '.dialog [data-action="confirm"]'), 'phone', 'the button that shuffles');
@@ -4109,8 +4110,9 @@ const CHECKS: Check[] = [
       table.deal({ button: 0 });
       const desktop = await table.open('Quigs', 'desktop');
       await desktop.click('[data-action="menu"]');
-      assert.equal(await text(desktop, '.menu [data-action="shuffle"] small'), 'Everyone gets a random seat when this hand ends');
+      assert.equal(await text(desktop, '.menu [data-action="shuffle"]'), 'Shuffle seats');
       await desktop.click('.menu [data-action="shuffle"]');
+      assert.match(await text(desktop, '.dialog-body p'), /During a hand, this happens when it ends\.$/, 'nothing says before the yes that a shuffle during a hand waits for its end');
       await desktop.click('[data-action="confirm"]');
       await desktop.waitForSelector('.feed-toggle .latest:has-text("The host shuffles the seats after this hand")', { state: 'attached' });
       assert.deepEqual(seatsOf(), after, 'the seats were shuffled in the middle of a hand');
@@ -4789,7 +4791,7 @@ const CHECKS: Check[] = [
           const [roomBefore] = await boxes(player, '.stage');
 
           await press('[data-action="menu"]');
-          assert.equal(await text(host, '.menu [data-action="bomb-pot"]'), `Bomb pot next hand${kind.amount} each, no blinds, starts on the flop`);
+          assert.equal(await text(host, '.menu [data-action="bomb-pot"]'), `Bomb pot next hand ${kind.amount} each`);
           assert.equal(await host.locator('.menu [data-action="bomb-pot-off"]').count(), 0, 'a bomb pot nobody called can be called off');
           await host.locator('.menu [data-action="bomb-pot"]').scrollIntoViewIfNeeded();
           assert.deepEqual(await squeezed(host, '.menu-item, .menu-item small'), [], 'a line of the menu is cut off');
@@ -4823,7 +4825,7 @@ const CHECKS: Check[] = [
           }
 
           await press('[data-action="menu"]');
-          assert.equal(await text(host, '.menu [data-action="bomb-pot-off"]'), 'Call off the bomb potThe next hand is an ordinary one');
+          assert.equal(await text(host, '.menu [data-action="bomb-pot-off"]'), 'Call off the bomb pot');
           assert.equal(await host.locator('.menu [data-action="bomb-pot"]').count(), 0, 'a bomb pot that is called already is offered again');
           await press('.menu [data-action="bomb-pot-off"]');
           await host.waitForSelector('.dialog', { state: 'detached' });
@@ -5754,9 +5756,9 @@ const CHECKS: Check[] = [
           await page.waitForSelector('.dialog', { state: 'detached' });
           assert.equal(table.view('Stu').feed.at(-1)!.text, `A double-board bomb pot is ${kind.amount} and comes only when called`);
 
-          // Called from the menu, which says what it starts on, it is told under the table by its name
+          // Called from the menu, which says it is played on two boards, it is told under the table by its name
           await press('[data-action="menu"]');
-          assert.equal(await text(page, '.menu [data-action="bomb-pot"]'), `Bomb pot next hand${kind.amount} each, no blinds, starts on two flops`);
+          assert.equal(await text(page, '.menu [data-action="bomb-pot"]'), `Bomb pot next hand ${kind.amount} each, on two boards`);
           assert.deepEqual(await squeezed(page, '.menu-item, .menu-item small'), [], 'a line of the menu is cut off');
           await press('.menu [data-action="bomb-pot"]');
           await page.waitForSelector('.controls .next-hand');
@@ -5819,7 +5821,7 @@ const CHECKS: Check[] = [
 
           // Called during a hand, from the menu, the count is of the hands after it
           await press('[data-action="menu"]');
-          assert.equal(await text(host, '.menu [data-action="lastHands"]'), 'Last handsCall how many hands are left, or end the night');
+          assert.equal(await text(host, '.menu [data-action="lastHands"]'), 'Last hands');
           await press('.menu [data-action="lastHands"]');
           await host.waitForSelector('.hand-counts');
           assert.deepEqual(await texts(host, '.this-hand button, .hand-counts button'), ['This hand is the last', ...Array.from({ length: 10 }, (_, index) => String(index + 1))]);
@@ -9993,7 +9995,7 @@ const CHECKS: Check[] = [
       assert.ok(!(await texts(page, '.entries li')).some((line) => line.includes('hidden')));
 
       await page.tap('[data-action="menu"]');
-      assert.match(await text(page, '.menu [data-action="mute"]'), /1 muted on this screen/);
+      assert.equal(await text(page, '.menu [data-action="mute"]'), 'Mute players 1 muted');
       await page.tap('.menu [data-action="mute"]');
       await page.tap(`${pamRow} [data-action="unmute"]`);
       await page.waitForSelector(`${pamRow} [data-action="mute"][aria-pressed="false"]`);
@@ -10863,7 +10865,7 @@ const CHECKS: Check[] = [
         const page = await table.open('Bobby', screen);
         const press = pressOn(page, screen);
         await press('[data-action="menu"]');
-        assert.equal(await text(page, '.menu [data-action="who"]'), 'Who you areNot on the list of players yet');
+        assert.equal(await text(page, '.menu [data-action="who"]'), 'Who you are Not on the list yet');
         await press('.menu [data-action="who"]');
         await page.waitForSelector('.dialog .who-pick');
 
@@ -10887,7 +10889,7 @@ const CHECKS: Check[] = [
         assert.equal(await text(page, '.seat.me .name'), 'Bobby', 'saying who he is changed what the table calls him');
 
         await press('[data-action="menu"]');
-        assert.equal(await text(page, '.menu [data-action="who"]'), 'Who you areOn the list of players as Bob');
+        assert.equal(await text(page, '.menu [data-action="who"]'), 'Who you are Bob');
 
         // Opened again it shows who he said he is, and can be said otherwise
         await press('.menu [data-action="who"]');
@@ -12053,7 +12055,7 @@ const CHECKS: Check[] = [
         const seatPress = pressOn(seat, screen);
         const address = seat.url();
         await seatPress('[data-action="menu"]');
-        assert.equal(await text(seat, '.menu [data-action="standings"]'), 'StandingsWho is up and who is down, over every night');
+        assert.equal(await text(seat, '.menu [data-action="standings"]'), 'Standings');
         await seatPress('.menu [data-action="standings"]');
         await seat.waitForSelector('.standings-players li');
         assert.equal(await text(seat, '.dialog h2'), 'Standings');
@@ -12699,6 +12701,7 @@ const CHECKS: Check[] = [
     },
   ],
   ...ACCESSIBILITY_CHECKS,
+  ...menuChecks(OUT),
 ];
 
 await mkdir(OUT, { recursive: true });

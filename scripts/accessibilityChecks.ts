@@ -535,7 +535,7 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
     },
   ],
   [
-    'every dialog of the menu opens from the keyboard with the keyboard in it and a name, breaks no rule in any theme, closes on Escape and gives the keyboard back to the menu button',
+    'every dialog of the menu, and the one the top bar’s Invite opens, opens from the keyboard with the keyboard in it and a name, breaks no rule in any theme, closes on Escape and, at a table where nothing else has changed meanwhile, gives the keyboard back to the button it was opened from',
     async (rig) => {
       const table = threeHanded(rig);
       const page = await listening(table, 'Quigs');
@@ -546,22 +546,10 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
       await playToShowdown(table, page);
       await heard(page, 'log: You have 1,090 chips.');
 
-      await page.focus('[data-action="menu"]');
-      await page.keyboard.press('Enter');
-      await page.waitForSelector('.menu');
-      assert.equal(await inDialog(), true, 'the menu opened with the keyboard left behind it');
-      assert.equal(await dialogName(), 'Friday Night');
-      await sweep.over(page, 'the menu');
-
-      const entries = (await page.evaluate(`[...document.querySelectorAll('.menu-item')].map((item) => item.dataset.action)`)) as string[];
       const opened: string[] = [];
 
-      // Leaving for the lobby is the one entry that takes the page off the table
-      for (const entry of entries.filter((action) => action !== 'lobby')) {
-        await tabTo(page, `.menu-item[data-action="${entry}"]`);
-        await page.keyboard.press('Enter');
-        await page.waitForFunction(`document.querySelector('.menu') === null`);
-
+      // Whatever a button has opened by now is looked at and shut with Escape, which hands the keyboard back to that button
+      const lookedAtFrom = async (button: string, entry: string) => {
         // An entry that does something outright, as pausing the game, opens nothing
         if ((await page.locator('.overlay .dialog').count()) > 0) {
           const name = await dialogName();
@@ -575,12 +563,36 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
           await page.waitForSelector('.overlay .dialog', { state: 'detached' });
         }
 
-        assert.equal(await focused(page), 'menu', `after ${entry} the keyboard is not back on the menu button`);
+        assert.equal(await focused(page), button, `after ${entry} the keyboard is not back on the button that opened it`);
+      };
+
+      // The top bar's own button, on every screen, which is why the menu has no line for it
+      await page.focus('.topbar [data-action="invite"]');
+      await page.keyboard.press('Enter');
+      await page.waitForSelector('.dialog #table-link');
+      await lookedAtFrom('invite', 'Invite');
+
+      await page.focus('[data-action="menu"]');
+      await page.keyboard.press('Enter');
+      await page.waitForSelector('.menu');
+      assert.equal(await inDialog(), true, 'the menu opened with the keyboard left behind it');
+      assert.equal(await dialogName(), 'Friday Night');
+      await sweep.over(page, 'the menu');
+
+      const entries = (await page.evaluate(`[...document.querySelectorAll('.menu-item')].map((item) => item.dataset.action)`)) as string[];
+
+      // Leaving for the lobby is the one entry that takes the page off the table
+      for (const entry of entries.filter((action) => action !== 'lobby')) {
+        await tabTo(page, `.menu-item[data-action="${entry}"]`);
+        await page.keyboard.press('Enter');
+        await page.waitForFunction(`document.querySelector('.menu') === null`);
+        await lookedAtFrom('menu', entry);
+
         await page.keyboard.press('Enter');
         await page.waitForSelector('.menu');
       }
 
-      assert.deepEqual(opened, ['Invite players', 'Ledger', 'Tonight', 'Standings', 'Hand history', 'Players', 'Shuffle the seats?', 'Last hands', 'Table settings', 'Who you are', 'Theme', 'Preferences', 'Mute players', 'Show or muck', 'Stand up?']);
+      assert.deepEqual(opened, ['Invite players', 'Players', 'Last hands', 'Table settings', 'Shuffle the seats?', 'Ledger', 'Tonight', 'Hand history', 'Standings', 'Show or muck', 'Mute players', 'Preferences', 'Theme', 'Who you are', 'Stand up?']);
       sweep.done(opened.length + 1);
     },
   ],

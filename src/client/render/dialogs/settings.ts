@@ -34,6 +34,6 @@ function settings(view: TableView, handlers: DialogHandlers): HTMLElement {
 
 export const settingsDialog: DialogKind<'settings'> = {
   kind: 'settings',
-  menu: { label: 'Table settings', who: hostOrCohost, note: (view) => `Blinds ${stakesText(view.config)}` },
+  menu: { group: 'run', label: 'Table settings', who: hostOrCohost, state: (view) => `Blinds ${stakesText(view.config)}` },
   draw: settings,
 };

@@ -175,6 +175,6 @@ function preferences(handlers: DialogHandlers): HTMLElement {
 
 export const preferencesDialog: DialogKind<'preferences'> = {
   kind: 'preferences',
-  menu: { label: 'Preferences', who: everyone, note: () => 'Sound, cards and the like, just for you' },
+  menu: { group: 'you', label: 'Preferences', who: everyone },
   draw: (_view, handlers) => preferences(handlers),
 };

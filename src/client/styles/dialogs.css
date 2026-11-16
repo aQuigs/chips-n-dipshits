@@ -65,23 +65,6 @@
   text-transform: uppercase;
 }
 
-.menu {
-  display: grid;
-  gap: 6px;
-}
-
-.menu-item {
-  display: grid;
-  gap: 2px;
-  padding: 11px 14px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--panel-raised);
-  font-weight: 600;
-  text-align: left;
-}
-
-.menu-item small,
 .theme-option small {
   display: block;
   color: var(--muted);

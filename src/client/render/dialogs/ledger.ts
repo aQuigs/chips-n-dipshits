@@ -53,7 +53,7 @@ function ledger(view: TableView, handlers: DialogHandlers): HTMLElement {
 
 export const ledgerDialog: DialogKind<'ledger'> = {
   kind: 'ledger',
-  menu: { label: 'Ledger', who: everyone, note: () => 'Who is up and who owes whom' },
+  menu: { group: 'scores', label: 'Ledger', who: everyone },
   shows: (view) => view.ledger,
   draw: ledger,
 };

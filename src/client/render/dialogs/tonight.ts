@@ -96,7 +96,7 @@ function tonight(view: TableView, handlers: DialogHandlers): HTMLElement {
 
 export const tonightDialog: DialogKind<'tonight'> = {
   kind: 'tonight',
-  menu: { label: 'Tonight', who: everyone, note: () => 'Pots won, the best hand, badges and the dipshit of the night' },
+  menu: { group: 'scores', label: 'Tonight', who: everyone },
   shows: (view) => [view.tonight, nightOver(view), view.config.unit, view.config.name, view.you.id],
   draw: tonight,
 };

@@ -15,6 +15,6 @@ function theme(handlers: DialogHandlers): HTMLElement {
 
 export const themeDialog: DialogKind<'theme'> = {
   kind: 'theme',
-  menu: { label: 'Theme', who: everyone, note: (_view, handlers) => themeById(handlers.prefs.get('theme')).name },
+  menu: { group: 'you', label: 'Theme', who: everyone, state: (_view, handlers) => themeById(handlers.prefs.get('theme')).name },
   draw: (_view, handlers) => theme(handlers),
 };

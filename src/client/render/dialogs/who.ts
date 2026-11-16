@@ -61,16 +61,17 @@ function who(view: TableView, handlers: DialogHandlers): HTMLElement {
 export const whoDialog: DialogKind<'who'> = {
   kind: 'who',
   menu: {
+    group: 'you',
     label: 'Who you are',
     who: everyone,
-    note: (view, handlers) => {
+    state: (view, handlers) => {
       if (view.you.identity === null) {
-        return 'Not on the list of players yet';
+        return 'Not on the list yet';
       }
 
       const remembered = handlers.players.remembered();
 
-      return remembered?.id === view.you.identity ? `On the list of players as ${remembered.name}` : 'On the list of players';
+      return remembered?.id === view.you.identity ? remembered.name : 'On the list';
     },
   },
   draw: who,

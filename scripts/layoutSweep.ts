@@ -57,7 +57,7 @@ function players(seats: number, stacks: number[]) {
 
 const holesFor = (seats: number) => Object.fromEntries(Object.entries(HOLES).filter(([seat]) => Number(seat) < seats));
 
-const passive = (view: TableView): Command => ({ type: view.hand!.options!.canCheck ? 'check' : 'call' });
+export const passive = (view: TableView): Command => ({ type: view.hand!.options!.canCheck ? 'check' : 'call' });
 
 /** Everything in, and `runs` picked by whoever is asked how many times to run it. */
 const allInPicking =
@@ -85,9 +85,9 @@ function tableWithTrophy(rig: Rig, seats: number, stacks: number[], config: Part
 // Who misses a big blind in the state that shows blinds owed: the big blind of the hand after the first
 const OWES = NAMES[3]!;
 
-/** Plays the hand on the table out with `move` and clears it away, the game paused so that the next hand is the state's to deal. */
-function playOut(table: RigTable, move: (view: TableView) => Command): void {
-  table.act(WIDEST, { type: 'pause' });
+/** Plays the hand on the table out with `move` and clears it away, the game paused by its host so that the next hand is the state's to deal. */
+export function playOut(table: RigTable, move: (view: TableView) => Command, host = WIDEST): void {
+  table.act(host, { type: 'pause' });
   table.play(move, (view) => view.hand!.stage === 'done');
   table.play(() => null, (view) => view.hand === null);
 }
@@ -621,10 +621,18 @@ const REPLAY_AT_ITS_END = `(() => {
   return step !== undefined && step === steps;
 })()`;
 
-const openFromMenu = async (page: Page, action: string) => {
+export const openTheMenu = async (page: Page) => {
   await page.locator('[data-action="menu"]').click();
+  await page.waitForSelector('.menu .menu-item');
+};
+
+const openFromMenu = async (page: Page, action: string) => {
+  await openTheMenu(page);
   await page.locator(`.menu [data-action="${action}"]`).click();
 };
+
+/** The menu's first line, when it is the one the page knows as `action` and says `words`. */
+export const menuStartsWith = (action: string, words: string) => `.menu > section:first-child .menu-item:first-child[data-action="${action}"]:has(span:text-is("${words}"))`;
 
 const SCREEN_STATES: ScreenState[] = [
   {
@@ -757,6 +765,45 @@ const SCREEN_STATES: ScreenState[] = [
       await page.locator('.feed [data-action="reactions"]').click();
       await page.waitForSelector('.react-panel:not([hidden])');
       await look(page, 'the reaction picker');
+    },
+  },
+  {
+    shows: 'the menu with every line that says how things stand saying it at its longest, for the host during a hand and between hands, and for a player',
+    async walk(rig, screen, look) {
+      // The widest name hosts and holds the high hand, at a table of cents where the bonus on it and a bomb pot are the longest amounts written out
+      const table = tableWithTrophy(rig, 3, BIGGEST, { ...CENTS, highHandBonus: LONGEST_WRITTEN_OUT, bombPotAmount: LONGEST_WRITTEN_OUT, bombPotBoards: 'two' });
+
+      table.dealNext({ holes: holesFor(3) });
+      table.act(WIDEST, { type: 'pause' });
+      table.act(WIDEST, { type: 'setLastHands', hands: LIMITS.lastHands });
+      table.act(WIDEST, { type: 'shuffleSeats' });
+      [FIRST_ASKING, NEXT_ASKING].forEach((name, nth) => asksForASeat(table, name, 6 + nth));
+
+      const host = await table.open(WIDEST, screen);
+
+      await openFromMenu(host, 'mute');
+      await host.locator('.dialog [data-action="mute"]').first().click();
+      await host.locator('.dialog [data-action="close"]').click();
+      await openTheMenu(host);
+      await host.waitForSelector(menuStartsWith('start', 'Call off the pause'));
+      assert.deepEqual(
+        await host.locator('.menu > section:first-child .menu-item small').allTextContents(),
+        ['2 waiting for you', '99,999.99 each, on two boards', `${LIMITS.lastHands} more hands after this one`, 'Between hands only', 'Blinds 0.25/0.50', 'Set for when this hand ends'],
+        'the host’s lines do not all say how things stand',
+      );
+      await look(host, 'the host’s menu during a hand');
+
+      // With the hand over the high hand can be paid, and its line says to whom and how much
+      table.play(folding, (view) => view.hand!.stage === 'done');
+      table.play(() => null, (view) => view.hand === null);
+      await host.waitForSelector(menuStartsWith('start', 'Resume the game'));
+      assert.equal(await host.locator('.menu [data-action="highHand"] small').textContent(), `${WIDEST}: 99,999.99 from everyone else`);
+      await look(host, 'the host’s menu between hands');
+
+      const player = await table.open(VIEWER, screen);
+
+      await openTheMenu(player);
+      await look(player, 'a player’s menu');
     },
   },
 ];
@@ -1508,6 +1555,43 @@ const ARRIVALS: Arrival[] = [
     step: (table) => table.play(folding, (view) => view.hand!.stage === 'done'),
     then: '.message.result',
     staysPut: [WIDEST],
+  },
+  {
+    when: 'the host pauses the game while a co-host has the menu open, and the line that pauses the game becomes the one that calls the pause off, where it lay',
+    build(rig) {
+      const table = viewerRunsTheTable(rig);
+
+      table.dealNext({ holes: holesFor(TABLE_OF_SIX) });
+
+      return table;
+    },
+    open: openTheMenu,
+    step: (table) => table.act(WIDEST, { type: 'pause' }),
+    then: menuStartsWith('start', 'Call off the pause'),
+  },
+  {
+    when: 'the first showdown of the night gives someone the high hand while a co-host has the menu open, and the line that pays it comes in over the lines under it',
+    build(rig) {
+      const table = rig.table(players(TABLE_OF_SIX, EVEN), { highHandBonus: 50 });
+
+      table.act(WIDEST, { type: 'setCohost', playerId: table.auth(VIEWER).id, on: true });
+      table.deal({ button: 0, holes: holesFor(TABLE_OF_SIX), board: ONE_BOARD });
+
+      return table;
+    },
+    open: openTheMenu,
+    step: (table) => table.play(passive, (view) => view.tonight.highHand.next !== null),
+    then: '.menu [data-action="highHand"]',
+  },
+  {
+    when: 'a player is removed from their seat while they have the menu open at its end, and its lines close up over Show or muck and Stand up, which go',
+    build: (rig) => tableWithTrophy(rig, TABLE_OF_SIX, EVEN),
+    async open(page) {
+      await openTheMenu(page);
+      await page.locator('.menu [data-action="lobby"]').scrollIntoViewIfNeeded();
+    },
+    step: (table) => table.act(WIDEST, { type: 'kick', playerId: table.auth(VIEWER).id }),
+    then: '.menu:not(:has([data-action="stand"]))',
   },
 ];
 

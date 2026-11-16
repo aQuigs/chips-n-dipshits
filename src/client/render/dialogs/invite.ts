@@ -1,6 +1,6 @@
 import type { TableView } from '../../../engine/view.ts';
 import { h } from '../../ui.ts';
-import { copyOnClick, everyone, frame } from './dialog.ts';
+import { copyOnClick, frame } from './dialog.ts';
 import type { DialogHandlers, DialogKind } from './dialog.ts';
 
 function copyRow(id: string, label: string, value: string, handlers: DialogHandlers, warning?: string): HTMLElement {
@@ -22,8 +22,8 @@ function invite(view: TableView, handlers: DialogHandlers): HTMLElement {
   );
 }
 
+/** Opened from the top bar, which has its button on every screen and in every state of the table, so the menu has no line for it. */
 export const inviteDialog: DialogKind<'invite'> = {
   kind: 'invite',
-  menu: { label: 'Invite players', who: everyone },
   draw: invite,
 };

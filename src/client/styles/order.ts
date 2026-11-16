@@ -16,6 +16,7 @@ export const STYLESHEETS = [
   'sideways.css',
   'feed.css',
   'dialogs.css',
+  'menu.css',
   'ledger.css',
   'invite.css',
   'history.css',

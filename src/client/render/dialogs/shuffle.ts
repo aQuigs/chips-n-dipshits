@@ -4,17 +4,9 @@ import type { MenuAction } from './menu.ts';
 
 const seatedCount = (view: TableView): number => view.seats.filter((seat) => seat !== null).length;
 
-function note(view: TableView): string {
-  if (view.shuffleAfterHand) {
-    return 'Set for when this hand ends';
-  }
-
-  return view.hand ? 'Everyone gets a random seat when this hand ends' : 'Everyone gets a random seat';
-}
-
 export const shuffleSeats: MenuAction = {
   action: 'shuffle',
-  menu: { label: 'Shuffle seats', who: (view) => hostOrCohost(view) && seatedCount(view) >= 2, note },
+  menu: { group: 'run', label: 'Shuffle seats', who: (view) => hostOrCohost(view) && seatedCount(view) >= 2, state: (view) => (view.shuffleAfterHand ? 'Set for when this hand ends' : null) },
   pick: (handlers) =>
     handlers.open({
       kind: 'confirm',

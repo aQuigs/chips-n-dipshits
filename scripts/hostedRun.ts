@@ -1283,7 +1283,7 @@ try {
       await guest.click('[data-action="menu"]');
       await guest.waitForSelector('.menu [data-action="who"]');
       assert.equal(await guest.locator('.menu [data-action="players"], .menu [data-action="settings"]').count(), 0, 'picking the host gave the guest the host’s menu');
-      assert.equal(await guest.innerText('.menu [data-action="who"] small'), 'On the list of players as Quigs');
+      assert.equal(await guest.innerText('.menu [data-action="who"] small'), 'Quigs');
       await guest.click('[data-action="close"]');
       assert.notEqual(inAddress(guest, 'me'), inAddress(host, 'me'));
       assert.equal(await remembered(guest, first), guestSeat, 'saying otherwise took the seat at the first table out of the browser');

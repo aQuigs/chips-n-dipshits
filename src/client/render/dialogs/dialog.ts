@@ -35,13 +35,26 @@ export interface DialogHandlers {
   pickSeat(playerId: string): void;
 }
 
+/** The parts of the menu, each under its heading, in the order the menu shows them. */
+export const MENU_GROUPS = {
+  run: 'Run the game',
+  scores: 'Scores and history',
+  you: 'You',
+  leave: 'Leave',
+} as const;
+
 /** A dialog's line in the menu. */
 export interface MenuEntry {
-  label: string;
+  group: keyof typeof MENU_GROUPS;
+  /** What the line does, in the words for where the table stands when those differ. */
+  label: string | ((view: TableView) => string);
   /** Who gets to see it: `everyone`, `seated`, `hostOrCohost` or `hostAlone` (`roles.ts`), or a rule of its own. */
   who(view: TableView): boolean;
-  /** The small print under the label. */
-  note?(view: TableView, handlers: DialogHandlers): string;
+  /**
+   * How things stand behind the line, where the viewer needs that before opening it: who waits, what it
+   * is set to. Never what the label already says, so most lines have none, and null is none for now.
+   */
+  state?(view: TableView, handlers: DialogHandlers): string | null;
 }
 
 export const everyone = (): boolean => true;

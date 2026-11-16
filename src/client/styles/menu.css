@@ -1,0 +1,56 @@
+/* ---- The table's menu ---- */
+
+.menu {
+  display: grid;
+  gap: 18px;
+}
+
+.menu section {
+  gap: 6px;
+}
+
+/* A part of the menu is one card, its lines parted by a hairline: the lines of a part read as belonging together, and none costs the room of a gap */
+.menu-group {
+  display: grid;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-raised);
+}
+
+/*
+ * A line is its label, with how things stand at its far end. Where the two have no room side by side,
+ * on a narrow phone or at a larger text size, the second goes under the first whole, never cut short.
+ */
+.menu-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0 12px;
+  padding: 11px 14px;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  font-weight: 600;
+  text-align: left;
+}
+
+.menu-item + .menu-item {
+  border-top: 1px solid var(--line);
+}
+
+/* The card's corners, so the ring around a line that has the keyboard follows them */
+.menu-item:first-child {
+  border-top-left-radius: var(--radius);
+  border-top-right-radius: var(--radius);
+}
+
+.menu-item:last-child {
+  border-bottom-right-radius: var(--radius);
+  border-bottom-left-radius: var(--radius);
+}
+
+.menu-item small {
+  color: var(--muted);
+  font-weight: 400;
+}

@@ -1,6 +1,6 @@
 import type { EarnedBadge } from '../engine/badges.ts';
 import type { HandEvent } from '../engine/events.ts';
-import type { FeedEntry, Reaction } from '../engine/types.ts';
+import type { FeedEntry, Reaction, RequestKind } from '../engine/types.ts';
 import type { TableView } from '../engine/view.ts';
 
 // Older than this when it reaches the page, a thing is something the viewer missed, as while their phone slept, not something happening
@@ -37,6 +37,8 @@ export interface TableChange {
   wentBack: boolean;
   /** The viewer's own move among `events` that the table made for them, chosen ahead of their turn (`PendingChoice` says so); undefined when they made none, or tapped it. */
   madeAhead?: HandEvent;
+  /** The viewer's own request that this view shows the host turned down (`RequestNews` says so); undefined when none was. */
+  turnedDown?: RequestKind;
   /** The server's time as the page reckons it when the view was put on screen, which is later than the view's own when it was slow to arrive. */
   now: number;
   /**

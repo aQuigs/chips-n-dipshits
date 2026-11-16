@@ -70,6 +70,12 @@
   white-space: nowrap;
 }
 
+/* A state of the table, where the hand's number usually is (`headline`): in the color of what is on, to be noticed there */
+.pill.news {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 /* On a small phone what the bar gives up between its parts goes to the table's name, which a wide font leaves the least of */
 @container app (max-width: 420px) {
   .topbar {

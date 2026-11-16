@@ -9,6 +9,7 @@ import { handSounds } from './effects/handSounds.ts';
 import { honorToasts } from './effects/honorToasts.ts';
 import { nightRecap } from './effects/nightRecap.ts';
 import { chatNudges } from './effects/nudges.ts';
+import { ownNews } from './effects/ownNews.ts';
 import { preActionLines } from './effects/preActionLines.ts';
 import { reactions } from './effects/reactions.ts';
 import { replayMakesWay } from './effects/replayMakesWay.ts';
@@ -61,7 +62,7 @@ export interface EffectContext {
   dealt: DealtMemory;
   /** A hand being played back over the table, which the game can have put aside when it needs the viewer. */
   replay: ReplaySetAside;
-  /** Shows the viewer a line at the top of the screen for a few seconds. */
+  /** Shows the viewer a line for a few seconds, over the chat's bar. */
   toast(message: string): void;
   /** The way to say a line to a screen reader alone, for what the screen shows without words. */
   say: Announcer;
@@ -95,6 +96,7 @@ const TABLE_EFFECTS: (() => TableEffect)[] = [
   dealtCards,
   replayMakesWay,
   preActionLines,
+  ownNews,
   spokenPlay,
 ];
 

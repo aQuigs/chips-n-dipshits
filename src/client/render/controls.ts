@@ -6,12 +6,13 @@ import { capitalized, cardWords } from '../../engine/handNames.ts';
 import { preActionFor } from '../../engine/preAction.ts';
 import { timesText } from '../../engine/runVote.ts';
 import { straddlesAllowed } from '../../engine/straddles.ts';
-import type { Command, PassedOver } from '../../engine/types.ts';
+import type { Command, PassedOver, RequestKind } from '../../engine/types.ts';
 import type { HandView, SeatView, TableView } from '../../engine/view.ts';
 import { ownDeadline } from '../actionClock.ts';
 import { askedSays, chipsAsked, outOfChips, roomToAdd } from '../buyIns.ts';
 import { lastOnRecord } from '../handRecords.ts';
 import { HOTKEYS } from '../hotkeys.ts';
+import { timedOutText, turnedDownText } from '../ownNews.ts';
 import { choiceOn } from '../pendingChoice.ts';
 import { AHEAD_ORDER, aheadLabel } from '../preActions.ts';
 import { FIT_ROW, fitted } from '../rowFit.ts';
@@ -439,11 +440,17 @@ function passedOverText(view: TableView, passed: PassedOver): (HTMLElement | str
   return ['No straddle this hand: ', ...reason()];
 }
 
-/** A line the bar has for the viewer alone, under what everyone is waiting for: about blinds they owe, or a straddle they did not get to post. */
+/**
+ * A line the bar has for the viewer alone. Under what everyone is waiting for: about blinds they owe, a
+ * request of theirs that was turned down, or a straddle they did not get to post. In its place, where
+ * it matters more to them than who the table waits for: that they ran out of time and are out.
+ */
 interface OwnNote {
-  about: 'owed' | 'straddle';
+  about: 'owed' | 'straddle' | 'timed-out' | 'turned-down';
   text: (HTMLElement | string)[];
 }
+
+const ownNoteEl = (own: OwnNote): HTMLElement => h(`div.own-note.${own.about}-note`, null, own.text);
 
 /** What tells the choices of a move ahead apart from the buttons of a turn, wherever one is looked for by its action. */
 export const AHEAD_ACTION = 'ahead-';
@@ -492,35 +499,50 @@ function aheadEl(view: TableView, hand: HandView, stack: number, handlers: Contr
   return h('div.ahead', { role: 'group', 'aria-label': 'Your move when the action reaches you' }, h('span.ahead-title', null, 'On your turn'), buttons);
 }
 
-/** What the bar says while the viewer has no move to make. With `sharing`, a line of buttons under it (`spareLine`) comes out of the same height, and the notes are set closer for it (pre-action.css). */
-function waitingEl(text: string, view: TableView, own: OwnNote | null = null, ahead: HTMLElement | null = null, sharing = false): HTMLElement {
+/**
+ * What the bar says while the viewer has no move to make: `first` is what everyone is waiting for, or
+ * a line for the viewer alone in its place. With `sharing`, a line of buttons under it (`spareLine`)
+ * comes out of the same height, and the notes are set closer for it (pre-action.css).
+ */
+function waitingEl(first: string | OwnNote, view: TableView, own: OwnNote | null = null, ahead: HTMLElement | null = null, sharing = false): HTMLElement {
   const note = nextHandNote(view);
+  // Beside the choices the bar keeps the height of a turn, and its first line is cut short before it takes a second: the whole of it is its title
+  const line = typeof first !== 'string' ? ownNoteEl(first) : ahead ? h('span.waiting-for', { title: first }, first) : first;
 
   return h(
     'div.waiting',
     { class: [ahead && 'choosing', (ahead || sharing) && 'set-close'].filter(Boolean).join(' ') },
     ahead,
-    // Beside the choices the bar keeps the height of a turn, and its first line is cut short before it takes a second: the whole of it is its title
-    ahead ? h('span.waiting-for', { title: text }, text) : text,
+    line,
     note.length > 0 ? h('div.next-hand', null, note.map((part) => h('span', null, part))) : null,
-    own ? h(`div.own-note.${own.about}-note`, null, own.text) : null,
+    own && ownNoteEl(own),
   );
 }
 
-/** The viewer's own line: a player in a hand owes nothing, so there is never more than one thing to say. */
-function ownNote(owed: string | null, hand: HandView | null, view: TableView): OwnNote | null {
+/**
+ * The viewer's own line under what everyone is waiting for, the one that matters most: what they owe
+ * explains the buttons under it, and a straddle passed over is news of this hand only.
+ */
+function ownNote(owed: string | null, hand: HandView | null, view: TableView, turnedDown: RequestKind | null): OwnNote | null {
   if (owed) {
     return { about: 'owed', text: [owed] };
+  }
+
+  if (turnedDown) {
+    return { about: 'turned-down', text: [turnedDownText(turnedDown)] };
   }
 
   return hand?.passedOver ? { about: 'straddle', text: passedOverText(view, hand.passedOver) } : null;
 }
 
-function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandlers, waiting: Waiting | null): HTMLElement {
+/** What the bar says first to a player the clock ran out on, until they are back: with the night over nothing is left to sit out of. */
+const timedOutNote = (view: TableView, seat: SeatView): OwnNote | null => (seat.away && !nightOver(view) ? { about: 'timed-out', text: [timedOutText(view, seat)] } : null);
+
+function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandlers, waiting: Waiting | null, turnedDown: RequestKind | null): HTMLElement {
   const hand = view.hand;
   // With the night over no hand is coming to settle anything in; the seat still says who is waiting
   const settling = nightOver(view) ? { note: null, buttons: [] } : settlingOf(view, seat, handlers);
-  const own = ownNote(settling.note, hand, view);
+  const own = ownNote(settling.note, hand, view, turnedDown);
   const showCards = showCardsEl(view, seat, handlers);
   const replay = own ? null : replayEl(view, seat, handlers);
   // Once the night is over the bar offers the last hand to see again, and nothing else
@@ -538,7 +560,7 @@ function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandle
   } else if (hand?.canVote) {
     main = answering(hand, runsQuestion(hand, handlers));
   } else {
-    const text = waiting === 'unconfirmed' ? `Waiting for the table to confirm your ${seat.lastAction ?? 'move'}…` : waitingText(view, hand);
+    const text = waiting === 'unconfirmed' ? `Waiting for the table to confirm your ${seat.lastAction ?? 'move'}…` : (timedOutNote(view, seat) ?? waitingText(view, hand));
 
     main = waitingEl(text, view, own, hand && aheadEl(view, hand, seat.stack, handlers), line !== null);
   }
@@ -673,12 +695,14 @@ function showCardsEl(view: TableView, seat: SeatView, handlers: ControlHandlers)
  * Everything the viewer can do right now, for the bar under the table. `waiting` says how a move of
  * theirs that is out with the server is to be taken (`ShownTable.waiting`): with no buttons for one
  * that is only sent, and with a line that says so for one the server has been slow to confirm.
+ * `turnedDown` is the kind of request of theirs that was turned down, while the bar still says so
+ * (`ShownTable.turnedDown`).
  */
-export function controlsEl(view: TableView, handlers: ControlHandlers, waiting: Waiting | null): HTMLElement {
+export function controlsEl(view: TableView, handlers: ControlHandlers, waiting: Waiting | null, turnedDown: RequestKind | null): HTMLElement {
   const seat = view.you.seat === null ? null : view.seats[view.you.seat];
 
   if (seat) {
-    return seatedControls(view, seat, handlers, waiting);
+    return seatedControls(view, seat, handlers, waiting, turnedDown);
   }
 
   const myRequest = view.requests.find((request) => request.playerId === view.you.id);
@@ -689,6 +713,10 @@ export function controlsEl(view: TableView, handlers: ControlHandlers, waiting: 
       waitingEl(`Asked the host for seat ${myRequest.seat + 1} with ${formatAmount(myRequest.amount, view.config)}`, view),
       h(`div.extras.${FIT_ROW}`, null, commandButton('button.chip-btn', 'cancel-request', 'Cancel request', () => handlers.send({ type: 'cancelRequest' }))),
     );
+  }
+
+  if (turnedDown && !nightOver(view)) {
+    return h('div.controls', null, waitingEl({ about: 'turned-down', text: [`${turnedDownText(turnedDown)}. Pick an open seat to ask again.`] }, view));
   }
 
   return h('div.controls', null, waitingEl(nightOver(view) ? 'The night is over' : 'You are watching. Pick an open seat to play.', view));
@@ -710,7 +738,7 @@ export function controlsSignature(view: TableView): string {
   const hand = view.hand;
 
   return JSON.stringify([
-    seat && [seat.stack, seat.pendingAdd, seat.sittingOut, seat.away, seat.straddles, seat.alwaysChop, seat.leaving, seat.owesBigBlind, seat.owesSmallBlind, seat.comesIn, seat.shown],
+    seat && [seat.stack, seat.pendingAdd, seat.sittingOut, timedOutNote(view, seat), seat.straddles, seat.alwaysChop, seat.leaving, seat.owesBigBlind, seat.owesSmallBlind, seat.comesIn, seat.shown],
     hand && [hand.number, hand.stage, hand.street, hand.toAct, hand.turn, hand.currentBet, hand.pot, hand.options, hand.canOfferChop, hand.canAnswerChop, hand.canVote, hand.canShow, hand.passedOver],
     [hand?.ahead, view.preAction],
     [view.running, view.nextHandAt !== null, view.handCount === 0, nightOver(view), hand?.stage === 'done' && onLastHand(view), seat && handToReplay(view, seat)],

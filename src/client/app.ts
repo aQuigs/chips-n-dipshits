@@ -11,6 +11,7 @@ import type { SendOutcome, Session } from './connection.ts';
 import { TableEffects } from './effects.ts';
 import { lastOnRecord } from './handRecords.ts';
 import { HotkeyPresser } from './hotkeyPresser.ts';
+import { headline } from './headline.ts';
 import { playerFor, RememberedPlayer } from './knownPlayers.ts';
 import type { Answer } from './knownPlayers.ts';
 import { KeyboardPlace } from './keyboardPlace.ts';
@@ -44,7 +45,6 @@ import { createFeed } from './render/feed.ts';
 import type { Feed } from './render/feed.ts';
 import { joinScreen, lobbyEl, noticeEl, putAwayEl, welcomeBackEl } from './render/lobby.ts';
 import type { AsksWho, LobbyScreen, TableLeft, Visitor } from './render/lobby.ts';
-import { nightOver } from './render/night.ts';
 import { outdatedEl } from './render/outdated.ts';
 import { hostOrCohost } from './render/roles.ts';
 import { standingsEl } from './render/standings.ts';
@@ -674,6 +674,8 @@ export class App {
       (text) => void this.send({ type: 'chat', text }),
       () => ({ deck: this.prefs.get('deck'), pictures: this.prefs.get('gifs'), shown: sendersShown(this.prefs, mutes, table.session.auth.id, 'chat') }),
       picker.toggleElement,
+      // At a table word of something lies over the chat's bar, clear of the table and of the top bar. `mount` has it back when the table is left
+      this.toastEl,
     );
     const stage = new Slot(h('main.stage', { 'aria-label': LABELS.table, tabindex: -1 }));
     const bar = h('section.controls-slot', { 'aria-label': LABELS.bar, tabindex: -1 });
@@ -1032,10 +1034,11 @@ export class App {
 
   private drawControls(screen: TableScreen, view: TableView): void {
     const waiting = screen.shown.waiting;
+    const turnedDown = screen.shown.turnedDown;
     // A choice of a move ahead draws the bar again the moment it is pressed, and whoever pressed it with a key is still on it:
     // the slot finds that button again. It finds no other, so no key press lands on a button of the turn that came up in its place
     const redrawn = screen.controls.draw(
-      [controlsSignature(view), waiting],
+      [controlsSignature(view), waiting, turnedDown],
       () =>
         controlsEl(
           view,
@@ -1050,6 +1053,7 @@ export class App {
             say: (message) => this.announcer.status(message),
           },
           waiting,
+          turnedDown,
         ),
       // Before the tap guard looks: a label that shortens moves the buttons beside it
       () => screen.rows.drawn(),
@@ -1099,16 +1103,7 @@ export class App {
 
   private drawTopbar(screen: TableScreen, view: TableView): void {
     const waiting = hostOrCohost(view) ? view.requests.length : 0;
-    let state = '';
-
-    if (view.hand) {
-      state = `Hand #${view.hand.number}`;
-    } else if (nightOver(view)) {
-      state = 'Night over';
-    } else if (!view.running) {
-      state = view.handCount === 0 ? 'Not started' : 'Paused';
-    }
-
+    const state = headline(view);
     const blinds = blindsText(view.config);
     const ante = anteText(view.config);
 
@@ -1117,7 +1112,7 @@ export class App {
       // The ante takes the place of the word: a small phone has no room for both beside the hand's number.
       // It is a piece of its own, so where there is no room for it either it moves to the next line whole
       h('div.title', null, h('b', { role: 'heading', 'aria-level': '1', title: view.config.name }, view.config.name), ante ? h('span', null, `${blinds} `, h('span.ante', null, `· ${ante}`)) : h('span', null, `${blinds} hold’em`)),
-      state ? h('span.pill', null, state) : null,
+      h('span.pill', { class: state.news && 'news' }, state.says),
       voiceLinkEl(view.config.voiceLink),
       h('button.btn.small', { type: 'button', 'data-action': 'invite', onclick: () => this.openDialog({ kind: 'invite' }) }, 'Invite'),
     ]);

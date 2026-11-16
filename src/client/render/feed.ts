@@ -41,11 +41,12 @@ function latestText(entry: FeedEntry, current: FeedLook): (string | HTMLElement)
 /**
  * The dealer's play-by-play and the table chat in one list. Built once and updated in place, so what
  * someone is typing and where they have scrolled to both survive new entries arriving. `beside` stands at
- * the end of its bar, which is there in every shape of the page. The bar shows the newest line in words
- * alone; a GIF shows only in the opened list, and only once its line is in sight there, so nothing is
- * fetched for a closed chat or a line scrolled past.
+ * the end of its bar, which is there in every shape of the page, and `over` lies over the bar while it
+ * has something to show (toast.css). The bar shows the newest line in words alone; a GIF shows only in
+ * the opened list, and only once its line is in sight there, so nothing is fetched for a closed chat or
+ * a line scrolled past.
  */
-export function createFeed(onChat: (text: string) => void, look: () => FeedLook, beside: HTMLElement | null = null): Feed {
+export function createFeed(onChat: (text: string) => void, look: () => FeedLook, beside: HTMLElement | null = null, over: HTMLElement | null = null): Feed {
   // Not a live region: new lines are said by the page's announcer, once, whether or not this list is open.
   // It takes the keyboard so that it can be scrolled without a pointer
   const list = h('ol.entries', { role: 'list', 'aria-label': LABELS.lines, tabindex: 0 });
@@ -62,7 +63,7 @@ export function createFeed(onChat: (text: string) => void, look: () => FeedLook,
       .sort((a, b) => a.localeCompare(b)),
   );
 
-  const element = h('aside.feed', { 'aria-label': LABELS.feed }, h('div.feed-bar', null, toggle, beside), h('div.feed-body', { id: 'feed-body' }, list, box.element));
+  const element = h('aside.feed', { 'aria-label': LABELS.feed }, h('div.feed-bar', null, toggle, beside, over), h('div.feed-body', { id: 'feed-body' }, list, box.element));
 
   toggle.addEventListener('click', () => {
     const open = element.classList.toggle('open');

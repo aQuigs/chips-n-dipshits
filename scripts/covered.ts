@@ -29,7 +29,10 @@ export const ALLOWED_ON_TOP: OnTop[] = [
   { what: 'a hand played back, which is modal', is: '.replay' },
   { what: 'word that the page is out of date, which is modal', is: '.outdated' },
   { what: 'a chip, a card or a thrown thing in flight, gone when it lands', is: '.stand-in' },
-  { what: 'a toast, over the top bar and nothing of the game', is: '.toast', over: '.topbar *, .brand *' },
+  // Beside the table the chat's column is narrower than a phone, and words that take more than the bar there grow down onto the oldest line in sight
+  { what: 'a toast at a table, over the chat’s bar and the chat’s lines under it, and nothing of the game or of the top bar', is: '.feed-bar > .toast', over: '.feed-bar *, .feed .entries *' },
+  { what: 'a toast away from a table, over the top of the screen', is: '.cnd > .toast', over: '.brand *' },
+  { what: 'a toast while a dialog or a replay is in front of the table, over the top bar they have shut off', is: '.app:has(> .overlay:not([hidden]), + .replay:not([hidden])) .toast', over: '.topbar *' },
   { what: 'a seat’s plate, over the foot of the cards behind it, never their rank or more than half their suit', is: '.plate', over: '.hole .pip', sameAs: '.seat', upTo: 0.5 },
   { what: 'a reaction or a landed throw, over another player’s cards and name, never the board or the pot', is: '.seat-reaction:not(.own)', over: '.seat:not(.me) .hole *, .seat:not(.me) .plate .name *' },
   { what: 'a reaction or a landed throw on the viewer’s own seat, over their own name, stack and status, never their cards', is: '.seat-reaction.own', over: '.seat.me .plate *' },

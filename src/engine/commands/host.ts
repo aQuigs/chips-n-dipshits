@@ -11,7 +11,7 @@ import { actorName, dropCohost, requireMayRemove } from '../hosts.ts';
 import { callLastHands, endNight, nightIsOver, onLastHand, restartNight } from '../night.ts';
 import { movePlayer, shuffleEveryone } from '../reseating.ts';
 import { grant, isDealtIn, leaveSeat, turnAway } from '../seating.ts';
-import { addFeed, memberNamed, recordLedger, seatedMember, seatIndexOf } from '../seats.ts';
+import { addFeed, memberNamed, recordLedger, seatedMember, seatIndexOf, turnedDownWords } from '../seats.ts';
 import { dropStraddlesNotAllowed, STRADDLES, straddlesAllowed } from '../straddles.ts';
 import { transfer } from '../transfers.ts';
 import { GameError, SEAT_COUNT } from '../types.ts';
@@ -62,7 +62,7 @@ export const deny: Handler<'deny'> = {
       state,
       ctx,
       (r) => r.playerId === command.playerId,
-      (name, r) => (r.kind === 'seat' ? `${who} turned down ${name}'s request for a seat` : `${who} turned down ${name}'s request for chips`),
+      (name, r) => `${who}${turnedDownWords(name, r.kind)}`,
     );
   },
 };

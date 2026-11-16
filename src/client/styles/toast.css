@@ -1,9 +1,8 @@
 /* ---- Toast ---- */
 
 /*
- * Word of something, for a few seconds, over the top bar and no lower: under the bar are the cards of
- * the seats along the top of the table. Two lines of it fit the bar, and taps go through it to the
- * menu and the buttons it lies on.
+ * Word of something, for a few seconds. Away from a table, and at one while a dialog or a replay is in
+ * front of it, it is at the top of the screen, where nothing under it is in use. Taps go through it.
  */
 .toast {
   position: fixed;
@@ -26,7 +25,7 @@
   pointer-events: none;
 }
 
-/* On a phone the words are many for the width, so the toast is the bar's whole width, where three lines fit its height */
+/* On a phone the words are many for the width, so the toast is the screen's whole width */
 @container app (max-width: 559.98px) {
   .toast {
     top: 0;
@@ -36,5 +35,40 @@
     border-width: 0 0 1px;
     border-radius: 0;
     font-size: 13px;
+  }
+}
+
+.feed-bar {
+  position: relative;
+}
+
+/*
+ * At a table it lies over the chat's bar (`createFeed`), which holds two lines of it: over the top bar
+ * it hid the menu button and what the table's state is, and anywhere between the two it would be on
+ * the table's cards or on the buttons of a turn. The bar is the last thing on a phone's screen, so a
+ * line more than two grows upward, onto the foot of the bar under the table and well short of the
+ * moves. The newest line it covers is back in a few seconds.
+ */
+.app:not(:has(> .overlay:not([hidden]), + .replay:not([hidden]))) .feed-bar > .toast {
+  position: absolute;
+  inset: auto 0 0;
+  display: grid;
+  place-items: center;
+  width: auto;
+  max-width: none;
+  min-height: 100%;
+  padding: 3px 12px;
+  border-width: 1px 0 0;
+  border-radius: 0;
+  box-shadow: none;
+  font-size: 13px;
+  transform: none;
+}
+
+/* Beside the table the chat's bar is right under the top bar, with the chat's lines under it: a line more than two grows downward */
+@container app (min-width: 900px) and (min-height: 521px) {
+  .app:not(:has(> .overlay:not([hidden]), + .replay:not([hidden]))) .feed-bar > .toast {
+    inset: 0 0 auto;
+    border-width: 0 0 1px;
   }
 }

@@ -45,6 +45,7 @@ import { menuChecks } from './menuChecks.ts';
 import { ownClockChecks } from './ownClockChecks.ts';
 import { PLAYERS_CHECKS } from './playersChecks.ts';
 import { preferencesChecks } from './preferencesChecks.ts';
+import { tableSaysChecks } from './tableSaysChecks.ts';
 import { namedByTheWatch, tapsLive, tellingOf, watched, watchTheBar } from './underTheFinger.ts';
 
 const OUT = fileURLToPath(new URL('../screenshots/', import.meta.url));
@@ -13853,6 +13854,7 @@ const CHECKS: Check[] = [
   ...confirmChecks(OUT),
   ...ownClockChecks(OUT),
   ...PLAYERS_CHECKS,
+  ...tableSaysChecks(OUT),
 ];
 
 await mkdir(OUT, { recursive: true });

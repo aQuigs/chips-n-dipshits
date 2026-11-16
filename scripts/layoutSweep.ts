@@ -159,9 +159,26 @@ interface TableState {
   /** How many seats are taken, each a table of its own. */
   seats: number[];
   build(rig: Rig, seats: number): RigTable;
-  /** What the viewer's own page does once it is open. */
-  onPage?(page: Page): Promise<void>;
+  /** What the viewer's own page does once it is open, or sees happen at the table. */
+  onPage?(page: Page, table: RigTable): Promise<void>;
   fleeting?: Fleeting;
+}
+
+/** The clock runs out on the viewer, with a check open to them: the hand goes on, played for them until they are back. */
+function clockRunsOutOnTheViewer(table: RigTable, rig: Rig, seats: number): void {
+  // The button so that the viewer is the big blind, who may check once everyone has called
+  table.deal({ button: seats - 2, holes: holesFor(seats) });
+  table.play((_view, name) => (name === VIEWER ? null : { type: 'call' }), (view) => view.hand!.toAct === 0);
+  rig.advance(table.view(VIEWER).hand!.deadline! - rig.now() + 1);
+  assert.equal(table.view(VIEWER).seats[0]!.away, true, 'the clock did not run out on the viewer');
+}
+
+/** The host turns down what the viewer asks for now, as their page looks on: a page knows of it only by having seen it happen. */
+async function turnedDownAsThePageLooksOn(page: Page, table: RigTable, asks: Command): Promise<void> {
+  table.act(VIEWER, asks);
+  await table.heardBy(page);
+  table.act(WIDEST, { type: 'deny', playerId: table.auth(VIEWER).id });
+  await page.waitForSelector('.controls .turned-down-note');
 }
 
 const REACTION_MARKS = `document.querySelectorAll('.seat-reaction:not([hidden])').length`;
@@ -358,6 +375,46 @@ const TABLE_STATES = {
     },
     fleeting: reactionsFlying,
   },
+  timedOut: {
+    shows: 'the bar of a player the clock ran out on, whose hand is played for them, with word that the chips they asked for were turned down',
+    seats: [9],
+    build(rig, seats) {
+      const table = tableWithTrophy(rig, seats, EVEN, { actionSeconds: 30 });
+
+      clockRunsOutOnTheViewer(table, rig, seats);
+
+      return table;
+    },
+    onPage: (page, table) => turnedDownAsThePageLooksOn(page, table, { type: 'requestRebuy', amount: LONGEST_WRITTEN_OUT }),
+  },
+  timedOutOwing: {
+    shows: 'the bar of a player the clock ran out on a hand ago, with the blind they have missed since to settle',
+    seats: [9],
+    build(rig, seats) {
+      const table = tableWithTrophy(rig, seats, EVEN, { actionSeconds: 30 });
+
+      clockRunsOutOnTheViewer(table, rig, seats);
+      playOut(table, folding);
+      // The small blind passes the viewer, who is dealt no cards
+      table.dealNext();
+      assert.equal(table.view(VIEWER).seats[0]!.owesSmallBlind, true, 'the viewer missed no blind');
+
+      return table;
+    },
+  },
+  seatTurnedDown: {
+    shows: 'the bar of someone watching whose request for the one open seat was turned down',
+    seats: [9],
+    build(rig, seats) {
+      const table = rig.table(players(seats, EVEN).filter((player) => player.name !== VIEWER));
+
+      table.join(VIEWER);
+      table.deal({ button: 1 });
+
+      return table;
+    },
+    onPage: (page, table) => turnedDownAsThePageLooksOn(page, table, { type: 'requestSeat', seat: 0, buyIn: LONGEST_WRITTEN_OUT }),
+  },
 } satisfies Record<string, TableState>;
 
 interface Size {
@@ -390,11 +447,18 @@ const SHORT_TABLE_PX = 350;
 // Word of something earned, long enough for two lines on a phone
 const TWO_LINE_TOAST = 'You earned 🃏 Rivered and 🔥 Heater, and 🏆 the high hand with a straight flush, queen high';
 
+// A page that told a toast of its own takes it down on a timer, and would take this one down with it in the middle of a look: it is held up until it is taken down here
 const toastUp = (up: boolean) => `(() => {
   const toast = document.querySelector('.toast');
 
+  window.toastHeldUp?.disconnect();
   toast.textContent = ${JSON.stringify(TWO_LINE_TOAST)};
   toast.hidden = ${!up};
+
+  if (${up}) {
+    window.toastHeldUp = new MutationObserver(() => (toast.hidden = false));
+    window.toastHeldUp.observe(toast, { attributes: true, attributeFilter: ['hidden'] });
+  }
 })()`;
 
 /** Puts the page as `how` says, runs `look`, and puts it back for the next look. A table held to a height is let go by the next change of screen. */
@@ -600,7 +664,7 @@ async function sweepTable(sweep: Sweep, rig: Rig, table: RigTable, state: TableS
   const look = (page: Page, where: string) => sweep.look(page, `${seats} seats, ${where}`, () => unreadableOn(page, rig, table, state));
 
   const phone = await table.open(VIEWER, 'smallPhone');
-  await state.onPage?.(phone);
+  await state.onPage?.(phone, table);
 
   for (const size of PHONES) {
     await phone.setViewportSize(size);
@@ -613,7 +677,7 @@ async function sweepTable(sweep: Sweep, rig: Rig, table: RigTable, state: TableS
   await phone.close();
 
   const desktop = await table.open(VIEWER, 'desktop');
-  await state.onPage?.(desktop);
+  await state.onPage?.(desktop, table);
   await look(desktop, 'desktop');
 
   await desktop.evaluate(toastUp(true));
@@ -1036,7 +1100,7 @@ const KNOWN_DEFECTS: KnownDefect[] = [
     isIt: ({ kind, what }) => kind === 'cut off' && /\.plate > \.name/.test(what),
   },
   {
-    holds: 'a toast of two lines on a 360 phone is over the top bar and nothing of the table',
+    holds: 'a toast of two lines on a 360 phone is over the chat’s bar and nothing of the table, of the bar under it or of the top bar',
     state: TABLE_STATES.blinds,
     seats: 9,
     size: SMALL_STANDING,
@@ -2613,6 +2677,68 @@ const lookSeesWhatATapPassesThrough: Check = [
   },
 ];
 
+// Run in the page: gives the toast that is up more words, until it is a line taller than the chat's bar holds on this screen in this font
+const OUTGROW_THE_BAR = `(() => {
+  const toast = document.querySelector('.toast');
+  const bar = document.querySelector('.feed-bar');
+
+  for (let more = 0; more < 40 && toast.getBoundingClientRect().height <= bar.getBoundingClientRect().height + 1; more++) {
+    toast.textContent += ', and 🔥 Heater again';
+  }
+})()`;
+
+/**
+ * Where a toast lies, held to what it must not hide even when it runs longer than the page ever tells
+ * one: the top bar, with the menu button and the table's state, and the moves of a turn. Two lines of
+ * it, which is as long as the page tells one, hide nothing but the chat's bar: every look of the sweep
+ * with a toast up says so.
+ */
+const toastKeepsClear: Check = [
+  'a toast a line too long for the chat’s bar grows clear of the top bar and of the moves of a turn, on a 360 phone standing and lying and on the desktop, and is at the top of the screen, clear of a dialog, while one is up',
+  async (rig) => {
+    const table = waitingBehindTheLongestCall(rig, TABLE_OF_SIX);
+
+    table.play(others({ type: 'fold' }), viewersTurn);
+    const page = await table.open(VIEWER, 'smallPhone');
+
+    for (const size of [SMALL_STANDING, LYING, { name: 'the desktop', ...SCREENS.desktop }]) {
+      await page.setViewportSize(size);
+      await page.waitForSelector('.turn [data-action="call"]:enabled');
+      await settled(page);
+      await page.evaluate(toastUp(true));
+      await page.evaluate(OUTGROW_THE_BAR);
+
+      const [toast] = await boxes(page, '.toast');
+      const [bar] = await boxes(page, '.feed-bar');
+
+      assert.ok(toast && bar, `${size.name}: no toast is up over a chat’s bar`);
+      assert.ok(toast.bottom - toast.top > bar.bottom - bar.top + 1, `${size.name}: the toast is no taller than the chat’s bar, so nothing is shown of where it grows`);
+      assert.ok(overlap(toast, bar), `${size.name}: the toast is not over the chat’s bar`);
+      assert.ok(toast.top >= 0 && toast.bottom <= size.height + 0.5 && toast.left >= 0 && toast.right <= size.width + 0.5, `${size.name}: the toast runs off the screen: ${JSON.stringify(toast)}`);
+
+      for (const kept of ['.topbar', '.turn']) {
+        for (const box of await boxes(page, kept)) {
+          assert.ok(!overlap(toast, box), `${size.name}: the toast lies on ${kept}: ${JSON.stringify({ toast, box })}`);
+        }
+      }
+
+      await page.evaluate(toastUp(false));
+    }
+
+    await page.setViewportSize(SMALL_STANDING);
+    await page.click('[data-action="menu"]');
+    await page.waitForSelector('.overlay .dialog');
+    await page.evaluate(toastUp(true));
+
+    const [toast] = await boxes(page, '.toast');
+    const [dialog] = await boxes(page, '.overlay .dialog');
+
+    assert.ok(toast && dialog, 'no toast is up with a dialog');
+    assert.ok(toast.top < 1, `with a dialog up the toast is not at the top of the screen: ${JSON.stringify(toast)}`);
+    assert.ok(!overlap(toast, dialog), `the toast lies on the dialog: ${JSON.stringify({ toast, dialog })}`);
+  },
+];
+
 const STAGE_HEIGHT = `document.querySelector('.stage').getBoundingClientRect().height`;
 
 /** The bar that waits has more to say than the bar of a turn, and must not be the taller for it: the table would jump as the turn came. */
@@ -2927,7 +3053,7 @@ export function layoutSweep(picturesIn: string): Check[] {
       const page = await table.open(VIEWER, 'smallPhone');
       let found: Finding[] = [];
 
-      await state.onPage?.(page);
+      await state.onPage?.(page, table);
       await page.setViewportSize(defect.size);
       await lookWith(page, defect.size, defect.with, async () => {
         found = (await unreadableOn(page, rig, table, state)).filter(defect.isIt);
@@ -2938,5 +3064,5 @@ export function layoutSweep(picturesIn: string): Check[] {
     },
   ]);
 
-  return [...defects, replayFromTheBar(picturesIn), historyGainsTheHand, barKeepsTheTurnsHeight(picturesIn), barRowsKeepToOneLine(picturesIn), choicesKeepTheirPlaces, chatMakesWayForTheTurn(picturesIn), keyboardInTheBoxKeepsTheChat, lookSeesWhatATapPassesThrough, ...underTheFinger(), ...secondTapFindsNothingNew, ...secondTapPressesNothingOfADialog, commitsWaitFromWhenTheyAreDrawn, aRowThatMovesUpIsHeld, aHoldRunsFromWhenThePageIsFree, aHoldRunsOutOnTime, aPageInTheBackgroundLetsGo, onlyWhatCameUpOverAnotherIsHeld, marksFollowTheTableTurned, ...tables, ...screens];
+  return [...defects, replayFromTheBar(picturesIn), historyGainsTheHand, barKeepsTheTurnsHeight(picturesIn), barRowsKeepToOneLine(picturesIn), choicesKeepTheirPlaces, chatMakesWayForTheTurn(picturesIn), keyboardInTheBoxKeepsTheChat, lookSeesWhatATapPassesThrough, toastKeepsClear, ...underTheFinger(), ...secondTapFindsNothingNew, ...secondTapPressesNothingOfADialog, commitsWaitFromWhenTheyAreDrawn, aRowThatMovesUpIsHeld, aHoldRunsFromWhenThePageIsFree, aHoldRunsOutOnTime, aPageInTheBackgroundLetsGo, onlyWhatCameUpOverAnotherIsHeld, marksFollowTheTableTurned, ...tables, ...screens];
 }

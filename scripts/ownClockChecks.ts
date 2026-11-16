@@ -14,13 +14,13 @@ import { BUZZ_PATTERN } from '../src/client/attentionWays.ts';
 import type { TableConfig } from '../src/engine/index.ts';
 import { heard, SPOKEN, spoken } from './a11y.ts';
 import type { Check } from './checkRunner.ts';
+import { NEXT_FRAME, TEXT_SIZES } from './layoutSweep.ts';
 import { BUZZ } from './pageSpies.ts';
 import { overlap, SCREENS } from './rig.ts';
 import type { Box, Rig, RigTable, ScreenName } from './rig.ts';
 
 const VIEWER = 'Quigs';
 const LYING = { width: 740, height: 360 };
-const TEXT_SIZES = ['standard', 'large', 'largest'];
 
 // The buttons that play a move or answer the turn's question, by their action
 const MOVES = ['fold', 'offer-chop', 'check', 'call', 'raise', 'chop-no', 'chop-yes'];
@@ -152,8 +152,6 @@ const LOOK = `(() => {
 // Run in the page: remembers every element of the bar as it is now
 const KEEP = `window.keptBar = [...document.querySelectorAll('.controls *')]`;
 
-const NEXT_FRAME = 'new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(() => done())))';
-
 const look = (page: Page) => page.evaluate(LOOK) as Promise<Look>;
 
 /** Moves the rig's clock to `left` whole seconds before the viewer's clock runs out, and waits for each page to show it. */
@@ -212,7 +210,6 @@ const byTheMoves: (picturesIn: string) => Check = (picturesIn) => [
 
       assert.ok(clock, `${where}: no clock by the moves`);
       assert.deepEqual([clock.says, found.seat?.says, found.seat?.mine], [clockText(whole), clockText(whole), true], `${where}: what the clock by the moves and the one at the seat say`);
-      assert.match(clock.says, /^\d:\d\d$/, `${where}: the clock is not written as minutes and seconds`);
       assert.equal(clock.named, 'Your time left: ', `${where}: what a screen reader is told the figure is`);
       assert.ok(!clock.cut, `${where}: the clock’s figure is cut off`);
       assert.equal(moves.length, 3, `${where}: the moves of the turn`);

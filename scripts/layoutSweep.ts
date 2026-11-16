@@ -436,7 +436,7 @@ const SETTLED = `(() => {
   return table.classList.contains(room.height > 0 && room.width / room.height >= ${WIDE_ASPECT} ? 'wide' : 'tall');
 })()`;
 
-const NEXT_FRAME = 'new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(() => done())))';
+export const NEXT_FRAME = 'new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(() => done())))';
 
 /** Waits until the page has laid itself out for the room it now has. */
 async function settled(page: Page): Promise<void> {
@@ -2688,7 +2688,7 @@ const BAR_STATES: BarState[] = [
   { name: 'out of chips with the hand lost, and asked to add some', build: outOfChips, row: ['Sit out next hand', 'Straddle: off', 'Add chips'] },
 ];
 
-const TEXT_SIZES = ['standard', 'large', 'largest'];
+export const TEXT_SIZES = ['standard', 'large', 'largest'];
 
 // Run in the page: the table's height, and of each row of the bar that is held to one line, what a player would find wrong with it
 const BAR_ROWS = `(() => {

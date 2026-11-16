@@ -96,7 +96,6 @@
 @container app (min-width: 640px) and (min-height: 521px) {
   .controls.seated > .turn:has(> .own-clock, > .sizing > .own-clock) {
     grid-template-columns: auto auto minmax(0, 1fr);
-    column-gap: 8px;
   }
 
   .sizing:has(> .own-clock) {

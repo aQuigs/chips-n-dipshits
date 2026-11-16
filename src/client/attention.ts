@@ -42,9 +42,7 @@ export class Attention implements Abilities {
 
   call(call: Call): void {
     for (const [key, way] of this.entries()) {
-      if (this.prefs.get(key) && way.ability() === 'yes') {
-        this.each(() => way.call(call));
-      }
+      this.callBy(key, way, call);
     }
   }
 
@@ -53,11 +51,7 @@ export class Attention implements Abilities {
    * still stands, and a second chime would be a second turn.
    */
   remind(call: Call): void {
-    const way = this.ways.buzz;
-
-    if (this.prefs.get('buzz') && way.ability() === 'yes') {
-      this.each(() => way.call(call));
-    }
+    this.callBy('buzz', this.ways.buzz, call);
   }
 
   /** Every way hears it, so what was showing goes away even if the player switched the way off since. */
@@ -79,6 +73,13 @@ export class Attention implements Abilities {
 
   private way(key: string): AttentionWay | undefined {
     return Object.hasOwn(this.ways, key) ? this.ways[key as keyof AttentionWays] : undefined;
+  }
+
+  /** A way answers a call only where this device can do it and the player has it switched on. */
+  private callBy(key: keyof AttentionWays, way: AttentionWay, call: Call): void {
+    if (this.prefs.get(key) && way.ability() === 'yes') {
+      this.each(() => way.call(call));
+    }
   }
 
   private entries(): [keyof AttentionWays, AttentionWay][] {

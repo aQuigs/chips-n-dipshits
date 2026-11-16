@@ -10,10 +10,10 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const skip = process.env.CI || process.env.E2E ? false : 'set E2E=1 to run the browser tests';
 
 // A script that says nothing for this long hangs. Each says a line for every part it gets through and stops
-// a step of its own that takes too long, a screen check within two minutes (scripts/checkRunner.ts). How long
-// the whole of one takes has no limit: the list of checks grows with every feature, and a machine busy with
-// something else makes a run slow, not wrong
-const SILENCE_MS = 180_000;
+// a step of its own that takes too long, a screen check within three and a half minutes (scripts/checkRunner.ts).
+// How long the whole of one takes has no limit: the list of checks grows with every feature, and a machine busy
+// with something else makes a run slow, not wrong
+const SILENCE_MS = 240_000;
 
 // How long a script told to stop has to close its browsers. Playwright takes the signal for itself, so a
 // script waiting on something that closing them does not end would go on for good: it is ended outright

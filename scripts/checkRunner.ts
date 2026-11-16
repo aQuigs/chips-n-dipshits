@@ -39,9 +39,11 @@ const fittingWorkers = () => Math.max(FEWEST_WORKERS, Math.floor(availableParall
 // A stalled run spends nearly all its time waiting, on about one core between twelve workers
 const STALLED_WORKERS = 12;
 
-// Three times what the slowest check takes, and with the grace after it shorter than the silence a run of them all is stopped for (tests/e2e.test.ts).
+// For a check that hangs, not one on a busy machine. The slowest take half a minute alone, but with two runs of them all side
+// by side on a laptop doing other work besides, one that takes 19 s alone took 90, and was cut off by the limit of then. This is
+// twice that. With the grace after it, it is shorter than the silence a run of them all is stopped for (tests/e2e.test.ts).
 // A stalled run waits out its stall after every step: the check with the most steps has about 150
-const LIMIT_MS = 90_000 + 150 * STALL_MS;
+const LIMIT_MS = 180_000 + 150 * STALL_MS;
 
 // Enough to look at the pages of a check that was stopped and close them
 const GRACE_MS = 20_000;

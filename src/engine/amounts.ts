@@ -57,8 +57,9 @@ export function editableAmount(amount: number, table: Denominated): string {
   return written(amount, table, false);
 }
 
+/** A win or a loss with its sign. A loss has a real minus sign, as wide and as high as the plus of the win above it in a column. */
 export function signedAmount(amount: number, table: Denominated): string {
-  return amount > 0 ? `+${formatAmount(amount, table)}` : formatAmount(amount, table);
+  return `${amount > 0 ? '+' : amount < 0 ? '−' : ''}${formatAmount(Math.abs(amount), table)}`;
 }
 
 // Nine characters are what a seat has room for: 9,999,999 in chips and 99,999.99 in dollars are the same count of the smallest unit

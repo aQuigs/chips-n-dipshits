@@ -1136,8 +1136,8 @@ const straddledHandCheck = (hand: StraddledHand, kind: StraddleTable): Check => 
 
 /** What the table of `tonightTable` comes to in whole chips and in dollars and cents, as its dialog writes it. */
 const TONIGHT_TABLES = [
-  { name: 'chips', config: {} as Partial<TableConfig>, first: '200', up: '+999,999,990', pot: '1,999,999,990', down: '1,000,000,000', afterTransfer: '-13' },
-  { name: 'cents', config: CENTS as Partial<TableConfig>, first: '5.00', up: '+9,999,999.75', pot: '19,999,999.75', down: '10,000,000.00', afterTransfer: '-0.43' },
+  { name: 'chips', config: {} as Partial<TableConfig>, first: '200', up: '+999,999,990', pot: '1,999,999,990', down: '1,000,000,000', afterTransfer: '−13' },
+  { name: 'cents', config: CENTS as Partial<TableConfig>, first: '5.00', up: '+9,999,999.75', pot: '19,999,999.75', down: '10,000,000.00', afterTransfer: '−0.43' },
 ];
 
 /**
@@ -3821,8 +3821,8 @@ const CHECKS: Check[] = [
 
         assert.deepEqual(await ledgerRows(page), [
           ['Quigs', '100.00', '0.00', '101.75', '+1.75'],
-          ['Stu', '50.00', '0.00', '49.75', '-0.25'],
-          ['Pocket Pam', '300.00', '0.00', '298.50', '-1.50'],
+          ['Stu', '50.00', '0.00', '49.75', '−0.25'],
+          ['Pocket Pam', '300.00', '0.00', '298.50', '−1.50'],
         ]);
         assert.deepEqual(await texts(page, '.settle li'), ['Pocket Pam pays Quigs 1.50', 'Stu pays Quigs 0.25']);
 
@@ -3873,7 +3873,7 @@ const CHECKS: Check[] = [
           rows: [
             ['Stu', '1,000', '0', '+300', '1,300', '+300'],
             ['Quigs', '1,000', '0', '0', '1,000', '0'],
-            [LONG, '1,000', '0', '-300', '700', '-300'],
+            [LONG, '1,000', '0', '−300', '700', '−300'],
           ],
           settle: [`${LONG} pays Stu 300`],
         },
@@ -3890,7 +3890,7 @@ const CHECKS: Check[] = [
           rows: [
             ['Stu', '100.00', '0.00', '+12.34', '112.34', '+12.34'],
             ['Quigs', '100.00', '0.00', '0.00', '100.00', '0.00'],
-            [LONG, '100.00', '0.00', '-12.34', '87.66', '-12.34'],
+            [LONG, '100.00', '0.00', '−12.34', '87.66', '−12.34'],
           ],
           settle: [`${LONG} pays Stu 12.34`],
         },
@@ -12495,7 +12495,7 @@ const CHECKS: Check[] = [
         await press('[data-action="standings"]');
         await page.waitForSelector('.standings-players li');
         assert.deepEqual(await names(page), ['Ann', 'Bob (you)', 'Cy']);
-        assert.deepEqual(await nets(page), ['+1,300', '+500', '-1,800']);
+        assert.deepEqual(await nets(page), ['+1,300', '+500', '−1,800']);
         assert.deepEqual(await texts(page, '.standings-players .place'), ['1', '2', '3']);
         assert.deepEqual(await texts(page, '.standings-players summary .counts'), ['2 nights · up in 1 · won 25% of hands', '3 nights · up in 2 · won 25% of hands', '3 nights · up in 0 · won 25% of hands']);
         assert.deepEqual(await texts(page, '.standings-players li.me .who'), ['Bob (you)']);
@@ -12535,7 +12535,7 @@ const CHECKS: Check[] = [
         await press('[data-player="Ann"] [data-action="retry-standings"]');
         await page.waitForSelector('[data-player="Ann"] .standings-nights li');
 
-        assert.deepEqual(await texts(page, '[data-player="Ann"] .standings-nights .net'), ['-200', '+1,500'], 'the latest night first');
+        assert.deepEqual(await texts(page, '[data-player="Ann"] .standings-nights .net'), ['−200', '+1,500'], 'the latest night first');
         assert.deepEqual((await texts(page, '[data-player="Ann"] .standings-nights .when small')).map((table) => table.trim()), ['· The garage', '· Dave’s place']);
         assert.deepEqual(await texts(page, '[data-player="Ann"] .standings-nights li:last-child .counts'), ['120 hands · 30 pots · biggest 2,400 · high hand of the night', 'Four kings K♠ K♥ K♦ K♣ A♠']);
         assert.deepEqual(await squeezed(page, '.standings-nights .when, .standings-nights .net, .standings-nights .counts, .standings-players dd'), []);
@@ -12547,7 +12547,7 @@ const CHECKS: Check[] = [
         // The other money is a list of its own, and coming back finds the open line as it was, with nothing asked for again
         await nights.close('requests');
         await press('.standings-units [data-unit="cents"]');
-        assert.deepEqual([await names(page), await nets(page)], [['Cy', 'Ann'], ['+25.50', '-25.50']]);
+        assert.deepEqual([await names(page), await nets(page)], [['Cy', 'Ann'], ['+25.50', '−25.50']]);
         assert.equal(await page.locator('.standings-players details[open]').count(), 0);
         await shot(page, `standings-dollars-${screen}`);
         await press('.standings-units [data-unit="chips"]');
@@ -12571,7 +12571,7 @@ const CHECKS: Check[] = [
         await seatPress('.menu [data-action="standings"]');
         await seat.waitForSelector('.standings-players li');
         assert.equal(await text(seat, '.dialog h2'), 'Standings');
-        assert.deepEqual([await names(seat), await nets(seat)], [['Ann', 'Bob (you)', 'Cy'], ['+1,300', '+500', '-1,800']]);
+        assert.deepEqual([await names(seat), await nets(seat)], [['Ann', 'Bob (you)', 'Cy'], ['+1,300', '+500', '−1,800']]);
         assert.deepEqual(await texts(seat, '.standings-players li.me .who'), ['Bob (you)']);
         await seatPress('[data-player="Cy"] summary');
         await seat.waitForSelector('[data-player="Cy"] .standings-nights li');

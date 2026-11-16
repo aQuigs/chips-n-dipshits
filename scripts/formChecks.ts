@@ -305,7 +305,7 @@ export const formChecks = (out: string): Check[] => {
       },
     ],
     [
-      'an amount stands in its box as the table writes it, in bare digits while it is typed over and all of it selected when the Tab key enters the box, and written again once the box is left: the buy-in, the bet beside the slider and what Max fills in',
+      'an amount stands in its box as the table writes it, in bare digits while it is typed over and all of it selected when the Tab key enters the box, and written again once the box is left: the buy-in, the bet beside the slider and what Max fills in; a loss in the ledger and in Tonight has a minus sign, not a hyphen',
       async (rig) => {
         const table = rig.table(['Quigs', 'Stu', 'Pam'].map((name) => ({ name, stack: 5000 })), { minBuyIn: 400, maxBuyIn: 9000 });
 
@@ -355,6 +355,25 @@ export const formChecks = (out: string): Check[] => {
         await quigs.focus('[data-action="raise"]');
         assert.equal(await quigs.inputValue('#raise-amount'), '1,500');
         assert.match(await quigs.innerText('[data-action="raise"]'), /1,500/);
+
+        // A hand lost, in the ledger and in Tonight
+        table.act('Quigs', { type: 'raise', to: 1500 });
+        table.play((view) => ({ type: view.hand!.options!.canCheck ? 'check' : 'fold' }), (view) => view.hand === null || view.hand.stage === 'done');
+        await table.heardBy(quigs);
+        await quigs.click('[data-action="menu"]');
+        await quigs.click('.menu [data-action="ledger"]');
+
+        const down = await quigs.locator('.ledger td.down').allInnerTexts();
+
+        assert.ok(down.length > 0 && down.every((net) => /^−[\d,]+$/.test(net)), `a loss is written ${JSON.stringify(down)}`);
+        await shot(quigs, 'ledger-loss-desktop');
+        await quigs.click('.dialog [data-action="close"]');
+        await quigs.click('[data-action="menu"]');
+        await quigs.click('.menu [data-action="tonight"]');
+
+        const nets = await quigs.locator('.tonight-players .net.down').allInnerTexts();
+
+        assert.ok(nets.length > 0 && nets.every((net) => /^−[\d,]+$/.test(net)), `a loss is written ${JSON.stringify(nets)}`);
       },
     ],
     [

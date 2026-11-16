@@ -31,7 +31,8 @@ test('an amount is written in whole chips at one kind of table and in dollars an
   assert.deepEqual(written(-5), ['-5', '-0.05']);
 
   assert.deepEqual([editableAmount(123_456_789, CHIPS), editableAmount(123_456_789, CENTS)], ['123456789', '1234567.89'], 'a box to type in has no commas');
-  assert.deepEqual([signedAmount(150, CENTS), signedAmount(-150, CENTS), signedAmount(0, CENTS), signedAmount(150, CHIPS)], ['+1.50', '-1.50', '0.00', '+150']);
+  assert.deepEqual([signedAmount(150, CENTS), signedAmount(-150, CENTS), signedAmount(0, CENTS), signedAmount(150, CHIPS)], ['+1.50', '−1.50', '0.00', '+150']);
+  assert.equal(signedAmount(-12_500, CHIPS), '\u221212,500', 'a loss has a minus sign, not the hyphen a negative amount is written with elsewhere');
   assert.deepEqual([asNumber(150, CHIPS), asNumber(150, CENTS), asNumber(-650, CENTS)], [150, 1.5, -6.5]);
   assert.deepEqual([hasDecimals(CHIPS), hasDecimals(CENTS)], [false, true]);
 });

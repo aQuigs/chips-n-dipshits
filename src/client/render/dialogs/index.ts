@@ -16,7 +16,6 @@ import { preferencesDialog } from './preferences.ts';
 import { rebuyDialog } from './rebuy.ts';
 import { setStackDialog } from './setStack.ts';
 import { settingsDialog } from './settings.ts';
-import { shuffleSeats } from './shuffle.ts';
 import { sitDialog } from './sit.ts';
 import { standingsDialog } from './standings.ts';
 import { straddlesDialog } from './straddles.ts';
@@ -42,7 +41,6 @@ const REGISTERED = [
   lastHandsDialog,
   highHandDialog,
   settingsDialog,
-  shuffleSeats,
   ledgerDialog,
   tonightDialog,
   historyDialog,

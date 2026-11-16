@@ -43,6 +43,7 @@ import { layoutSweep } from './layoutSweep.ts';
 import { confirmChecks } from './confirmChecks.ts';
 import { menuChecks } from './menuChecks.ts';
 import { ownClockChecks } from './ownClockChecks.ts';
+import { PLAYERS_CHECKS } from './playersChecks.ts';
 import { preferencesChecks } from './preferencesChecks.ts';
 import { namedByTheWatch, tapsLive, tellingOf, watched, watchTheBar } from './underTheFinger.ts';
 
@@ -3252,6 +3253,7 @@ const CHECKS: Check[] = [
 
       await host.click('[data-action="menu"]');
       await host.click('.menu [data-action="players"]');
+      await host.click('li:has-text("Lurker") [data-action="more"]');
       await host.click('li:has-text("Lurker") button:has-text("Remove")');
       await host.click('[data-action="confirm"]');
 
@@ -3280,13 +3282,16 @@ const CHECKS: Check[] = [
         await press('.menu [data-action="players"]');
 
         for (const name of ['Marge Simpson-Jr', 'Lurker']) {
-          assert.deepEqual(await page.locator(`${row(name)} button`).allInnerTexts(), name === 'Lurker' ? ['Make co-host', 'Make host', 'Remove'] : ['Set stack', 'Move', 'Make co-host', 'Make host', 'Remove']);
+          assert.deepEqual(await page.locator(`${row(name)} button:visible`).allInnerTexts(), name === 'Lurker' ? ['More'] : ['Set stack', 'Move', 'More']);
+          assert.deepEqual(await page.locator(`${row(name)} .row-more button`).allInnerTexts(), ['Make co-host', 'Make host', 'Remove'], 'what is rare is not behind "More"');
         }
-        assert.deepEqual(await page.locator(`${row('Quigs')} button`).allInnerTexts(), ['Set stack', 'Move', 'Remove'], 'the host is offered a say over their own role');
+        assert.deepEqual(await page.locator(`${row('Quigs')} button`).allInnerTexts(), ['Set stack', 'Move'], 'the host is offered a say over their own role, or to remove themselves');
         assertOnScreen(await boxes(page, '.dialog .row-actions .btn'), screen, 'a button in the Players dialog');
         assert.deepEqual(await squeezed(page, '.dialog .row-actions .btn'), [], 'a button in the Players dialog is cut off');
         await shot(page, `players-host-${screen}`);
 
+        await press(`${row('Marge Simpson-Jr')} [data-action="more"]`);
+        assertOnScreen(await boxes(page, '.dialog .row-actions .btn'), screen, 'a button in the Players dialog, with a row unfolded');
         await press(`${row('Marge Simpson-Jr')} [data-action="make-cohost"]`);
         assert.equal(await text(page, '.dialog h2'), 'Make Marge Simpson-Jr a co-host?');
         await press('[data-action="confirm"]');
@@ -3325,15 +3330,19 @@ const CHECKS: Check[] = [
 
         await press('[data-action="menu"]');
         const menu = await cohost.locator('.menu .menu-item').evaluateAll((items) => items.map((item) => item.getAttribute('data-action')));
-        for (const tool of ['players', 'shuffle', 'settings', 'start']) {
+        for (const tool of ['players', 'settings', 'start']) {
           assert.ok(menu.includes(tool), `the co-host's menu has no ${tool}: ${menu.join(', ')}`);
         }
 
         await press('.menu [data-action="players"]');
         assert.deepEqual(await cohost.locator('.dialog li:has-text("Quigs") button').allInnerTexts(), ['Set stack', 'Move'], 'a co-host is offered to remove the host');
-        assert.deepEqual(await cohost.locator('.dialog li:has-text("Pam") button').allInnerTexts(), ['Set stack', 'Move', 'Remove']);
-        assert.deepEqual(await cohost.locator('.dialog li:has-text("Lurker") button').allInnerTexts(), ['Remove']);
+        assert.deepEqual(await cohost.locator('.dialog li:has-text("Stu") button').allInnerTexts(), ['Set stack', 'Move'], 'a co-host is offered to remove themselves');
+        assert.deepEqual(await cohost.locator('.dialog li:has-text("Pam") button:visible').allInnerTexts(), ['Set stack', 'Move', 'More']);
+        assert.deepEqual(await cohost.locator('.dialog li:has-text("Pam") .row-more button').allInnerTexts(), ['Remove']);
+        assert.deepEqual(await cohost.locator('.dialog li:has-text("Lurker") button:visible').allInnerTexts(), ['More']);
+        assert.deepEqual(await cohost.locator('.dialog li:has-text("Lurker") .row-more button').allInnerTexts(), ['Remove']);
         assert.equal(await cohost.locator('.dialog [data-action="transfer"]').count(), 1, 'a co-host is not offered to transfer chips');
+        assert.equal(await cohost.locator('.dialog [data-action="shuffle"]').count(), 1, 'a co-host is not offered to shuffle the seats');
         assert.equal(await cohost.locator('[data-action="make-host"], [data-action="make-cohost"], [data-action="end-cohost"]').count(), 0, 'a co-host is offered what only the host may do');
         assertOnScreen(await boxes(cohost, '.dialog .row-actions .btn'), screen, 'a button in the co-host\'s Players dialog');
         await shot(cohost, `players-as-cohost-${screen}`);
@@ -4178,7 +4187,7 @@ const CHECKS: Check[] = [
         await press('[data-action="menu"]');
         await press('.menu [data-action="players"]');
         assert.equal(await text(host, '.dialog li:has-text("WWWWWWWWWWWWWWWW") .move-note'), 'Moves to seat 8 after this hand');
-        assert.deepEqual(await host.locator('.dialog li:has-text("WWWWWWWWWWWWWWWW") button').allInnerTexts(), ['Set stack', 'Stay put', 'Make co-host', 'Make host', 'Remove'], 'a move that waits cannot be taken back');
+        assert.deepEqual(await host.locator('.dialog li:has-text("WWWWWWWWWWWWWWWW") button:visible').allInnerTexts(), ['Set stack', 'Stay put', 'More'], 'a move that waits cannot be taken back');
         await press('[data-action="close"]');
 
         table.play(() => ({ type: 'fold' }), (view) => view.hand === null || view.hand.number > 1);
@@ -4201,14 +4210,19 @@ const CHECKS: Check[] = [
 
       const page = await table.open('Quigs', 'phone');
       await page.tap('[data-action="menu"]');
-      assert.equal(await text(page, '.menu [data-action="shuffle"]'), 'Shuffle seats');
-      await page.tap('.menu [data-action="shuffle"]');
+      assert.equal(await page.locator('.menu [data-action="shuffle"]').count(), 0, 'the menu still shuffles the seats, which Players does now');
+      await page.tap('.menu [data-action="players"]');
+      assert.equal(await text(page, '.dialog [data-action="shuffle"]'), 'Shuffle seats');
+      await page.tap('.dialog [data-action="shuffle"]');
       assert.equal(await text(page, '.dialog h2'), 'Shuffle the seats?');
       assertOnScreen(await boxes(page, '.dialog [data-action="confirm"]'), 'phone', 'the button that shuffles');
       await shot(page, 'shuffle-confirm-phone');
       await page.tap('[data-action="confirm"]');
 
       await page.waitForSelector('.feed-toggle .latest:has-text("The host shuffled the seats")');
+      // The answer gives way to the list the seats were shuffled from
+      await page.waitForSelector('.dialog[aria-label="Players"]');
+      assert.equal(await page.locator('.dialog .shuffle-note').count(), 0, 'between hands a shuffle is said to wait for one');
       const after = seatsOf();
       assert.deepEqual(after.map((name) => name !== null), before.map((name) => name !== null), 'a shuffle opened or filled a seat');
       assert.deepEqual([...after].sort(), [...before].sort());
@@ -4217,15 +4231,16 @@ const CHECKS: Check[] = [
       table.deal({ button: 0 });
       const desktop = await table.open('Quigs', 'desktop');
       await desktop.click('[data-action="menu"]');
-      assert.equal(await text(desktop, '.menu [data-action="shuffle"]'), 'Shuffle seats');
-      await desktop.click('.menu [data-action="shuffle"]');
+      await desktop.click('.menu [data-action="players"]');
+      await desktop.click('.dialog [data-action="shuffle"]');
       assert.match(await text(desktop, '.dialog-body p'), /During a hand, this happens when it ends\.$/, 'nothing says before the yes that a shuffle during a hand waits for its end');
       await desktop.click('[data-action="confirm"]');
       await desktop.waitForSelector('.feed-toggle .latest:has-text("The host shuffles the seats after this hand")', { state: 'attached' });
       assert.deepEqual(seatsOf(), after, 'the seats were shuffled in the middle of a hand');
 
-      await desktop.click('[data-action="menu"]');
-      assert.equal(await text(desktop, '.menu [data-action="shuffle"] small'), 'Set for when this hand ends');
+      // Beside the button that set it, in the list the answer gave way to
+      assert.equal(await text(desktop, '.dialog .shuffle-note'), 'The seats are shuffled after this hand');
+      assertOnScreen(await boxes(desktop, '.dialog .list-tools > *'), 'desktop', 'the tools over the list of the seated');
       await desktop.click('[data-action="close"]');
 
       table.play(() => ({ type: 'fold' }), (view) => view.hand === null || view.hand.number > 1);
@@ -13837,6 +13852,7 @@ const CHECKS: Check[] = [
   ...preferencesChecks(OUT),
   ...confirmChecks(OUT),
   ...ownClockChecks(OUT),
+  ...PLAYERS_CHECKS,
 ];
 
 await mkdir(OUT, { recursive: true });

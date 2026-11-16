@@ -1455,6 +1455,7 @@ export class App {
       close: () => this.leaveDialog(),
       toTable: () => this.closeDialog(),
       byItself: (change) => this.screen!.taps.byItself(change),
+      byThePlayer: (change) => this.screen!.taps.byThePlayer(change),
       copy: (text) => this.copy(text),
       loadHistory: () => this.loadHistory(),
       replay: (record) => this.openReplay(record),

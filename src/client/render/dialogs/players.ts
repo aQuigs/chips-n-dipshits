@@ -1,6 +1,7 @@
 import { formatAmount } from '../../../engine/amounts.ts';
 import type { SeatView, TableView } from '../../../engine/view.ts';
 import { h } from '../../ui.ts';
+import type { Child } from '../../ui.ts';
 import { roleOf } from '../../../engine/hosts.ts';
 import { requestText } from '../../spoken.ts';
 import { badgeMarks } from '../badges.ts';
@@ -8,12 +9,32 @@ import { hostAlone, hostOrCohost, roleMark } from '../roles.ts';
 import { frame, rowActions } from './dialog.ts';
 import type { DialogHandlers, DialogKind } from './dialog.ts';
 
-function players(view: TableView, handlers: DialogHandlers): HTMLElement {
+interface Player {
+  id: string;
+  name: string;
+}
+
+/**
+ * The rows that are unfolded, for each opening of the dialog. Drawn again with the table's news, or
+ * come back to from a question, it is the same list with the same rows open; opened anew, every row
+ * is folded again, and what removes a player or gives the table away is put away with it.
+ */
+const UNFOLDED = new WeakMap<object, Set<string>>();
+
+function unfoldedIn(opening: object): Set<string> {
+  const unfolded = UNFOLDED.get(opening) ?? new Set<string>();
+
+  UNFOLDED.set(opening, unfolded);
+
+  return unfolded;
+}
+
+function players(view: TableView, handlers: DialogHandlers, unfolded: Set<string>): HTMLElement {
   const requests = view.requests.map((request) =>
     h(
       'li',
       null,
-      h('span', null, h('b', null, request.name), ` ${requestText(request, view.config)}`),
+      h('span.who', null, h('b', null, request.name), ` ${requestText(request, view.config)}`),
       rowActions(
         { id: request.playerId, name: request.name },
         h('button.btn.small.primary', { type: 'button', 'data-action': 'approve', onclick: () => void handlers.send({ type: 'approve', playerId: request.playerId }) }, 'Approve'),
@@ -23,7 +44,7 @@ function players(view: TableView, handlers: DialogHandlers): HTMLElement {
   );
 
   // Who runs the table is the host's choice alone, and nobody is offered a say over their own role
-  const roleButtons = (playerId: string, name: string) => {
+  const roleButtons = ({ id: playerId, name }: Player) => {
     if (!hostAlone(view) || playerId === view.you.id) {
       return [];
     }
@@ -68,12 +89,13 @@ function players(view: TableView, handlers: DialogHandlers): HTMLElement {
     return [cohost, makeHost];
   };
 
-  // A co-host may not remove the host, nor take another co-host off the table, which would end their role
-  const remove = (playerId: string, name: string, body: string, altogether: boolean) =>
-    !hostAlone(view) && (roleOf(view, playerId) === 'host' || (altogether && roleOf(view, playerId) === 'cohost'))
+  // A co-host may not remove the host, nor take another co-host off the table, which would end their role. And nobody
+  // is offered to remove themselves: standing up is theirs, in the menu
+  const remove = ({ id: playerId, name }: Player, body: string, altogether: boolean) =>
+    playerId === view.you.id || (!hostAlone(view) && (roleOf(view, playerId) === 'host' || (altogether && roleOf(view, playerId) === 'cohost')))
       ? null
       : h(
-          'button.btn.small',
+          'button.btn.small.danger',
           {
             type: 'button',
             'data-action': 'remove',
@@ -82,9 +104,51 @@ function players(view: TableView, handlers: DialogHandlers): HTMLElement {
           'Remove',
         );
 
+  const rowsDrawn = new Set<string>();
+
+  /** Makes `behind` the part of `row` that one "More" unfolds in place, and hands back that "More". */
+  const unfolds = (row: string, behind: HTMLElement): HTMLElement => {
+    behind.id = `more-${row}`;
+    behind.classList.add('row-more');
+    behind.hidden = !unfolded.has(row);
+    rowsDrawn.add(row);
+
+    const toggle = h('button.btn.small', { type: 'button', 'data-action': 'more', 'aria-expanded': String(!behind.hidden), 'aria-controls': behind.id }, 'More');
+
+    toggle.addEventListener('click', () =>
+      // Unfolding makes a sheet taller or scrolls its list, and either brings these buttons up where "More" was tapped
+      handlers.byThePlayer(() => {
+        behind.hidden = !behind.hidden;
+        toggle.setAttribute('aria-expanded', String(!behind.hidden));
+
+        if (behind.hidden) {
+          unfolded.delete(row);
+        } else {
+          unfolded.add(row);
+          // At the foot of what scrolls they would unfold out of sight, and "More" would seem to do nothing: the whole row, with the room under it
+          behind.parentElement?.scrollIntoView({ block: 'nearest' });
+        }
+      }),
+    );
+
+    return toggle;
+  };
+
+  /**
+   * A player's row: who they are, what is done to them every night, and what is done once a night at most, or once ever,
+   * behind "More", with no "More" when there is nothing to put behind it. A player's row in one list is not theirs in the
+   * other, which starts folded.
+   */
+  const playerRow = (list: 'seated' | 'watching', player: Player, who: Child[], everyNight: Child[], rare: Child[]): HTMLElement => {
+    const behind = rowActions(player, ...rare);
+    const toggle = behind.childElementCount > 0 ? unfolds(`${list}-${player.id}`, behind) : null;
+
+    return h(`li.player-row.${list}`, null, h('span.who', null, who), rowActions(player, ...everyNight, toggle), toggle && behind);
+  };
+
   const badges = new Map(view.tonight.players.map((row) => [row.playerId, row.badges]));
 
-  const nameOf = (playerId: string, name: string) => [h('b', null, name, roleMark(view, playerId)), badgeMarks(badges.get(playerId) ?? [])];
+  const nameOf = ({ id, name }: Player) => [h('b', null, name, roleMark(view, id)), badgeMarks(badges.get(id) ?? [])];
 
   // Only to an open seat, not for a player already on their way out, and not while a shuffle is coming. A move that waits can be taken back
   const move = (seat: SeatView) => {
@@ -99,49 +163,71 @@ function players(view: TableView, handlers: DialogHandlers): HTMLElement {
 
   const owes = (seat: SeatView) => [seat.owesBigBlind ? 'the big blind' : '', seat.owesSmallBlind ? 'the small blind' : ''].filter(Boolean).join(' and ');
 
-  const seatedIds = new Set(view.seats.flatMap((seat) => (seat ? [seat.playerId] : [])));
-  const seated = view.seats.flatMap((seat) =>
-    seat
-      ? [
-          h(
-            'li',
-            null,
-            h(
-              'span',
-              null,
-              nameOf(seat.playerId, seat.name),
-              ` · seat ${seat.seat + 1} · ${formatAmount(seat.stack, view.config)}`,
-              seat.moveTo !== null ? h('small.move-note', null, `Moves to seat ${seat.moveTo + 1} after this hand`) : null,
-              owes(seat) ? h('small.owes-note', null, `Owes ${owes(seat)}`) : null,
-            ),
-            rowActions(
-              { id: seat.playerId, name: seat.name },
-              h('button.btn.small', { type: 'button', 'data-action': 'set-stack', onclick: () => handlers.open({ kind: 'setStack', playerId: seat.playerId }) }, 'Set stack'),
-              move(seat),
-              owes(seat) ? h('button.btn.small', { type: 'button', 'data-action': 'forgive-blinds', onclick: () => void handlers.send({ type: 'forgiveBlinds', playerId: seat.playerId }) }, 'Forgive blinds') : null,
-              roleButtons(seat.playerId, seat.name),
-              remove(seat.playerId, seat.name, 'They lose their seat and their chips are cashed out in the ledger. They can ask for a seat again.', false),
-            ),
-          ),
-        ]
-      : [],
-  );
+  const seats = view.seats.filter((seat) => seat !== null);
+  const seated = seats.map((seat) => {
+    const player = { id: seat.playerId, name: seat.name };
+    const owing = owes(seat);
 
-  const watching = view.members.filter((member) => !seatedIds.has(member.id) && member.id !== view.you.id);
+    return playerRow(
+      'seated',
+      player,
+      [
+        nameOf(player),
+        ` · seat ${seat.seat + 1} · ${formatAmount(seat.stack, view.config)}`,
+        seat.moveTo !== null ? h('small.move-note', null, `Moves to seat ${seat.moveTo + 1} after this hand`) : null,
+        owing ? h('small.owes-note', null, `Owes ${owing}`) : null,
+      ],
+      [
+        h('button.btn.small', { type: 'button', 'data-action': 'set-stack', onclick: () => handlers.open({ kind: 'setStack', playerId: player.id }) }, 'Set stack'),
+        move(seat),
+        owing ? h('button.btn.small', { type: 'button', 'data-action': 'forgive-blinds', onclick: () => void handlers.send({ type: 'forgiveBlinds', playerId: player.id }) }, 'Forgive blinds') : null,
+      ],
+      [roleButtons(player), remove(player, 'They lose their seat and their chips are cashed out in the ledger. They can ask for a seat again.', false)],
+    );
+  });
 
+  const seatedIds = new Set(seats.map((seat) => seat.playerId));
   // Only someone with no line in the ledger can be taken off the table altogether
   const played = new Set(view.ledger.map((row) => row.playerId));
-  const watcherRow = (playerId: string, name: string) =>
-    h(
-      'li',
-      null,
-      h('span', null, nameOf(playerId, name)),
-      rowActions(
-        { id: playerId, name },
-        roleButtons(playerId, name),
-        played.has(playerId) ? null : remove(playerId, name, 'They have not played here, so they are taken off the table and their name is free again. They can join again from the link.', true),
-      ),
+  const watchers = view.members
+    .filter((member) => !seatedIds.has(member.id) && member.id !== view.you.id)
+    .map((member) =>
+      playerRow('watching', member, [nameOf(member)], [], [
+        roleButtons(member),
+        played.has(member.id) ? null : remove(member, 'They have not played here, so they are taken off the table and their name is free again. They can join again from the link.', true),
+      ]),
     );
+
+  // A row is folded again once its player has left it: back in the same list later, they are not found open
+  for (const row of unfolded) {
+    if (!rowsDrawn.has(row)) {
+      unfolded.delete(row);
+    }
+  }
+
+  // What is done to the whole table stands over the list it is done to, in reach before any scrolling
+  const tools = [
+    seats.filter((seat) => !seat.leaving).length > 1 ? h('button.btn.small', { type: 'button', 'data-action': 'transfer', onclick: () => handlers.open({ kind: 'transfer' }) }, 'Transfer chips') : null,
+    seated.length > 1
+      ? h(
+          'button.btn.small',
+          {
+            type: 'button',
+            'data-action': 'shuffle',
+            onclick: () =>
+              handlers.open({
+                kind: 'confirm',
+                title: 'Shuffle the seats?',
+                body: 'Everyone seated gets a random seat among those taken, with their chips. The open seats stay open, and the dealer button is drawn again for the next hand. During a hand, this happens when it ends.',
+                action: 'Shuffle',
+                command: { type: 'shuffleSeats' },
+              }),
+          },
+          'Shuffle seats',
+        )
+      : null,
+    view.shuffleAfterHand ? h('small.note.shuffle-note', null, 'The seats are shuffled after this hand') : null,
+  ].filter((tool) => tool !== null);
 
   // Whoever runs the table is the one who can ask a player to say who they are, so that their night counts for them.
   // Said once and last, where it moves nothing the host reaches for
@@ -156,10 +242,10 @@ function players(view: TableView, handlers: DialogHandlers): HTMLElement {
       'section',
       null,
       h('h3', null, 'Seated'),
+      tools.length > 0 ? h('div.list-tools', null, tools) : null,
       seated.length > 0 ? h('ul.rows', null, seated) : h('p.note', null, 'Nobody is seated yet.'),
-      view.seats.filter((seat) => seat && !seat.leaving).length > 1 ? h('button.btn', { type: 'button', 'data-action': 'transfer', onclick: () => handlers.open({ kind: 'transfer' }) }, 'Transfer chips between players') : null,
     ),
-    watching.length > 0 ? h('section', null, h('h3', null, 'Watching'), h('ul.rows', null, watching.map((member) => watcherRow(member.id, member.name)))) : null,
+    watchers.length > 0 ? h('section', null, h('h3', null, 'Watching'), h('ul.rows', null, watchers)) : null,
     unknownNote,
   );
 }
@@ -186,5 +272,5 @@ export const playersDialog: DialogKind<'players'> = {
     view.tonight.players.map((row) => [row.playerId, row.badges]),
     view.seats.map((seat) => seat && [seat.playerId, seat.name, seat.seat, seat.moveTo, seat.leaving, seat.owesBigBlind, seat.owesSmallBlind, view.hand ? null : seat.stack]),
   ],
-  draw: players,
+  draw: (view, handlers, opening) => players(view, handlers, unfoldedIn(opening as object)),
 };

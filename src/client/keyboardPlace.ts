@@ -6,7 +6,8 @@ const CONTROLS = 'button, input, select, textarea, summary, a[href]';
  * Where the keyboard belongs in a part of the page that its viewer leaves and is brought back to: on
  * the control they pressed to leave it, a row's button that opens a question. And when that control is
  * gone, as the button on the row of a player just removed, on the one that does the same for the next
- * row: a list is worked down, and from the top of it the next row is a long way off.
+ * row: a list is worked down, and from the top of it the next row is a long way off. A control that is
+ * folded away takes no keyboard, so the button that unfolds its part of the row stands for it.
  *
  * Only ever made for a control that opens something, which is what its like on another row does too.
  * One that plays or sends at a press must never be handed the keyboard this way: a second press of
@@ -45,6 +46,9 @@ export class KeyboardPlace {
       }
     }
 
-    return this.nearest.map((key) => drawn.get(key)).find((control) => control !== undefined) ?? null;
+    const control = this.nearest.map((key) => drawn.get(key)).find((found) => found !== undefined) ?? null;
+    const folded = control?.closest('[hidden]') ?? null;
+
+    return folded === null ? control : part.querySelector<HTMLElement>(`[aria-controls="${CSS.escape(folded.id)}"]`);
   }
 }

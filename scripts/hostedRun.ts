@@ -273,6 +273,7 @@ try {
 
     await host.click('[data-action="menu"]');
     await host.click('.menu [data-action="players"]');
+    await host.click('li:has-text("Lurker") [data-action="more"]');
     await host.click('li:has-text("Lurker") button:has-text("Remove")');
     await host.click('[data-action="confirm"]');
 

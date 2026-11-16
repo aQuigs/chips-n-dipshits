@@ -16,52 +16,22 @@ import { Sweep, tabTo } from './accessibilityChecks.ts';
 import type { Check } from './checkRunner.ts';
 import { letGoEarly, passive, playOut } from './layoutSweep.ts';
 import { answeredTo, commandsSent } from './pageSpies.ts';
+import { CANCEL, CLOSE, dialogNamed, EIGHT, fromMenu, HOST, keyboardOn, more, named, noDialog, on, playersFromTheKeyboard, row, seated, seatedAndWatched, WATCHER } from './playersDialog.ts';
 import { Gate } from './rig.ts';
-import type { Rig, RigTable } from './rig.ts';
+import type { RigTable } from './rig.ts';
 import { namedByTheWatch, tapsLive, tellingOf, watched, watchTheBar } from './underTheFinger.ts';
 
-const HOST = 'Quigs';
-const EIGHT = [HOST, 'Danny', 'Marge', 'Stu', 'Big Al', 'Pocket Pam', 'Zed', 'Mo'];
-const WATCHER = 'Kibitz';
-
-/** Eight seated with nothing dealt, the first of them hosting, and someone watching. */
-function eightSeated(rig: Rig): RigTable {
-  const table = rig.table(
-    EIGHT.map((name) => ({ name, stack: 2000 })),
-    { name: 'Friday Night' },
-  );
-
-  table.join(WATCHER);
-
-  return table;
-}
-
-const row = (name: string) => `.dialog li:has(b:text-is("${name}"))`;
-const on = (name: string, action: string) => `${row(name)} [data-action="${action}"]`;
-// A player removed from their seat is still at the table, on a row among those watching: only a seated row sets a stack
-const seated = (name: string) => on(name, 'set-stack');
-// A row's button as a screen reader names it, in plain CSS, which is what the page itself can be asked with
-const named = (says: string, name: string) => `.dialog button[aria-label="${says}, ${name}"]`;
+const SHUFFLE = '.dialog [data-action="shuffle"]';
 const ANSWER = '.dialog [data-action="confirm"]';
-const CANCEL = '.dialog .buttons button:not([data-action])';
-const CLOSE = '.dialog [data-action="close"]';
 const END_NIGHT = '.dialog [data-action="end-night"]';
 
-const dialogNamed = (page: Page, name: string) => page.waitForSelector(`.overlay .dialog[aria-label=${JSON.stringify(name)}]`);
-const noDialog = (page: Page) => page.waitForSelector('.overlay .dialog', { state: 'detached' });
 const scrolled = (page: Page) => page.evaluate(`document.querySelector('.dialog-body').scrollTop`) as Promise<number>;
-
-async function fromMenu(page: Page, press: (selector: string) => Promise<void>, action: string): Promise<void> {
-  await press('[data-action="menu"]');
-  await press(`.menu [data-action="${action}"]`);
-  await page.waitForFunction(`document.querySelector('.menu') === null`);
-}
 
 const backToPlayers: Check = [
   'what a host opens from Players gives way to Players again, scrolled where they had it: a question on Cancel, the ✕, Escape, a tap beside it and its answer, and Set stack and Transfer chips closed or sent; Players itself closes to the table; a co-host is named and a player removed in six taps, on a 360 phone and the desktop',
   async (rig) => {
     for (const screen of ['smallPhone', 'desktop'] as const) {
-      const table = eightSeated(rig);
+      const table = seatedAndWatched(rig);
       const page = await table.open(HOST, screen);
       const sent = commandsSent(page);
       let taps = 0;
@@ -85,6 +55,8 @@ const backToPlayers: Check = [
       };
 
       await fromMenu(page, press, 'players');
+      await reach(more('Zed'));
+      await press(more('Zed'));
 
       const far = await reach(on('Zed', 'make-cohost'));
 
@@ -96,12 +68,13 @@ const backToPlayers: Check = [
       await page.waitForSelector(`${row('Zed')} .cohost`);
       await backWhereItWas(far, 'naming a co-host');
 
+      await press(more('Mo'));
       await press(on('Mo', 'remove'));
       await dialogNamed(page, 'Remove Mo?');
       await press(ANSWER);
       await page.waitForSelector(seated('Mo'), { state: 'detached' });
       await dialogNamed(page, 'Players');
-      assert.equal(taps, 6, `${screen}: naming a co-host and then removing a player takes ${taps} taps`);
+      assert.equal(taps, 8, `${screen}: naming a co-host and then removing a player takes ${taps} taps`);
       assert.deepEqual(sent, ['setCohost', 'kick']);
 
       const leaving: [how: string, leave: () => Promise<unknown>][] = [
@@ -111,6 +84,10 @@ const backToPlayers: Check = [
         // The corner of the screen, which a question leaves bare on every screen
         ['a tap beside it', () => (screen === 'desktop' ? page.mouse.click(8, 8) : page.touchscreen.tap(8, 8))],
       ];
+
+      // Unfolded once: the row is as its reader left it after every way out of the question
+      await reach(more('Pocket Pam'));
+      await press(more('Pocket Pam'));
 
       for (const [how, leave] of leaving) {
         const at = await reach(on('Pocket Pam', 'remove'));
@@ -135,12 +112,17 @@ const backToPlayers: Check = [
       await page.waitForSelector(`${row('Pocket Pam')}:has-text("1,500")`);
       await backWhereItWas(at, 'a stack set');
 
-      const end = await reach('.dialog [data-action="transfer"]');
+      const top = await reach('.dialog [data-action="transfer"]');
 
       await press('.dialog [data-action="transfer"]');
       await dialogNamed(page, 'Transfer chips');
       await press(CLOSE);
-      await backWhereItWas(end, 'the ✕ on Transfer chips');
+      await backWhereItWas(top, 'the ✕ on Transfer chips');
+
+      await press(SHUFFLE);
+      await dialogNamed(page, 'Shuffle the seats?');
+      await press(CANCEL);
+      await backWhereItWas(top, 'Cancel on shuffling the seats');
 
       await press(CLOSE);
       await noDialog(page);
@@ -167,7 +149,7 @@ const lastHandsAndTheMenu: Check = [
   'Cancel, the ✕ and Escape on “End the night?” give way to Last hands again, and its answer leaves for the table, where the night’s numbers open by themselves, with Last hands never drawn in between; a question opened from the menu closes to the table whatever is answered: Shuffle the seats, Stand up; on a 360 phone and the desktop',
   async (rig) => {
     for (const screen of ['smallPhone', 'desktop'] as const) {
-      const table = eightSeated(rig);
+      const table = seatedAndWatched(rig);
       const page = await table.open(HOST, screen);
       const sent = commandsSent(page);
 
@@ -176,12 +158,10 @@ const lastHandsAndTheMenu: Check = [
         await (screen === 'desktop' ? page.click(selector) : page.tap(selector));
       };
 
-      for (const [action, title] of [['shuffle', 'Shuffle the seats?'], ['stand', 'Stand up?']] as const) {
-        await fromMenu(page, press, action);
-        await dialogNamed(page, title);
-        await press(CANCEL);
-        await noDialog(page);
-      }
+      await fromMenu(page, press, 'stand');
+      await dialogNamed(page, 'Stand up?');
+      await press(CANCEL);
+      await noDialog(page);
 
       await fromMenu(page, press, 'lastHands');
 
@@ -221,7 +201,7 @@ const ENDS = (also: string) => `No more hands are dealt.${also} Chips, the ledge
 const nightsEndIsSaid: Check = [
   'the question before ending the night says what ending does that its button does not, and only what it will do: nothing more at a table with no high hand to pay and nobody waiting; that the high hand is paid and requests still waiting are dropped where they are, which is then what happens',
   async (rig) => {
-    const quiet = eightSeated(rig);
+    const quiet = seatedAndWatched(rig);
     const calm = await quiet.open(HOST, 'desktop');
 
     await fromMenu(calm, (selector) => calm.click(selector), 'lastHands');
@@ -280,8 +260,8 @@ interface AnswerDrawn {
 
 interface Asked {
   title: string;
-  /** The line of the menu a host comes to it by, and the button of the dialog that line opens, when it is asked from one. */
-  by: [menu: string, button?: string];
+  /** The line of the menu a host comes to it by, and the buttons of the dialog that line opens, when it is asked from one. */
+  by: [menu: string, ...buttons: string[]];
   /** What its two buttons say, the way out first. */
   says: [string, string];
   /** Whether yes takes a seat, chips or the table from someone that no one tap gives back. */
@@ -289,14 +269,14 @@ interface Asked {
 }
 
 const QUESTIONS: Asked[] = [
-  { title: 'Remove Stu?', by: ['players', on('Stu', 'remove')], says: ['Cancel', 'Remove'], danger: true },
-  { title: `Remove ${WATCHER}?`, by: ['players', on(WATCHER, 'remove')], says: ['Cancel', 'Remove'], danger: true },
-  { title: 'Make Stu the host?', by: ['players', on('Stu', 'make-host')], says: ['Cancel', 'Hand over'], danger: true },
+  { title: 'Remove Stu?', by: ['players', more('Stu'), on('Stu', 'remove')], says: ['Cancel', 'Remove'], danger: true },
+  { title: `Remove ${WATCHER}?`, by: ['players', more(WATCHER), on(WATCHER, 'remove')], says: ['Cancel', 'Remove'], danger: true },
+  { title: 'Make Stu the host?', by: ['players', more('Stu'), on('Stu', 'make-host')], says: ['Cancel', 'Hand over'], danger: true },
   { title: 'Stand up?', by: ['stand'], says: ['Cancel', 'Stand up'], danger: true },
   { title: 'End the night?', by: ['lastHands', END_NIGHT], says: ['Cancel', 'End the night'], danger: true },
   { title: 'Pay the high hand?', by: ['highHand'], says: ['Cancel', 'Pay 100'], danger: true },
-  { title: 'Make Stu a co-host?', by: ['players', on('Stu', 'make-cohost')], says: ['Cancel', 'Make co-host'], danger: false },
-  { title: 'Shuffle the seats?', by: ['shuffle'], says: ['Cancel', 'Shuffle'], danger: false },
+  { title: 'Make Stu a co-host?', by: ['players', more('Stu'), on('Stu', 'make-cohost')], says: ['Cancel', 'Make co-host'], danger: false },
+  { title: 'Shuffle the seats?', by: ['players', SHUFFLE], says: ['Cancel', 'Shuffle'], danger: false },
 ];
 
 const dangerIsDrawn = (picturesIn: string): Check => [
@@ -317,11 +297,11 @@ const dangerIsDrawn = (picturesIn: string): Check => [
       const press = (selector: string) => (screen === 'desktop' ? page.click(selector) : page.tap(selector));
 
       for (const asked of QUESTIONS) {
-        const [menu, button] = asked.by;
+        const [menu, ...buttons] = asked.by;
 
         await fromMenu(page, press, menu);
 
-        if (button) {
+        for (const button of buttons) {
           await press(button);
         }
 
@@ -366,6 +346,8 @@ interface Answered {
   what: string;
   /** The dialog the question is opened from, by its line in the menu and its name. */
   from: [action: string, name: string];
+  /** The "More" of the row the asking button is behind, for one that is behind one. */
+  unfolds?: string;
   /** The button of that dialog that asks, and the question. */
   asks: [button: string, title: string];
   /** The button tapped. */
@@ -378,17 +360,18 @@ interface Answered {
 
 const PLAYERS: Answered['from'] = ['players', 'Players'];
 const LAST_HANDS: Answered['from'] = ['lastHands', 'Last hands'];
-const removing = (name: string): Answered['asks'] => [on(name, 'remove'), `Remove ${name}?`];
+const removing = (name: string): Pick<Answered, 'unfolds' | 'asks'> => ({ unfolds: more(name), asks: [on(name, 'remove'), `Remove ${name}?`] });
 const gone = (name: string) => (page: Page) => page.waitForSelector(seated(name), { state: 'detached' });
 
 const ANSWERS: Answered[] = [
-  { what: 'Remove, answered for the fifth of eight', from: PLAYERS, asks: removing('Big Al'), tap: ANSWER, sends: 'kick', answered: gone('Big Al') },
-  { what: 'Cancel on removing the fifth of eight', from: PLAYERS, asks: removing('Big Al'), tap: CANCEL },
-  { what: 'Remove, answered for the last of eight with the list at its end', from: PLAYERS, asks: removing('Mo'), tap: ANSWER, sends: 'kick', answered: gone('Mo') },
-  { what: 'the ✕ on removing the last of eight with the list at its end', from: PLAYERS, asks: removing('Mo'), tap: CLOSE },
+  { what: 'Remove, answered for the fifth of eight', from: PLAYERS, ...removing('Big Al'), tap: ANSWER, sends: 'kick', answered: gone('Big Al') },
+  { what: 'Cancel on removing the fifth of eight', from: PLAYERS, ...removing('Big Al'), tap: CANCEL },
+  { what: 'Remove, answered for the last of eight with the list at its end', from: PLAYERS, ...removing('Mo'), tap: ANSWER, sends: 'kick', answered: gone('Mo') },
+  { what: 'the ✕ on removing the last of eight with the list at its end', from: PLAYERS, ...removing('Mo'), tap: CLOSE },
   {
     what: 'Make co-host, answered for the second of eight',
     from: PLAYERS,
+    unfolds: more('Danny'),
     asks: [on('Danny', 'make-cohost'), 'Make Danny a co-host?'],
     tap: ANSWER,
     sends: 'setCohost',
@@ -397,6 +380,7 @@ const ANSWERS: Answered[] = [
   {
     what: 'Hand over, answered for the second of eight, after which no row offers a role',
     from: PLAYERS,
+    unfolds: more('Danny'),
     asks: [on('Danny', 'make-host'), 'Make Danny the host?'],
     tap: ANSWER,
     sends: 'transferHost',
@@ -426,7 +410,7 @@ const secondTapOnAnAnswer = ANSWERS.map((answered): Check => [
     let cameUpAnywhere = 0;
 
     for (const size of SIZES) {
-      const table = eightSeated(rig);
+      const table = seatedAndWatched(rig);
       const page = await table.open(HOST, 'smallPhone');
       const [action, from] = answered.from;
       const [button, title] = answered.asks;
@@ -434,6 +418,13 @@ const secondTapOnAnAnswer = ANSWERS.map((answered): Check => [
       await page.setViewportSize(size);
       await fromMenu(page, (selector) => page.tap(selector), action);
       await dialogNamed(page, from);
+
+      if (answered.unfolds) {
+        await page.locator(answered.unfolds).scrollIntoViewIfNeeded();
+        await page.locator(answered.unfolds).tap();
+        await tapsLive(page);
+      }
+
       await page.locator(button).scrollIntoViewIfNeeded();
       await page.locator(button).tap();
       await dialogNamed(page, title);
@@ -479,23 +470,25 @@ const secondTapOnAnAnswer = ANSWERS.map((answered): Check => [
   },
 ]);
 
-/** Whose row the keyboard is on, and what on it. */
-const keyboardOn = (page: Page) => page.evaluate(`document.activeElement?.getAttribute('aria-label') ?? document.activeElement?.tagName ?? 'nothing'`) as Promise<string>;
-
 const keyboardComesBack: Check = [
-  'a host who answers a question from the keyboard has the keyboard back in Players on the button that opened it, on Escape, Cancel and an answer; Enter held down on the answer asks nothing again; once that button is gone, with the player removed, the keyboard is on the same button of the next row, and of the row before when the last one goes, never on the button that took its place; a click that leaves the keyboard on another button, as some browsers’ do, still brings it back to the one clicked; the question breaks no rule of the rule engine in any theme',
+  'a host who answers a question from the keyboard has the keyboard back in Players on the button that opened it, on Escape, Cancel and an answer; Enter held down on the answer asks nothing again; once that button is gone, with the player removed, the keyboard is on the next row, at the button that unfolds it, and on the row before when the last one goes, never on the button that took its place; a click that leaves the keyboard on another button, as some browsers’ do, still brings it back to the one clicked; the question breaks no rule of the rule engine in any theme',
   async (rig) => {
-    const table = eightSeated(rig);
+    const table = seatedAndWatched(rig);
     const page = await table.open(HOST, 'desktop');
     const inPlayers = () => focusIn(page, '.dialog[aria-label="Players"]');
 
-    await page.focus('[data-action="menu"]');
-    await page.keyboard.press('Enter');
-    await tabTo(page, '.menu-item[data-action="players"]');
-    await page.keyboard.press('Enter');
-    await dialogNamed(page, 'Players');
+    await playersFromTheKeyboard(page);
 
+    const unfolded = (name: string) => page.getAttribute(named('More', name), 'aria-expanded');
+
+    // Unfolds the row from the keyboard when it is folded, then asks from the button "More" kept
     const asks = async (name: string, says = 'Remove') => {
+      if ((await unfolded(name)) === 'false') {
+        await tabTo(page, named('More', name));
+        await page.keyboard.press('Enter');
+        assert.equal(await keyboardOn(page), `More, ${name}`, 'unfolding a row took the keyboard off the button that unfolds it');
+      }
+
       await tabTo(page, named(says, name));
       await page.keyboard.press('Enter');
       await page.waitForSelector(ANSWER);
@@ -537,34 +530,41 @@ const keyboardComesBack: Check = [
     assert.equal(await page.getAttribute('.overlay [role$="dialog"]', 'aria-label'), 'Players', 'Enter held down on the answer asked the question again');
     assert.equal(await keyboardOn(page), 'Remove, Stu', 'the answer left the keyboard elsewhere than on the button that opened the question');
 
+    // The next row is folded, and its own button to remove takes no keyboard: the one that unfolds it stands for it
     await gate.open();
     await page.waitForSelector(seated('Stu'), { state: 'detached' });
-    assert.equal(await keyboardOn(page), 'Remove, Big Al', 'with the player gone the keyboard is not on the next row’s button');
+    assert.equal(await keyboardOn(page), 'More, Big Al', 'with the player gone the keyboard is not on the next row');
+    assert.equal(await unfolded('Big Al'), 'false', 'the next row unfolded by itself');
     assert.equal(await inPlayers(), true);
 
-    // From there the list is worked down with no trip back to its top: the next row is removed with Enter alone
+    // From there the list is worked down with no trip back to its top: the next row is unfolded with Enter, and its button is the next stop
     await page.keyboard.press('Enter');
+    assert.equal(await unfolded('Big Al'), 'true');
+    await page.keyboard.press('Tab');
+    assert.equal(await keyboardOn(page), 'Make co-host, Big Al', 'what a row unfolds is not what the keyboard comes to after the button that unfolds it');
+    await asks('Big Al');
     await dialogNamed(page, 'Remove Big Al?');
     await tabTo(page, ANSWER);
     await page.keyboard.press('Enter');
     await page.waitForSelector(seated('Big Al'), { state: 'detached' });
-    assert.equal(await keyboardOn(page), 'Remove, Pocket Pam');
+    assert.equal(await keyboardOn(page), 'More, Pocket Pam');
 
     // The watcher's row is the last with such a button, and with it gone the row before has the keyboard
     await asks(WATCHER);
     await tabTo(page, ANSWER);
     await page.keyboard.press('Enter');
     await page.waitForSelector(row(WATCHER), { state: 'detached' });
-    assert.equal(await keyboardOn(page), 'Remove, Mo', 'with the last row gone the keyboard is not on the row before');
+    assert.equal(await keyboardOn(page), 'More, Mo', 'with the last row gone the keyboard is not on the row before');
 
     // A co-host named: the row stays and its button becomes the one that ends it, which sends at a press and so never gets the keyboard
     await asks('Danny', 'Make co-host');
     await tabTo(page, ANSWER);
     await page.keyboard.press('Enter');
     await page.waitForSelector(on('Danny', 'end-cohost'));
-    assert.equal(await keyboardOn(page), 'Make co-host, Marge', 'with its button gone for End co-host the keyboard is not on the next row’s');
+    assert.equal(await keyboardOn(page), 'More, Marge', 'with its button gone for End co-host the keyboard is not on the next row');
 
     // A click that moves no keyboard, as in a browser that leaves it where it was: here on a button that sends at a press
+    await page.click(named('More', 'Pocket Pam'));
     await page.focus(named('End co-host', 'Danny'));
     await page.evaluate(`document.querySelector(${JSON.stringify(named('Remove', 'Pocket Pam'))}).click()`);
     await dialogNamed(page, 'Remove Pocket Pam?');

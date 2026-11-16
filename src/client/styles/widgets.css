@@ -209,6 +209,16 @@ summary > .fold {
   line-height: 1;
 }
 
-details[open] > summary > .fold {
+details[open] > summary > .fold,
+.row-actions > [aria-expanded='true']::after {
   transform: rotate(180deg);
+}
+
+/* A row's button that unfolds more of the row carries the same mark after its word, drawn here so the word alone is its name */
+.row-actions > [aria-expanded]::after {
+  content: '▾';
+  display: inline-block;
+  margin-left: 6px;
+  color: var(--muted);
+  line-height: 1;
 }

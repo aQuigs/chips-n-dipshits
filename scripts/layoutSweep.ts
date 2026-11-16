@@ -29,6 +29,8 @@ const VIEWER = 'Quigs';
 // The widest sixteen letters a name can be, which the sweep makes the host and the holder of the high hand, so the star and the trophy stand beside the name with the least room for them
 const WIDEST = 'WWWWWWWWWWWWWWWW';
 const NAMES = [VIEWER, WIDEST, 'Ünïcödé Ñandú Ø!', 'Marge Simpson-Jr', 'Stu', 'Big Al', 'Pocket Pam', 'iiiiiiiiiiiiiiii', 'Zed'];
+// As wide but for a letter, for someone at the table with no seat: two members cannot share a name
+const WIDE_WATCHER = 'WWWWWWWWWWWWWWWV';
 
 // A pair each, the viewer's the best, so every hand at a showdown has a name and no two cards are dealt twice
 const HOLES: Record<number, string> = { 0: 'As Ah', 1: 'Ks Kh', 2: 'Qs Qh', 3: 'Js Jh', 4: 'Ts Th', 5: '9s 9h', 6: '8s 8h', 7: '7s 7h', 8: '6s 6h' };
@@ -889,15 +891,36 @@ const SCREEN_STATES: ScreenState[] = [
     },
   },
   {
-    shows: 'a question whose answer takes something, asked about the widest name and about the longest',
+    shows: 'the list of players hosted by the widest name, with another as wide watching and asking for a seat, its rows folded and then one unfolded in each part, the fullest of them a player’s who owes a blind; a question whose answer takes something, asked about the widest name and about the longest; and the list with a shuffle waiting for the hand to end',
     async walk(rig, screen, look) {
-      const table = rig.table(players(9, EVEN));
+      // Between hands with a seat open, the viewer's row has every button a row can have: a stack to set, a move, blinds to forgive and "More"
+      const table = owingTheBigBlind(rig);
+
+      // Asking for a seat, the watcher has a row among those waiting for the host as well as among those watching
+      asksForASeat(table, WIDE_WATCHER, 7);
+
       const host = await table.open(WIDEST, screen);
-      const rowOf = (name: string) => `.dialog li:has(b:text-is("${name}"))`;
+      const rowOf = (name: string) => `.dialog li.player-row:has(b:text-is("${name}"))`;
+      const unfold = async (name: string) => {
+        await host.locator(`${rowOf(name)} [data-action="more"]`).click();
+        await host.locator(`${rowOf(name)} .row-more`).scrollIntoViewIfNeeded();
+        await tapsLive(host);
+      };
 
       await openFromMenu(host, 'players');
+      await host.waitForSelector(`${rowOf(VIEWER)} [data-action="forgive-blinds"]`);
+      await look(host, 'Players, every row folded');
 
-      for (const [name, action, asks] of [[WIDEST, 'remove', `Remove ${WIDEST}?`], [NAMES[2]!, 'make-host', `Make ${NAMES[2]!} the host?`]] as const) {
+      await unfold(VIEWER);
+      await look(host, 'Players, a seated player’s row unfolded');
+
+      // Who is watching, and who is not on the list of players, are under the rows of the seated: a look reads only the head and the foot of what scrolls
+      await unfold(WIDE_WATCHER);
+      await host.locator('.dialog .unknown-players').scrollIntoViewIfNeeded();
+      await look(host, 'Players, a watching player’s row unfolded');
+      await unfold(NAMES[2]!);
+
+      for (const [name, action, asks] of [[WIDE_WATCHER, 'remove', `Remove ${WIDE_WATCHER}?`], [NAMES[2]!, 'make-host', `Make ${NAMES[2]!} the host?`]] as const) {
         await host.locator(`${rowOf(name)} [data-action="${action}"]`).click();
         await host.waitForSelector(`.dialog[aria-label=${JSON.stringify(asks)}] .btn.danger`);
         await look(host, `the question “${asks}”`);
@@ -906,6 +929,11 @@ const SCREEN_STATES: ScreenState[] = [
         await host.waitForSelector('.dialog[aria-label="Players"]');
         await tapsLive(host);
       }
+
+      table.dealNext();
+      table.act(WIDEST, { type: 'shuffleSeats' });
+      await host.locator('.dialog .shuffle-note').scrollIntoViewIfNeeded();
+      await look(host, 'Players, a shuffle waiting for the hand to end');
     },
   },
   {
@@ -917,7 +945,6 @@ const SCREEN_STATES: ScreenState[] = [
       table.dealNext({ holes: holesFor(3) });
       table.act(WIDEST, { type: 'pause' });
       table.act(WIDEST, { type: 'setLastHands', hands: LIMITS.lastHands });
-      table.act(WIDEST, { type: 'shuffleSeats' });
       [FIRST_ASKING, NEXT_ASKING].forEach((name, nth) => asksForASeat(table, name, 6 + nth));
 
       const host = await table.open(WIDEST, screen);
@@ -929,7 +956,7 @@ const SCREEN_STATES: ScreenState[] = [
       await host.waitForSelector(menuStartsWith('start', 'Call off the pause'));
       assert.deepEqual(
         await host.locator('.menu > section:first-child .menu-item small').allTextContents(),
-        ['2 waiting for you', '99,999.99 each, on two boards', `${LIMITS.lastHands} more hands after this one`, 'Between hands only', 'Blinds 0.25/0.50', 'Set for when this hand ends'],
+        ['2 waiting for you', '99,999.99 each, on two boards', `${LIMITS.lastHands} more hands after this one`, 'Between hands only', 'Blinds 0.25/0.50'],
         'the host’s lines do not all say how things stand',
       );
       await look(host, 'the host’s menu during a hand');
@@ -2010,9 +2037,9 @@ function cohosting(rig: Rig): RigTable {
   return table;
 }
 
-/** The viewer handed the table, which only its host hands on. */
-function hosting(rig: Rig): RigTable {
-  const table = betweenHands(rig);
+/** The viewer handed a table of `seats`, which only its host hands on. */
+function hosting(rig: Rig, seats = TABLE_OF_SIX): RigTable {
+  const table = tableWithTrophy(rig, seats, EVEN);
 
   table.act(WIDEST, { type: 'transferHost', playerId: table.auth(VIEWER).id });
 
@@ -2020,6 +2047,28 @@ function hosting(rig: Rig): RigTable {
 }
 
 const MAKE_STU_HOST = '.dialog [data-action="make-host"][aria-label$=", Stu"]';
+const moreOf = (name: string) => `.dialog [data-action="more"][aria-label$=", ${name}"]`;
+const UNFOLDED = '.dialog .row-more [data-action="remove"]:visible';
+
+/** Opens the list of players and scrolls it until `control` is the last thing it shows: what the control unfolds is then out of sight under it. */
+async function playersWithAtTheFoot(page: Page, control: string): Promise<void> {
+  await openFromMenu(page, 'players');
+  await page.waitForSelector(control);
+  await page.evaluate(`(() => {
+    const control = document.querySelector(${JSON.stringify(control)});
+    const list = control.closest('.dialog-body');
+
+    list.scrollTop += control.getBoundingClientRect().bottom - list.getBoundingClientRect().bottom;
+  })()`);
+}
+
+const MORE_ON_THE_LAST_OF_NINE: Omit<OwnDialog, 'when'> = {
+  build: (rig) => hosting(rig, 9),
+  open: (page) => playersWithAtTheFoot(page, moreOf(NAMES[8]!)),
+  tap: moreOf(NAMES[8]!),
+  then: UNFOLDED,
+  under: 'remove',
+};
 
 const OWN_DIALOGS: OwnDialog[] = [
   {
@@ -2077,11 +2126,30 @@ const OWN_DIALOGS: OwnDialog[] = [
     phone: LYING,
     open: async (page) => {
       await openFromMenu(page, 'players');
+      await page.locator(moreOf('Stu')).click();
       await page.locator(MAKE_STU_HOST).scrollIntoViewIfNeeded();
     },
     tap: MAKE_STU_HOST,
     then: '.dialog [data-action="confirm"]',
     under: 'confirm',
+  },
+  {
+    // A sheet that is not yet as tall as it may be grows from its foot up, and takes "More" up with it
+    when: 'More on a row of three players, whose sheet grows and lays the button that removes the player where "More" lay',
+    build: (rig) => hosting(rig, 3),
+    open: (page) => openFromMenu(page, 'players'),
+    tap: moreOf(NAMES[2]!),
+    then: UNFOLDED,
+    under: 'remove',
+  },
+  {
+    when: 'More on the last row of nine, at the foot of what shows, which scrolls the list to show what it unfolds, the button that removes the player where "More" lay',
+    ...MORE_ON_THE_LAST_OF_NINE,
+  },
+  {
+    when: 'More on the last row of nine, at the foot of what shows, on a 360 phone lying down, where the row’s buttons stand at its end',
+    phone: LYING,
+    ...MORE_ON_THE_LAST_OF_NINE,
   },
 ];
 

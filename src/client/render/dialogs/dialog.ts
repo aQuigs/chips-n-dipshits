@@ -20,6 +20,11 @@ export interface DialogHandlers {
   close(): void;
   /** Makes a change to the open dialog that the game and not the viewer brings about, as on an answer from the table: what comes up under a finger takes no tap for a moment (`TapGuard`). */
   byItself(change: () => void): void;
+  /**
+   * Makes a change to the open dialog that its viewer asked for with a tap, as a row that unfolds: no surprise to them, so
+   * what it brings up is live at once, all but what comes up where they tapped, where the second tap of two lands (`TapGuard`).
+   */
+  byThePlayer(change: () => void): void;
   copy(text: string): Promise<boolean>;
   loadHistory(): Promise<HandRecord[]>;
   /** Plays a finished hand back, over the table and whatever is open on it. */

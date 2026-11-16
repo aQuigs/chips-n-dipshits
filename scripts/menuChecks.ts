@@ -59,7 +59,7 @@ const partsByWhereTheGameStands: Check = [
 
     await openTheMenu(page);
     assert.deepEqual(await parts(page), [
-      ['Run the game', ['Start the game', 'Players', 'Bomb pot next hand: 100 each', 'Last hands', 'Table settings: Blinds 10/20', 'Shuffle seats']],
+      ['Run the game', ['Start the game', 'Players', 'Bomb pot next hand: 100 each', 'Last hands', 'Table settings: Blinds 10/20']],
       SCORES,
       YOU_SEATED,
       LEAVE_SEATED,
@@ -87,13 +87,13 @@ const partsByWhereTheGameStands: Check = [
     await openTheMenu(page);
     assert.deepEqual(await run(), [
       'Run the game',
-      ['Resume the game', 'Players', 'Bomb pot next hand: 100 each', 'Last hands', `Pay the high hand: ${HOST}: ${BONUS} from everyone else`, 'Table settings: Blinds 10/20', 'Shuffle seats'],
+      ['Resume the game', 'Players', 'Bomb pot next hand: 100 each', 'Last hands', `Pay the high hand: ${HOST}: ${BONUS} from everyone else`, 'Table settings: Blinds 10/20'],
     ]);
 
     // The night's end pays the bonus, and with no hand to come there is none to call a bomb pot or the last hands for
     table.act(HOST, { type: 'endNight' });
     await firstLine('keep-playing', 'Keep playing');
-    assert.deepEqual(await run(), ['Run the game', ['Keep playing', 'Players', 'Table settings: Blinds 10/20', 'Shuffle seats']]);
+    assert.deepEqual(await run(), ['Run the game', ['Keep playing', 'Players', 'Table settings: Blinds 10/20']]);
   },
 ];
 
@@ -114,7 +114,7 @@ const partsByWhoLooks: Check = [
 
     table.act(HOST, { type: 'setCohost', playerId: table.auth(PLAYER).id, on: true });
     await player.waitForSelector('.menu [data-action="pause"]');
-    assert.deepEqual(await parts(player), [['Run the game', ['Pause the game', 'Players', 'Bomb pot next hand: 100 each', 'Last hands', 'Table settings: Blinds 10/20', 'Shuffle seats']], SCORES, YOU_SEATED, LEAVE_SEATED]);
+    assert.deepEqual(await parts(player), [['Run the game', ['Pause the game', 'Players', 'Bomb pot next hand: 100 each', 'Last hands', 'Table settings: Blinds 10/20']], SCORES, YOU_SEATED, LEAVE_SEATED]);
   },
 ];
 
@@ -227,7 +227,7 @@ function assertStatesPlaced(menu: LaidOut, where: string): void {
   }
 }
 
-/** A hand in play at a table whose host has the high hand, with the last hands called, the seats to be shuffled after it and three players asking for seats: every line of the host's menu that can say how things stand does. */
+/** A hand in play at a table whose host has the high hand, with the last hands called and three players asking for seats: every line of the host's menu that can say how things stand does. */
 function everyLineSaying(rig: Rig): RigTable {
   const table = threeAndAWatcher(rig);
 
@@ -235,7 +235,6 @@ function everyLineSaying(rig: Rig): RigTable {
   pausedAfterTheHand(table);
   table.dealNext({ holes: ACES_HOLD_UP.holes });
   table.act(HOST, { type: 'setLastHands', hands: 2 });
-  table.act(HOST, { type: 'shuffleSeats' });
 
   ['Alice', 'Bob'].forEach((name) => table.join(name));
   [WATCHER, 'Alice', 'Bob'].forEach((name, nth) => table.act(name, { type: 'requestSeat', seat: 5 + nth, buyIn: 2000 }));
@@ -255,7 +254,7 @@ const fitsAPhone = (picturesIn: string): Check => [
 
     assert.deepEqual((await parts(host))[0], [
       'Run the game',
-      ['Pause the game', 'Players: 3 waiting for you', 'Bomb pot next hand: 100 each', 'Last hands: 2 more hands after this one', 'Pay the high hand: Between hands only', 'Table settings: Blinds 10/20', 'Shuffle seats: Set for when this hand ends'],
+      ['Pause the game', 'Players: 3 waiting for you', 'Bomb pot next hand: 100 each', 'Last hands: 2 more hands after this one', 'Pay the high hand: Between hands only', 'Table settings: Blinds 10/20'],
     ]);
     assert.ok(inSight(hosts, 'standings'), `the host scrolls to the end of Scores and history, which is ${hosts.lines.standings!.bottom} px down a list that shows ${hosts.shows}`);
     assert.equal(hosts.lines.players!.beside, true, 'word of who waits is not at the end of the Players line');
@@ -276,7 +275,7 @@ const fitsAPhone = (picturesIn: string): Check => [
     const smalls = await laidOut(small);
 
     assertStatesPlaced(smalls, 'the host on a small phone');
-    assert.ok(inSight(smalls, 'shuffle'), `on a small phone the host scrolls to the end of Run the game, which is ${smalls.lines.shuffle!.bottom} px down a list that shows ${smalls.shows}`);
+    assert.ok(inSight(smalls, 'settings'), `on a small phone the host scrolls to the end of Run the game, which is ${smalls.lines.settings!.bottom} px down a list that shows ${smalls.shows}`);
     assert.deepEqual(await squeezed(small, '.menu-item, .menu-item > *'), [], 'a line of the menu is cut short on a small phone');
     await small.screenshot({ path: `${picturesIn}check-menu-host-360.png` });
   },

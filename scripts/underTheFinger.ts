@@ -62,7 +62,7 @@ export interface Watched {
 const NAMED = `(element) => element.matches(${JSON.stringify(BACKDROP)}) ? 'the backdrop of the dialog' : JSON.stringify((element.getAttribute('aria-label') || element.textContent || element.placeholder || element.id || element.tagName).trim().replace(/\\s+/g, ' ').slice(0, 30))`;
 
 // Run in the page. Notes where every control is, and from then on compares the page, each time anything on it is
-// drawn anew or the bar changes shape, with how things lay before, asking of each control that came up where
+// drawn anew, shown or hidden, or the bar changes shape, with how things lay before, asking of each control that came up where
 // another had been what a tap there would reach. A control is told from another as the page tells them apart,
 // by its id and its data marks. Every control the page holds back is tapped the moment it is, where it lies
 const WATCH = `(({ tapped, backdrop, bar, playsNothing, settling, byName }) => {
@@ -154,7 +154,16 @@ const WATCH = `(({ tapped, backdrop, bar, playsNothing, settling, byName }) => {
     watched.before = now;
   };
 
-  new MutationObserver(compare).observe(document.body, { childList: true, subtree: true });
+  // A part that unfolds in place is drawn already, and only stops being hidden. Only one that holds a control and is shown or
+  // hidden for real is looked at: the page hides a part of words, or one hidden already, with no thought for a tap, and may do it
+  // as a style lets other controls come up, which the page holds back when the bar changes shape and not a moment sooner
+  const showsOrHides = ({ type, target, oldValue }) => type === 'attributes' && (oldValue === null) === target.hidden && (target.matches(tapped) || target.querySelector(tapped) !== null);
+
+  new MutationObserver((changes) => {
+    if (changes.some((change) => change.type === 'childList' || showsOrHides(change))) {
+      compare();
+    }
+  }).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden'], attributeOldValue: true });
   new ResizeObserver(compare).observe(document.querySelector(bar));
 
   // Every control the page holds back, for how long, and a tap on each the moment it is held. A control drawn again

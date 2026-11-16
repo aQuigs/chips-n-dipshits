@@ -88,7 +88,7 @@ test('a preset saved when the bounty was one amount for seven-deuce has it as th
   // An amount the table can't pay goes back to no bounties, as the one amount went back to 0
   const fraction = fromPreset({ ...beforeLists, sevenDeuceBounty: 2.5 });
   assert.deepEqual(fraction.config.bounties, []);
-  assert.deepEqual(fraction.notes, ['Bounty hands is back to none: the preset’s is no longer allowed.']);
+  assert.deepEqual(fraction.notes, ['The bounties went back to none: the preset’s is no longer allowed.']);
 
   const { bounties: _none, ...centsBeforeLists } = kept({ unit: 'cents' });
   assert.deepEqual(fromPreset({ ...centsBeforeLists, sevenDeuceBounty: 250 }).config.bounties, [['72', 250]]);
@@ -106,7 +106,7 @@ test('a preset keeps its list of bounties as it was saved, and a table playing i
 
   const twice = fromPreset({ ...kept({}), bounties: [['72', 10], ['27', 20]] });
   assert.deepEqual(twice.config.bounties, []);
-  assert.deepEqual(twice.notes, ['Bounty hands is back to none: the preset’s is no longer allowed.']);
+  assert.deepEqual(twice.notes, ['The bounties went back to none: the preset’s is no longer allowed.']);
 });
 
 test('a preset saved when there was one kind of straddle plays as it did: under the gun if it allowed that, and no other kind', () => {
@@ -172,14 +172,14 @@ test('a value no longer allowed goes back to the usual one, and a note names the
   assert.equal(used.config.name, DEFAULT_CONFIG.name);
   assert.equal(used.config.smallBlind, 5, 'the rest of the preset still counts');
   assert.deepEqual(used.notes, [
-    'Seconds to act is back to 30: the preset’s is no longer allowed.',
-    'Table name is back to Chips n\' Dipshits: the preset’s is no longer allowed.',
-    'Straddle under the gun is back to on: the preset’s is no longer allowed.',
+    'The action clock went back to 30: the preset’s is no longer allowed.',
+    'The table name went back to Chips n\' Dipshits: the preset’s is no longer allowed.',
+    'The straddle under the gun went back to on: the preset’s is no longer allowed.',
   ]);
 
   const clock = fromPreset({ ...kept({}), actionSeconds: 3 });
   assert.equal(clock.config.actionSeconds, 30);
-  assert.deepEqual(clock.notes, ['Seconds to act is back to 30: the preset’s is no longer allowed.']);
+  assert.deepEqual(clock.notes, ['The action clock went back to 30: the preset’s is no longer allowed.']);
 });
 
 test('settings that no longer go together both go back to the usual', () => {
@@ -187,7 +187,7 @@ test('settings that no longer go together both go back to the usual', () => {
 
   assert.equal(used.config.smallBlind, 10);
   assert.equal(used.config.bigBlind, 20);
-  assert.deepEqual(used.notes, ['Small blind and Big blind are back to the usual: the preset’s no longer go together.']);
+  assert.deepEqual(used.notes, ['The small blind and the big blind are back to the usual: the preset’s no longer go together.']);
   assert.deepEqual(newConfig(used.config), used.config);
 });
 
@@ -199,13 +199,13 @@ test('a dollars-and-cents preset plays dollars and cents, and its notes write am
   // A blind someone typed in dollars into the Sheet: amounts are kept as whole cents
   const typed = fromPreset({ ...settings, smallBlind: 0.25 });
   assert.equal(typed.config.smallBlind, 25);
-  assert.deepEqual(typed.notes, ['Small blind is back to 0.25: the preset’s is no longer allowed.']);
+  assert.deepEqual(typed.notes, ['The small blind went back to 0.25: the preset’s is no longer allowed.']);
 
   // What a table plays with that the game no longer has falls back first, so the amounts are read as whole chips
   const unknownUnit = fromPreset({ ...kept({ smallBlind: 5, bigBlind: 10 }), unit: 'euros' });
   assert.equal(unknownUnit.config.unit, 'chips');
   assert.equal(unknownUnit.config.bigBlind, 10);
-  assert.deepEqual(unknownUnit.notes, ['Play with is back to Whole chips: the preset’s is no longer allowed.']);
+  assert.deepEqual(unknownUnit.notes, ['What the table plays with went back to Whole chips: the preset’s is no longer allowed.']);
 });
 
 test('the settings a preset doesn\'t keep come from the table they are filled into', () => {

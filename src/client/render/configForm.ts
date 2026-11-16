@@ -1,25 +1,51 @@
-import { CONFIG_GROUPS, CONFIG_KEYS, CONFIG_SPECS, fixedAtCreation, holdsAmounts, sameSetting, startingConfig } from '../../engine/config.ts';
+import { CONFIG_SPECS, fixedAtCreation, holdsAmounts, sameSetting, settingText, startingConfig } from '../../engine/config.ts';
 import type { ConfigKey, ConfigSpec, SettingValue } from '../../engine/config.ts';
+import { CONFIG_SECTION_KEYS, CONFIG_SECTIONS, sectionOf } from '../../engine/configSections.ts';
+import type { ConfigSection } from '../../engine/configSections.ts';
 import type { TableConfig } from '../../engine/types.ts';
 import { h } from '../ui.ts';
 import { bountiesHeld, bountyListField } from './bountyList.ts';
 import type { BountyRow } from './bountyList.ts';
+import { foldSection } from './foldSection.ts';
+import type { FoldSection } from './foldSection.ts';
 import { amountField, amountOf, checkField, inputOf, numberField, numberOf } from './forms.ts';
 
+export interface ConfigFormOptions {
+  /** Keeps the fields of two forms on one page apart. */
+  idPrefix: string;
+  /**
+   * The form a new table is made with. It has only the settings asked for then, and it is the one place
+   * a setting chosen for good is open; anywhere else it is told in words, not offered. Picking a choice
+   * there that suggests where other settings start, as what the table plays with does, starts the
+   * amounts over from that, since a number typed for whole chips means something else in dollars and cents.
+   */
+  creating: boolean;
+  /** Whether a section starts unfolded. The rest start folded under the line of what they hold. */
+  open(section: ConfigSection): boolean;
+  /** The section the form leads with, ahead of the registry's order. */
+  first?: ConfigSection;
+  /** Told where the amounts start when a choice has started them over, for amounts kept outside the form. */
+  startedOver?(start: TableConfig): void;
+  /** Told whenever what the fields hold may have changed. */
+  edited?(): void;
+}
+
 export interface ConfigForm {
-  /** One row per setting, or per two that share a row, to put inside a form. */
-  rows: HTMLElement[];
+  /** One part per section of the settings with a field here, each under its heading, to put inside a form. */
+  sections: HTMLElement[];
   /** The settings it has a field for. */
   shown: ConfigKey[];
-  /** What the rows hold now, for the settings the form lets be changed. */
+  /** What the fields hold now, for the settings the form lets be changed. */
   read(form: HTMLFormElement): Partial<TableConfig>;
-  /** Puts `values` in every field, marking each field it changed, and says which those were. */
+  /** Puts `values` in every field, marking each field it changed and unfolding its section, and says which those were. */
   fill(form: HTMLFormElement, values: TableConfig): ConfigKey[];
+  /** Unfolds the sections these settings stand in, for when something is about to be said of them. */
+  unfold(keys: ConfigKey[]): void;
 }
 
 /** The field for one setting. `table` is the table its amounts are written for. */
 function field(id: string, spec: ConfigSpec, value: SettingValue | readonly BountyRow[], table: TableConfig): HTMLElement {
-  const hint = 'hint' in spec && spec.hint ? h('small', null, spec.hint) : null;
+  const hint = spec.hint ? h('small', null, spec.hint) : null;
 
   switch (spec.kind) {
     case 'text':
@@ -43,7 +69,7 @@ function field(id: string, spec: ConfigSpec, value: SettingValue | readonly Boun
       return numberField(id, spec.label, Number(value), spec.min, spec.max, spec.hint);
 
     case 'toggle':
-      return checkField(id, spec.label, value === true);
+      return checkField(id, spec.label, value === true, spec.hint);
 
     case 'choice':
       return h(
@@ -61,6 +87,15 @@ function field(id: string, spec: ConfigSpec, value: SettingValue | readonly Boun
     case 'handAmounts':
       return bountyListField(id, spec, value as readonly BountyRow[], table);
   }
+}
+
+/** A setting chosen for good, told in words where its field would be: a control nobody can use only looks broken. */
+function fixedLine(id: string, key: ConfigKey, table: TableConfig): HTMLElement {
+  const spec = CONFIG_SPECS[key];
+  const picked = spec.kind === 'choice' ? spec.options.find((option) => option.value === table[key]) : undefined;
+  const said = picked?.chosen ?? `${spec.label}: ${settingText(key, table)}`;
+
+  return h('p.note', { id }, `${[said, spec.hint].filter(Boolean).join('. ')}.`);
 }
 
 function held(form: HTMLFormElement, id: string, spec: ConfigSpec, table: TableConfig): SettingValue {
@@ -91,27 +126,77 @@ function held(form: HTMLFormElement, id: string, spec: ConfigSpec, table: TableC
   }
 }
 
+/** A list cut where `of` changes from one item to the next. */
+function runs<T>(items: T[], of: (item: T) => unknown): T[][] {
+  const cut: T[][] = [];
+
+  for (const item of items) {
+    if (cut.length > 0 && of(cut.at(-1)![0]!) === of(item)) {
+      cut.at(-1)!.push(item);
+    } else {
+      cut.push([item]);
+    }
+  }
+
+  return cut;
+}
+
 /**
- * The form fields for the table's settings, built from the config registry: section by section in the
- * registry's order, each filled with its value in `values`. `idPrefix` keeps the fields of two forms on
- * one page apart.
- *
- * `creating` is the form a new table is made with. It has only the settings asked for then, and it is
- * the one place a setting chosen for good is open; anywhere else it is shown, not offered. Picking a
- * choice there that suggests where other settings start, as what the table plays with does, starts the
- * amounts over from that, since a number typed for whole chips means something else in dollars and cents.
- * `startedOver` is told where they start, for amounts kept outside the form.
+ * The form fields for the table's settings, built from the config registry: a part for each of its
+ * sections, in its order, with the section's settings under its heading, each filled with its value in
+ * `values`. A part folds away under one line that says what its fields hold, and unfolds by itself when
+ * the browser refuses one of them, since a field out of sight can't be pointed at.
  */
-export function configForm(values: TableConfig, idPrefix: string, creating: boolean, startedOver?: (start: TableConfig) => void): ConfigForm {
-  const asked = CONFIG_KEYS.filter((key) => !creating || CONFIG_SPECS[key].atCreate);
-  const shown = CONFIG_GROUPS.flatMap((group) => asked.filter((key) => CONFIG_SPECS[key].group === group));
+export function configForm(values: TableConfig, options: ConfigFormOptions): ConfigForm {
+  const { idPrefix, creating } = options;
   const idOf = (key: ConfigKey) => idPrefix + key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
   const closed = (key: ConfigKey) => !creating && fixedAtCreation(key);
+  const asked = (key: ConfigKey) => !creating || CONFIG_SPECS[key].atCreate;
+
+  // What is settled for good comes after what can be changed
+  const settingsOf = (section: ConfigSection): ConfigKey[] => {
+    const keys = CONFIG_SECTIONS[section].settings.filter(asked);
+
+    return [...keys.filter((key) => !closed(key)), ...keys.filter(closed)];
+  };
+
+  const order = options.first ? [options.first, ...CONFIG_SECTION_KEYS.filter((section) => section !== options.first)] : CONFIG_SECTION_KEYS;
+  const filled = order.filter((section) => settingsOf(section).length > 0);
+  const shown = filled.flatMap(settingsOf);
   const choices = shown.filter((key) => CONFIG_SPECS[key].kind === 'choice');
 
   // The table the form's amounts are written for, which at creation changes with the choices
   let table = values;
   const fields = new Map<ConfigKey, HTMLElement>();
+  const parts = new Map<ConfigSection, FoldSection>();
+
+  const read = (form: HTMLFormElement): Partial<TableConfig> => {
+    const open = shown.filter((key) => !closed(key));
+
+    return Object.fromEntries(open.map((key) => [key, held(form, idOf(key), CONFIG_SPECS[key], table)])) as Partial<TableConfig>;
+  };
+
+  /** Brings what follows from the fields in line with them: which settings apply, and the line each section is folded under. */
+  const follow = (form: HTMLFormElement): void => {
+    const now = { ...table, ...read(form) };
+
+    for (const key of shown) {
+      const applies = CONFIG_SPECS[key].applies;
+
+      if (applies) {
+        fields.get(key)!.hidden = !applies(now);
+      }
+    }
+
+    for (const [section, part] of parts) {
+      // A field that can't be read has nothing to say yet: the line keeps what it last could
+      if (part.element.querySelector(':invalid') === null) {
+        part.hold(CONFIG_SECTIONS[section].holds(now));
+      }
+    }
+
+    options.edited?.();
+  };
 
   const startOver = (event: Event): void => {
     const form = (event.target as HTMLInputElement).form!;
@@ -125,18 +210,15 @@ export function configForm(values: TableConfig, idPrefix: string, creating: bool
       redraw(key, spec.kind === 'handAmounts' ? bountiesHeld(form, idOf(key), table).map(([hand]): BountyRow => [hand, null]) : table[key]);
     }
 
-    startedOver?.(table);
+    follow(form);
+    options.startedOver?.(table);
   };
 
   const draw = (key: ConfigKey, value: SettingValue | readonly BountyRow[] = table[key]): HTMLElement => {
     const spec = CONFIG_SPECS[key];
-    const element = field(idOf(key), spec, value, table);
+    const element = closed(key) ? fixedLine(idOf(key), key, table) : field(idOf(key), spec, value, table);
 
-    if (closed(key)) {
-      for (const input of element.querySelectorAll('input')) {
-        input.disabled = true;
-      }
-    }
+    element.hidden = spec.applies?.(table) === false;
 
     if (creating && spec.kind === 'choice' && spec.options.some((option) => option.suggests)) {
       element.addEventListener('change', startOver);
@@ -154,37 +236,72 @@ export function configForm(values: TableConfig, idPrefix: string, creating: bool
     return fresh;
   };
 
-  const read = (form: HTMLFormElement): Partial<TableConfig> => {
-    const open = shown.filter((key) => !closed(key));
+  /** The rows of some settings that follow one another: each alone, or two to a row where both are narrow. */
+  const rowsOf = (keys: ConfigKey[]): HTMLElement[] => {
+    const rows: HTMLElement[] = [];
+    let pair: HTMLElement | null = null;
 
-    return Object.fromEntries(open.map((key) => [key, held(form, idOf(key), CONFIG_SPECS[key], table)])) as Partial<TableConfig>;
+    for (const key of keys) {
+      const element = draw(key);
+
+      fields.set(key, element);
+
+      if (!CONFIG_SPECS[key].half) {
+        rows.push(element);
+        pair = null;
+      } else if (pair) {
+        pair.append(element);
+        pair = null;
+      } else {
+        pair = h('div.pair', null, element);
+        rows.push(pair);
+      }
+    }
+
+    return rows;
   };
 
-  const rows: HTMLElement[] = [];
-  let open: { pair: HTMLElement; group: string } | null = null;
+  for (const section of filled) {
+    const rows = runs(settingsOf(section), (key) => CONFIG_SPECS[key].among).flatMap((together) => {
+      const heading = CONFIG_SPECS[together[0]!].among;
 
-  for (const key of shown) {
-    const spec = CONFIG_SPECS[key];
-    const element = draw(key);
+      return heading ? [h('fieldset.field.among', null, h('legend', null, heading), rowsOf(together))] : rowsOf(together);
+    });
+    const part = foldSection(section, CONFIG_SECTIONS[section].label, options.open(section), rows);
 
-    fields.set(key, element);
+    part.hold(CONFIG_SECTIONS[section].holds(table));
+    parts.set(section, part);
 
-    if (!spec.half) {
-      rows.push(element);
-      open = null;
-    } else if (open && open.group === spec.group) {
-      open.pair.append(element);
-      open = null;
-    } else {
-      open = { pair: h('div.pair', null, element), group: spec.group };
-      rows.push(open.pair);
+    // A click too: a row of a list is added and taken away with a button, which no field hears of
+    for (const type of ['input', 'change', 'click']) {
+      part.element.addEventListener(type, () => {
+        const form = part.element.closest('form');
+
+        if (form) {
+          follow(form);
+        }
+      });
     }
+
+    // Before the browser looks for the field to point at, which it only finds unfolded
+    part.element.addEventListener('invalid', () => (part.element.open = true), true);
   }
 
+  const unfold = (keys: ConfigKey[]): void => {
+    for (const key of keys) {
+      const part = parts.get(sectionOf(key));
+
+      if (part) {
+        part.element.open = true;
+      }
+    }
+  };
+
   return {
-    rows,
+    sections: filled.map((section) => parts.get(section)!.element),
     shown,
     read,
+    unfold,
 
     fill(form, values) {
       const before = { ...table, ...read(form) };
@@ -195,6 +312,9 @@ export function configForm(values: TableConfig, idPrefix: string, creating: bool
       for (const key of shown) {
         redraw(key).classList.toggle('changed', changed.includes(key));
       }
+
+      follow(form);
+      unfold(changed);
 
       return changed;
     },

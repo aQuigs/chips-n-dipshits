@@ -1,5 +1,5 @@
 import { bountiesText } from '../../engine/bounties.ts';
-import { CONFIG_SPECS, sameSetting, settingText, startingConfig } from '../../engine/config.ts';
+import { CONFIG_SPECS, sameSetting, settingName, settingText, startingConfig } from '../../engine/config.ts';
 import type { ConfigKey } from '../../engine/config.ts';
 import { fromPreset, PRESET_KEYS } from '../../engine/presets.ts';
 import type { Preset } from '../../engine/presets.ts';
@@ -95,7 +95,7 @@ export function lobbyEl(visitor: Visitor, themePicker: HTMLElement, handlers: Lo
     const start = startingConfig(table);
     const differ = (Object.keys(unseen) as ConfigKey[]).filter((key) => !sameSetting(table[key], start[key]));
 
-    return differ.length > 0 ? [h('p.note', null, `Also set, in the table settings: ${differ.map((key) => `${CONFIG_SPECS[key].label} ${settingText(key, table)}`).join(', ')}.`)] : [];
+    return differ.length > 0 ? [h('p.note', null, `Also set, in the table settings: ${differ.map((key) => `${settingName(key)} ${settingText(key, table)}`).join(', ')}.`)] : [];
   };
 
   // An amount means something else once what the table plays with changes, so the preset's unseen ones start over too
@@ -106,7 +106,8 @@ export function lobbyEl(visitor: Visitor, themePicker: HTMLElement, handlers: Lo
     notes.replaceChildren(...alsoSet({ ...start, ...unseen }));
   };
 
-  const settings = configForm(usual, 'new-table-', true, startedOver);
+  // Every section open, with the table's name where a new host starts
+  const settings = configForm(usual, { idPrefix: 'new-table-', creating: true, open: () => true, first: 'table', startedOver });
 
   const pick = (chosen: Preset | null): void => {
     const current = { ...usual, ...settings.read(create) };
@@ -116,7 +117,7 @@ export function lobbyEl(visitor: Visitor, themePicker: HTMLElement, handlers: Lo
     unseen = Object.fromEntries(PRESET_KEYS.filter((key) => !settings.shown.includes(key)).map((key) => [key, used.config[key]]));
 
     notes.replaceChildren(
-      h('p.note', null, changed.length > 0 ? `Changed here: ${changed.map((key) => CONFIG_SPECS[key].label).join(', ')}.` : 'The form already held these settings.'),
+      h('p.note', null, changed.length > 0 ? `Changed here: ${changed.map(settingName).join(', ')}.` : 'The form already held these settings.'),
       ...alsoSet(used.config),
       ...used.notes.map((note) => h('p.note.warn', null, note)),
     );
@@ -133,7 +134,7 @@ export function lobbyEl(visitor: Visitor, themePicker: HTMLElement, handlers: Lo
     h('h2', null, 'Start a table'),
     who.element,
     presetPick,
-    settings.rows,
+    h('div.sections', null, settings.sections),
     h('p.note', null, 'You become the host. Clock, straddles and running it more than once are in the table settings.'),
     createButton,
   );

@@ -1292,6 +1292,7 @@ export class App {
       send: (command) => this.send(command),
       open: (dialog) => this.openDialog(dialog),
       close: () => this.closeDialog(),
+      byItself: (change) => this.screen!.taps.byItself(change),
       copy: (text) => this.copy(text),
       loadHistory: () => this.loadHistory(),
       replay: (record) => this.openReplay(record),

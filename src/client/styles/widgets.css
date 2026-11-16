@@ -177,7 +177,8 @@
   gap: 0 20px;
 }
 
-.choice .check {
+.choice .check,
+.switch .check {
   color: var(--text);
   font-size: calc(15px * var(--text-scale));
   font-weight: 400;

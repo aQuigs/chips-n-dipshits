@@ -612,6 +612,27 @@ const FORTY = Array.from({ length: 40 }, (_player, nth) => [`${'W'.repeat(13)}${
 // One short of as many bounty hands as a table can have, so the last is added on the page
 const BOUNTIES: Bounty[] = [['72', 25], ['72s', 100], ['J4s', 50], ['AA', 200], ['T9o', 20], ['K2o', 10], ['QQ', 75]];
 
+// What makes the line each section of the table settings is folded under as long as it gets
+const LONGEST_LINES: Partial<TableConfig> = {
+  // In words, as the menu's own heading cannot break a name that has none
+  name: 'WWWWWWW WWWWWWW WWWWWWW WWWWWWW WWWWWWWW',
+  voiceLink: 'https://meet.example/abc',
+  ante: 25,
+  anteFrom: 'bigBlind',
+  maxBuyIn: 1_000_000_000,
+  allowStraddle: true,
+  allowDoubleStraddle: true,
+  allowButtonStraddle: true,
+  allowMississippiStraddle: true,
+  allowChop: true,
+  missedBlinds: 'forgiven',
+  rabbitHunting: true,
+  bombPotEvery: LIMITS.handsPerBombPot,
+  bombPotBoards: 'two',
+  bounties: BOUNTIES,
+  highHandBonus: 1_000_000,
+};
+
 const GIF = 'https://media.giphy.com/media/abc123/giphy.gif';
 
 // Run in the page: whether the replay is at the last of its steps
@@ -645,9 +666,11 @@ const SCREEN_STATES: ScreenState[] = [
     },
   },
   {
-    shows: 'the host’s menu, and the table settings with as many bounty hands as a table can have',
+    shows: 'the host’s menu, and the table settings folded under their longest lines, then with every section unfolded, as many bounty hands as a table can have and a change not saved',
     async walk(rig, screen, look) {
-      const table = rig.table(players(2, BIGGEST), { ...CENTS, bounties: BOUNTIES, allowStraddle: true, rabbitHunting: true });
+      const table = rig.table(players(2, BIGGEST), { ...CENTS, ...LONGEST_LINES });
+      // A hand in play, so the settings say when a change to the blinds applies
+      table.dealNext();
       const page = await table.open(WIDEST, screen);
 
       await page.locator('[data-action="menu"]').click();
@@ -655,9 +678,22 @@ const SCREEN_STATES: ScreenState[] = [
       await look(page, 'the menu');
 
       await page.locator('.menu [data-action="settings"]').click();
+      await page.waitForSelector('[data-action="save-settings"]');
+      await look(page, 'the table settings as they open');
+
+      const folded = page.locator('.fold-section:not([open]) > summary');
+
+      while ((await folded.count()) > 0) {
+        await folded.first().click();
+      }
+
       await page.locator('[data-action="add-bounty"]').click();
       await page.waitForSelector(`#table-bounties-hand-${BOUNTIES.length}`);
-      await look(page, 'the table settings');
+      await page.fill('#table-big-blind', '1.00');
+      await page.waitForSelector('.dialog-foot [data-says="next-hand"]:visible');
+      await page.waitForSelector('.preset-panel [data-says="table-unchanged"]:visible');
+      await page.evaluate(`document.querySelector('.dialog-body').scrollTop = 0`);
+      await look(page, 'the table settings, every section unfolded');
     },
   },
   {

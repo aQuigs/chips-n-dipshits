@@ -15,6 +15,8 @@ export interface DialogHandlers {
   send(command: Command): Promise<SendOutcome>;
   open(dialog: Dialog): void;
   close(): void;
+  /** Makes a change to the open dialog that the game and not the viewer brings about, as on an answer from the table: what comes up under a finger takes no tap for a moment (`TapGuard`). */
+  byItself(change: () => void): void;
   copy(text: string): Promise<boolean>;
   loadHistory(): Promise<HandRecord[]>;
   /** Plays a finished hand back, over the table and whatever is open on it. */
@@ -102,6 +104,16 @@ export function frame(title: string, handlers: Pick<DialogHandlers, 'close'>, ..
 }
 
 /**
+ * Gives a dialog a foot that stays in sight under its body however far that is scrolled, for the one
+ * button that must always be in reach. A button there belongs to a form in the body by the form's id.
+ */
+export function footed(dialog: HTMLElement, ...foot: Child[]): HTMLElement {
+  dialog.append(h('div.dialog-foot', null, foot));
+
+  return dialog;
+}
+
+/**
  * The buttons at the end of a player's row in a list, each marked as that player's and named with their
  * name. A dialog drawn again puts the keyboard back on the button that had it, found by its marks
  * (`Slot`): found by its place among its like, it would be the same button on another player's row once
@@ -150,17 +162,28 @@ export function copyOnClick(button: HTMLButtonElement, field: HTMLInputElement |
 
 /**
  * Sends what a form asks for. A refusal leaves the form as it was typed, with the reason in a toast,
- * instead of costing the player their entries. With no answer the table may have taken it all the
- * same, so the form moves on rather than invite a second try: the host adding chips twice would get them twice.
+ * instead of costing the player their entries; `refused` is then told, for a form that has to bring
+ * what was refused into sight. With no answer the table may have taken it all the same, so the form
+ * moves on rather than invite a second try: the host adding chips twice would get them twice.
  */
-export function submit(event: Event, handlers: DialogHandlers, command: Command, then: () => void): void {
+export function submit(event: Event, handlers: DialogHandlers, command: Command, then: () => void, refused?: () => void): void {
   event.preventDefault();
 
-  const button = (event.target as HTMLFormElement).querySelector<HTMLButtonElement>('button[type="submit"]')!;
+  // Among the form's own controls, wherever they stand: its button may be in the dialog's foot
+  const controls = [...(event.target as HTMLFormElement).elements];
+  const button = controls.find((control): control is HTMLButtonElement => control instanceof HTMLButtonElement && control.type === 'submit')!;
 
   holdWhile(button, async () => {
+    const outcome = await handlers.send(command);
+
     // If the dialog was closed while the answer was on its way, there is nothing left to move on from
-    if ((await handlers.send(command)) !== 'refused' && button.isConnected) {
+    if (!button.isConnected) {
+      return;
+    }
+
+    if (outcome === 'refused') {
+      refused?.();
+    } else {
       then();
     }
   });

@@ -30,7 +30,7 @@ import { cardWords } from '../src/engine/handNames.ts';
 import type { Bounty, Card, Command, KnownPlayer, PreActionKind, Straddle, TableConfig, TableView } from '../src/engine/index.ts';
 import { PUT_AWAY_AFTER_MS, PUT_AWAY_MESSAGE } from '../src/server/putAway.ts';
 import { contrast } from '../tests/colorVision.ts';
-import { boxes, Gate, overlap, Rig, RigTable, SCREENS, setStageHeight, squeezed, textBoxes, WIDE_ASPECT } from './rig.ts';
+import { boxes, Gate, overlap, Rig, RigTable, SCREENS, setStageHeight, squeezed, textBoxes, unfolded, WIDE_ASPECT } from './rig.ts';
 import type { Box, RigDeal, RigPlayer, ScreenName } from './rig.ts';
 import { answeredAfter, answeredTo, complaints, flightsSince, LISTEN, MOTION, movesSent, NOTICES, opsSent, ownComplaints, replayDrawn, soundOf, SPOTS, TITLES, toastTold, toasts, toldOf } from './pageSpies.ts';
 import type { Flight, Spots } from './pageSpies.ts';
@@ -1392,6 +1392,58 @@ const clear = (rig: Rig, table: RigTable) => rig.advance(table.view('Quigs').han
 /** Whose plates carry the high hand's trophy. */
 const markedOn = (page: Page) => texts(page, '.plate:has(.high-hand) .name > span:first-child');
 
+
+/** A phone lying down, as wide and as low as the table settings are held to. */
+const LYING_DOWN = { width: 740, height: 360 };
+
+/** The sizes the table settings are held to: the phones a host holds, one of them lying down, and a desktop. */
+const SETTINGS_SIZES = [
+  { name: 'small phone', screen: 'smallPhone', ...SCREENS.smallPhone },
+  { name: 'phone', screen: 'tallPhone', ...SCREENS.tallPhone },
+  { name: 'phone lying down', screen: 'smallPhone', ...LYING_DOWN },
+  { name: 'desktop', screen: 'desktop', ...SCREENS.desktop },
+] as const;
+
+// Run in the page: whether the Save of the table settings can be pressed where it lies, on the screen and under nothing
+const SAVE_IN_REACH = `(() => {
+  const save = document.querySelector('[data-action="save-settings"]');
+  const box = save.getBoundingClientRect();
+
+  return box.top >= 0 && box.left >= 0 && box.bottom <= window.innerHeight && box.right <= window.innerWidth && save.contains(document.elementFromPoint((box.left + box.right) / 2, (box.top + box.bottom) / 2));
+})()`;
+
+// Run in the page, with a section of a dialog: whether it is unfolded with its heading in sight and as much under the heading as the dialog has room for
+const AS_MUCH_IN_SIGHT_AS_FITS = `(section) => {
+  const part = document.querySelector('.fold-section[data-section="' + section + '"]');
+  const room = document.querySelector('.dialog-body').getBoundingClientRect();
+  const heading = part.querySelector('summary').getBoundingClientRect();
+  const whole = part.getBoundingClientRect();
+
+  return part.open && heading.top >= room.top - 1 && Math.min(whole.bottom, room.bottom) - heading.top >= Math.min(whole.height, room.height) - 1;
+}`;
+
+// Run in the page before a section unfolds by itself: writes down, the moment it does, the fields of it that lie
+// where the control `lay` was, which of them take a tap, and what a tap at the middle of where that control was reaches
+const WHAT_COMES_UP_UNDER = `(({ unfolding, lay }) => {
+  const part = document.querySelector(unfolding);
+  const was = document.querySelector(lay).getBoundingClientRect();
+
+  new MutationObserver((_changes, watch) => {
+    const fields = [...part.querySelectorAll('input')].filter((field) => {
+      const box = field.getBoundingClientRect();
+
+      return box.bottom > was.top + 2 && box.top < was.bottom - 2;
+    });
+    const reached = document.elementFromPoint((was.left + was.right) / 2, (was.top + was.bottom) / 2)?.closest('label, input, button, summary, a');
+
+    watch.disconnect();
+    window.__cameUpUnder = {
+      fields: fields.map((field) => field.id),
+      live: fields.filter((field) => getComputedStyle(field).pointerEvents !== 'none').map((field) => field.id),
+      tapReaches: reached ? reached.tagName + ' ' + reached.textContent.trim().slice(0, 30) : null,
+    };
+  }).observe(part, { attributes: true, attributeFilter: ['open'] });
+})`;
 
 type Check = [name: string, run: (rig: Rig) => Promise<void>];
 
@@ -3380,14 +3432,14 @@ const CHECKS: Check[] = [
       const host = await table.open('Quigs', 'desktop');
       await host.click('[data-action="menu"]');
       await host.click('.menu [data-action="settings"]');
-      await host.waitForSelector('#table-voice-link');
+      await host.waitForSelector(await unfolded(host, '#table-voice-link'));
 
       const cohost = await table.open('Stu', 'phone');
       await cohost.tap('[data-action="menu"]');
       await cohost.tap('.menu [data-action="settings"]');
 
       const typed = 'http://meet.google.com/abc-defg-hij';
-      await cohost.fill('#table-voice-link', typed);
+      await cohost.fill(await unfolded(cohost, '#table-voice-link'), typed);
       await cohost.tap('[data-action="save-settings"]');
       await toastTold(cohost, 'The voice chat link must start with https://');
       assert.equal(await cohost.inputValue('#table-voice-link'), typed, 'a refused save threw away what was typed');
@@ -3881,18 +3933,18 @@ const CHECKS: Check[] = [
         await press('.menu [data-action="settings"]');
         await page.waitForSelector('#table-unit');
 
-        assert.equal(await page.isChecked('#table-unit input[value="cents"]'), true);
-        assert.deepEqual(await page.evaluate(`[...document.querySelectorAll('#table-unit input')].map((input) => input.disabled)`), [true, true], 'what the table plays with can still be picked');
-        assert.equal(await text(page, '#table-unit small'), "Can't be changed once the table is created");
+        assert.equal(await text(page, '#table-unit'), "This table plays dollars and cents. Can't be changed once the table is created.");
+        assert.equal(await page.locator('#table-unit :is(input, button, select), [name="table-unit"]').count(), 0, 'what the table plays with is still shown as something to pick');
         assert.deepEqual(
           await Promise.all(['small-blind', 'big-blind', 'min-buy-in', 'max-buy-in'].map((field) => page.inputValue(`#table-${field}`))),
           ['0.25', '0.50', '20.00', '100.00'],
         );
-        assert.deepEqual(await squeezed(page, '#table-unit .check span, #table-unit small, .dialog .field input'), [], 'part of the settings is cut off');
-        assertOnScreen(await boxes(page, '.dialog, #table-unit, #table-unit .check'), screen, 'the settings');
+        await page.locator('#table-unit').scrollIntoViewIfNeeded();
+        assert.deepEqual(await squeezed(page, '#table-unit, .dialog .field input'), [], 'part of the settings is cut off');
+        assertOnScreen(await boxes(page, '.dialog, #table-unit'), screen, 'the settings');
         await shot(page, `cents-settings-${screen}`);
 
-        await press('[data-action="add-bounty"]');
+        await press(await unfolded(page, '[data-action="add-bounty"]'));
         await page.fill('#table-bounties-hand-0', '72');
         await page.fill('#table-bounties-amount-0', '2.5');
         await page.fill('#table-small-blind', '.5');
@@ -3931,8 +3983,7 @@ const CHECKS: Check[] = [
       const page = await chips.open('Quigs', 'desktop');
       await page.click('[data-action="menu"]');
       await page.click('.menu [data-action="settings"]');
-      assert.equal(await page.isChecked('#table-unit input[value="chips"]'), true);
-      assert.equal(await page.isDisabled('#table-unit input[value="cents"]'), true);
+      assert.equal(await text(page, '#table-unit'), "This table plays whole chips. Can't be changed once the table is created.");
       assert.equal(await page.inputValue('#table-small-blind'), '10');
     },
   ],
@@ -4551,6 +4602,11 @@ const CHECKS: Check[] = [
 
           assert.equal(await page.inputValue('#table-ante'), kind.noAnte);
           assert.equal(await text(page, 'label[for="table-ante"] small'), 'Goes into the pot before any betting. 0 for no ante');
+          assert.equal(await page.isVisible('#table-ante-from'), false, 'who antes is asked at a table with no ante');
+
+          // Who pays it is asked once there is one to pay
+          await page.fill('#table-ante', kind.typed);
+          await page.waitForSelector('#table-ante-from');
           assert.equal(await page.isChecked('#table-ante-from input[value="everyone"]'), true, 'everyone antes unless the host says otherwise');
           assert.deepEqual(await texts(page, '#table-ante-from .check'), ['Everyone dealt in', 'The big blind, once for the table']);
           assert.deepEqual(await page.evaluate(`[...document.querySelectorAll('#table-ante-from input')].map((input) => input.disabled)`), [false, false]);
@@ -4562,7 +4618,6 @@ const CHECKS: Check[] = [
           assert.ok(everyone && bigBlind && !overlap(everyone, bigBlind), 'the two choices are drawn over each other');
           await assertNoSidewaysScroll(page);
 
-          await page.fill('#table-ante', kind.typed);
           if (fromBigBlind) {
             await press('#table-ante-from label:has-text("The big blind")');
           }
@@ -4579,6 +4634,7 @@ const CHECKS: Check[] = [
           assert.equal(await text(page, '.menu [data-action="settings"] small'), `Blinds ${kind.stakes}`);
           await press('.menu [data-action="settings"]');
           assert.equal(await page.inputValue('#table-ante'), kind.shown);
+          assert.equal(await page.isVisible('#table-ante-from'), true, 'a table with an ante does not show who pays it');
           assert.equal(await page.isChecked(`#table-ante-from input[value="${kind.config.anteFrom ?? 'everyone'}"]`), true);
 
           await page.context().close();
@@ -4595,6 +4651,7 @@ const CHECKS: Check[] = [
 
         assert.equal(await page.inputValue('#new-table-ante'), '0');
         assert.equal(await page.isChecked('#new-table-ante-from input[value="everyone"]'), true);
+        assert.equal(await page.isVisible('#new-table-ante-from'), false, 'who antes is asked before there is an ante');
 
         await page.fill('#host-name', `Quigs ${screen}`);
         await page.fill('#new-table-small-blind', '15');
@@ -4605,6 +4662,7 @@ const CHECKS: Check[] = [
         // What the table plays with still starts the amounts over, the ante among them, and keeps who pays it
         await press('#new-table-unit label:has-text("Dollars and cents")');
         assert.deepEqual([await page.inputValue('#new-table-small-blind'), await page.inputValue('#new-table-ante')], ['0.25', '0.00']);
+        assert.equal(await page.isVisible('#new-table-ante-from'), false, 'who antes is still asked with the ante back at none');
         assert.equal(await page.isChecked('#new-table-ante-from input[value="bigBlind"]'), true);
         assert.equal(await page.getAttribute('#new-table-ante', 'inputmode'), 'decimal');
 
@@ -4949,12 +5007,13 @@ const CHECKS: Check[] = [
           const openSettings = async () => {
             await press('[data-action="menu"]');
             await press('.menu [data-action="settings"]');
-            await page.waitForSelector('#table-bomb-pot-amount');
+            await page.waitForSelector(await unfolded(page, '#table-bomb-pot-amount'));
           };
 
           await openSettings();
           assert.deepEqual(await values(), [kind.amount, '0'], 'bomb pots come only when called unless the host says otherwise');
-          assert.equal(await text(page, 'label[for="table-bomb-pot-amount"] small'), 'What everyone puts in for a bomb pot: no blinds, and the hand starts on the flop');
+          assert.deepEqual(await texts(page, 'label[for^="table-bomb-pot"] > span'), ['Each player puts in', 'Automatically every … hands']);
+          assert.equal(await text(page, 'label[for="table-bomb-pot-amount"] small'), 'No blinds, and the hand starts on the flop');
           assert.equal(await text(page, 'label[for="table-bomb-pot-every"] small'), '0 for only when the host calls one from the menu');
 
           await page.locator('label[for="table-bomb-pot-every"]').scrollIntoViewIfNeeded();
@@ -5046,8 +5105,14 @@ const CHECKS: Check[] = [
 
           await press('[data-action="menu"]');
           await press('.menu [data-action="settings"]');
-          await page.waitForSelector('.preset-list li.note:has-text("None yet")');
+
+          // A section of its own, folded under how the presets stand, with nothing of it beside the table's Save
+          await page.waitForSelector('.fold-section[data-section="presets"] .holds:has-text("None saved")');
+          assert.equal(await page.isVisible('#preset-name'), false, 'the presets are open before anyone asked for them');
+          await page.waitForSelector(await unfolded(page, '.preset-list li.note:has-text("None yet")'));
           assert.equal(await page.locator('.preset-panel p.note:has-text("plays the preset"):visible').count(), 0);
+          assert.equal(await text(page, '[data-action="save-preset"]'), 'Save as preset');
+          assert.equal(await page.isVisible('.preset-panel [data-says="table-unchanged"]'), false, 'a form that holds what the table plays is said to differ from it');
 
           await page.fill('#preset-name', 'Friday 25/50');
           await press('[data-action="save-preset"]');
@@ -5056,6 +5121,9 @@ const CHECKS: Check[] = [
           assert.equal('voiceLink' in rig.presets.list()[0]!.settings, false, 'the call went into a preset anyone can read');
           assert.equal(await text(page, '.preset-panel p.note[aria-live]'), 'Saved Friday 25/50.');
           assert.equal(await text(page, '.preset-panel p.note:not([hidden]):not([aria-live])'), 'This table plays the preset Friday 25/50.');
+          await press('.fold-section[data-section="presets"] > summary');
+          assert.equal(await text(page, '.fold-section[data-section="presets"] .holds'), 'Plays Friday 25/50');
+          await press('.fold-section[data-section="presets"] > summary');
 
           await page.locator('.preset-panel').scrollIntoViewIfNeeded();
           assertOnScreen(await boxes(page, '.preset-panel, #preset-name, [data-action="save-preset"], .preset-list [data-action="delete-preset"]'), screen, 'the presets in the table settings');
@@ -5067,6 +5135,10 @@ const CHECKS: Check[] = [
           // What the form holds is what is saved, before the table itself is
           // Read the way the server reads a name, so a stray space still finds the preset it would replace
           await page.fill('#table-small-blind', '30');
+          await page.waitForSelector('.preset-panel [data-says="table-unchanged"]');
+          assert.equal(await text(page, '.preset-panel [data-says="table-unchanged"]'), 'A preset keeps what this form holds now. The table itself is unchanged until you press Save.');
+          await page.locator('.preset-panel [data-says="table-unchanged"]').scrollIntoViewIfNeeded();
+          assertOnScreen(await boxes(page, '.preset-panel [data-says="table-unchanged"]'), screen, 'the line that says the table is unchanged');
           await page.fill('#preset-name', ' friday  25/50');
           await press('[data-action="save-preset"]');
           await page.waitForSelector('.preset-question:not([hidden])');
@@ -5107,7 +5179,7 @@ const CHECKS: Check[] = [
           const cohost = await table.open('Stu', screen);
           await pressOn(cohost, screen)('[data-action="menu"]');
           await pressOn(cohost, screen)('.menu [data-action="settings"]');
-          await cohost.waitForSelector('.preset-list .preset-name:has-text("Friday 25/50")');
+          await cohost.waitForSelector(await unfolded(cohost, '.preset-list .preset-name:has-text("Friday 25/50")'));
           await cohost.fill('#preset-name', 'Stu night');
           await pressOn(cohost, screen)('[data-action="save-preset"]');
           await cohost.waitForSelector('.preset-list .preset-name:has-text("Stu night")');
@@ -5178,8 +5250,8 @@ const CHECKS: Check[] = [
           assert.equal(await page.inputValue('#new-table-name'), "Chips n' Dipshits", 'the preset names the table');
           assert.equal(await page.inputValue('#new-table-voice-link'), 'https://discord.gg/abc', 'the call typed in was thrown away');
           assert.deepEqual(await texts(page, '.preset-notes p'), [
-            'Changed here: Table name, Play with, Small blind, Big blind, Ante, Minimum buy-in, Maximum buy-in, Bounty hands.',
-            'Also set, in the table settings: Seconds to act 20, Straddle under the gun off.',
+            'Changed here: the table name, what the table plays with, the small blind, the big blind, the ante, the minimum buy-in, the maximum buy-in, the bounties.',
+            'Also set, in the table settings: the action clock 20, the straddle under the gun off.',
           ]);
           assert.deepEqual([await page.inputValue('#new-table-bounties .bounty-hand'), await page.inputValue('#new-table-bounties .bounty-row input:not(.bounty-hand)')], ['72', '1.00'], 'the seven-deuce bounty of a preset saved before bounties were a list');
           assert.equal(await page.locator('.changed').count(), 8);
@@ -5194,7 +5266,7 @@ const CHECKS: Check[] = [
 
           await page.selectOption('#new-table-preset', { label: 'From before' });
           assert.deepEqual(await stakes(page), ['chips', '5', '10', '400', '2000']);
-          assert.deepEqual(await texts(page, '.preset-notes p.warn'), ['Seconds to act is back to 30: the preset’s is no longer allowed.']);
+          assert.deepEqual(await texts(page, '.preset-notes p.warn'), ['The action clock went back to 30: the preset’s is no longer allowed.']);
           await shot(page, `presets-outdated-${screen}`);
 
           await page.selectOption('#new-table-preset', { label: 'The usual settings' });
@@ -5205,7 +5277,7 @@ const CHECKS: Check[] = [
           await page.selectOption('#new-table-preset', { label: 'Tuesday cents' });
           await press('#new-table-unit label:has-text("Whole chips")');
           assert.deepEqual(await stakes(page), ['chips', '10', '20', '400', '2000']);
-          assert.deepEqual(await texts(page, '.preset-notes p'), ['Also set, in the table settings: Seconds to act 20, Straddle under the gun off.']);
+          assert.deepEqual(await texts(page, '.preset-notes p'), ['Also set, in the table settings: the action clock 20, the straddle under the gun off.']);
           await press('#new-table-unit label:has-text("Dollars and cents")');
 
           // Every amount starts over with what the table plays with, the bomb pot's as much as the blinds
@@ -5225,7 +5297,7 @@ const CHECKS: Check[] = [
 
           await page.selectOption('#new-table-preset', { label: 'Bombs in chips' });
           assert.equal(await boardsMarked(), 'two');
-          assert.match(await text(page, '.preset-notes p'), /^Changed here: .*A bomb pot is played on\.$/);
+          assert.match(await text(page, '.preset-notes p'), /^Changed here: .*the boards of a bomb pot\.$/);
 
           await page.locator('#new-table-bomb-pot-boards').scrollIntoViewIfNeeded();
           assertOnScreen(await boxes(page, '#new-table-bomb-pot-boards'), screen, 'the boards of a bomb pot, marked as changed');
@@ -5737,12 +5809,12 @@ const CHECKS: Check[] = [
           const openSettings = async () => {
             await press('[data-action="menu"]');
             await press('.menu [data-action="settings"]');
-            await page.waitForSelector('#table-bomb-pot-boards');
+            await page.waitForSelector(await unfolded(page, '#table-bomb-pot-boards'));
           };
 
           await openSettings();
           assert.equal(await picked('one'), true, 'a bomb pot is on one board unless the host says otherwise');
-          assert.equal(await text(page, '#table-bomb-pot-boards > span'), 'A bomb pot is played on');
+          assert.equal(await text(page, '#table-bomb-pot-boards > span'), 'Boards');
           assert.deepEqual(await texts(page, '#table-bomb-pot-boards .check'), ['One board', 'Two boards']);
           assert.equal(await text(page, '#table-bomb-pot-boards small'), 'With two, each board wins half of every pot');
 
@@ -6828,7 +6900,7 @@ const CHECKS: Check[] = [
           const openSettings = async () => {
             await press('[data-action="menu"]');
             await press('.menu [data-action="settings"]');
-            await page.waitForSelector('#table-missed-blinds');
+            await page.waitForSelector(await unfolded(page, '#table-missed-blinds'));
           };
 
           await openSettings();
@@ -7216,11 +7288,12 @@ const CHECKS: Check[] = [
 
         await press('[data-action="menu"]');
         await press('.menu [data-action="settings"]');
-        await page.waitForSelector(ids[0]!);
+        await page.waitForSelector(await unfolded(page, ids[0]!));
 
         // As a table always was: under the gun and nothing else
         assert.deepEqual(await ticked(page), [true, false, false, false]);
-        assert.deepEqual(await texts(page, switches), STRADDLE_LABELS);
+        assert.deepEqual(await texts(page, switches), ['Under the gun', 'Double', 'Button', 'Mississippi']);
+        assert.equal(await text(page, `fieldset:has(${ids[0]}) legend`), 'Straddles allowed');
 
         await page.locator(ids[3]!).scrollIntoViewIfNeeded();
         assertOnScreen(await boxes(page, switches), screen, 'the switches for the kinds of straddle');
@@ -7257,7 +7330,7 @@ const CHECKS: Check[] = [
         assert.equal(await lobby.locator('[id^="new-table-allow-"]').count(), 0, 'the form for a new table asks about straddles');
 
         await lobby.selectOption('#new-table-preset', { label: 'Button and Mississippi' });
-        assert.equal((await texts(lobby, '.preset-notes p')).at(-1), 'Also set, in the table settings: Straddle under the gun off, Button straddle on, Mississippi straddle on.');
+        assert.equal((await texts(lobby, '.preset-notes p')).at(-1), 'Also set, in the table settings: the straddle under the gun off, the button straddle on, the Mississippi straddle on.');
         await lobby.locator('.preset-notes').scrollIntoViewIfNeeded();
         assert.deepEqual(await squeezed(lobby, '.preset-notes p'), [], 'part of what the picker says is cut off');
         await assertNoSidewaysScroll(lobby);
@@ -7265,7 +7338,7 @@ const CHECKS: Check[] = [
 
         // One saved when there was a single kind says what it always said, and nothing of the others
         await lobby.selectOption('#new-table-preset', { label: 'From before the kinds' });
-        assert.equal((await texts(lobby, '.preset-notes p')).at(-1), 'Also set, in the table settings: Straddle under the gun off.');
+        assert.equal((await texts(lobby, '.preset-notes p')).at(-1), 'Also set, in the table settings: the straddle under the gun off.');
         await lobby.context().close();
 
         forgetPresets(rig);
@@ -8308,12 +8381,13 @@ const CHECKS: Check[] = [
         assert.equal(await host.locator('.controls [data-action="always-chop"]').count(), 0);
         await press('[data-action="menu"]');
         await press('.menu [data-action="settings"]');
-        await host.waitForSelector('#table-allow-chop');
+        await host.waitForSelector(await unfolded(host, '#table-allow-chop'));
         assert.equal(await host.isChecked('#table-allow-chop'), false);
-        assert.equal(await text(host, switchFor), 'Let the blinds chop when it folds to them');
+        assert.equal(await text(host, switchFor), 'Chopping the blinds');
+        assert.equal(await text(host, '#table-allow-chop-hint'), 'When it folds to the blinds, they can agree to take their blinds back');
         await host.locator('#table-allow-chop').scrollIntoViewIfNeeded();
         assertOnScreen(await boxes(host, switchFor), screen, 'the switch for chops');
-        assert.deepEqual(await squeezed(host, `${switchFor} span`), [], 'the name of the switch is cut off');
+        assert.deepEqual(await squeezed(host, `${switchFor} span, #table-allow-chop-hint`), [], 'the name of the switch or the line under it is cut off');
         const [box] = await boxes(host, '#table-rabbit-hunting');
         assert.ok(box!.right - box!.left >= 20, `the switch's box is squeezed by its long name: ${JSON.stringify(box)}`);
         await assertNoSidewaysScroll(host);
@@ -9422,7 +9496,7 @@ const CHECKS: Check[] = [
 
         await press('[data-action="menu"]');
         await press('.menu [data-action="settings"]');
-        await page.waitForSelector('#table-high-hand-bonus');
+        await page.waitForSelector(await unfolded(page, '#table-high-hand-bonus'));
         assert.equal(await page.inputValue('#table-high-hand-bonus'), kind.zero);
         await page.locator('#table-high-hand-bonus').scrollIntoViewIfNeeded();
         assert.deepEqual(await squeezed(page, '.dialog .field input, .dialog .field small'), [], 'part of the settings is cut off');
@@ -9783,12 +9857,14 @@ const CHECKS: Check[] = [
 
         await press('[data-action="menu"]');
         await press('.menu [data-action="settings"]');
-        await host.waitForSelector('#table-rabbit-hunting');
+        await host.waitForSelector(await unfolded(host, '#table-rabbit-hunting'));
         assert.equal(await host.isChecked('#table-rabbit-hunting'), false);
-        assert.equal(await text(host, switchFor), 'Rabbit hunting: after a hand ends early, a player can see the cards that would have come');
+        assert.equal(await text(host, switchFor), 'Rabbit hunting');
+        assert.equal(await text(host, '#table-rabbit-hunting-hint'), 'After a hand ends early, a player can see the cards that would have come');
+        assert.equal(await host.getAttribute('#table-rabbit-hunting', 'aria-describedby'), 'table-rabbit-hunting-hint', 'the line under the switch is not read as what it does');
         await host.locator('#table-rabbit-hunting').scrollIntoViewIfNeeded();
-        assertOnScreen(await boxes(host, switchFor), screen, 'the switch for rabbit hunting');
-        assert.deepEqual(await squeezed(host, `${switchFor} span`), [], 'the name of the switch is cut off');
+        assertOnScreen(await boxes(host, `${switchFor}, #table-rabbit-hunting-hint`), screen, 'the switch for rabbit hunting');
+        assert.deepEqual(await squeezed(host, `${switchFor} span, #table-rabbit-hunting-hint`), [], 'the name of the switch or the line under it is cut off');
         await assertNoSidewaysScroll(host);
         await shot(host, `rabbit-settings-${screen}`);
 
@@ -11172,7 +11248,8 @@ const CHECKS: Check[] = [
 
         await press('[data-action="menu"]');
         await press('.menu [data-action="settings"]');
-        await page.waitForSelector('#table-bounties');
+        assert.equal(await text(page, '.fold-section[data-section="sideMoney"] .holds'), '7 bounty hands', 'a list too long for a line is not counted on it');
+        await page.waitForSelector(await unfolded(page, '#table-bounties'));
 
         assert.deepEqual(await hands(), ['72', '72s', 'J4s', 'AA', 'T9o', 'K2o', 'QQ']);
         assert.deepEqual(await said(), ['Seven-deuce', 'Seven-deuce suited', 'Jack-four suited', 'Pocket aces', 'Ten-nine offsuit', 'King-deuce offsuit', 'Pocket queens']);
@@ -11340,7 +11417,8 @@ const CHECKS: Check[] = [
 
       await press('[data-action="menu"]');
       await press('.menu [data-action="settings"]');
-      await page.waitForSelector('#table-bounties');
+      assert.equal(await text(page, '.fold-section[data-section="sideMoney"] .holds'), '72 pays 25');
+      await page.waitForSelector(await unfolded(page, '#table-bounties'));
       assert.deepEqual([await page.inputValue('#table-bounties-hand-0'), await page.inputValue('#table-bounties-amount-0'), await text(page, '#table-bounties .said')], ['72', '25', 'Seven-deuce']);
       await page.locator('#table-bounties').scrollIntoViewIfNeeded();
       await shot(page, 'bounties-upgraded-72-phone');
@@ -12701,6 +12779,228 @@ const CHECKS: Check[] = [
 
       rig.advance(1000);
       await page.waitForSelector('.stage[data-unconfirmed]');
+    },
+  ],
+  ...SETTINGS_SIZES.flatMap((size) =>
+    (['standard', 'largest'] as const).map(
+      (textSize): Check => [
+        `the table settings open on the stakes, every other section folded under a line of what it holds, with Save in reach on a ${size.name} at the ${textSize} text size: a heading unfolds its section into view and folds it under what the form holds now, Save stays where it lay, and nothing is sent before it is pressed`,
+        async (rig) => {
+          const table = rig.table(
+            [
+              { name: 'Quigs', stack: 1000 },
+              { name: 'Stu', stack: 1000 },
+            ],
+            { name: 'Friday Night', actionSeconds: 30 },
+          );
+          const page = await table.open('Quigs', size.screen, `localStorage.setItem('cnd.textSize', '${textSize}')`);
+          const press = pressOn(page, size.screen);
+          const heading = (section: string) => `.fold-section[data-section="${section}"] > summary`;
+          const line = (section: string) => text(page, `${heading(section)} .holds`);
+          const unfoldedOnes = () => page.evaluate(`[...document.querySelectorAll('.dialog details.fold-section[open]')].map((section) => section.dataset.section)`);
+          const save = async () => (await boxes(page, '[data-action="save-settings"]'))[0]!;
+
+          await page.setViewportSize({ width: size.width, height: size.height });
+          await press('[data-action="menu"]');
+          await press('.menu [data-action="settings"]');
+          await page.waitForSelector(`${heading('presets')} .holds:has-text("None saved")`);
+
+          assert.deepEqual(await page.locator('.dialog .fold-section > summary h3').allTextContents(), ['Stakes', 'Bomb pots', 'Bounties and high hand', 'House rules', 'Table', 'Presets']);
+          assert.deepEqual(await unfoldedOnes(), ['stakes']);
+          assert.deepEqual(await texts(page, '.dialog .fold-section:not([open]) > summary .holds'), [
+            '100 each · only when called · one board',
+            'None',
+            'Straddle under the gun · run it up to 3 times · missed blinds owed',
+            'Friday Night · 30 s clock · no voice link',
+            'None saved',
+          ]);
+          assert.equal(await page.isVisible(`${heading('stakes')} .holds`), false, 'an open section says under its heading what its fields say below');
+          assert.equal(await page.isVisible('.dialog-foot [data-says="next-hand"]'), false, 'with nothing changed, the foot of the dialog says a change waits');
+
+          const lay = await save();
+
+          assert.equal(await page.evaluate(SAVE_IN_REACH), true, `Save is out of reach as the dialog opens: ${JSON.stringify(lay)} on ${size.width}x${size.height}`);
+          assert.deepEqual(await squeezed(page, '.dialog summary h3, .dialog .holds, .dialog-foot .btn'), [], 'a heading, the line under one or Save is cut off');
+          await assertNoSidewaysScroll(page);
+          await shot(page, `settings-folded-${size.name.replaceAll(' ', '-')}-${textSize}`);
+
+          // From the foot of the dialog up, where a section unfolding has the least room below it
+          for (const section of ['presets', 'table', 'house', 'sideMoney', 'bombPots']) {
+            await press(heading(section));
+            await page.waitForFunction(AS_MUCH_IN_SIGHT_AS_FITS, section);
+            assert.equal(await page.isVisible(`${heading(section)} .holds`), false);
+            assert.deepEqual(await save(), lay, `Save moved when ${section} unfolded`);
+
+            if (section === 'house') {
+              await press('label[for="table-allow-chop"]');
+              await shot(page, `settings-house-rules-${size.name.replaceAll(' ', '-')}-${textSize}`);
+            }
+
+            if (section === 'bombPots') {
+              await page.fill('#table-bomb-pot-every', '4');
+            }
+
+            await press(heading(section));
+            await page.waitForSelector(`${heading(section)} .holds`);
+          }
+
+          assert.deepEqual(await unfoldedOnes(), ['stakes']);
+          assert.equal(await line('bombPots'), '100 each · every 4 hands · one board');
+          assert.equal(await line('house'), 'Straddle under the gun · run it up to 3 times · blinds can chop · missed blinds owed');
+          assert.deepEqual(await squeezed(page, '.dialog summary h3, .dialog .holds'), [], 'a line that has grown is cut off');
+          assert.equal(await page.evaluate(SAVE_IN_REACH), true, 'Save is out of reach once the sections have been opened and folded');
+
+          const { bombPotEvery, allowChop } = table.view('Quigs').config;
+          assert.deepEqual({ bombPotEvery, allowChop }, { bombPotEvery: 0, allowChop: false }, 'folding a section sent what it holds');
+
+          await press('[data-action="save-settings"]');
+          await page.waitForSelector('.dialog', { state: 'detached' });
+          assert.deepEqual([table.view('Quigs').config.bombPotEvery, table.view('Quigs').config.allowChop], [4, true], 'what lay in folded sections was not saved');
+          await page.context().close();
+        },
+      ],
+    ),
+  ),
+  [
+    'a setting that is refused is never left folded away: Save unfolds the section of a field the browser will not take and puts the keyboard in it, the table’s refusal unfolds the section of what was sent with what was typed still there, and a field that comes up then where a heading lay takes no tap for a moment',
+    async (rig) => {
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        const table = rig.table([
+          { name: 'Quigs', stack: 1000 },
+          { name: 'Stu', stack: 1000 },
+        ]);
+        const page = await table.open('Quigs', screen);
+        const press = pressOn(page, screen);
+        const part = (section: string) => `.fold-section[data-section="${section}"]`;
+        const isOpen = (section: string) => page.evaluate(`document.querySelector(${JSON.stringify(part(section))}).open`);
+
+        await press('[data-action="menu"]');
+        await press('.menu [data-action="settings"]');
+
+        // An amount nobody can read, in a section folded again: its line keeps the last it could say
+        await page.fill(await unfolded(page, '#table-bomb-pot-amount'), 'lots');
+        await press(`${part('bombPots')} > summary`);
+        assert.equal(await isOpen('bombPots'), false);
+        assert.equal(await text(page, `${part('bombPots')} .holds`), '100 each · only when called · one board');
+
+        await press('[data-action="save-settings"]');
+        await page.waitForSelector(`${part('bombPots')}[open]`);
+        assert.equal(await page.evaluate('document.activeElement.id'), 'table-bomb-pot-amount', 'the browser could not point at the field it refused');
+        assertOnScreen(await boxes(page, '#table-bomb-pot-amount'), screen, 'the field the browser refused');
+        assert.equal(await page.locator('.dialog').count(), 1, 'a form with a field nobody can read was sent');
+        await shot(page, `settings-refused-by-the-browser-${screen}`);
+        await page.fill('#table-bomb-pot-amount', '100');
+        await press(`${part('bombPots')} > summary`);
+
+        // An address the table refuses, in a section folded again with the heading of the presets right under its own
+        await page.fill(await unfolded(page, '#table-voice-link'), 'meet.example/abc');
+        await press(`${part('table')} > summary`);
+        assert.equal(await isOpen('table'), false);
+        await page.evaluate(`${WHAT_COMES_UP_UNDER}(${JSON.stringify({ unfolding: part('table'), lay: `${part('presets')} > summary` })})`);
+
+        await press('[data-action="save-settings"]');
+        await toastTold(page, 'must start with https://');
+        await page.waitForSelector(`${part('table')}[open]`);
+        assert.equal(await page.inputValue('#table-voice-link'), 'meet.example/abc', 'a refused save threw away what was typed');
+        assert.deepEqual([await isOpen('bombPots'), await isOpen('house')], [false, false], 'a section nothing was changed in unfolded with the one that was refused');
+
+        const cameUp = (await page.evaluate('window.__cameUpUnder')) as { fields: string[]; live: string[]; tapReaches: string | null };
+
+        assert.ok(cameUp.fields.length > 0, 'no field came up where the heading of the presets lay: the check no longer shows what it is here for');
+        assert.deepEqual(cameUp.live, [], 'a field that came up by itself where a heading lay takes a tap at once');
+        assert.equal(cameUp.tapReaches, null, 'a tap for the heading that lay there lands on what came up');
+        await shot(page, `settings-refused-by-the-table-${screen}`);
+
+        // Once the moment is over the field is as any other
+        await tapsLive(page);
+        await press('#table-voice-link');
+        assert.equal(await page.evaluate('document.activeElement.id'), 'table-voice-link');
+        await page.fill('#table-voice-link', 'https://meet.example/abc');
+        await press('[data-action="save-settings"]');
+        await page.waitForSelector('.dialog', { state: 'detached' });
+        assert.deepEqual([table.view('Quigs').config.voiceLink, table.view('Quigs').config.bombPotAmount], ['https://meet.example/abc', 100]);
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'the foot of the table settings says a change waits for the next hand only while a hand is in play and something changed waits for one, beside Save on a phone lying down',
+    async (rig) => {
+      const table = rig.table([
+        { name: 'Quigs', stack: 1000 },
+        { name: 'Stu', stack: 1000 },
+      ]);
+      const page = await table.open('Quigs', 'smallPhone');
+      const note = '.dialog-foot [data-says="next-hand"]';
+      const openSettings = async () => {
+        await page.tap('[data-action="menu"]');
+        await page.tap('.menu [data-action="settings"]');
+        await page.waitForSelector('[data-action="save-settings"]');
+      };
+
+      // Between hands a change is the table's at once
+      await openSettings();
+      await page.fill('#table-big-blind', '40');
+      assert.equal(await page.inputValue('#table-big-blind'), '40');
+      assert.equal(await page.isVisible(note), false, 'a change is said to wait with no hand in play');
+      await page.tap('[data-action="close"]');
+
+      table.dealNext();
+      await page.waitForSelector('.seat.me .card');
+      await openSettings();
+      assert.equal(await page.isVisible(note), false, 'with nothing changed, something is said to wait');
+
+      // The table's name is the table's at once, in a hand or out of one
+      await page.fill(await unfolded(page, '#table-name'), 'Friday Night');
+      assert.equal(await page.inputValue('#table-name'), 'Friday Night');
+      assert.equal(await page.isVisible(note), false, 'a new name is said to wait for the next hand');
+
+      await page.fill('#table-big-blind', '40');
+      await page.waitForSelector(`${note}:visible`);
+      assert.equal(await text(page, note), 'Applies from the next hand.');
+      assert.equal(await page.evaluate(SAVE_IN_REACH), true, 'the line over Save put it out of reach');
+      assertOnScreen(await boxes(page, note), 'smallPhone', 'the line that says a change waits');
+      assertApart(await boxes(page, note), await boxes(page, '[data-action="save-settings"]'), 'the line that says a change waits and Save');
+      await shot(page, 'settings-waits-for-the-next-hand-phone');
+
+      await page.fill('#table-big-blind', '20');
+      await page.waitForSelector(note, { state: 'hidden' });
+
+      // Lying down there is no room over Save, so the line goes beside it
+      await page.fill('#table-big-blind', '40');
+      await page.setViewportSize(LYING_DOWN);
+      await page.waitForFunction(`document.querySelector('.dialog').getBoundingClientRect().height <= ${LYING_DOWN.height}`);
+      assert.equal(await page.evaluate(SAVE_IN_REACH), true, 'Save is out of reach on a phone lying down, with the line beside it');
+      assert.deepEqual(await squeezed(page, `${note}, .dialog-foot .btn`), [], 'the line that says a change waits, or Save, is cut off');
+      assertApart(await boxes(page, note), await boxes(page, '[data-action="save-settings"]'), 'the line that says a change waits and Save, lying down');
+      const [said] = await boxes(page, note);
+      const [button] = await boxes(page, '[data-action="save-settings"]');
+      assert.ok(said!.right <= button!.left, `the line is not beside Save: ${JSON.stringify([said, button])}`);
+      await shot(page, 'settings-waits-for-the-next-hand-lying');
+
+      await page.tap('[data-action="save-settings"]');
+      await page.waitForSelector('.dialog', { state: 'detached' });
+      assert.deepEqual([table.view('Quigs').config.bigBlind, table.view('Quigs').config.name], [40, 'Friday Night']);
+    },
+  ],
+  [
+    'the form for a new table stands under the headings of the table settings, the table’s name first, with every section open and nothing told in a line instead',
+    async (rig) => {
+      for (const screen of PHONE_AND_DESKTOP) {
+        const page = await rig.lobby(screen);
+
+        assert.deepEqual(await page.locator('.lobby .fold-section > summary h3').allTextContents(), ['Table', 'Stakes', 'Bomb pots', 'Bounties and high hand', 'House rules']);
+        assert.equal(await page.locator('.lobby details.fold-section:not([open])').count(), 0, 'a section of the form starts folded');
+        assert.equal(await page.locator('.lobby .fold-section .holds:visible').count(), 0, 'an open section says under its heading what its fields say below');
+        assert.deepEqual(await texts(page, '.lobby .fold-section[data-section="table"] .field > span'), ['Name', 'Voice chat link']);
+        assert.equal(await page.locator('#new-table-unit input:enabled').count(), 2, 'what a new table plays with cannot be picked');
+        assert.deepEqual(await squeezed(page, '.lobby summary h3'), [], 'a heading is cut off');
+        await assertNoSidewaysScroll(page);
+
+        await page.locator('.lobby .fold-section[data-section="stakes"] > summary').scrollIntoViewIfNeeded();
+        await shot(page, `new-table-sections-${screen}`);
+        await page.context().close();
+      }
     },
   ],
   ...ACCESSIBILITY_CHECKS,

@@ -1,8 +1,10 @@
+import { CONFIG_KEYS, sameSetting } from '../../engine/config.ts';
 import { matchingPreset, presetName, sameName } from '../../engine/presets.ts';
 import type { Preset } from '../../engine/presets.ts';
 import type { TableConfig } from '../../engine/types.ts';
 import { LIMITS } from '../../engine/validate.ts';
 import { h, holdWhile } from '../ui.ts';
+import { foldSection } from './foldSection.ts';
 
 export interface PresetHandlers {
   /** Rejects when they could not be loaded. */
@@ -25,19 +27,28 @@ function cleaned(typed: string): string {
 /** A question waiting for the player before something is overwritten or thrown away for the whole group. */
 type Asking = { kind: 'replace' | 'delete'; name: string } | null;
 
+export interface PresetsPanel {
+  element: HTMLElement;
+  /** Told when the settings form has been changed, since a preset is saved from what the form holds. */
+  formChanged(): void;
+}
+
 /**
- * The part of a table's settings where its host or a co-host keeps them as a preset for the group, and
- * deletes ones the group no longer wants. `table` is the table's settings, for saying whether it plays
- * one; `current` is what the settings form above holds, which is what a preset is saved from.
+ * The section of a table's settings where its host or a co-host keeps them as a preset for the group,
+ * and deletes ones the group no longer wants, folded under a line that says how the presets stand.
+ * `table` is the table's settings, for saying whether it plays one; `current` is what the settings
+ * form holds, which is what a preset is saved from.
  */
-export function presetsPanel(table: TableConfig, handlers: PresetHandlers, current: () => TableConfig): HTMLElement {
+export function presetsPanel(table: TableConfig, handlers: PresetHandlers, current: () => TableConfig): PresetsPanel {
   let presets: Preset[] | null = null;
   let failed = false;
   let asking: Asking = null;
 
   const nameInput = h('input', { type: 'text', id: 'preset-name', name: 'preset-name', maxlength: LIMITS.presetNameLength, required: true, autocomplete: 'off', placeholder: 'Friday 25/50' });
-  const saveButton = h('button.btn', { type: 'submit', 'data-action': 'save-preset' }, 'Save preset');
+  const saveButton = h('button.btn', { type: 'submit', 'data-action': 'save-preset' }, 'Save as preset');
   const playing = h('p.note', { hidden: true });
+  // Saving a preset and saving the table are two things: said where one could be taken for the other
+  const unsaved = h('p.note', { hidden: true, 'data-says': 'table-unchanged' }, 'A preset keeps what this form holds now. The table itself is unchanged until you press Save.');
   const status = h('p.note', { 'aria-live': 'polite' });
   const question = h('div.preset-question', { hidden: true });
   const list = h('ul.rows.preset-list');
@@ -80,11 +91,19 @@ export function presetsPanel(table: TableConfig, handlers: PresetHandlers, curre
     panel.querySelector('.preset-question:not([hidden]), .asking')?.scrollIntoView({ block: 'nearest' });
   };
 
+  const formChanged = (): void => {
+    const held = current();
+
+    unsaved.hidden = CONFIG_KEYS.every((key) => sameSetting(held[key], table[key]));
+  };
+
   const draw = (): void => {
     const match = presets && matchingPreset(presets, table);
 
     playing.hidden = !match;
     playing.textContent = match ? `This table plays the preset ${match.name}.` : '';
+    section.hold(match ? `Plays ${match.name}` : presets ? (presets.length === 0 ? 'None saved' : `${presets.length} saved`) : failed ? 'Could not load' : '');
+    formChanged();
 
     question.hidden = asking?.kind !== 'replace';
     question.replaceChildren();
@@ -148,14 +167,15 @@ export function presetsPanel(table: TableConfig, handlers: PresetHandlers, curre
         }
       },
     },
-    h('label.field', { for: 'preset-name' }, h('span', null, 'Save the settings above as a preset'), nameInput),
+    h('label.field', { for: 'preset-name' }, h('span', null, 'Name these settings'), nameInput),
     saveButton,
   );
 
-  const panel = h('section.preset-panel', null, h('h3', null, 'Presets'), playing, form, question, status, list);
+  const panel = h('div.preset-panel', null, playing, form, unsaved, question, status, list);
+  const section = foldSection('presets', 'Presets', false, panel);
 
   draw();
   void reload();
 
-  return panel;
+  return { element: section.element, formChanged };
 }

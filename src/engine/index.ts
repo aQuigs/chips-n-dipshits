@@ -9,6 +9,7 @@ export * from './cards.ts';
 export * from './chances.ts';
 export * from './chop.ts';
 export * from './config.ts';
+export * from './configSections.ts';
 export * from './events.ts';
 export * from './forcedBets.ts';
 export * from './hand.ts';

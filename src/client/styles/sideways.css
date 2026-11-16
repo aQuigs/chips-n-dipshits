@@ -71,6 +71,14 @@
     padding-block: 4px;
   }
 
+  /* A dialog has little height to give here: what it says beside its button, not over it */
+  .dialog-foot {
+    grid-auto-flow: column;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: center;
+    padding-block: 8px;
+  }
+
   .controls-slot {
     border-top: 0;
     border-left: 1px solid var(--line);

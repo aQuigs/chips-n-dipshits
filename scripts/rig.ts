@@ -1096,6 +1096,23 @@ export async function setStageHeight(page: Page, height: number): Promise<void> 
   assert.ok(resized && Math.abs(resized.bottom - resized.top - height) <= 1, `the table's part of the screen is ${resized && resized.bottom - resized.top} tall, not ${height}`);
 }
 
+/**
+ * A field of a form that puts its settings away in sections, with its section unfolded the way whoever
+ * means to use the field would unfold it: by a press on the section's heading. Resolves to the selector
+ * it was given, so a check goes straight on with the field: `page.fill(await unfolded(page, '#table-ante'), '5')`.
+ */
+export async function unfolded(page: Page, selector: string): Promise<string> {
+  await page.waitForSelector(selector, { state: 'attached' });
+
+  const heading = page.locator(`details.fold-section:not([open]):has(${selector}) > summary`);
+
+  if ((await heading.count()) > 0) {
+    await ((await page.evaluate('matchMedia("(pointer: coarse)").matches')) ? heading.tap() : heading.click());
+  }
+
+  return selector;
+}
+
 export function overlap(a: Box, b: Box): boolean {
   return a.left < b.right - 1 && b.left < a.right - 1 && a.top < b.bottom - 1 && b.top < a.bottom - 1;
 }

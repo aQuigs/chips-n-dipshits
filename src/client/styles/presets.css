@@ -6,6 +6,11 @@
   gap: 6px;
 }
 
+.preset-panel {
+  display: grid;
+  gap: 14px;
+}
+
 /* A field the preset just picked has changed, marked in the space beside it */
 .changed {
   position: relative;

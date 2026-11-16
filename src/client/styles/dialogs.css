@@ -22,7 +22,7 @@
 
 .dialog {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
   width: min(100%, 460px);
   max-height: 88cqb;
   border: 1px solid var(--line);
@@ -57,7 +57,16 @@
   overflow-y: auto;
 }
 
-.dialog h3 {
+/* What must stay in reach however far the body is scrolled */
+.dialog-foot {
+  display: grid;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--line);
+}
+
+.dialog h3,
+.fold-section h3 {
   color: var(--muted);
   font-size: calc(12px * var(--text-scale));
   font-weight: 700;

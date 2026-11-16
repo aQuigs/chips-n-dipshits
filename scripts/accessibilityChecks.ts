@@ -1146,4 +1146,64 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
       assert.deepEqual(near, [], 'the viewer’s bet is on their cards, or touches them');
     },
   ],
+  [
+    'the table settings from the keyboard: every section is a group under a heading, folded ones under the line of what they hold, Enter on a heading unfolds it with the keyboard still there and Tab goes on into it, every section open breaks no rule in any theme, and Enter in a field saves',
+    async (rig) => {
+      const table = threeHanded(rig);
+      const page = await listening(table, 'Quigs');
+      const sweep = new Sweep();
+      const heading = (section: string) => `summary[data-section="${section}"]`;
+      const onIt = (selector: string) => page.evaluate(`document.activeElement?.matches(${JSON.stringify(selector)}) ?? false`);
+
+      await page.focus('[data-action="menu"]');
+      await page.keyboard.press('Enter');
+      await tabTo(page, '.menu-item[data-action="settings"]');
+      await page.keyboard.press('Enter');
+      await page.waitForSelector(`${heading('presets')} .holds:not(:empty)`);
+
+      assert.match(
+        await tree(page, '.dialog'),
+        new RegExp(
+          [
+            '- group:\\n\\s+- heading "Stakes" \\[level=3\\]\\n\\s+- text: Small blind\\n[^]*',
+            '- group:\\n\\s+- heading "Bomb pots" \\[level=3\\]\\n\\s+- text: 100 each · only when called · one board\\n\\s+',
+            '- group:\\n\\s+- heading "Bounties and high hand" \\[level=3\\]\\n\\s+- text: None\\n\\s+',
+            '- group:\\n\\s+- heading "House rules" \\[level=3\\]\\n\\s+- text: Straddle under the gun · run it up to 3 times · missed blinds owed\\n\\s+',
+            '- group:\\n\\s+- heading "Table" \\[level=3\\]\\n\\s+- text: Friday Night · no clock · no voice link\\n\\s+',
+            '- group:\\n\\s+- heading "Presets" \\[level=3\\]\\n\\s+- text: None saved\\n\\s+',
+            '- button "Save"',
+          ].join(''),
+        ),
+      );
+      await sweep.over(page, 'the table settings as they open');
+
+      // The straddles are one question with four answers, and a switch is told apart from the line that explains it
+      await tabTo(page, heading('house'));
+      await page.keyboard.press('Enter');
+      await page.waitForSelector('.fold-section[data-section="house"][open]');
+      assert.equal(await onIt(heading('house')), true, 'unfolding a section took the keyboard off its heading');
+      await page.keyboard.press('Tab');
+      assert.equal(await focused(page), '#table-allow-straddle', 'Tab from a heading just unfolded does not go into its section');
+      assert.match(await tree(page, '.fold-section[data-section="house"]'), /- group "Straddles allowed":\n\s+- text: Straddles allowed\n\s+- checkbox "Under the gun" \[checked\]\n[^]*- checkbox "Chopping the blinds"\n/);
+      assert.equal(await page.getAttribute('#table-allow-chop', 'aria-describedby'), 'table-allow-chop-hint');
+
+      for (const section of ['bombPots', 'sideMoney', 'table', 'presets']) {
+        await tabTo(page, heading(section));
+        await page.keyboard.press('Enter');
+        await page.waitForSelector(`.fold-section[data-section="${section}"][open]`);
+        assert.equal(await onIt(heading(section)), true, `unfolding ${section} took the keyboard off its heading`);
+      }
+
+      await sweep.over(page, 'the table settings with every section open');
+
+      // Save lies outside the form it sends, in the foot of the dialog: Enter in a field must find it all the same
+      await page.fill('#table-big-blind', '40');
+      await page.focus('#table-big-blind');
+      await page.keyboard.press('Enter');
+      await page.waitForSelector('.overlay .dialog', { state: 'detached' });
+      assert.equal(table.view('Quigs').config.bigBlind, 40);
+      assert.equal(await focused(page), 'menu', 'saving from the keyboard did not give it back to the menu button');
+      sweep.done(2);
+    },
+  ],
 ];

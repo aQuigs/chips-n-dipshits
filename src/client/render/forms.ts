@@ -60,8 +60,12 @@ export function pickField(id: string, label: string, prompt: string, choices: { 
   );
 }
 
-export function checkField(id: string, label: string, checked: boolean): HTMLElement {
-  return h('label.check', { for: id }, h('input', { type: 'checkbox', id, name: id, checked }), h('span', null, label));
+/** A switch. A `hint` goes on a line under it, read as its description and not as part of its name. */
+export function checkField(id: string, label: string, checked: boolean, hint?: string): HTMLElement {
+  const hintId = `${id}-hint`;
+  const check = h('label.check', { for: id }, h('input', { type: 'checkbox', id, name: id, checked, 'aria-describedby': hint ? hintId : null }), h('span', null, label));
+
+  return hint ? h('div.field.switch', null, check, h('small', { id: hintId }, hint)) : check;
 }
 
 export function inputOf(form: HTMLFormElement, name: string): HTMLInputElement {

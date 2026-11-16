@@ -19,6 +19,7 @@ import { PokerService } from '../src/server/service.ts';
 import { seededRng } from '../tests/helpers.ts';
 import { clientPage } from './bundle.ts';
 import { STILL } from './pageSpies.ts';
+import { unfolded } from './rig.ts';
 
 const OUT = fileURLToPath(new URL('../screenshots/', import.meta.url));
 const DESKTOP = { width: 1280, height: 800 };
@@ -211,7 +212,7 @@ try {
 
   // Each player's turn waits while their pictures are taken, which on a busy machine outlasts the usual clock and folds them
   await openFromMenu(host.page, 'settings');
-  await host.page.fill('#table-action-seconds', String(LIMITS.maxActionSeconds));
+  await host.page.fill(await unfolded(host.page, '#table-action-seconds'), String(LIMITS.maxActionSeconds));
   await host.page.click('[data-action="save-settings"]');
   await host.page.waitForSelector('.dialog', { state: 'detached' });
 

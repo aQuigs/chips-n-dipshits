@@ -24,8 +24,10 @@ export interface StraddleKind {
   what: Straddle;
   /** The table setting that allows it. */
   setting: SwitchKey;
-  /** What the table settings and a player's own switch call it. */
+  /** What a player's own switch calls it, and the table when it says which kinds are allowed. */
   label: string;
+  /** What it is called where a heading has already said straddles, as it reads inside a sentence. */
+  short: string;
   /** How a refusal names it: "The button straddle must be on or off". */
   subject: string;
   /** Allowed at a table whose host never said. */
@@ -57,6 +59,7 @@ export const STRADDLES: readonly StraddleKind[] = [
     what: 'straddle',
     setting: 'allowStraddle',
     label: 'Straddle under the gun',
+    short: 'under the gun',
     subject: 'The straddle under the gun',
     byDefault: true,
     says: 'Twice the big blind when you are first to act before the flop. You act last instead.',
@@ -67,6 +70,7 @@ export const STRADDLES: readonly StraddleKind[] = [
     what: 'double straddle',
     setting: 'allowDoubleStraddle',
     label: 'Double straddle',
+    short: 'double',
     subject: 'The double straddle',
     byDefault: false,
     says: 'Twice the straddle when the player on your right straddles under the gun. You act last instead.',
@@ -78,6 +82,7 @@ export const STRADDLES: readonly StraddleKind[] = [
     what: 'button straddle',
     setting: 'allowButtonStraddle',
     label: 'Button straddle',
+    short: 'button',
     subject: 'The button straddle',
     byDefault: false,
     says: 'Twice the big blind when you have the button. The small blind acts first.',
@@ -88,6 +93,7 @@ export const STRADDLES: readonly StraddleKind[] = [
     what: 'Mississippi straddle',
     setting: 'allowMississippiStraddle',
     label: 'Mississippi straddle',
+    short: 'Mississippi',
     subject: 'The Mississippi straddle',
     byDefault: false,
     says: 'Twice the big blind from any seat without a blind. The button has the first right to it, then the player on its right, and so on.',

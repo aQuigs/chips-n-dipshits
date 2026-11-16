@@ -19,7 +19,7 @@ interface Size {
 const LAPTOP: Size = { width: 1180, height: 740 };
 const PHONE: Size = { width: 390, height: 780 };
 
-// What the invite dialog shows; the demo table has no address of its own
+// What the dialogs that hold a link show; the demo table has no address of its own
 const SAMPLE_ADDRESS = 'https://script.google.com/macros/s/your-deployment/exec';
 
 function sessionMemory(): Memory {

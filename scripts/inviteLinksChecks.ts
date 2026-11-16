@@ -8,9 +8,9 @@ import assert from 'node:assert/strict';
 import type { Page } from 'playwright';
 
 import type { Check } from './checkRunner.ts';
-import { openTheMenu, textSize, TEXT_SIZES } from './layoutSweep.ts';
+import { textSize, TEXT_SIZES } from './layoutSweep.ts';
 import { boxes, pressOn, squeezed } from './rig.ts';
-import type { Rig } from './rig.ts';
+import type { Rig, RigTable } from './rig.ts';
 
 const [HOST, PLAYER, THIRD, WATCHER] = ['Quigs', 'Danny', 'Marge', 'Kibitz'];
 const SCREEN = 'smallPhone';
@@ -28,6 +28,20 @@ const DRAWN = `(() => {
 const BUTTONS = `[...document.querySelectorAll('.dialog-body button')].map((button) => [button.textContent, button.classList.contains('primary')])`;
 
 const copied = (page: Page) => page.evaluate('navigator.clipboard.readText()') as Promise<string>;
+
+// Run in the page before anything of its own: a browser that lets the page copy nothing, neither way it knows, as a frame of someone else's may
+const NO_COPYING = `(() => {
+  Object.defineProperty(navigator, 'clipboard', { value: { writeText: () => Promise.reject(new Error('refused')) } });
+  document.execCommand = () => false;
+})()`;
+
+/** What a box holds, how much of that is selected, and whether the keyboard is in it. */
+const boxAt = (page: Page, box: string) =>
+  page.evaluate(`(() => {
+    const box = document.querySelector(${JSON.stringify(box)});
+
+    return { holds: box.value, selected: box.value.slice(box.selectionStart, box.selectionEnd), focused: document.activeElement === box };
+  })()`) as Promise<{ holds: string; selected: string; focused: boolean }>;
 
 /** Whose tokens are in what the open dialog draws. */
 async function tokensDrawn(page: Page, tokens: Map<string, string>): Promise<string[]> {
@@ -53,13 +67,48 @@ async function wholeAtEverySize(page: Page, button: string, where: string): Prom
   await textSize(page, TEXT_SIZES[0]!);
 }
 
+type Press = (selector: string) => Promise<void>;
+
+/** Three seated and someone watching, nothing dealt. */
+function threeAndAWatcher(rig: Rig): RigTable {
+  const table = rig.table([HOST, PLAYER, THIRD].map((name) => ({ name, stack: 2000 })));
+
+  table.join(WATCHER);
+
+  return table;
+}
+
+/** Opens Invite players from the top bar: the menu has no line for it. */
+async function openInvite(page: Page, press: Press): Promise<void> {
+  await press('.topbar [data-action="invite"]');
+  await page.waitForSelector('.dialog #table-link');
+}
+
+/** Opens Play on another device from its line in the viewer's part of the menu, and gives what the line says. */
+async function openOtherDevice(page: Page, press: Press): Promise<string> {
+  const line = '.menu > section:has(h3:text-is("You")) [data-action="otherDevice"]';
+
+  await press('[data-action="menu"]');
+  await page.waitForSelector(line);
+  await page.locator(line).scrollIntoViewIfNeeded();
+
+  const says = await page.innerText(line);
+
+  await press(line);
+  await page.waitForSelector('.dialog #member-link');
+
+  return says;
+}
+
+async function closeDialog(page: Page, press: Press): Promise<void> {
+  await press('.dialog [data-action="close"]');
+  await page.waitForSelector('.dialog', { state: 'detached' });
+}
+
 const linksAreApart = (picturesIn: string): Check => [
   'Invite players holds the table’s link and nothing that is one member’s: no token is anywhere in what it draws, for the host, a player and someone watching, and its one gold button says it copies the invite link and copies that; Play on another device, in the viewer’s part of the menu, holds the viewer’s personal link and nobody else’s, says over the link what it gives away, and its plain button says it copies my link and copies that; opened in another browser, the link asks whether to go on as the viewer; both dialogs are whole on a 360 phone at every size of text',
-  async (rig: Rig) => {
-    const table = rig.table([HOST, PLAYER, THIRD].map((name) => ({ name, stack: 2000 })));
-
-    table.join(WATCHER);
-
+  async (rig) => {
+    const table = threeAndAWatcher(rig);
     const tokens = new Map([HOST, PLAYER, THIRD, WATCHER].map((name) => [name, table.auth(name).token]));
 
     for (const viewer of [HOST, PLAYER, WATCHER]) {
@@ -70,8 +119,7 @@ const linksAreApart = (picturesIn: string): Check => [
       await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
 
       // Invite players: the link for friends, and no member in it
-      await press('.topbar [data-action="invite"]');
-      await page.waitForSelector('.dialog #table-link');
+      await openInvite(page, press);
 
       const invite = new URL(await page.inputValue('#table-link'));
 
@@ -89,16 +137,10 @@ const linksAreApart = (picturesIn: string): Check => [
       await page.waitForSelector('[data-copy="table-link"]:text-is("Copied")');
       assert.equal(await copied(page), invite.href, `${viewer}: what Copy invite link copied`);
       assert.deepEqual(await tokensDrawn(page, tokens), [], `${viewer}: Invite players draws a member’s token once its link is copied`);
-      await press('.dialog [data-action="close"]');
-      await page.waitForSelector('.dialog', { state: 'detached' });
+      await closeDialog(page, press);
 
       // Play on another device: the viewer's own link, and nobody else's
-      await press('[data-action="menu"]');
-      await page.waitForSelector('.menu .menu-item');
-      assert.equal(await page.innerText('.menu > section:has(h3:text-is("You")) [data-action="otherDevice"]'), 'Play on another device', `${viewer}: the line of the menu`);
-      await page.locator('.menu [data-action="otherDevice"]').scrollIntoViewIfNeeded();
-      await press('.menu [data-action="otherDevice"]');
-      await page.waitForSelector('.dialog #member-link');
+      assert.equal(await openOtherDevice(page, press), 'Play on another device', `${viewer}: the line of the menu`);
 
       const own = new URL(await page.inputValue('#member-link'));
 
@@ -140,7 +182,30 @@ const linksAreApart = (picturesIn: string): Check => [
   },
 ];
 
+const refusedTheClipboard: Check = [
+  'in a browser that refuses the clipboard, Copy invite link and Copy my link each leave their link in its box, all of it selected and the keyboard in the box, and say to copy it from there',
+  async (rig) => {
+    const table = threeAndAWatcher(rig);
+    const page = await table.open(PLAYER, SCREEN, NO_COPYING);
+    const press = pressOn(page, SCREEN);
+
+    for (const [box, open] of [
+      ['table-link', openInvite],
+      ['member-link', openOtherDevice],
+    ] as const) {
+      await open(page, press);
+
+      const link = await page.inputValue(`#${box}`);
+
+      await press(`[data-copy="${box}"]`);
+      await page.waitForSelector(`[data-copy="${box}"]:text-is("Copy it from the box")`);
+      assert.deepEqual(await boxAt(page, `#${box}`), { holds: link, selected: link, focused: true }, `${box}: the link is not ready to be copied by hand`);
+      await closeDialog(page, press);
+    }
+  },
+];
+
 /** The checks of the table's two links. Pictures go into `picturesIn`, a folder ending in a slash. */
 export function inviteLinksChecks(picturesIn: string): Check[] {
-  return [linksAreApart(picturesIn)];
+  return [linksAreApart(picturesIn), refusedTheClipboard];
 }

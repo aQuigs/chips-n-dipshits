@@ -982,6 +982,8 @@ const SCREEN_STATES: ScreenState[] = [
   },
   {
     shows: 'Invite players with the table’s link alone, and Play on another device with the viewer’s own link under what it gives away',
+    // Lying down a phone shows less of a dialog than the second of them is tall
+    alsoOn: 'phoneSideways',
     async walk(rig, screen, look) {
       const table = tableWithTrophy(rig, 3, EVEN);
       const page = await table.open(VIEWER, screen);

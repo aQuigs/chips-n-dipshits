@@ -22,7 +22,6 @@ function changed(opened: TableConfig, held: Partial<TableConfig>): Partial<Table
 }
 
 function settings(view: TableView, handlers: DialogHandlers): HTMLElement {
-  const handInPlay = view.hand !== null && view.hand.stage !== 'done';
   const waits = h('p.note', { hidden: true, 'data-says': 'next-hand' }, 'Applies from the next hand.');
   const unsaved = () => changed(view.config, fields.read(form));
 
@@ -32,7 +31,8 @@ function settings(view: TableView, handlers: DialogHandlers): HTMLElement {
     // What a host comes to change mid-game leads the registry, and is what the dialog opens on
     open: (section) => section === CONFIG_SECTION_KEYS[0],
     edited: () => {
-      waits.hidden = !(handInPlay && Object.keys(unsaved()).some((key) => CONFIG_SPECS[key as ConfigKey].nextHand));
+      // Whenever something changed waits, in a hand or between two: the dialog is drawn once, and a hand may be dealt under it
+      waits.hidden = !Object.keys(unsaved()).some((key) => CONFIG_SPECS[key as ConfigKey].nextHand);
       presets.formChanged();
     },
   });
@@ -51,7 +51,11 @@ function settings(view: TableView, handlers: DialogHandlers): HTMLElement {
     fields.sections,
   );
 
-  const presets = presetsPanel(view.config, handlers.presets, () => ({ ...view.config, ...fields.read(form) }));
+  const presets = presetsPanel(view.config, handlers.presets, {
+    current: () => ({ ...view.config, ...fields.read(form) }),
+    // The browser points at a field it can't read, which unfolds the section it is in
+    readable: () => form.reportValidity(),
+  });
 
   return footed(
     frame('Table settings', handlers, h('div.sections', null, form, presets.element)),

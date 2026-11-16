@@ -27,6 +27,14 @@ function cleaned(typed: string): string {
 /** A question waiting for the player before something is overwritten or thrown away for the whole group. */
 type Asking = { kind: 'replace' | 'delete'; name: string } | null;
 
+/** The settings form a preset is saved from. */
+export interface SettingsHeld {
+  /** What it holds now. */
+  current(): TableConfig;
+  /** Whether all of it can be read. When not, the form has pointed at what can't. */
+  readable(): boolean;
+}
+
 export interface PresetsPanel {
   element: HTMLElement;
   /** Told when the settings form has been changed, since a preset is saved from what the form holds. */
@@ -36,10 +44,10 @@ export interface PresetsPanel {
 /**
  * The section of a table's settings where its host or a co-host keeps them as a preset for the group,
  * and deletes ones the group no longer wants, folded under a line that says how the presets stand.
- * `table` is the table's settings, for saying whether it plays one; `current` is what the settings
- * form holds, which is what a preset is saved from.
+ * `table` is the table's settings, for saying whether it plays one; `form` is the settings form,
+ * since what it holds is what a preset is saved from.
  */
-export function presetsPanel(table: TableConfig, handlers: PresetHandlers, current: () => TableConfig): PresetsPanel {
+export function presetsPanel(table: TableConfig, handlers: PresetHandlers, form: SettingsHeld): PresetsPanel {
   let presets: Preset[] | null = null;
   let failed = false;
   let asking: Asking = null;
@@ -78,7 +86,9 @@ export function presetsPanel(table: TableConfig, handlers: PresetHandlers, curre
   };
 
   const save = (button: HTMLButtonElement, name: string, replace: boolean): void => {
-    holdWhile(button, async () => show(await handlers.save(name, current(), replace), `Saved ${name}.`));
+    if (form.readable()) {
+      holdWhile(button, async () => show(await handlers.save(name, form.current(), replace), `Saved ${name}.`));
+    }
   };
 
   const keepIt = () => h('button.btn.small', { type: 'button', 'data-action': 'keep-preset', onclick: () => show(presets) }, 'Keep it');
@@ -92,7 +102,7 @@ export function presetsPanel(table: TableConfig, handlers: PresetHandlers, curre
   };
 
   const formChanged = (): void => {
-    const held = current();
+    const held = form.current();
 
     unsaved.hidden = CONFIG_KEYS.every((key) => sameSetting(held[key], table[key]));
   };
@@ -151,7 +161,7 @@ export function presetsPanel(table: TableConfig, handlers: PresetHandlers, curre
     );
   };
 
-  const form = h(
+  const naming = h(
     'form.preset-save',
     {
       onsubmit: (event: Event) => {
@@ -171,7 +181,7 @@ export function presetsPanel(table: TableConfig, handlers: PresetHandlers, curre
     saveButton,
   );
 
-  const panel = h('div.preset-panel', null, playing, form, unsaved, question, status, list);
+  const panel = h('div.preset-panel', null, playing, naming, unsaved, question, status, list);
   const section = foldSection('presets', 'Presets', false, panel);
 
   draw();

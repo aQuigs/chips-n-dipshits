@@ -12883,6 +12883,15 @@ const CHECKS: Check[] = [
         assert.equal(await isOpen('bombPots'), false);
         assert.equal(await text(page, `${part('bombPots')} .holds`), '100 each · only when called · one board');
 
+        // A preset is saved from the same form, so it is held to the same
+        await page.fill(await unfolded(page, '#preset-name'), 'Friday');
+        await press('[data-action="save-preset"]');
+        await page.waitForSelector(`${part('bombPots')}[open]`);
+        assert.equal(await page.evaluate('document.activeElement.id'), 'table-bomb-pot-amount', 'saving a preset did not point at the field nobody can read');
+        assert.deepEqual(rig.presets.list(), [], 'a preset was saved from a form with a field nobody can read');
+        await press(`${part('bombPots')} > summary`);
+        await press(`${part('presets')} > summary`);
+
         await press('[data-action="save-settings"]');
         await page.waitForSelector(`${part('bombPots')}[open]`);
         assert.equal(await page.evaluate('document.activeElement.id'), 'table-bomb-pot-amount', 'the browser could not point at the field it refused');
@@ -12924,7 +12933,7 @@ const CHECKS: Check[] = [
     },
   ],
   [
-    'the foot of the table settings says a change waits for the next hand only while a hand is in play and something changed waits for one, beside Save on a phone lying down',
+    'the foot of the table settings says a change applies from the next hand only while something changed waits for one, also for a hand dealt since the dialog opened, beside Save on a phone lying down',
     async (rig) => {
       const table = rig.table([
         { name: 'Quigs', stack: 1000 },
@@ -12938,19 +12947,13 @@ const CHECKS: Check[] = [
         await page.waitForSelector('[data-action="save-settings"]');
       };
 
-      // Between hands a change is the table's at once
-      await openSettings();
-      await page.fill('#table-big-blind', '40');
-      assert.equal(await page.inputValue('#table-big-blind'), '40');
-      assert.equal(await page.isVisible(note), false, 'a change is said to wait with no hand in play');
-      await page.tap('[data-action="close"]');
-
-      table.dealNext();
-      await page.waitForSelector('.seat.me .card');
+      // Opened between hands, with a hand dealt under it before anything is typed: the line goes by what changed, not by how the table stood
       await openSettings();
       assert.equal(await page.isVisible(note), false, 'with nothing changed, something is said to wait');
+      table.dealNext();
+      await table.heardBy(page);
 
-      // The table's name is the table's at once, in a hand or out of one
+      // The table's name is the table's at once
       await page.fill(await unfolded(page, '#table-name'), 'Friday Night');
       assert.equal(await page.inputValue('#table-name'), 'Friday Night');
       assert.equal(await page.isVisible(note), false, 'a new name is said to wait for the next hand');
@@ -12981,6 +12984,53 @@ const CHECKS: Check[] = [
       await page.tap('[data-action="save-settings"]');
       await page.waitForSelector('.dialog', { state: 'detached' });
       assert.deepEqual([table.view('Quigs').config.bigBlind, table.view('Quigs').config.name], [40, 'Friday Night']);
+    },
+  ],
+  [
+    'who antes, out of sight while there is no ante, stays where it is while the ante is half typed, and what it holds out of sight is neither sent nor counted as a change',
+    async (rig) => {
+      const table = rig.table([
+        { name: 'Quigs', stack: 1000 },
+        { name: 'Stu', stack: 1000 },
+      ]);
+      const page = await table.open('Quigs', 'smallPhone');
+      const shown = () => page.isVisible('#table-ante-from');
+      const buyInAt = async () => (await boxes(page, '#table-min-buy-in'))[0]!.top;
+
+      await page.tap('[data-action="menu"]');
+      await page.tap('.menu [data-action="settings"]');
+      await page.waitForSelector('#table-ante');
+      assert.equal(await shown(), false);
+
+      // No ante yet: the box emptied on the way to an amount brings nothing up
+      const without = await buyInAt();
+      await page.fill('#table-ante', '');
+      assert.equal(await page.inputValue('#table-ante'), '');
+      assert.deepEqual([await shown(), await buyInAt()], [false, without], 'who antes came up for an ante nobody has typed yet');
+
+      await page.fill('#table-ante', '5');
+      await page.waitForSelector('#table-ante-from');
+      await page.tap('#table-ante-from label:has-text("The big blind")');
+      await page.waitForSelector('.dialog-foot [data-says="next-hand"]:visible');
+
+      // An ante there is: the box emptied on the way to another amount takes nothing away
+      const withIt = await buyInAt();
+      await page.fill('#table-ante', '');
+      assert.equal(await page.inputValue('#table-ante'), '');
+      assert.deepEqual([await shown(), await buyInAt()], [true, withIt], 'who antes went away while the ante was half typed, and the fields under it jumped');
+
+      // Back at no ante, who would pay it is out of sight, and what it was left on is no change
+      await page.fill('#table-ante', '0');
+      await page.waitForSelector('#table-ante-from', { state: 'hidden' });
+      await page.waitForSelector('.dialog-foot [data-says="next-hand"]', { state: 'hidden' });
+      assert.equal(await page.isChecked('#table-ante-from input[value="bigBlind"]'), true, 'the check no longer shows what it is here for: the hidden choice is back on what the table has');
+      await page.tap(await unfolded(page, '#preset-name'));
+      assert.equal(await page.isVisible('.preset-panel [data-says="table-unchanged"]'), false, 'a choice nobody can see is counted as a change to the form');
+
+      const told = table.view('Quigs').feed.length;
+      await page.tap('[data-action="save-settings"]');
+      await page.waitForSelector('.dialog', { state: 'detached' });
+      assert.deepEqual([table.view('Quigs').config.ante, table.view('Quigs').config.anteFrom, table.view('Quigs').feed.length], [0, 'everyone', told], 'a choice nobody could see was sent to the table');
     },
   ],
   [

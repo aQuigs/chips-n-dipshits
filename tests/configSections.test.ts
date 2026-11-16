@@ -94,7 +94,7 @@ test('the sections come in the order a host reaches for them, and each folds und
   assert.equal(lines({ ...DEFAULT_CONFIG, bounties: [['72', 25], ['AA', 100], ['J4s', 50]], highHandBonus: 50 }).sideMoney, '3 bounty hands · high hand 50', 'a long list is counted, so the line stays a line');
 });
 
-test('nothing is hidden by folding: a change to any setting shows in the line of its section', () => {
+test('no setting is forgotten by folding: each has its say in the line of its section', () => {
   // With an ante, so that who pays it means something
   const table: TableConfig = { ...DEFAULT_CONFIG, ante: 5, bounties: [['72', 25]], highHandBonus: 50 };
   const before = lines(table);
@@ -102,7 +102,7 @@ test('nothing is hidden by folding: a change to any setting shows in the line of
   for (const key of CONFIG_KEYS) {
     const after = lines({ ...table, [key]: another(key, table) });
 
-    assert.notEqual(after[sectionOf(key)], before[sectionOf(key)], `${key} can change without its section's line saying so`);
+    assert.notEqual(after[sectionOf(key)], before[sectionOf(key)], `the line of its section has nothing to say of ${key}`);
   }
 });
 

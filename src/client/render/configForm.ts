@@ -35,7 +35,7 @@ export interface ConfigForm {
   sections: HTMLElement[];
   /** The settings it has a field for. */
   shown: ConfigKey[];
-  /** What the fields hold now, for the settings the form lets be changed. */
+  /** What the fields hold now, for the settings the form lets be changed. One that does not apply is left out: its field is out of sight, so nobody is changing it. */
   read(form: HTMLFormElement): Partial<TableConfig>;
   /** Puts `values` in every field, marking each field it changed and unfolding its section, and says which those were. */
   fill(form: HTMLFormElement, values: TableConfig): ConfigKey[];
@@ -170,29 +170,31 @@ export function configForm(values: TableConfig, options: ConfigFormOptions): Con
   const fields = new Map<ConfigKey, HTMLElement>();
   const parts = new Map<ConfigSection, FoldSection>();
 
+  const applies = (key: ConfigKey, config: TableConfig): boolean => CONFIG_SPECS[key].applies?.(config) !== false;
+
   const read = (form: HTMLFormElement): Partial<TableConfig> => {
     const open = shown.filter((key) => !closed(key));
+    const all = Object.fromEntries(open.map((key) => [key, held(form, idOf(key), CONFIG_SPECS[key], table)])) as Partial<TableConfig>;
+    const now = { ...table, ...all };
 
-    return Object.fromEntries(open.map((key) => [key, held(form, idOf(key), CONFIG_SPECS[key], table)])) as Partial<TableConfig>;
+    return Object.fromEntries(Object.entries(all).filter(([key]) => applies(key as ConfigKey, now))) as Partial<TableConfig>;
   };
 
   /** Brings what follows from the fields in line with them: which settings apply, and the line each section is folded under. */
   const follow = (form: HTMLFormElement): void => {
     const now = { ...table, ...read(form) };
 
-    for (const key of shown) {
-      const applies = CONFIG_SPECS[key].applies;
-
-      if (applies) {
-        fields.get(key)!.hidden = !applies(now);
-      }
-    }
-
     for (const [section, part] of parts) {
-      // A field that can't be read has nothing to say yet: the line keeps what it last could
-      if (part.element.querySelector(':invalid') === null) {
-        part.hold(CONFIG_SECTIONS[section].holds(now));
+      // A field that can't be read has nothing to say yet: its section stays as it last could be told, so nothing jumps while an amount is half typed
+      if (part.element.querySelector(':invalid') !== null) {
+        continue;
       }
+
+      for (const key of settingsOf(section)) {
+        fields.get(key)!.hidden = !applies(key, now);
+      }
+
+      part.hold(CONFIG_SECTIONS[section].holds(now));
     }
 
     options.edited?.();
@@ -218,7 +220,7 @@ export function configForm(values: TableConfig, options: ConfigFormOptions): Con
     const spec = CONFIG_SPECS[key];
     const element = closed(key) ? fixedLine(idOf(key), key, table) : field(idOf(key), spec, value, table);
 
-    element.hidden = spec.applies?.(table) === false;
+    element.hidden = !applies(key, table);
 
     if (creating && spec.kind === 'choice' && spec.options.some((option) => option.suggests)) {
       element.addEventListener('change', startOver);
@@ -305,7 +307,7 @@ export function configForm(values: TableConfig, options: ConfigFormOptions): Con
 
     fill(form, values) {
       const before = { ...table, ...read(form) };
-      const changed = shown.filter((key) => !sameSetting(before[key], values[key]));
+      const changed = shown.filter((key) => applies(key, values) && !sameSetting(before[key], values[key]));
 
       table = values;
 

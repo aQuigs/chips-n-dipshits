@@ -125,7 +125,7 @@
   color: var(--muted);
 }
 
-.field input:where(:not([type='radio'])),
+.field input:where(:not([type='radio'], [type='checkbox'])),
 .say input,
 .copy input,
 .who-filter {

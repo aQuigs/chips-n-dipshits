@@ -1153,7 +1153,6 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
       const page = await listening(table, 'Quigs');
       const sweep = new Sweep();
       const heading = (section: string) => `summary[data-section="${section}"]`;
-      const onIt = (selector: string) => page.evaluate(`document.activeElement?.matches(${JSON.stringify(selector)}) ?? false`);
 
       await page.focus('[data-action="menu"]');
       await page.keyboard.press('Enter');
@@ -1181,7 +1180,7 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
       await tabTo(page, heading('house'));
       await page.keyboard.press('Enter');
       await page.waitForSelector('.fold-section[data-section="house"][open]');
-      assert.equal(await onIt(heading('house')), true, 'unfolding a section took the keyboard off its heading');
+      assert.equal(await focusIn(page, heading('house')), true, 'unfolding a section took the keyboard off its heading');
       await page.keyboard.press('Tab');
       assert.equal(await focused(page), '#table-allow-straddle', 'Tab from a heading just unfolded does not go into its section');
       assert.match(await tree(page, '.fold-section[data-section="house"]'), /- group "Straddles allowed":\n\s+- text: Straddles allowed\n\s+- checkbox "Under the gun" \[checked\]\n[^]*- checkbox "Chopping the blinds"\n/);
@@ -1191,7 +1190,7 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
         await tabTo(page, heading(section));
         await page.keyboard.press('Enter');
         await page.waitForSelector(`.fold-section[data-section="${section}"][open]`);
-        assert.equal(await onIt(heading(section)), true, `unfolding ${section} took the keyboard off its heading`);
+        assert.equal(await focusIn(page, heading(section)), true, `unfolding ${section} took the keyboard off its heading`);
       }
 
       await sweep.over(page, 'the table settings with every section open');

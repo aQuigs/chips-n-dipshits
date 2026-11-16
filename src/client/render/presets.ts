@@ -1,4 +1,3 @@
-import { CONFIG_KEYS, sameSetting } from '../../engine/config.ts';
 import { matchingPreset, presetName, sameName } from '../../engine/presets.ts';
 import type { Preset } from '../../engine/presets.ts';
 import type { TableConfig } from '../../engine/types.ts';
@@ -37,8 +36,8 @@ export interface SettingsHeld {
 
 export interface PresetsPanel {
   element: HTMLElement;
-  /** Told when the settings form has been changed, since a preset is saved from what the form holds. */
-  formChanged(): void;
+  /** Told whether the settings form now differs from the table, since a preset is saved from what the form holds. */
+  differs(fromTable: boolean): void;
 }
 
 /**
@@ -101,19 +100,12 @@ export function presetsPanel(table: TableConfig, handlers: PresetHandlers, form:
     panel.querySelector('.preset-question:not([hidden]), .asking')?.scrollIntoView({ block: 'nearest' });
   };
 
-  const formChanged = (): void => {
-    const held = form.current();
-
-    unsaved.hidden = CONFIG_KEYS.every((key) => sameSetting(held[key], table[key]));
-  };
-
   const draw = (): void => {
     const match = presets && matchingPreset(presets, table);
 
     playing.hidden = !match;
     playing.textContent = match ? `This table plays the preset ${match.name}.` : '';
     section.hold(match ? `Plays ${match.name}` : presets ? (presets.length === 0 ? 'None saved' : `${presets.length} saved`) : failed ? 'Could not load' : '');
-    formChanged();
 
     question.hidden = asking?.kind !== 'replace';
     question.replaceChildren();
@@ -187,5 +179,5 @@ export function presetsPanel(table: TableConfig, handlers: PresetHandlers, form:
   draw();
   void reload();
 
-  return { element: section.element, formChanged };
+  return { element: section.element, differs: (fromTable) => (unsaved.hidden = !fromTable) };
 }

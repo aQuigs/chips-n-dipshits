@@ -23,17 +23,17 @@ function changed(opened: TableConfig, held: Partial<TableConfig>): Partial<Table
 
 function settings(view: TableView, handlers: DialogHandlers): HTMLElement {
   const waits = h('p.note', { hidden: true, 'data-says': 'next-hand' }, 'Applies from the next hand.');
-  const unsaved = () => changed(view.config, fields.read(form));
-
   const fields = configForm(view.config, {
     idPrefix: 'table-',
     creating: false,
     // What a host comes to change mid-game leads the registry, and is what the dialog opens on
     open: (section) => section === CONFIG_SECTION_KEYS[0],
-    edited: () => {
+    edited: (held) => {
+      const unsaved = Object.keys(changed(view.config, held)) as ConfigKey[];
+
       // Whenever something changed waits, in a hand or between two: the dialog is drawn once, and a hand may be dealt under it
-      waits.hidden = !Object.keys(unsaved()).some((key) => CONFIG_SPECS[key as ConfigKey].nextHand);
-      presets.formChanged();
+      waits.hidden = !unsaved.some((key) => CONFIG_SPECS[key].nextHand);
+      presets.differs(unsaved.length > 0);
     },
   });
 
@@ -42,7 +42,7 @@ function settings(view: TableView, handlers: DialogHandlers): HTMLElement {
     {
       id: FORM_ID,
       onsubmit: (event: Event) => {
-        const sent = unsaved();
+        const sent = changed(view.config, fields.read(form));
 
         // The table's words name a setting that was sent, which may be folded away by now
         submit(event, handlers, { type: 'updateConfig', config: sent }, handlers.close, () => handlers.byItself(() => fields.unfold(Object.keys(sent) as ConfigKey[])));

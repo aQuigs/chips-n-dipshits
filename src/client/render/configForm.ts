@@ -26,8 +26,8 @@ export interface ConfigFormOptions {
   first?: ConfigSection;
   /** Told where the amounts start when a choice has started them over, for amounts kept outside the form. */
   startedOver?(start: TableConfig): void;
-  /** Told whenever what the fields hold may have changed. */
-  edited?(): void;
+  /** Told whenever what the fields hold may have changed, with what they hold now (`read`). */
+  edited?(held: Partial<TableConfig>): void;
 }
 
 export interface ConfigForm {
@@ -182,7 +182,8 @@ export function configForm(values: TableConfig, options: ConfigFormOptions): Con
 
   /** Brings what follows from the fields in line with them: which settings apply, and the line each section is folded under. */
   const follow = (form: HTMLFormElement): void => {
-    const now = { ...table, ...read(form) };
+    const held = read(form);
+    const now = { ...table, ...held };
 
     for (const [section, part] of parts) {
       // A field that can't be read has nothing to say yet: its section stays as it last could be told, so nothing jumps while an amount is half typed
@@ -197,7 +198,7 @@ export function configForm(values: TableConfig, options: ConfigFormOptions): Con
       part.hold(CONFIG_SECTIONS[section].holds(now));
     }
 
-    options.edited?.();
+    options.edited?.(held);
   };
 
   const startOver = (event: Event): void => {
@@ -212,7 +213,6 @@ export function configForm(values: TableConfig, options: ConfigFormOptions): Con
       redraw(key, spec.kind === 'handAmounts' ? bountiesHeld(form, idOf(key), table).map(([hand]): BountyRow => [hand, null]) : table[key]);
     }
 
-    follow(form);
     options.startedOver?.(table);
   };
 

@@ -28,13 +28,6 @@
 .fold-section .fold {
   grid-row: 1 / span 2;
   grid-column: 2;
-  color: var(--muted);
-  font-size: calc(18px * var(--text-scale));
-  line-height: 1;
-}
-
-.fold-section[open] > summary .fold {
-  transform: rotate(180deg);
 }
 
 .fold-section .holds {
@@ -79,12 +72,6 @@
 .among legend {
   margin-bottom: 4px;
   padding: 0;
-}
-
-.among .check {
-  color: var(--text);
-  font-size: calc(15px * var(--text-scale));
-  font-weight: 400;
 }
 
 /*

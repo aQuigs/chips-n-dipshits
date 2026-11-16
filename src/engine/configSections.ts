@@ -3,6 +3,7 @@
  * under each and in what order, and the one line a section is folded under.
  */
 import { formatAmount } from './amounts.ts';
+import { capitalized } from './handNames.ts';
 import { stakesText } from './stakes.ts';
 import { straddlesAllowed } from './straddles.ts';
 import type { TableConfig } from './types.ts';
@@ -39,7 +40,7 @@ function sideMoneyHeld(config: TableConfig): string {
   const bonus = highHandBonus > 0 ? [`high hand ${formatAmount(highHandBonus, config)}`] : [];
   const line = [...paid, ...bonus].join(' · ');
 
-  return line === '' ? 'None' : line[0]!.toUpperCase() + line.slice(1);
+  return line === '' ? 'None' : capitalized(line);
 }
 
 /**

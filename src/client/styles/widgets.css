@@ -178,7 +178,8 @@
 }
 
 .choice .check,
-.switch .check {
+.switch .check,
+.among .check {
   color: var(--text);
   font-size: calc(15px * var(--text-scale));
   font-weight: 400;
@@ -198,4 +199,15 @@
 .note {
   color: var(--muted);
   font-size: calc(13px * var(--text-scale));
+}
+
+/* The mark on a line or a heading that unfolds, turned over while it is open */
+summary > .fold {
+  color: var(--muted);
+  font-size: calc(18px * var(--text-scale));
+  line-height: 1;
+}
+
+details[open] > summary > .fold {
+  transform: rotate(180deg);
 }

@@ -2380,14 +2380,25 @@ const onlyWhatCameUpOverAnotherIsHeld: Check = [
       }
     }
 
-    // The viewer's own switch draws the bar again on their turn, every button where it was
-    const heldBefore = await Promise.all(pages.map(async ({ page }) => (await watched(page)).held.length));
+    // The viewer's own choice draws the bar again on their turn, every button where it was. All but in a font that
+    // has the row a hair from saying more: there "on" for "off" is the room it lacked, the row says the rest, its
+    // buttons move, and the ones that came up where another lay are held as any such button is
+    const before = await Promise.all(pages.map(({ page }) => watched(page)));
 
     table.act(VIEWER, { type: 'setStraddle', kind: 'straddle', on: true });
 
     for (const [nth, { page, where }] of pages.entries()) {
       await page.waitForSelector(`${STRADDLES}:has-text("Straddle: on")`);
-      assert.equal((await watched(page)).held.length, heldBefore[nth], `${where}: a button was held back when the bar was drawn again with every button where it was`);
+
+      const now = await watched(page);
+      const overAnother = now.found.slice(before[nth]!.found.length).map((one) => one.cameUp);
+      const held = now.held.slice(before[nth]!.held.length).map((one) => one.what);
+
+      assert.deepEqual(
+        held.filter((what) => !overAnother.includes(what)),
+        [],
+        `${where}: a button was held back when the bar was drawn again with no other control where it had lain`,
+      );
     }
   },
 ];

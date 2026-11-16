@@ -8,9 +8,10 @@ import assert from 'node:assert/strict';
 
 import type { Page } from 'playwright';
 
+import { ONCE } from '../src/client/once.ts';
 import type { Command } from '../src/engine/index.ts';
 import type { Check } from './checkRunner.ts';
-import { buttonNow, commandsSent, refusalTold, toasts, toastTold } from './pageSpies.ts';
+import { buttonNow, commandsSent, keysSent, refusalTold, toasts, toastTold } from './pageSpies.ts';
 import { ANSWER, CANCEL, CLOSE, dialogNamed, fromMenu, HOST, more, noDialog, on, seatedAndWatched } from './playersDialog.ts';
 import { Gate } from './rig.ts';
 import type { Rig, RigTable } from './rig.ts';
@@ -208,9 +209,23 @@ const everyPath = SENDING.map((sending): Check => [
     const table = build(rig);
     const page = await table.open(HOST, 'smallPhone');
     const sent = commandsSent(page);
+    const keys = keysSent(page);
     const gate = await Gate.on(page, 'hosting');
     const polls = await Gate.on(page, 'polls');
     const before = table.version;
+
+    // What goes under a key (`ONCE`) the page does not leave at one try: it asks the table how it stands and sends
+    // the same once more, under the same key, with the button held all the while
+    const keyed = ONCE.has(sends);
+    const askedAgain = async (path: string, becomes: () => Promise<void>) => {
+      if (!keyed) {
+        return;
+      }
+
+      await gate.holding();
+      assert.deepEqual(await buttonNow(page, button), { says: doing, held: true }, `${path}: the button came back while the page was asking again`);
+      await becomes();
+    };
 
     // Pressed, with the request stopped at the gate: the one thing on the page that says the press was heard
     const pressed = async (path: string) => {
@@ -242,6 +257,7 @@ const everyPath = SENDING.map((sending): Check => [
     await open?.(page);
     await pressed('refused');
     await gate.refuse();
+    await askedAgain('refused', () => gate.refuse());
     await back('refused');
     await (ofForm ? refusalTold(page, 'The table is busy') : toastTold(page, 'The table is busy'));
 
@@ -251,6 +267,7 @@ const everyPath = SENDING.map((sending): Check => [
     await pressed('no answer');
     await gate.lose();
     await toastTold(page, 'No answer from the table', told);
+    await askedAgain('no answer', () => gate.lose());
 
     if (unanswered === 'stays') {
       await back('no answer');
@@ -276,7 +293,9 @@ const everyPath = SENDING.map((sending): Check => [
     await gate.open();
     await taken(page);
     await polls.open();
-    assert.equal(sent.filter((type) => type === sends).length, 3, 'something was sent that no press asked for, or a press was not sent');
+    assert.equal(sent.filter((type) => type === sends).length, keyed ? 5 : 3, 'something was sent that no press asked for, or a press was not sent');
+    assert.equal(new Set(keys).size, 1, keyed ? 'the same press, asked again, went under another key' : 'a press went under a key that needs none');
+    assert.equal(keys[0] !== undefined, keyed);
     assert.equal(await page.locator(`${button}[aria-busy]`).count(), 0, 'a button is left held after the answer');
   },
 ]);

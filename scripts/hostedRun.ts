@@ -13,6 +13,7 @@ import type { Browser, Page } from 'playwright';
 
 import { KEYS_SETTLE_MS } from '../src/client/hotkeys.ts';
 import { startDevServer } from '../src/dev/server.ts';
+import { isKey } from '../src/engine/index.ts';
 import type { TableState } from '../src/engine/index.ts';
 import { CacheArrivalKeys } from '../src/gas/cacheArrivalKeys.ts';
 import { ERRORS_TAB, SheetErrorLog } from '../src/gas/sheetErrorLog.ts';
@@ -31,7 +32,7 @@ import { FakeCache, FakeLock, FakeSpreadsheet } from '../tests/fakes.ts';
 import { seededRng } from '../tests/helpers.ts';
 import { clientPage } from './bundle.ts';
 import { playCheck } from './liveCheckSteps.ts';
-import { answeredAfter, complaints, moveIn, movesSent, NOTICES, opsSent, ownComplaints, STILL, TITLES, toldOf } from './pageSpies.ts';
+import { answeredAfter, complaints, keysSent, moveIn, movesSent, NOTICES, opsSent, ownComplaints, STILL, TITLES, toldOf } from './pageSpies.ts';
 import { Gate, launchBrowser } from './rig.ts';
 import { STAND_IN_HOST } from './standInHost.ts';
 
@@ -1259,6 +1260,87 @@ try {
 
       await owner.context().close();
       await guest.context().close();
+    } finally {
+      await own.close();
+    }
+  }
+
+  console.log('Chips sent twice with no answer, and sent again from a form filled in while the page knows nothing, go under one key and move once; the key is in neither the address nor what the browser remembers');
+  {
+    // A game of its own, whose tables can be looked into
+    const tables = new MemoryStore();
+    const game = new PokerService({ store: tables, presets: new MemoryPresetStore(), players: new MemoryPlayerStore(seededRng(29)), clock: { now: () => Date.now() }, rng: seededRng(28) });
+    const own = await startDevServer({ port: 0, page: async () => html, service: game });
+
+    try {
+      const giver = await open(browser);
+      const id = await createTable(giver, own.url, 'Edna');
+      await sit(giver, 0);
+
+      const getter = await open(browser);
+      await getter.goto(`${own.url}?table=${id}`);
+      await getter.fill('#join-name', 'Otto');
+      await getter.click('[data-action="join-table"]');
+      await sit(getter, 1);
+      await giver.click('.banner [data-action="approve"]');
+      await getter.waitForSelector('.seat.me');
+
+      const stacks = () => tables.read(id)!.seats.flatMap((seat) => (seat ? [seat.stack] : []));
+      const [had, has] = stacks();
+      const keys = keysSent(giver);
+      const sends = await Gate.on(giver, 'hosting');
+      const polls = await Gate.on(giver, 'polls');
+
+      const send = async () => {
+        await giver.click('[data-action="menu"]');
+        await giver.click('.menu [data-action="players"]');
+        await giver.click('.dialog [data-action="transfer"]');
+        await giver.selectOption('#transfer-from', { label: 'Edna' });
+        await giver.selectOption('#transfer-to', { label: 'Otto' });
+        await giver.fill('#transfer-amount', '300');
+        await giver.click('[data-action="confirm-transfer"]');
+      };
+      const formGone = async () => {
+        await giver.waitForSelector('.dialog [data-action="transfer"]');
+        await giver.click('[data-action="close"]');
+      };
+
+      // The first asking never reaches the table. The page looks, finds it has not, and asks again by itself
+      await sends.close('requests');
+      await send();
+      await sends.holding();
+      await sends.lose();
+      await giver.waitForSelector('.toast:has-text("Checking whether that went through")');
+      await sends.holding();
+      assert.equal(await giver.locator('[data-action="confirm-transfer"][aria-busy="true"]').count(), 1, 'the form let go of its button while the page was asking again');
+
+      // That one the table takes, and its answer is lost too. The table's news stops reaching the page first, or a poll would show it the chips
+      await polls.close('requests');
+      await sends.close('answers');
+      await sends.holding();
+      assert.deepEqual(stacks(), [had! - 300, has! + 300], 'the table did not take the second asking, so the case shows nothing');
+      await sends.lose();
+      await formGone();
+
+      // The page is told nothing of the chips, so whoever sent them fills the form in again
+      await send();
+      await sends.holding();
+      await sends.open();
+      await formGone();
+      await polls.open();
+      await getter.waitForSelector('.feed li:has-text("moved 300 from Edna to Otto")');
+
+      assert.deepEqual(stacks(), [had! - 300, has! + 300], 'filled in again, the form moved the chips a second time');
+      assert.equal(await getter.locator('.feed li:has-text("moved 300")').count(), 1);
+      assert.equal(keys.length, 3);
+      assert.ok(isKey(keys[0]), 'the transfer went without a key');
+      assert.equal(new Set(keys).size, 1, 'the same words went under more than one key while nothing was known of them');
+
+      const keptBy = await (giver.evaluate('JSON.stringify([location.href, { ...localStorage }, { ...sessionStorage }, document.cookie, document.documentElement.outerHTML])') as Promise<string>);
+      assert.ok(!keptBy.includes(keys[0]!), 'the key of a command is in the address, in what the browser remembers, or on the page');
+
+      await giver.context().close();
+      await getter.context().close();
     } finally {
       await own.close();
     }

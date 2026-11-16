@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { addMember, applyCommand, createTable, DEFAULT_CONFIG, ledgerOf, LIMITS, presetName, refusalNames, refusesName, setIdentity, STATE_SCHEMA, SUBJECTS, viewFor } from '../src/engine/index.ts';
-import type { Command, Ctx } from '../src/engine/index.ts';
+import { addMember, applyCommand, ASKED_KEPT, ASKED_KEPT_EACH, createTable, DEFAULT_CONFIG, ledgerOf, LIMITS, presetName, refusalNames, refusesName, seenOf, setIdentity, STATE_SCHEMA, SUBJECTS, viewFor } from '../src/engine/index.ts';
+import type { Command, Ctx, RequestSeen } from '../src/engine/index.ts';
 import { NameOnList } from '../src/server/playerStore.ts';
 import { restoreState } from '../src/server/store.ts';
-import { ledgerEntries, refusalOf, seededRng, sevenDeuceBounty, TestTable } from './helpers.ts';
-import { assertChipsConserved, assertViewsKeepSecrets } from './invariants.ts';
+import { ledgerEntries, refusalOf, seededRng, sevenDeuceBounty, testKey, TestTable } from './helpers.ts';
+import { assertChipsConserved, assertInvariants, assertViewsKeepSecrets } from './invariants.ts';
 
 function freshCtx(): Ctx {
   return { now: 5000, rng: seededRng(7), effects: [] };
@@ -167,7 +167,7 @@ test('a member carries which known player they said they are, or nobody, and eve
   assert.deepEqual([host.identity, bob.identity, guest.identity], ['QQQQQQQQQQ', 'BBBBBBBBBB', null]);
 
   const view = viewFor(state, guest.id, ctx.now);
-  assert.deepEqual(view.you, { id: guest.id, name: 'Guest', role: 'member', seat: null, identity: null });
+  assert.deepEqual(view.you, { id: guest.id, name: 'Guest', role: 'member', seat: null, identity: null, asked: [] });
   assert.deepEqual(view.members, [
     { id: host.id, name: 'Quigs', identity: 'QQQQQQQQQQ' },
     { id: bob.id, name: 'Bob', identity: 'BBBBBBBBBB' },
@@ -698,6 +698,167 @@ test('a co-host is told they have the host\'s powers and sees every request; a p
   }
 
   assertViewsKeepSecrets(t.state, t.now);
+});
+
+test('a command asked again under its key is taken both times and done once: chips move once, and the ledger hears of them once', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 1000], names: ['Host', 'Dana', 'Sam'] });
+  const move: Command = { type: 'transferChips', from: t.ids[1]!, to: t.ids[2]!, amount: 300 };
+
+  t.cmd(0, move, testKey(1));
+  const once = JSON.stringify(t.state);
+  const booked = t.effects.length;
+
+  t.cmd(0, move, testKey(1));
+  assert.equal(JSON.stringify(t.state), once, 'the table is as the first asking left it');
+  assert.equal(t.effects.length, booked, 'the second asking went to the ledger');
+  assert.deepEqual(t.stacks(), [1000, 700, 1300]);
+
+  // The host's own chips are bought the moment they are asked for, with nobody to approve them
+  const add: Command = { type: 'requestRebuy', amount: 250 };
+  t.cmd(0, add, testKey(2));
+  t.cmd(0, add, testKey(2));
+  assert.deepEqual(t.stacks(), [1250, 700, 1300]);
+  assert.equal(t.state.members[0]!.buyIn, 1250);
+
+  // The same words under another key, or under none as before commands had keys, are another command
+  t.cmd(0, move, testKey(3));
+  t.cmd(0, move);
+  assert.deepEqual(t.stacks(), [1250, 100, 1900]);
+  assertInvariants(t.state, t.now);
+});
+
+test('a key is its sender\'s: the same one from another member is that member\'s own command, and each is told their own keys and nobody else\'s', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 1000] });
+  const move: Command = { type: 'transferChips', from: t.ids[2]!, to: t.ids[0]!, amount: 100 };
+  t.cmd(0, { type: 'setCohost', playerId: t.ids[1]!, on: true });
+
+  t.cmd(0, move, testKey(1));
+  t.cmd(1, move, testKey(1));
+  assert.deepEqual(t.stacks(), [1200, 1000, 800], 'the co-host\'s command was taken for the host\'s');
+
+  t.cmd(1, move, testKey(1));
+  t.cmd(1, move, testKey(2));
+  assert.deepEqual(t.stacks(), [1300, 1000, 700]);
+
+  assert.deepEqual([0, 1, 2].map((player) => t.view(player).you.asked), [[testKey(1)], [testKey(1), testKey(2)], []]);
+  assertViewsKeepSecrets(t.state, t.now);
+});
+
+test('the table remembers the latest keys and no more, and only so many of one member: a member\'s next pushes out their own oldest and nobody else\'s, and the table\'s next its oldest of all', () => {
+  const t = new TestTable({ stacks: [100_000, 1000, 1000, 1000, 1000] });
+  const give: Command = { type: 'transferChips', from: t.ids[0]!, to: t.ids[1]!, amount: 1 };
+  const given = () => t.state.seats[1]!.stack - 1000;
+  const keysOf = (player: number) => t.view(player).you.asked;
+
+  // Anything a member sends under a key is remembered for them: here, sitting out and back in
+  const others = (player: number, from: number) => {
+    for (let n = 0; n < ASKED_KEPT_EACH; n++) {
+      t.cmd(player, { type: n % 2 === 0 ? 'sitOut' : 'sitIn' }, testKey(from + n));
+    }
+  };
+
+  for (let n = 1; n <= ASKED_KEPT_EACH; n++) {
+    t.cmd(0, give, testKey(n));
+  }
+
+  others(1, 100);
+  t.cmd(0, give, testKey(1));
+  assert.equal(given(), ASKED_KEPT_EACH, 'another member\'s keys pushed out the host\'s');
+
+  t.cmd(0, give, testKey(ASKED_KEPT_EACH + 1));
+  assert.deepEqual(keysOf(0), Array.from({ length: ASKED_KEPT_EACH }, (_, index) => testKey(index + 2)));
+  assert.equal(keysOf(1).length, ASKED_KEPT_EACH, 'the host\'s key pushed out another member\'s');
+
+  t.cmd(0, give, testKey(1));
+  assert.equal(given(), ASKED_KEPT_EACH + 2, 'a key the table has forgotten was still taken for done');
+
+  // With as many remembered as the table keeps, the next from anyone pushes out the oldest of all
+  others(2, 200);
+  others(3, 300);
+  assert.equal(t.state.asked.length, ASKED_KEPT);
+  const oldest = t.state.asked[0]!;
+
+  t.cmd(4, { type: 'sitOut' }, testKey(400));
+  assert.equal(t.state.asked.length, ASKED_KEPT);
+  assert.ok(!t.state.asked.some((asked) => asked.key === oldest.key && asked.by === oldest.by));
+  assert.deepEqual(keysOf(4), [testKey(400)]);
+  assertInvariants(t.state, t.now);
+});
+
+test('a command the table refuses is not remembered: asked again under its key it is weighed anew', () => {
+  const t = new TestTable({ stacks: [1000, 100, 1000] });
+  const move: Command = { type: 'transferChips', from: t.ids[1]!, to: t.ids[2]!, amount: 500 };
+  const before = JSON.stringify(t.state);
+
+  assert.throws(() => t.cmd(0, move, testKey(1)), { name: 'GameError', message: 'The amount must be a whole number from 1 to 100' });
+  assert.equal(JSON.stringify(t.state), before);
+
+  t.cmd(0, { type: 'setStack', playerId: t.ids[1]!, stack: 600 });
+  t.cmd(0, move, testKey(1));
+  t.cmd(0, move, testKey(1));
+  assert.deepEqual(t.stacks(), [1000, 100, 1500]);
+});
+
+test('an answer to a request is for the one the host\'s page showed: one the player has changed since is neither granted nor turned down unseen', () => {
+  const t = new TestTable({ stacks: [1000, 300], config: { minBuyIn: 100, maxBuyIn: 5000 } });
+  const playerId = t.ids[1]!;
+  const shown = () => seenOf(t.view(0).requests[0]!);
+
+  t.cmd(1, { type: 'requestRebuy', amount: 200 });
+  const saw = shown();
+  t.cmd(1, { type: 'requestRebuy', amount: 4000 });
+  const before = JSON.stringify(t.state);
+
+  for (const type of ['approve', 'deny'] as const) {
+    assert.throws(() => t.cmd(0, { type, playerId, saw }, testKey(1)), { name: 'GameError', message: 'That request has changed' }, type);
+    assert.equal(JSON.stringify(t.state), before, type);
+  }
+
+  // What is sent as seen and is nothing a page shows fits no request
+  for (const nothing of [null, 'rebuy', { kind: 'rebuy' }, []]) {
+    assert.throws(() => t.cmd(0, { type: 'approve', playerId, saw: nothing as unknown as RequestSeen }), { message: 'That request has changed' });
+  }
+
+  t.cmd(0, { type: 'approve', playerId, saw: shown() }, testKey(1));
+  assert.equal(t.state.seats[1]!.stack, 4300);
+
+  // An answer that says nothing of what it saw, as a page from before answers did, is for whatever waits
+  t.cmd(1, { type: 'requestRebuy', amount: 100 });
+  t.cmd(0, { type: 'approve', playerId });
+  assert.equal(t.state.seats[1]!.stack, 4400);
+  assert.throws(() => t.cmd(0, { type: 'approve', playerId, saw }), { message: 'That request is gone' });
+
+  // Chips asked for go with their player to another seat, and are the same request there
+  t.cmd(1, { type: 'requestRebuy', amount: 100 });
+  const sawBeforeTheMove = shown();
+  t.cmd(0, { type: 'moveSeat', playerId, seat: 6 });
+  t.cmd(0, { type: 'approve', playerId, saw: sawBeforeTheMove });
+  assert.equal(t.state.seats[6]!.stack, 4500);
+
+  // A seat asked for again somewhere else is another request too
+  t.ids.push(addMember(t.state, 'Ann', t.ctx()).id);
+  t.cmd(2, { type: 'requestSeat', seat: 4, buyIn: 500 });
+  const sawSeat = shown();
+  t.cmd(2, { type: 'requestSeat', seat: 5, buyIn: 500 });
+  assert.throws(() => t.cmd(0, { type: 'approve', playerId: t.ids[2]!, saw: sawSeat }), { message: 'That request has changed' });
+  assert.equal(t.state.seats[4], null);
+});
+
+test('Approve asked again under its key grants the request once, and leaves waiting one the player has made in the same words since', () => {
+  const t = new TestTable({ stacks: [1000, 300], config: { minBuyIn: 100, maxBuyIn: 5000 } });
+  const approve: Command = { type: 'approve', playerId: t.ids[1]!, saw: { kind: 'rebuy', seat: 1, amount: 200 } };
+
+  t.cmd(1, { type: 'requestRebuy', amount: 200 });
+  t.cmd(0, approve, testKey(1));
+  t.cmd(1, { type: 'requestRebuy', amount: 200 });
+  t.cmd(0, approve, testKey(1));
+
+  assert.equal(t.state.seats[1]!.stack, 500, 'the second request was granted by the answer to the first');
+  assert.deepEqual(t.state.requests, [{ playerId: t.ids[1], kind: 'rebuy', seat: 1, amount: 200 }]);
+
+  // Pressed again on purpose, once the page has drawn the new request, it is a new answer under a new key
+  t.cmd(0, approve, testKey(2));
+  assert.equal(t.state.seats[1]!.stack, 700);
 });
 
 test('chat lands in the feed, which keeps only the latest entries', () => {

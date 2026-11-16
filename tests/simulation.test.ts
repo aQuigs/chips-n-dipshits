@@ -33,9 +33,9 @@ class Recording extends TestTable {
     return sent;
   }
 
-  override cmd(seat: number, command: Command): void {
+  override cmd(seat: number, command: Command, key?: string): void {
     this.sent.add(command.type);
-    super.cmd(seat, command);
+    super.cmd(seat, command, key);
   }
 }
 
@@ -379,7 +379,8 @@ test('random games where players choose their moves ahead all the time: each mov
 });
 
 test('the commands sent beside the game leave it as it was: the same tables played with them and without make the same game, step for step', () => {
-  const without = ({ reactions, ...game }: Recording['state']) => game;
+  // Which commands went under a key is counted over all that random play sends, asides among them
+  const without = ({ reactions, asked, ...game }: Recording['state']) => game;
 
   for (let seed = 1; seed <= TABLES / 3; seed++) {
     const asides = randomTable(seed);

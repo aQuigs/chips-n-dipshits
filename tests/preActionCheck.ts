@@ -86,13 +86,16 @@ export function holdToWhatWasChosen(t: TestTable, played: PlayedAhead = nonePlay
   const cmd = t.cmd.bind(t);
   const wait = t.wait.bind(t);
 
+  // The key a choice was sent under is remembered with it, and is no more of the game than the choice
+  const besidesTheChoice = (state: TableState): TableState => ({ ...withoutChoices(state), asked: [] });
+
   const choosing = (run: () => void): void => {
-    const before = withoutChoices(t.state);
+    const before = besidesTheChoice(t.state);
     const effectsBefore = t.effects.length;
 
     run();
 
-    assert.deepEqual(withoutChoices(t.state), before, 'choosing a move ahead changed more of the table than the choice');
+    assert.deepEqual(besidesTheChoice(t.state), before, 'choosing a move ahead changed more of the table than the choice');
     assert.equal(t.effects.length, effectsBefore, 'choosing a move ahead wrote to the ledger or the hand records');
   };
 
@@ -127,6 +130,7 @@ export function holdToWhatWasChosen(t: TestTable, played: PlayedAhead = nonePlay
     assert.deepEqual(effects, t.effects.slice(effectsBefore), 'the moves chosen ahead left other records than the same moves tapped');
   };
 
-  t.cmd = (seat: number, command: Command) => (command.type === 'preAct' ? choosing(() => cmd(seat, command)) : checked(() => cmd(seat, command), (state, ctx) => applyCommand(state, ctx, t.ids[seat]!, command)));
+  t.cmd = (seat: number, command: Command, key?: string) =>
+    command.type === 'preAct' ? choosing(() => cmd(seat, command, key)) : checked(() => cmd(seat, command, key), (state, ctx) => applyCommand(state, ctx, t.ids[seat]!, command, key));
   t.wait = (ms: number) => checked(() => wait(ms), (state, ctx) => tick(state, ctx));
 }

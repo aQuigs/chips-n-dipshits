@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 
 import type { PrefMemory } from '../src/client/prefs.ts';
-import { applyCommand, createTable, addMember, freshDeck, seededRng, startHand, startOver, tick, viewFor, SEAT_COUNT, SEVEN_DEUCE } from '../src/engine/index.ts';
+import { applyCommand, createTable, addMember, freshDeck, KEY_LENGTH, seededRng, startHand, startOver, tick, viewFor, SEAT_COUNT, SEVEN_DEUCE } from '../src/engine/index.ts';
 import type { Bounty, Card, Command, Ctx, Effect, Hand, HandPlayer, HandRecord, LedgerEntry, Rng, TableConfig, TableState, TableView } from '../src/engine/index.ts';
 import type { ApiResponse, Joined } from '../src/server/api.ts';
 
@@ -137,6 +137,9 @@ function steeredRng(shuffle: (maxExclusive: number) => number, other: (maxExclus
   };
 }
 
+/** A key as a page makes one for a command, the same for the same number. */
+export const testKey = (n: number): string => String(n).padStart(KEY_LENGTH, 'k');
+
 /** A table with a player in each of the first seats, driven directly through the engine. */
 export class TestTable {
   state: TableState;
@@ -183,8 +186,9 @@ export class TestTable {
     return { now: this.now, rng: this.rng, effects: this.effects };
   }
 
-  cmd(seat: number, command: Command): void {
-    applyCommand(this.state, this.ctx(), this.ids[seat]!, command);
+  /** Under a `key`, as a page sends a command that must be done once. */
+  cmd(seat: number, command: Command, key?: string): void {
+    applyCommand(this.state, this.ctx(), this.ids[seat]!, command, key);
   }
 
   /**

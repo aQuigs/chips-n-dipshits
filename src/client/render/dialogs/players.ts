@@ -3,6 +3,7 @@ import type { SeatView, TableView } from '../../../engine/view.ts';
 import { h, heldTogether, sendingButton, sends } from '../../ui.ts';
 import type { Child } from '../../ui.ts';
 import { roleOf } from '../../../engine/hosts.ts';
+import { seenOf } from '../../../engine/types.ts';
 import { requestText } from '../../spoken.ts';
 import { badgeMarks } from '../badges.ts';
 import { hostAlone, hostOrCohost, roleMark } from '../roles.ts';
@@ -38,8 +39,8 @@ function players(view: TableView, handlers: DialogHandlers, unfolded: Set<string
       rowActions(
         { id: request.playerId, name: request.name },
         ...heldTogether(
-          sendingButton('button.btn.small.primary', { 'data-action': 'approve' }, sends('Approve', 'Approving…'), () => handlers.send({ type: 'approve', playerId: request.playerId })),
-          sendingButton('button.btn.small', { 'data-action': 'deny' }, sends('Deny', 'Denying…'), () => handlers.send({ type: 'deny', playerId: request.playerId })),
+          sendingButton('button.btn.small.primary', { 'data-action': 'approve' }, sends('Approve', 'Approving…'), () => handlers.send({ type: 'approve', playerId: request.playerId, saw: seenOf(request) })),
+          sendingButton('button.btn.small', { 'data-action': 'deny' }, sends('Deny', 'Denying…'), () => handlers.send({ type: 'deny', playerId: request.playerId, saw: seenOf(request) })),
         ),
       ),
     ),

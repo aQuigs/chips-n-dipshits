@@ -4,6 +4,7 @@ import { newConfig } from './config.ts';
 import { startHand, stepHand, TIMING } from './hand.ts';
 import { handEnded } from './handEnd.ts';
 import { numberedName, playerName, readAlike } from './names.ts';
+import { remember, wasAsked } from './once.ts';
 import { addFeed, eligibleSeats, memberOf } from './seats.ts';
 import { newTonight } from './tonight.ts';
 import { GameError, SEAT_COUNT, STATE_SCHEMA } from './types.ts';
@@ -113,6 +114,7 @@ export function createTable(id: string, hostName: unknown, configInput: unknown,
     feed: [],
     feedSeq: 0,
     reactions: [],
+    asked: [],
   };
 
   const host = newMember(state, hostName, ctx.rng, arriving);
@@ -162,13 +164,26 @@ function scheduleNextHand(state: TableState, now: number): void {
   }
 }
 
-export function applyCommand(state: TableState, ctx: Ctx, playerId: string, command: Command): void {
+/**
+ * Carries out a member's command. Under a `key` the table has acted on for that member already, it does
+ * nothing: the command was asked again because its answer was lost, and is done (`once.ts`). A command
+ * that is refused leaves its key unremembered, and is weighed anew when asked again.
+ */
+export function applyCommand(state: TableState, ctx: Ctx, playerId: string, command: Command, key?: string): void {
   if (typeof command !== 'object' || command === null) {
     throw new GameError('Unknown command');
   }
 
+  if (key !== undefined && wasAsked(state, playerId, key)) {
+    return;
+  }
+
   dispatch(state, ctx, playerId, command);
   scheduleNextHand(state, ctx.now);
+
+  if (key !== undefined) {
+    remember(state, playerId, key);
+  }
 }
 
 /** When the table next changes by itself, or null if it is waiting on a player. */

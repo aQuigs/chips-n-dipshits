@@ -188,7 +188,7 @@ export function copyOnClick(button: HTMLButtonElement, field: HTMLInputElement |
  * (`answered`, for the table when `forTable`). A refusal leaves the dialog as it was, with the reason at
  * `refused` for a form that says it itself, and in a toast otherwise. With no answer the table may have
  * taken it all the same and is being asked what happened, so the dialog is left rather than invite a
- * second try: the host adding chips twice would get them twice.
+ * second try at what may be done already.
  */
 export const sendAndLeave =
   (handlers: DialogHandlers, command: Command, forTable = false, refused?: RefusalPlace) =>

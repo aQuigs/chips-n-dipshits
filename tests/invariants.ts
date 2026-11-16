@@ -4,7 +4,7 @@
  */
 import assert from 'node:assert/strict';
 
-import { badgeOf, blindsOnly, BOARD_SIZE, boardsDealt, evaluateHand, FEED_LIMIT, FLOP_SIZE, handFacts, isStraddle, LIMITS, MENTIONS_PER_LINE, MOST_RUNS, nextHighHand, nightIsOver, owes, owesAction, PLAYING_THE_BOARD, REACTION_GAP_MS, reactionKind, reaches, REACTIONS_LIVE, replayHand, roleOf, STRADDLES, STRADDLES_IN_A_ROW, straddlesAllowed, viewFor, wonAPot } from '../src/engine/index.ts';
+import { ASKED_KEPT, ASKED_KEPT_EACH, askedBy, badgeOf, blindsOnly, BOARD_SIZE, boardsDealt, evaluateHand, FEED_LIMIT, FLOP_SIZE, handFacts, isKey, isStraddle, LIMITS, MENTIONS_PER_LINE, MOST_RUNS, nextHighHand, nightIsOver, owes, owesAction, PLAYING_THE_BOARD, REACTION_GAP_MS, reactionKind, reaches, REACTIONS_LIVE, replayHand, roleOf, STRADDLES, STRADDLES_IN_A_ROW, straddlesAllowed, viewFor, wonAPot } from '../src/engine/index.ts';
 import type { Card, Effect, FeedEntry, HandPlayer, Mention, HandRecord, TableState } from '../src/engine/index.ts';
 import { CACHE_VALUE_BYTES, utf8Bytes } from '../src/gas/sheetStore.ts';
 import { restoreState } from '../src/server/store.ts';
@@ -363,6 +363,16 @@ export function assertReactionsHold(state: TableState): void {
   });
 }
 
+/** The table remembers no more keys than its cap, nor more of one member than theirs, each one a key as a page makes it, and none twice for one member. */
+export function assertAskedHolds(state: TableState): void {
+  const { asked } = state;
+
+  assert.ok(asked.length <= ASKED_KEPT, `the table remembers ${asked.length} keys`);
+  assert.ok(asked.every(({ by }) => askedBy(state, by).length <= ASKED_KEPT_EACH), 'the table remembers more of one member\'s keys than it keeps of anyone\'s');
+  assert.ok(asked.every(({ key }) => isKey(key)), 'the table remembers something that is no key');
+  assert.equal(new Set(asked.map(({ key, by }) => `${by} ${key}`)).size, asked.length, 'a key is remembered twice for one member');
+}
+
 /** The table comes back from being saved exactly as it was. */
 export function assertSurvivesSaving(state: TableState): void {
   const json = JSON.stringify(state);
@@ -418,6 +428,10 @@ export function assertViewsKeepSecrets(state: TableState, now: number): void {
     const leaked = secretIn({ ...view, tonight: null }, faceDown);
     assert.equal(leaked, undefined, `${viewer.name}'s view holds a card that is face down for them`);
     assert.deepEqual(view.tonight, tonight, `${viewer.name} is shown other numbers for the night than the rest of the table`);
+
+    // The keys a member's commands went under are theirs alone: with another's, a page would take that one's command for its own
+    assert.deepEqual(view.you.asked, state.asked.flatMap(({ key, by }) => (by === viewer.id ? [key] : [])), `${viewer.name} is told other keys than their own`);
+    assert.ok(!state.asked.some(({ key }) => !view.you.asked.includes(key) && json.includes(key)), `${viewer.name}'s view holds a key that is not their own`);
 
     // When a player shows without being asked is theirs alone to know: the view holds the viewer's own and nobody else's
     const own = state.seats.find((seat) => seat?.playerId === viewer.id);
@@ -542,6 +556,7 @@ export function assertInvariants(state: TableState, now: number): void {
   assertChopHolds(state);
   assertPreActionsHold(state);
   assertReactionsHold(state);
+  assertAskedHolds(state);
   assertSurvivesSaving(state);
   assertViewsKeepSecrets(state, now);
   assertFitsTheStore(state);

@@ -1,6 +1,7 @@
 import type { Command } from '../engine/types.ts';
 import type { TableView } from '../engine/view.ts';
 import type { ApiError, ApiRequest, ApiResponse, Auth, Built } from '../server/api.ts';
+import type { Once } from './once.ts';
 import type { Transport } from './transport.ts';
 
 // How long the server may sit on a poll before answering "nothing new"
@@ -85,6 +86,11 @@ export function nextRetry(last: number): number {
 /** The server has said this member or table isn't there, as opposed to not having managed to answer. */
 export function isRefusal(response: ApiResponse | null): response is ApiError {
   return response !== null && !response.ok && (response.code === 'unauthorized' || response.code === 'not_found');
+}
+
+/** No answer, or one that says to try again: the server may have done what was asked before something went wrong. */
+export function leftInDoubt(response: ApiResponse | null): boolean {
+  return !response || (!response.ok && (response.code === 'busy' || response.code === 'internal'));
 }
 
 /**
@@ -203,6 +209,7 @@ export class TableConnection {
   private readonly server: ServerLine;
   private readonly clock: ServerClock;
   private readonly listener: TableListener;
+  private readonly once: Once | null;
 
   /** The newest view taken up, which is the one on screen. */
   private view: TableView | null = null;
@@ -218,11 +225,13 @@ export class TableConnection {
   private pollRun = 0;
   private closed = false;
 
-  constructor(server: ServerLine, session: Session, clock: ServerClock, listener: TableListener) {
+  /** Without `once`, no command carries a key. */
+  constructor(server: ServerLine, session: Session, clock: ServerClock, listener: TableListener, once: Once | null = null) {
     this.server = server;
     this.session = session;
     this.clock = clock;
     this.listener = listener;
+    this.once = once;
   }
 
   /** A move is on its way or unaccounted for, so the buttons that play one must not be pressed. */
@@ -311,6 +320,12 @@ export class TableConnection {
 
   private async carry(command: Command, refused?: RefusalPlace): Promise<SendOutcome> {
     const { tableId, auth } = this.session;
+    const key = this.once?.keyFor(tableId, command);
+
+    if (key !== undefined) {
+      return this.carryOnce({ op: 'act', tableId, auth, command, key }, key, refused);
+    }
+
     const move = MOVES.has(command.type);
 
     if (move) {
@@ -352,6 +367,105 @@ export class TableConnection {
     }
 
     return response.ok ? 'taken' : 'refused';
+  }
+
+  /**
+   * Sends a command that must be done once, under its key. With no answer, or one that only says to try
+   * again, it may have been done all the same, so the table's next word is asked for: a key the table
+   * remembers means done. Otherwise the command is asked once more under the same key, which the table
+   * does once whichever asking it hears first, and that answer decides. Told to try again both times,
+   * with the table showing nothing done, the command is known not to be done, and the player is told
+   * what the server said and keeps the form. With an asking that got no answer at all nothing is known,
+   * and the key is kept for whoever asks the same again.
+   */
+  private async carryOnce(request: ApiRequest, key: string, refused?: RefusalPlace): Promise<SendOutcome> {
+    // Asked before in these words with nothing known of it, and the table has shown since that it did it then
+    if (this.shownDone(key)) {
+      this.listener.notice('That went through the first time, so it was not sent again');
+      return 'taken';
+    }
+
+    const first = await this.server.ask(request);
+
+    if (this.closed) {
+      return 'unanswered';
+    }
+
+    if (first && !leftInDoubt(first)) {
+      return this.answered(first, key, refused);
+    }
+
+    this.listener.notice('No answer from the table. Checking whether that went through…');
+    this.refresh(true);
+
+    if (await this.foundDone(key)) {
+      return 'taken';
+    }
+
+    if (this.closed) {
+      return 'unanswered';
+    }
+
+    const again = await this.server.ask(request);
+
+    if (this.closed || !again) {
+      return 'unanswered';
+    }
+
+    if (again.ok || !leftInDoubt(again)) {
+      return this.answered(again, key, refused);
+    }
+
+    // It may have been saved before whatever went wrong
+    this.refresh(true);
+
+    if (await this.foundDone(key)) {
+      return 'taken';
+    }
+
+    if (this.closed || !first) {
+      return 'unanswered';
+    }
+
+    this.fail(again, refused);
+    return 'refused';
+  }
+
+  /** Takes up the table's own answer to a command sent under a key, which whoever asked is told: the key is given up. */
+  private answered(response: ApiResponse, key: string, refused?: RefusalPlace): SendOutcome {
+    if (response.ok && response.kind === 'view') {
+      this.take(response.view);
+    }
+
+    if (!response.ok) {
+      this.fail(response, refused);
+    }
+
+    this.once?.settled(key);
+
+    return response.ok ? 'taken' : 'refused';
+  }
+
+  /**
+   * Whether the table has shown the command under this key done, which whoever asked is then told: the
+   * key is given up. Given up at the table's news alone, a form still open or filled in again would
+   * send the same thing as a new command.
+   */
+  private shownDone(key: string): boolean {
+    const done = this.view?.you.asked.includes(key) ?? false;
+
+    if (done) {
+      this.once?.settled(key);
+    }
+
+    return done;
+  }
+
+  /** The same, once the table has been heard from by the fresh poll that is out. */
+  private async foundDone(key: string): Promise<boolean> {
+    await new Promise<void>((heard) => this.awaitingWord.push(heard));
+
+    return !this.closed && this.shownDone(key);
   }
 
   private async sendFleeting(command: Command): Promise<SendOutcome> {

@@ -372,6 +372,21 @@ export function commandsSent(page: Page): string[] {
   return sent;
 }
 
+/** The key each command a page sends the table goes under from now on, in order: undefined for one sent without. */
+export function keysSent(page: Page): (string | undefined)[] {
+  const sent: (string | undefined)[] = [];
+
+  page.on('request', (request) => {
+    const body = request.method() === 'POST' ? (JSON.parse(request.postData() ?? '{}') as { command?: object; key?: string }) : {};
+
+    if (body.command) {
+      sent.push(body.key);
+    }
+  });
+
+  return sent;
+}
+
 export function movesSent(page: Page): string[] {
   const sent: string[] = [];
 

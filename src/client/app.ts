@@ -1,6 +1,7 @@
 import { liveReactions, REACTION_TOO_SOON, reactionRefusal } from '../engine/reactions.ts';
 import { replaySteps } from '../engine/replay.ts';
 import { anteText, blindsText } from '../engine/stakes.ts';
+import { seenOf } from '../engine/types.ts';
 import type { Preset } from '../engine/presets.ts';
 import type { Command, HandRecord, TableConfig } from '../engine/types.ts';
 import type { TableView } from '../engine/view.ts';
@@ -57,6 +58,7 @@ import type { Shape } from './render/table.ts';
 import { clockText, ownDeadline, runningOut } from './actionClock.ts';
 import { Arrivals } from './arrivals.ts';
 import { Attention } from './attention.ts';
+import { Once } from './once.ts';
 import { pageWays } from './pageAttention.ts';
 import { showStillOffered } from './showing.ts';
 import { ShownTable } from './shownTable.ts';
@@ -154,6 +156,9 @@ export class App {
     (bytes) => crypto.getRandomValues(new Uint8Array(bytes)),
     (request) => this.request(request),
   );
+
+  /** The keys of the commands a table must do once. */
+  private readonly once = new Once((bytes) => crypto.getRandomValues(new Uint8Array(bytes)));
 
   /** Which of the players the game knows this browser was last used as. */
   private readonly me: RememberedPlayer;
@@ -679,14 +684,20 @@ export class App {
     this.leaveTableScreen();
     this.pointAddress(session.tableId, session.auth);
 
-    const table = new TableConnection(this.server, session, this.clock, {
-      view: (shown, wentBack) => this.showView(shown, wentBack),
-      move: (lock, sent) => this.screen?.shown.moveIs(lock, sent),
-      chose: (sent) => this.screen?.shown.choiceIs(sent),
-      status: () => this.showStatus(),
-      refused: (error) => this.dropSession(error),
-      notice: (message) => this.fail(message),
-    });
+    const table = new TableConnection(
+      this.server,
+      session,
+      this.clock,
+      {
+        view: (shown, wentBack) => this.showView(shown, wentBack),
+        move: (lock, sent) => this.screen?.shown.moveIs(lock, sent),
+        chose: (sent) => this.screen?.shown.choiceIs(sent),
+        status: () => this.showStatus(),
+        refused: (error) => this.dropSession(error),
+        notice: (message) => this.fail(message),
+      },
+      this.once,
+    );
     this.table = table;
 
     const picker = new ReactionPicker({ react: (kind, to) => this.react(kind, to), refusal: (view) => this.reactionRefusal(view) });
@@ -1179,7 +1190,7 @@ export class App {
         // guard and to the keyboard alike. Held, a button here only dims: the room what it is doing would take is the request's
         // own words', and on a small phone at the largest text the table's under them
         const answer = (action: 'approve' | 'deny', spec: `button.${string}`, says: string) =>
-          sendingButton(spec, { 'data-action': action, 'data-player': request.playerId, 'aria-label': `${says} ${request.name}` }, says, () => this.send({ type: action, playerId: request.playerId }));
+          sendingButton(spec, { 'data-action': action, 'data-player': request.playerId, 'aria-label': `${says} ${request.name}` }, says, () => this.send({ type: action, playerId: request.playerId, saw: seenOf(request) }));
 
         return h('div.banner', null, h('span', null, h('b', null, request.name), ` ${what}`), h('div.answers', null, heldTogether(answer('approve', 'button.btn.small.primary', 'Approve'), answer('deny', 'button.btn.small', 'Deny'))));
       }),

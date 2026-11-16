@@ -28,10 +28,11 @@ export interface CheckRun {
 /*
  * A check keeps about one core busy between its pages, so a machine runs a few more than half as many
  * at once as it has cores, and the rest are left to whatever else it is doing: a second suite beside
- * this one, the other tests, the desktop. Timed on 67 checks on a ten-core laptop with two cores busy
- * elsewhere: 82 s at four at a time, 78 at six, 72 to 81 at eight and 72 at ten. The whole machine was
- * a quarter idle at four and a sixth at six; from eight up nothing was, and a check took half as long
- * again. CI has four cores, which four checks fill, and keeps its four.
+ * this one, the other tests, the desktop. Timed once each on a ten-core laptop with two cores busy
+ * elsewhere, all 354 checks with the two other browser tests beside them: 381 s at four at a time, the
+ * whole machine a quarter idle, and 343 s at six, a seventh idle, with another checkout's unit tests
+ * beside those for a minute. A check took a third longer at six, and none failed either way. More than
+ * six were not timed on a quiet machine. CI has four cores, which four checks fill, and keeps its four.
  */
 const FEWEST_WORKERS = 4;
 const fittingWorkers = () => Math.max(FEWEST_WORKERS, Math.floor(availableParallelism() / 2) + 1);

@@ -11,9 +11,14 @@
   gap: 14px;
 }
 
-/* A field the preset just picked has changed, marked in the space beside it */
+/* A field the preset just picked has changed, marked in the space beside it, and so has the heading of a section with one */
 .changed {
   position: relative;
+}
+
+/* Unfolded, the fields under a heading carry the mark themselves */
+.fold-section[open] > summary.changed::before {
+  content: none;
 }
 
 .changed::before {

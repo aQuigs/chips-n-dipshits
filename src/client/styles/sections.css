@@ -33,6 +33,7 @@
 .fold-section .holds {
   grid-column: 1;
   overflow-wrap: anywhere;
+  text-wrap: pretty;
 }
 
 /* Unfolded, the fields say it themselves */

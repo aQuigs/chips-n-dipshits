@@ -962,7 +962,7 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
     },
   ],
   [
-    'the screens before a table break no rule of the rule engine in any theme, each has one main heading and says its language: the lobby, joining, the standings, a table that is gone',
+    'the screens before a table break no rule of the rule engine in any theme, each has one main heading and says its language: the lobby, its form for a new table folded and with every section unfolded from the keyboard, joining, the standings, a table that is gone',
     async (rig) => {
       const sweep = new Sweep();
       const table = threeHanded(rig);
@@ -978,6 +978,33 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
 
         assert.deepEqual(await structure(lobby), { language: 'en', headings: 1, mains: 1 }, `the lobby, ${screen}`);
         await sweep.over(lobby, `the lobby, ${screen}`);
+
+        // The form for a new table: a folded section is a group under its heading and the line of what it holds, with Create table right after the last
+        assert.match(
+          await tree(lobby, '.lobby form:has([data-action="create-table"])'),
+          new RegExp(
+            [
+              '- group:\\n\\s+- heading "Table" \\[level=3\\]\\n\\s+- text: Name\\n[^]*',
+              '- group:\\n\\s+- heading "Stakes" \\[level=3\\]\\n\\s+- radiogroup "Play with":[^]*',
+              '- group:\\n\\s+- heading "Bomb pots" \\[level=3\\]\\n\\s+- text: 100 each · only when called · one board\\n',
+              '- group:\\n\\s+- heading "Bounties and high hand" \\[level=3\\]\\n\\s+- text: None\\n',
+              '- group:\\n\\s+- heading "House rules" \\[level=3\\]\\n\\s+- text: 30 s clock · Straddle under the gun · run it up to 3 times · missed blinds owed\\n',
+              '- button "Create table"',
+            ].join(''),
+          ),
+          `the form for a new table, ${screen}`,
+        );
+
+        for (const section of ['bombPots', 'sideMoney', 'house']) {
+          await tabTo(lobby, `summary[data-section="${section}"]`);
+          await lobby.keyboard.press('Enter');
+          await lobby.waitForSelector(`.fold-section[data-section="${section}"][open]`);
+          assert.equal(await focusIn(lobby, `summary[data-section="${section}"]`), true, `unfolding ${section} took the keyboard off its heading, ${screen}`);
+        }
+
+        await lobby.keyboard.press('Tab');
+        assert.equal(await focused(lobby), '#new-table-action-seconds', 'Tab from a heading just unfolded does not go into its section');
+        await sweep.over(lobby, `the lobby with every section of its form open, ${screen}`);
 
         await lobby.click('[data-action="standings"]');
         await lobby.waitForSelector('.dialog[aria-label="Standings"]');
@@ -1008,7 +1035,7 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
         'the parts of the table screen a screen reader can jump between',
       );
 
-      sweep.done(8);
+      sweep.done(10);
     },
   ],
   [
@@ -1165,8 +1192,8 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
             '- group:\\n\\s+- heading "Stakes" \\[level=3\\]\\n\\s+- text: Small blind\\n[^]*',
             '- group:\\n\\s+- heading "Bomb pots" \\[level=3\\]\\n\\s+- text: 100 each · only when called · one board\\n\\s+',
             '- group:\\n\\s+- heading "Bounties and high hand" \\[level=3\\]\\n\\s+- text: None\\n\\s+',
-            '- group:\\n\\s+- heading "House rules" \\[level=3\\]\\n\\s+- text: Straddle under the gun · run it up to 3 times · missed blinds owed\\n\\s+',
-            '- group:\\n\\s+- heading "Table" \\[level=3\\]\\n\\s+- text: Friday Night · no clock · no voice link\\n\\s+',
+            '- group:\\n\\s+- heading "House rules" \\[level=3\\]\\n\\s+- text: No clock · Straddle under the gun · run it up to 3 times · missed blinds owed\\n\\s+',
+            '- group:\\n\\s+- heading "Table" \\[level=3\\]\\n\\s+- text: Friday Night · no voice link\\n\\s+',
             '- group:\\n\\s+- heading "Presets" \\[level=3\\]\\n\\s+- text: None saved\\n\\s+',
             '- button "Save"',
           ].join(''),
@@ -1180,7 +1207,7 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
       await page.waitForSelector('.fold-section[data-section="house"][open]');
       assert.equal(await focusIn(page, heading('house')), true, 'unfolding a section took the keyboard off its heading');
       await page.keyboard.press('Tab');
-      assert.equal(await focused(page), '#table-allow-straddle', 'Tab from a heading just unfolded does not go into its section');
+      assert.equal(await focused(page), '#table-action-seconds', 'Tab from a heading just unfolded does not go into its section');
       assert.match(await tree(page, '.fold-section[data-section="house"]'), /- group "Straddles allowed":\n\s+- text: Straddles allowed\n\s+- checkbox "Under the gun" \[checked\]\n[^]*- checkbox "Chopping the blinds"\n/);
       assert.equal(await page.getAttribute('#table-allow-chop', 'aria-describedby'), 'table-allow-chop-hint');
 

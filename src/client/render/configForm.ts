@@ -14,31 +14,39 @@ export interface ConfigFormOptions {
   /** Keeps the fields of two forms on one page apart. */
   idPrefix: string;
   /**
-   * The form a new table is made with. It has only the settings asked for then, and it is the one place
-   * a setting chosen for good is open; anywhere else it is told in words, not offered. Picking a choice
-   * there that suggests where other settings start, as what the table plays with does, starts the
-   * amounts over from that, since a number typed for whole chips means something else in dollars and cents.
+   * The form a new table is made with: the one place a setting chosen for good is open; anywhere else
+   * it is told in words, not offered. Picking a choice there that suggests where other settings start,
+   * as what the table plays with does, starts the amounts over from that, since a number typed for whole
+   * chips means something else in dollars and cents.
    */
   creating: boolean;
-  /** Whether a section starts unfolded. The rest start folded under the line of what they hold. */
+  /**
+   * Whether a section is unfolded; the rest are folded under the line of what they hold. Asked as the
+   * form is drawn and again each time it is filled, when a section its user has had a hand in, by its
+   * heading or by changing a field, is left as they have it.
+   */
   open(section: ConfigSection): boolean;
   /** The section the form leads with, ahead of the registry's order. */
   first?: ConfigSection;
-  /** Told where the amounts start when a choice has started them over, for amounts kept outside the form. */
-  startedOver?(start: TableConfig): void;
-  /** Told whenever what the fields hold may have changed, with what they hold now (`read`). */
-  edited?(held: Partial<TableConfig>): void;
+  /** Told when a choice has started the amounts over: what the last fill brought is no longer all there, and nothing is marked as what it changed. */
+  startedOver?(): void;
+  /** Told whenever what the fields hold may have changed, with what of it their user has changed (`changed`). */
+  edited?(changed: Partial<TableConfig>): void;
 }
 
 export interface ConfigForm {
-  /** One part per section of the settings with a field here, each under its heading, to put inside a form. */
+  /** One part per section of the settings, each under its heading, to put inside a form. */
   sections: HTMLElement[];
-  /** The settings it has a field for. */
-  shown: ConfigKey[];
   /** What the fields hold now, for the settings the form lets be changed. One that does not apply is left out: its field is out of sight, so nobody is changing it. */
   read(form: HTMLFormElement): Partial<TableConfig>;
-  /** Puts `values` in every field, marking each field it changed and unfolding its section, and says which those were. */
-  fill(form: HTMLFormElement, values: TableConfig): ConfigKey[];
+  /** What of that its user has changed: whatever is not as the form itself last put it in the fields. */
+  changed(form: HTMLFormElement): Partial<TableConfig>;
+  /**
+   * Puts `values` in the fields of the settings it names and folds the sections as `open` now says.
+   * Each field it changed is marked, with the heading of its section, and it says which sections those
+   * were, in the form's order.
+   */
+  fill(form: HTMLFormElement, values: Partial<TableConfig>): ConfigSection[];
   /** Unfolds the sections these settings stand in, for when something is about to be said of them. */
   unfold(keys: ConfigKey[]): void;
 }
@@ -151,24 +159,24 @@ export function configForm(values: TableConfig, options: ConfigFormOptions): Con
   const { idPrefix, creating } = options;
   const idOf = (key: ConfigKey) => idPrefix + key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
   const closed = (key: ConfigKey) => !creating && fixedAtCreation(key);
-  const asked = (key: ConfigKey) => !creating || CONFIG_SPECS[key].atCreate;
 
   // What is settled for good comes after what can be changed
   const settingsOf = (section: ConfigSection): ConfigKey[] => {
-    const keys = CONFIG_SECTIONS[section].settings.filter(asked);
+    const keys: readonly ConfigKey[] = CONFIG_SECTIONS[section].settings;
 
     return [...keys.filter((key) => !closed(key)), ...keys.filter(closed)];
   };
 
   const order = options.first ? [options.first, ...CONFIG_SECTION_KEYS.filter((section) => section !== options.first)] : CONFIG_SECTION_KEYS;
-  const filled = order.filter((section) => settingsOf(section).length > 0);
-  const shown = filled.flatMap(settingsOf);
+  const shown = order.flatMap(settingsOf);
   const choices = shown.filter((key) => CONFIG_SPECS[key].kind === 'choice');
 
-  // The table the form's amounts are written for, which at creation changes with the choices
+  // What the form itself last put in the fields, which is also the table its amounts are written for
   let table = values;
   const fields = new Map<ConfigKey, HTMLElement>();
   const parts = new Map<ConfigSection, FoldSection>();
+  /** The sections whose user has had a hand in them: how each is folded is theirs to say from then on. */
+  const theirs = new Set<ConfigSection>();
 
   const applies = (key: ConfigKey, config: TableConfig): boolean => CONFIG_SPECS[key].applies?.(config) !== false;
 
@@ -179,6 +187,9 @@ export function configForm(values: TableConfig, options: ConfigFormOptions): Con
 
     return Object.fromEntries(Object.entries(all).filter(([key]) => applies(key as ConfigKey, now))) as Partial<TableConfig>;
   };
+
+  const changedOf = (held: Partial<TableConfig>): Partial<TableConfig> =>
+    Object.fromEntries(Object.entries(held).filter(([key, value]) => !sameSetting(value, table[key as ConfigKey]))) as Partial<TableConfig>;
 
   /** Brings what follows from the fields in line with them: which settings apply, and the line each section is folded under. */
   const follow = (form: HTMLFormElement): void => {
@@ -198,22 +209,32 @@ export function configForm(values: TableConfig, options: ConfigFormOptions): Con
       part.hold(CONFIG_SECTIONS[section].holds(now));
     }
 
-    options.edited?.(held);
+    options.edited?.(changedOf(held));
   };
 
   const startOver = (event: Event): void => {
     const form = (event.target as HTMLInputElement).form!;
+    const start = startingConfig(Object.fromEntries(choices.map((key) => [key, held(form, idOf(key), CONFIG_SPECS[key], table)])));
+    const amounts = shown.filter(holdsAmounts);
 
-    table = startingConfig(Object.fromEntries(choices.map((key) => [key, held(form, idOf(key), CONFIG_SPECS[key], table)])));
+    // Only the choices and the amounts: every other field still holds what it was filled with
+    table = { ...table, ...Object.fromEntries([...choices, ...amounts].map((key) => [key, start[key]])) };
 
-    for (const key of shown.filter(holdsAmounts)) {
+    for (const key of amounts) {
       const spec = CONFIG_SPECS[key];
 
       // A hand is the same hand in chips and in dollars: only what it pays starts over
       redraw(key, spec.kind === 'handAmounts' ? bountiesHeld(form, idOf(key), table).map(([hand]): BountyRow => [hand, null]) : table[key]);
     }
 
-    options.startedOver?.(table);
+    for (const part of parts.values()) {
+      part.element.querySelectorAll('.changed').forEach((marked) => marked.classList.remove('changed'));
+
+      // An amount left empty is theirs to write again, and the line it is folded under still says the old one
+      part.element.open ||= part.element.querySelector(':invalid') !== null;
+    }
+
+    options.startedOver?.();
   };
 
   const draw = (key: ConfigKey, value: SettingValue | readonly BountyRow[] = table[key]): HTMLElement => {
@@ -263,7 +284,7 @@ export function configForm(values: TableConfig, options: ConfigFormOptions): Con
     return rows;
   };
 
-  for (const section of filled) {
+  for (const section of order) {
     const rows = runs(settingsOf(section), (key) => CONFIG_SPECS[key].among).flatMap((together) => {
       const heading = CONFIG_SPECS[together[0]!].among;
 
@@ -276,8 +297,13 @@ export function configForm(values: TableConfig, options: ConfigFormOptions): Con
 
     // A click too: a row of a list is added and taken away with a button, which no field hears of
     for (const type of ['input', 'change', 'click']) {
-      part.element.addEventListener(type, () => {
+      part.element.addEventListener(type, (event) => {
         const form = part.element.closest('form');
+
+        // A press on its heading or on a button of a list is a hand in it; one that only puts the keyboard in a field is not
+        if (type !== 'click' || (event.target as Element).closest('summary, button') !== null) {
+          theirs.add(section);
+        }
 
         if (form) {
           follow(form);
@@ -300,25 +326,35 @@ export function configForm(values: TableConfig, options: ConfigFormOptions): Con
   };
 
   return {
-    sections: filled.map((section) => parts.get(section)!.element),
-    shown,
+    sections: order.map((section) => parts.get(section)!.element),
     read,
+    changed: (form) => changedOf(read(form)),
     unfold,
 
     fill(form, values) {
       const before = { ...table, ...read(form) };
-      const changed = shown.filter((key) => applies(key, values) && !sameSetting(before[key], values[key]));
+      const after = { ...before, ...values };
+      const filled = shown.filter((key) => key in values);
+      const changed = new Set(filled.filter((key) => applies(key, after) && !sameSetting(before[key], values[key])));
+      const sections = order.filter((section) => settingsOf(section).some((key) => changed.has(key)));
 
-      table = values;
+      table = { ...table, ...values };
 
-      for (const key of shown) {
-        redraw(key).classList.toggle('changed', changed.includes(key));
+      for (const key of filled) {
+        redraw(key).classList.toggle('changed', changed.has(key));
+      }
+
+      for (const [section, part] of parts) {
+        part.summary.classList.toggle('changed', sections.includes(section));
+
+        if (!theirs.has(section)) {
+          part.element.open = options.open(section);
+        }
       }
 
       follow(form);
-      unfold(changed);
 
-      return changed;
+      return sections;
     },
   };
 }

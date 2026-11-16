@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import type { Page } from 'playwright';
 
 import { TAPS_SETTLE_MS } from '../src/client/tapGuard.ts';
-import { BADGES, LIMITS, REACTION_LIFE_MS, REACTIONS_LIVE } from '../src/engine/index.ts';
+import { BADGES, DEFAULT_CONFIG, LIMITS, presetSettings, REACTION_LIFE_MS, REACTIONS_LIVE } from '../src/engine/index.ts';
 import type { Bounty, Card, Command, TableConfig, TableView } from '../src/engine/index.ts';
 import { HISTORY_LIMIT } from '../src/server/api.ts';
 
@@ -657,6 +657,9 @@ const LONGEST_LINES: Partial<TableConfig> = {
   highHandBonus: 1_000_000,
 };
 
+// A preset's name at its longest, in words so the list it is picked from can break it
+const LONGEST_PRESET = 'Wednesday Wild WWWWWWW WWWWWWW';
+
 const GIF = 'https://media.giphy.com/media/abc123/giphy.gif';
 
 // Run in the page: whether the replay is at the last of its steps
@@ -685,12 +688,32 @@ export const menuStartsWith = (action: string, words: string) => `.menu > sectio
 
 const SCREEN_STATES: ScreenState[] = [
   {
-    shows: 'the first screen asking who you are, with forty players known',
-    known: (rig) => FORTY.forEach((name, nth) => rig.players.add(name, rig.now() + nth)),
+    shows: 'the first screen asking who you are, with forty players known, then with a preset picked and the table folded by hand, every section of the form under its longest line, then with every section unfolded',
+    known(rig) {
+      FORTY.forEach((name, nth) => rig.players.add(name, rig.now() + nth));
+      // No table plays these, so the clock can be at its longest too
+      rig.presets.save({ name: LONGEST_PRESET, settings: presetSettings({ ...DEFAULT_CONFIG, ...CENTS, ...LONGEST_LINES, actionSeconds: LIMITS.maxActionSeconds }), savedAt: 0, savedBy: WIDEST }, false);
+    },
     async walk(rig, screen, look) {
       const page = await rig.lobby(screen);
       await page.waitForSelector('.who-list .who-pill');
       await look(page, 'the first screen');
+
+      await page.selectOption('#new-table-preset', { label: LONGEST_PRESET });
+      await page.waitForSelector('.lobby .fold-section[data-section="stakes"]:not([open])');
+      await page.fill('#new-table-voice-link', LONGEST_LINES.voiceLink!);
+      await page.click('.lobby .fold-section[data-section="table"] > summary');
+      await page.waitForSelector('.lobby .fold-section[data-section="table"]:not([open])');
+      await look(page, 'the first screen, a preset picked and every section folded');
+
+      const folded = page.locator('.lobby .fold-section:not([open]) > summary');
+
+      while ((await folded.count()) > 0) {
+        await folded.first().click();
+      }
+
+      await page.evaluate(`document.querySelector('.lobby').scrollTop = 0`);
+      await look(page, 'the first screen, every section unfolded');
     },
   },
   {

@@ -4,6 +4,8 @@ import type { Child } from '../ui.ts';
 /** A part of a form or a dialog under a heading of its own, which folds away under one line saying what it holds. */
 export interface FoldSection {
   element: HTMLDetailsElement;
+  /** Its heading, which a press folds and unfolds it by. */
+  summary: HTMLElement;
   /** Says what it holds now, on the line shown while it is folded. */
   hold(line: string): void;
 }
@@ -23,6 +25,7 @@ export function foldSection(key: string, label: string, open: boolean, ...conten
 
   return {
     element,
+    summary,
     hold: (line) => {
       holds.textContent = line;
     },

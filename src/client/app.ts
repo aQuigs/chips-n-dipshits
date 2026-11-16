@@ -323,12 +323,19 @@ export class App {
       this.pointAddress(null);
     }
 
+    // Its holds end by themselves a moment after the one change it guards, so it needs no putting away
+    const taps = new TapGuard();
     const lobby = lobbyEl(this.visitor(), this.themePicker(), {
       create: async (as, config) => {
-        if (!(await this.createTable(as, config))) {
+        const went = await this.createTable(as, config);
+
+        if (went !== 'made') {
           void this.offerPlayers(lobby);
         }
+
+        return went === 'refused';
       },
+      byItself: (change) => taps.byItself(change),
       openTable: (code) => this.openTable(code.trim().toUpperCase()),
       standings: () => this.showStandings(),
     });
@@ -514,19 +521,19 @@ export class App {
     }
   }
 
-  /** Resolves to whether the table was made. */
-  private async createTable(as: Answer, config: Partial<TableConfig>): Promise<boolean> {
+  /** Resolves to how it went. `'refused'` is the server turning down what it was asked for (code `invalid`), in words that say what. */
+  private async createTable(as: Answer, config: Partial<TableConfig>): Promise<'made' | 'refused' | 'failed'> {
     const response = await this.arrivals.ask({ op: 'create', ...as, config });
     if (response?.ok && response.kind === 'joined') {
       this.remember(response.view.id, response.auth);
       this.enterTable({ tableId: response.view.id, auth: response.auth }, response.view);
       this.openDialog({ kind: 'invite' });
       this.noteWho(as, response.view);
-      return true;
+      return 'made';
     }
 
     this.fail(response && !response.ok ? response.error : 'Could not create the table. Check your connection and try again.');
-    return false;
+    return response && !response.ok && response.code === 'invalid' ? 'refused' : 'failed';
   }
 
   /** Resolves to whether the visitor is now somewhere other than the form they joined from. */

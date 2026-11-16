@@ -1,6 +1,7 @@
 import { bountiesText } from '../../engine/bounties.ts';
-import { CONFIG_SPECS, sameSetting, settingName, settingText, startingConfig } from '../../engine/config.ts';
+import { startingConfig } from '../../engine/config.ts';
 import type { ConfigKey } from '../../engine/config.ts';
+import { CONFIG_SECTIONS } from '../../engine/configSections.ts';
 import { fromPreset, PRESET_KEYS } from '../../engine/presets.ts';
 import type { Preset } from '../../engine/presets.ts';
 import { stakesText } from '../../engine/stakes.ts';
@@ -29,8 +30,10 @@ export interface AsksWho {
 }
 
 export interface LobbyHandlers {
-  /** Resolves when the attempt is over, whichever way it went. */
-  create(as: Answer, config: Partial<TableConfig>): Promise<void>;
+  /** Resolves when the attempt is over, to whether the server refused it: its words then say what in the form is wrong. */
+  create(as: Answer, config: Partial<TableConfig>): Promise<boolean>;
+  /** Makes a change to the screen that the game and not the visitor brings about, as on the server's answer: what comes up under a finger takes no tap for a moment (`TapGuard`). */
+  byItself(change: () => void): void;
   openTable(code: string): void;
   /** Shows the standings over this screen, which stays as it is underneath. */
   standings(): void;
@@ -86,39 +89,30 @@ export function lobbyEl(visitor: Visitor, themePicker: HTMLElement, handlers: Lo
   // The table's name starts out with the apostrophe the page's own title has
   const usual: TableConfig = { ...startingConfig(), name: 'Chips n’ Dipshits' };
 
-  // A preset's settings that the form has no field for, which the table is created with all the same
-  let unseen: Partial<TableConfig> = {};
+  let preset: Preset | null = null;
   const presetPick = h('div.preset-pick', { hidden: true });
   const notes = h('div.preset-notes', { 'aria-live': 'polite' });
 
-  const alsoSet = (table: TableConfig): HTMLElement[] => {
-    const start = startingConfig(table);
-    const differ = (Object.keys(unseen) as ConfigKey[]).filter((key) => !sameSetting(table[key], start[key]));
-
-    return differ.length > 0 ? [h('p.note', null, `Also set, in the table settings: ${differ.map((key) => `${settingName(key)} ${settingText(key, table)}`).join(', ')}.`)] : [];
-  };
-
-  // An amount means something else once what the table plays with changes, so the preset's unseen ones start over too
-  const startedOver = (start: TableConfig): void => {
-    const amounts = (Object.keys(unseen) as ConfigKey[]).filter((key) => CONFIG_SPECS[key].kind === 'chips');
-
-    unseen = { ...unseen, ...Object.fromEntries(amounts.map((key) => [key, start[key]])) };
-    notes.replaceChildren(...alsoSet({ ...start, ...unseen }));
-  };
-
-  // Every section open, with the table's name where a new host starts
-  const settings = configForm(usual, { idPrefix: 'new-table-', creating: true, open: () => true, first: 'table', startedOver });
+  // Open on what a new host can answer: what the table is and what it plays for. A preset has answered the stakes too.
+  // The rest waits folded under the line of what it holds, the table's name where a new host starts
+  const settings = configForm(usual, {
+    idPrefix: 'new-table-',
+    creating: true,
+    first: 'table',
+    open: (section) => section === 'table' || (section === 'stakes' && !preset),
+    startedOver: () => notes.replaceChildren(),
+  });
 
   const pick = (chosen: Preset | null): void => {
-    const current = { ...usual, ...settings.read(create) };
-    const used = fromPreset(chosen ? chosen.settings : usual, current);
-    const changed = settings.fill(create, used.config);
+    const used = fromPreset(chosen ? chosen.settings : usual);
 
-    unseen = Object.fromEntries(PRESET_KEYS.filter((key) => !settings.shown.includes(key)).map((key) => [key, used.config[key]]));
+    preset = chosen;
+
+    // Only what a preset keeps: the rest is still as the host has it
+    const changed = settings.fill(create, Object.fromEntries(PRESET_KEYS.map((key) => [key, used.config[key]])));
 
     notes.replaceChildren(
-      h('p.note', null, changed.length > 0 ? `Changed here: ${changed.map(settingName).join(', ')}.` : 'The form already held these settings.'),
-      ...alsoSet(used.config),
+      h('p.note', null, changed.length > 0 ? `Changed here: ${changed.map((section) => CONFIG_SECTIONS[section].label).join(', ')}.` : 'The form already held these settings.'),
       ...used.notes.map((note) => h('p.note.warn', null, note)),
     );
   };
@@ -128,19 +122,25 @@ export function lobbyEl(visitor: Visitor, themePicker: HTMLElement, handlers: Lo
     {
       onsubmit: (event: Event) => {
         event.preventDefault();
-        void whilePending(createButton, 'Setting up…', () => handlers.create(who.answer(), { ...unseen, ...settings.read(create) }));
+
+        void whilePending(createButton, 'Setting up…', async () => {
+          if (await handlers.create(who.answer(), settings.read(create))) {
+            // The server's words name something the host changed, which may be folded away by now
+            handlers.byItself(() => settings.unfold(Object.keys(settings.changed(create)) as ConfigKey[]));
+          }
+        });
       },
     },
     h('h2', null, 'Start a table'),
     who.element,
     presetPick,
     h('div.sections', null, settings.sections),
-    h('p.note', null, 'You become the host. Clock, straddles and running it more than once are in the table settings.'),
     createButton,
+    h('p.note', null, 'You become the host. Everything but what the table plays with can be changed later in Table settings.'),
   );
 
   const join = h(
-    'form.card-panel',
+    'form.card-panel.join-door',
     {
       onsubmit: (event: Event) => {
         event.preventDefault();

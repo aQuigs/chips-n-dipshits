@@ -1,8 +1,7 @@
-import { CONFIG_SPECS, sameSetting } from '../../../engine/config.ts';
+import { CONFIG_SPECS } from '../../../engine/config.ts';
 import type { ConfigKey } from '../../../engine/config.ts';
 import { CONFIG_SECTION_KEYS } from '../../../engine/configSections.ts';
 import { stakesText } from '../../../engine/stakes.ts';
-import type { TableConfig } from '../../../engine/types.ts';
 import type { TableView } from '../../../engine/view.ts';
 import { h } from '../../ui.ts';
 import { configForm } from '../configForm.ts';
@@ -13,14 +12,6 @@ import type { DialogHandlers, DialogKind } from './dialog.ts';
 
 const FORM_ID = 'settings-form';
 
-/**
- * Only what was changed in the form. The form is drawn once, so a field left alone may hold what another
- * host has changed since, and sending it would quietly undo their change.
- */
-function changed(opened: TableConfig, held: Partial<TableConfig>): Partial<TableConfig> {
-  return Object.fromEntries(Object.entries(held).filter(([key, value]) => !sameSetting(value, opened[key as keyof TableConfig])));
-}
-
 function settings(view: TableView, handlers: DialogHandlers): HTMLElement {
   const waits = h('p.note', { hidden: true, 'data-says': 'next-hand' }, 'Applies from the next hand.');
   const fields = configForm(view.config, {
@@ -28,8 +19,8 @@ function settings(view: TableView, handlers: DialogHandlers): HTMLElement {
     creating: false,
     // What a host comes to change mid-game leads the registry, and is what the dialog opens on
     open: (section) => section === CONFIG_SECTION_KEYS[0],
-    edited: (held) => {
-      const unsaved = Object.keys(changed(view.config, held)) as ConfigKey[];
+    edited: (changed) => {
+      const unsaved = Object.keys(changed) as ConfigKey[];
 
       // Whenever something changed waits, in a hand or between two: the dialog is drawn once, and a hand may be dealt under it
       waits.hidden = !unsaved.some((key) => CONFIG_SPECS[key].nextHand);
@@ -42,7 +33,8 @@ function settings(view: TableView, handlers: DialogHandlers): HTMLElement {
     {
       id: FORM_ID,
       onsubmit: (event: Event) => {
-        const sent = changed(view.config, fields.read(form));
+        // Only what was changed: the form is drawn once, so a field left alone may hold what another host has changed since, and sending it would quietly undo their change
+        const sent = fields.changed(form);
 
         // The table's words name a setting that was sent, which may be folded away by now
         submit(event, handlers, { type: 'updateConfig', config: sent }, handlers.close, () => handlers.byItself(() => fields.unfold(Object.keys(sent) as ConfigKey[])));

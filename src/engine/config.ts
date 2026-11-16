@@ -23,11 +23,10 @@ interface SpecBase {
   /** Left out, always. A setting that means nothing as the others stand is kept off the form until it does. */
   applies?(config: TableConfig): boolean;
   /**
-   * Asked for when a table is created as well; the rest are only in the table settings. `'only'` is
-   * for what can't change once there is a table: it is chosen then, shown closed in the table settings
-   * from then on, and a change to it is refused.
+   * For what can't change once there is a table: it is chosen when the table is created, told in words
+   * in the table settings from then on, and a change to it is refused.
    */
-  atCreate?: boolean | 'only';
+  atCreate?: 'only';
   /** A change leaves the hand in play as it is, which finishes on the value it was dealt under. */
   nextHand?: boolean;
   /** Belongs to one table, so a preset doesn't keep it. Presets can be read by anyone with the game's address. */
@@ -137,8 +136,8 @@ export const CONFIG_SPECS: { [K in ConfigKey]-?: SpecFor<TableConfig[K]> } = {
     ],
     atCreate: 'only',
   },
-  smallBlind: { kind: 'chips', label: 'Small blind', subject: 'The small blind', default: 10, min: 1, half: true, atCreate: true, nextHand: true },
-  bigBlind: { kind: 'chips', label: 'Big blind', subject: 'The big blind', default: 20, min: 1, half: true, atCreate: true, nextHand: true },
+  smallBlind: { kind: 'chips', label: 'Small blind', subject: 'The small blind', default: 10, min: 1, half: true, nextHand: true },
+  bigBlind: { kind: 'chips', label: 'Big blind', subject: 'The big blind', default: 20, min: 1, half: true, nextHand: true },
   ante: {
     kind: 'chips',
     label: 'Ante',
@@ -146,7 +145,6 @@ export const CONFIG_SPECS: { [K in ConfigKey]-?: SpecFor<TableConfig[K]> } = {
     hint: 'Goes into the pot before any betting. 0 for no ante',
     default: 0,
     min: 0,
-    atCreate: true,
     nextHand: true,
   },
   anteFrom: {
@@ -159,11 +157,10 @@ export const CONFIG_SPECS: { [K in ConfigKey]-?: SpecFor<TableConfig[K]> } = {
       { value: 'bigBlind', label: 'The big blind, once for the table' },
     ],
     applies: (config) => config.ante > 0,
-    atCreate: true,
     nextHand: true,
   },
-  minBuyIn: { kind: 'chips', label: 'Minimum buy-in', subject: 'The minimum buy-in', default: 400, min: 1, half: true, atCreate: true },
-  maxBuyIn: { kind: 'chips', label: 'Maximum buy-in', subject: 'The maximum buy-in', default: 2000, min: 1, half: true, atCreate: true },
+  minBuyIn: { kind: 'chips', label: 'Minimum buy-in', subject: 'The minimum buy-in', default: 400, min: 1, half: true },
+  maxBuyIn: { kind: 'chips', label: 'Maximum buy-in', subject: 'The maximum buy-in', default: 2000, min: 1, half: true },
   actionSeconds: {
     kind: 'seconds',
     label: 'Seconds to act',
@@ -179,7 +176,6 @@ export const CONFIG_SPECS: { [K in ConfigKey]-?: SpecFor<TableConfig[K]> } = {
     subject: 'The table name',
     default: "Chips n' Dipshits",
     maxLength: LIMITS.tableNameLength,
-    atCreate: true,
   },
   voiceLink: {
     kind: 'link',
@@ -189,7 +185,6 @@ export const CONFIG_SPECS: { [K in ConfigKey]-?: SpecFor<TableConfig[K]> } = {
     default: '',
     maxLength: LIMITS.linkLength,
     placeholder: 'https://meet.google.com/…',
-    atCreate: true,
     inPresets: false,
   },
   allowStraddle: straddleSwitch('allowStraddle'),
@@ -226,7 +221,6 @@ export const CONFIG_SPECS: { [K in ConfigKey]-?: SpecFor<TableConfig[K]> } = {
       { value: 'owed', label: 'Owed' },
       { value: 'forgiven', label: 'Forgiven' },
     ],
-    atCreate: true,
     nextHand: true,
   },
   bounties: {
@@ -237,7 +231,6 @@ export const CONFIG_SPECS: { [K in ConfigKey]-?: SpecFor<TableConfig[K]> } = {
     default: [],
     min: 1,
     most: LIMITS.bounties,
-    atCreate: true,
     nextHand: true,
   },
   highHandBonus: {
@@ -255,7 +248,6 @@ export const CONFIG_SPECS: { [K in ConfigKey]-?: SpecFor<TableConfig[K]> } = {
     hint: 'No blinds, and the hand starts on the flop',
     default: 100,
     min: 1,
-    atCreate: true,
     nextHand: true,
   },
   bombPotEvery: {
@@ -266,7 +258,6 @@ export const CONFIG_SPECS: { [K in ConfigKey]-?: SpecFor<TableConfig[K]> } = {
     default: 0,
     min: 0,
     max: LIMITS.handsPerBombPot,
-    atCreate: true,
     nextHand: true,
   },
   bombPotBoards: {
@@ -279,7 +270,6 @@ export const CONFIG_SPECS: { [K in ConfigKey]-?: SpecFor<TableConfig[K]> } = {
       { value: 'one', label: 'One board' },
       { value: 'two', label: 'Two boards' },
     ],
-    atCreate: true,
     nextHand: true,
   },
   rabbitHunting: {

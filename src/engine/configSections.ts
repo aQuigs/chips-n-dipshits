@@ -17,21 +17,53 @@ interface SectionSpec {
   holds(config: TableConfig): string;
 }
 
-const RUNS: Record<TableConfig['maxRuns'], string> = { 1: 'run it once', 2: 'run it up to twice', 3: 'run it up to 3 times' };
 const BOARDS: Record<TableConfig['bombPotBoards'], string> = { one: 'one board', two: 'two boards' };
-const MISSED_BLINDS: Record<TableConfig['missedBlinds'], string> = { owed: 'missed blinds owed', forgiven: 'missed blinds forgiven' };
 
 /** Past this many, the folded line counts the bounty hands instead of listing them. */
 const BOUNTIES_LISTED = 2;
 
-function straddlesHeld(config: TableConfig): string {
+/** Past this many, the folded line counts the kinds of straddle instead of naming them. */
+const STRADDLES_NAMED = 2;
+
+/**
+ * How long the line of the house rules may get with each rule in its full words. Past it each is said in
+ * fewer, so a table with everything on still folds under a line to glance at: three lines of the
+ * narrowest phone hold every line this long, and the shortest that takes a fourth is a few characters longer.
+ */
+const HOUSE_LINE_ROOM = 100;
+
+type Runs = Record<TableConfig['maxRuns'], string>;
+
+const RUNS: { full: Runs; brief: Runs } = {
+  full: { 1: 'run it once', 2: 'run it up to twice', 3: 'run it up to 3 times' },
+  brief: { 1: 'run it once', 2: 'run it twice', 3: 'run it 3 times' },
+};
+
+function straddlesHeld(config: TableConfig, brief: boolean): string {
   const allowed = straddlesAllowed(config);
 
-  if (allowed.length === 1) {
-    return allowed[0]!.label;
+  if (allowed.length <= 1) {
+    return allowed[0]?.label ?? 'No straddles';
   }
 
-  return allowed.length === 0 ? 'No straddles' : `Straddles: ${allowed.map((kind) => kind.short).join(', ')}`;
+  return brief || allowed.length > STRADDLES_NAMED ? `${allowed.length} straddles` : `Straddles: ${allowed.map((kind) => kind.short).join(', ')}`;
+}
+
+function houseHeld(config: TableConfig): string {
+  const said = (brief: boolean): string =>
+    [
+      config.actionSeconds === 0 ? 'No clock' : `${config.actionSeconds} s clock`,
+      straddlesHeld(config, brief),
+      RUNS[brief ? 'brief' : 'full'][config.maxRuns],
+      config.allowChop && (brief ? 'chop' : 'blinds can chop'),
+      `${brief ? '' : 'missed '}blinds ${config.missedBlinds}`,
+      config.rabbitHunting && 'rabbit hunting',
+    ]
+      .filter(Boolean)
+      .join(' · ');
+  const full = said(false);
+
+  return full.length <= HOUSE_LINE_ROOM ? full : said(true);
 }
 
 function sideMoneyHeld(config: TableConfig): string {
@@ -71,14 +103,15 @@ export const CONFIG_SECTIONS = {
   },
   house: {
     label: 'House rules',
-    settings: ['allowStraddle', 'allowDoubleStraddle', 'allowButtonStraddle', 'allowMississippiStraddle', 'maxRuns', 'allowChop', 'missedBlinds', 'rabbitHunting'],
-    holds: (config) =>
-      [straddlesHeld(config), RUNS[config.maxRuns], config.allowChop && 'blinds can chop', MISSED_BLINDS[config.missedBlinds], config.rabbitHunting && 'rabbit hunting'].filter(Boolean).join(' · '),
+    // The clock leads, here and on the line: it is the one of these a host comes back to change mid-game, when someone is slow
+    settings: ['actionSeconds', 'allowStraddle', 'allowDoubleStraddle', 'allowButtonStraddle', 'allowMississippiStraddle', 'maxRuns', 'allowChop', 'missedBlinds', 'rabbitHunting'],
+    holds: houseHeld,
   },
+  // Only what a host is asked about every table, since this is the section the form for a new table opens on
   table: {
     label: 'Table',
-    settings: ['name', 'voiceLink', 'actionSeconds'],
-    holds: (config) => [config.name, config.actionSeconds === 0 ? 'no clock' : `${config.actionSeconds} s clock`, config.voiceLink === '' ? 'no voice link' : 'voice link set'].join(' · '),
+    settings: ['name', 'voiceLink'],
+    holds: (config) => [config.name, config.voiceLink === '' ? 'no voice link' : 'voice link set'].join(' · '),
   },
 } satisfies Record<string, SectionSpec>;
 

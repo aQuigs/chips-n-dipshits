@@ -33,7 +33,7 @@
 
 .panels {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 16px;
   width: min(100%, 760px);
   align-items: start;
@@ -41,6 +41,21 @@
 
 .panels.single {
   width: min(100%, 400px);
+}
+
+/* One under the other, the single field of joining comes first: nobody with a table's code scrolls past the host's form to reach it */
+.join-door {
+  order: -1;
+}
+
+@container app (min-width: 648px) {
+  .panels:not(.single) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .join-door {
+    order: 0;
+  }
 }
 
 .card-panel {

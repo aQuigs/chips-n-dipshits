@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { CONFIG_KEYS, CONFIG_SECTION_KEYS, CONFIG_SECTIONS, CONFIG_SPECS, DEFAULT_CONFIG, sectionOf, settingName } from '../src/engine/index.ts';
+import { CONFIG_KEYS, CONFIG_SECTION_KEYS, CONFIG_SECTIONS, CONFIG_SPECS, DEFAULT_CONFIG, LIMITS, sectionOf, settingName } from '../src/engine/index.ts';
 import type { ConfigKey, ConfigSection, SettingValue, TableConfig } from '../src/engine/index.ts';
 
 const lines = (config: TableConfig) => Object.fromEntries(CONFIG_SECTION_KEYS.map((section) => [section, CONFIG_SECTIONS[section].holds(config)])) as Record<ConfigSection, string>;
@@ -48,8 +48,8 @@ test('the sections come in the order a host reaches for them, and each folds und
     stakes: '10/20 · buy-in 400 to 2,000',
     bombPots: '100 each · only when called · one board',
     sideMoney: 'None',
-    house: 'Straddle under the gun · run it up to 3 times · missed blinds owed',
-    table: 'Friday Night · 30 s clock · no voice link',
+    house: '30 s clock · Straddle under the gun · run it up to 3 times · missed blinds owed',
+    table: 'Friday Night · no voice link',
   });
 
   const full: TableConfig = {
@@ -82,16 +82,38 @@ test('the sections come in the order a host reaches for them, and each folds und
     stakes: '0.25/0.50 · BB ante 0.10 · buy-in 20.00 to 100.00',
     bombPots: '2.50 each · every 5 hands · two boards',
     sideMoney: '72 pays 2.50 · high hand 5.00',
-    house: 'Straddles: under the gun, double, button, Mississippi · run it up to twice · blinds can chop · missed blinds forgiven · rabbit hunting',
-    table: 'Nickels · no clock · voice link set',
+    house: 'No clock · 4 straddles · run it twice · chop · blinds forgiven · rabbit hunting',
+    table: 'Nickels · voice link set',
   });
 
-  assert.equal(lines({ ...DEFAULT_CONFIG, allowStraddle: false }).house, 'No straddles · run it up to 3 times · missed blinds owed');
-  assert.equal(lines({ ...DEFAULT_CONFIG, allowStraddle: false, allowButtonStraddle: true, maxRuns: 1 }).house, 'Button straddle · run it once · missed blinds owed');
+  assert.equal(lines({ ...DEFAULT_CONFIG, allowStraddle: false }).house, '30 s clock · No straddles · run it up to 3 times · missed blinds owed');
+  assert.equal(lines({ ...DEFAULT_CONFIG, allowStraddle: false, allowButtonStraddle: true, maxRuns: 1 }).house, '30 s clock · Button straddle · run it once · missed blinds owed');
+  assert.equal(lines({ ...DEFAULT_CONFIG, allowButtonStraddle: true, allowChop: true }).house, '30 s clock · 2 straddles · run it 3 times · chop · blinds owed', 'with more on, each rule is said in fewer words');
+  assert.equal(lines({ ...DEFAULT_CONFIG, allowButtonStraddle: true, maxRuns: 2 }).house, '30 s clock · Straddles: under the gun, button · run it up to twice · missed blinds owed', 'two kinds are named while there is room');
+  assert.equal(lines({ ...DEFAULT_CONFIG, allowButtonStraddle: true, allowDoubleStraddle: true }).house, '30 s clock · 3 straddles · run it up to 3 times · missed blinds owed', 'more kinds than two are counted');
   assert.equal(lines({ ...DEFAULT_CONFIG, bombPotEvery: 1 }).bombPots, '100 each · every hand · one board');
   assert.equal(lines({ ...DEFAULT_CONFIG, highHandBonus: 50 }).sideMoney, 'High hand 50');
   assert.equal(lines({ ...DEFAULT_CONFIG, bounties: [['72', 25], ['AA', 100]] }).sideMoney, '72 pays 25 · AA pays 100');
   assert.equal(lines({ ...DEFAULT_CONFIG, bounties: [['72', 25], ['AA', 100], ['J4s', 50]], highHandBonus: 50 }).sideMoney, '3 bounty hands · high hand 50', 'a long list is counted, so the line stays a line');
+});
+
+test('whatever its house rules, a table folds them under a line a narrow phone shows in three lines', () => {
+  const values = (key: ConfigKey): SettingValue[] => {
+    const spec = CONFIG_SPECS[key];
+
+    return spec.kind === 'toggle' ? [false, true] : spec.kind === 'choice' ? spec.options.map((option) => option.value) : [LIMITS.maxActionSeconds];
+  };
+
+  let tables: TableConfig[] = [DEFAULT_CONFIG];
+
+  for (const key of CONFIG_SECTIONS.house.settings) {
+    tables = tables.flatMap((table) => values(key).map((value) => ({ ...table, [key]: value })));
+  }
+
+  const longest = tables.map((table) => lines(table).house).reduce((longer, line) => (line.length > longer.length ? line : longer));
+
+  // HOUSE_LINE_ROOM in src/engine/configSections.ts
+  assert.ok(longest.length <= 100, `${longest.length} characters: ${longest}`);
 });
 
 test('no setting is forgotten by folding: each has its say in the line of its section', () => {

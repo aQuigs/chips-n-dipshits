@@ -6,7 +6,6 @@
 import { mkdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
-import { chromium } from 'playwright';
 import type { Browser, Page } from 'playwright';
 
 import { THEMES } from '../src/client/themes.ts';
@@ -19,7 +18,7 @@ import { PokerService } from '../src/server/service.ts';
 import { seededRng } from '../tests/helpers.ts';
 import { clientPage } from './bundle.ts';
 import { STILL } from './pageSpies.ts';
-import { unfolded } from './rig.ts';
+import { launchBrowser, unfolded } from './rig.ts';
 
 const OUT = fileURLToPath(new URL('../screenshots/', import.meta.url));
 const DESKTOP = { width: 1280, height: 800 };
@@ -153,7 +152,7 @@ const html = await clientPage({});
  */
 const service = new PokerService({ store: new MemoryStore(), presets: new MemoryPresetStore(), players: new MemoryPlayerStore(seededRng(2)), clock: { now: () => Date.now() }, rng: seededRng(1) });
 const server = await startDevServer({ port: 0, page: async () => html, service });
-const browser = await chromium.launch();
+const browser = await launchBrowser();
 const players: Player[] = [];
 
 try {

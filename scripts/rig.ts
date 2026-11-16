@@ -854,6 +854,15 @@ export class Rig {
 }
 
 /**
+ * A browser for the checks' pages, with no audio device. Playwright's is muted but still plays through the
+ * machine's audio service, and a page's audio clock, which it places its sounds by, stands still whenever that
+ * service is slow to take them: on a laptop whose service was busy the clock got 2.3 to 3.5 s on in four
+ * and stood for up to 0.8 s at a time, and a page drops a sound that would wait 0.4 s behind others. With no
+ * device the browser keeps the clock by a timer of its own: 4.0 s on in four, and never 30 ms still.
+ */
+export const launchBrowser = (): Promise<Browser> => chromium.launch({ args: ['--disable-audio-output'] });
+
+/**
  * The browser of one worker, whose checks use it one after the other, each on a rig of its own. It is
  * launched when first asked for, and again when it has died, so a crash costs the check it happened
  * under and no other worker's.
@@ -864,7 +873,7 @@ export class RigBrowser {
   /** A new rig, which whoever asks closes when done with it; given `way`, a stalled one whose pages are slow that way. */
   async rig(way?: StallWay): Promise<Rig> {
     if (!this.browser?.isConnected()) {
-      this.browser = await chromium.launch();
+      this.browser = await launchBrowser();
     }
 
     return Rig.start(this.browser, way);

@@ -9,7 +9,6 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { fileURLToPath } from 'node:url';
 
-import { chromium } from 'playwright';
 import type { Browser, Page } from 'playwright';
 
 import { KEYS_SETTLE_MS } from '../src/client/hotkeys.ts';
@@ -33,7 +32,7 @@ import { seededRng } from '../tests/helpers.ts';
 import { clientPage } from './bundle.ts';
 import { playCheck } from './liveCheckSteps.ts';
 import { answeredAfter, complaints, moveIn, movesSent, NOTICES, opsSent, ownComplaints, STILL, TITLES, toldOf } from './pageSpies.ts';
-import { Gate } from './rig.ts';
+import { Gate, launchBrowser } from './rig.ts';
 import { STAND_IN_HOST } from './standInHost.ts';
 
 const PICTURES = fileURLToPath(new URL('../screenshots/', import.meta.url));
@@ -145,7 +144,7 @@ const html = await clientPage({});
 // refused is a failure of the page, and the server fails nowhere
 const errors = new MemoryErrorLog({ now: () => Date.now() });
 const server = await startDevServer({ port: 0, page: async () => html, errors });
-const browser = await chromium.launch();
+const browser = await launchBrowser();
 
 try {
   const host = await open(browser);
@@ -778,6 +777,13 @@ try {
     await folder.click('.turn [data-action="fold"]');
 
     const hunter = folder === dealer ? other : dealer;
+    await hunter.waitForSelector('.message [data-action="hunt"]');
+
+    // No poll gets through until the page has heard that its hunt got no answer: one that showed the hunt played
+    // sooner would leave the page nothing to offer, and it then rightly sends nothing more
+    const polls = await Gate.on(hunter, 'polls');
+    await polls.close('requests');
+
     let hunts = 0;
     await hunter.route('**/api', async (route) => {
       const body = JSON.parse(route.request().postData() ?? '{}') as { op?: string; command?: { type?: string } };
@@ -793,6 +799,7 @@ try {
 
     await hunter.click('.message [data-action="hunt"]');
     await hunter.waitForSelector('.board .card.hunted:nth-child(5)');
+    await polls.open();
     await folder.waitForSelector('.board .card.hunted:nth-child(5)');
 
     assert.equal(hunts, 2, 'the hunt with no answer was sent once more');
@@ -822,8 +829,13 @@ try {
     await folder.click('.turn [data-action="fold"]');
     const watcher = folder === dealer ? other : dealer;
 
-    // The first is played by the table, and its answer never reaches the page; the one sent again is let through
+    await folder.waitForSelector('.controls [data-action="show-card"][data-place="0"]');
+
+    // The first is played by the table, and its answer never reaches the page; the one sent again is let through.
+    // No poll gets through meanwhile, as with the hunt: one that showed the card would leave nothing to send again
+    const polls = await Gate.on(folder, 'polls');
     const shows = await Gate.on(folder, 'shows');
+    await polls.close('requests');
     await shows.close('answers');
     await folder.click('.controls [data-action="show-card"][data-place="0"]');
     await shows.holding();
@@ -832,6 +844,7 @@ try {
     await shows.open();
 
     await folder.waitForSelector('.seat.me .hole .card.seen');
+    await polls.open();
     await watcher.waitForSelector('.seat:not(.me) .hole .card[data-card] + .card.back');
 
     assert.equal(await folder.locator('.feed li:has-text("shows one card")').count(), 1, 'and the card came out once');

@@ -442,11 +442,11 @@ export const formChecks = (out: string): Check[] => {
       },
     ],
     [
-      'a bet that was sized stays when the bar is drawn again for the same decision with the keyboard nowhere near the box, in whole chips and in dollars and cents, on a phone and the desktop: sized with a size button, through the player’s own Sit out next hand; with the slider, through their own request for chips and the host’s yes to it; typed and left, through a clock the host changes; the button names it throughout and plays it, and the next decision starts from the smallest bet',
+      'a bet that was sized stays when the bar is drawn again for the same decision with the keyboard nowhere near the box, in whole chips and in dollars and cents, on a phone and the desktop: sized with a size button, through the player’s own Sit out next hand; with the slider, through their own request for chips and the host’s yes to it; typed and left, through a clock the host changes; and with the keyboard still on the slider, through blinds the host changes, which move the slider’s stops and not the bet; the button names it throughout and plays it, and the next decision starts from the smallest bet',
       async (rig) => {
         const kinds = [
-          { name: 'chips', config: { maxBuyIn: 20_000 }, stack: 9000, asked: 500, pot: ['70', 'Raise to 70'], slid: 1500, slidTo: ['1,500', 'Raise to 1,500'], typed: '2500', typedTo: ['2,500', 'Raise to 2,500'], played: 2500, next: ['20', 'Bet 20'] },
-          { name: 'cents', config: { unit: 'cents', smallBlind: 25, bigBlind: 50, minBuyIn: 1000, maxBuyIn: 2_000_000 }, stack: 900_000, asked: 50_000, pot: ['1.75', 'Raise to 1.75'], slid: 150_000, slidTo: ['1,500.00', 'Raise to 1,500.00'], typed: '2500.5', typedTo: ['2,500.50', 'Raise to 2,500.50'], played: 250_050, next: ['0.50', 'Bet 0.50'] },
+          { name: 'chips', config: { maxBuyIn: 20_000 }, stack: 9000, asked: 500, pot: ['70', 'Raise to 70'], slidTo: ['280', 'Raise to 280'], typed: '2500', typedTo: ['2,500', 'Raise to 2,500'], blinds: { smallBlind: 25, bigBlind: 50 }, heldTo: ['340', 'Raise to 340'], played: 340, next: ['20', 'Bet 20'] },
+          { name: 'cents', config: { unit: 'cents', smallBlind: 25, bigBlind: 50, minBuyIn: 1000, maxBuyIn: 2_000_000 }, stack: 900_000, asked: 50_000, pot: ['1.75', 'Raise to 1.75'], slidTo: ['7.00', 'Raise to 7.00'], typed: '2500.5', typedTo: ['2,500.50', 'Raise to 2,500.50'], blinds: { smallBlind: 50, bigBlind: 100 }, heldTo: ['8.50', 'Raise to 8.50'], played: 850, next: ['0.50', 'Bet 0.50'] },
         ] as const;
 
         for (const kind of kinds) {
@@ -468,13 +468,23 @@ export const formChecks = (out: string): Check[] => {
               await page.waitForFunction(`document.querySelector('#raise-amount') !== null && document.querySelector('#raise-amount').old !== true`);
             };
 
+            // The slider by its keys, from the least raise up: it counts stops, a step of the blinds each
+            const slideTo = async (stop: number) => {
+              await page.focus('#raise-slider');
+              await page.keyboard.press('Home');
+
+              for (let at = 0; at < stop; at++) {
+                await page.keyboard.press('ArrowRight');
+              }
+            };
+
             await page.waitForSelector('#raise-amount');
             await press('.presets button:text-is("Pot")');
             assert.deepEqual(await bet(), [...kind.pot, false], `${where}: the pot, sized with its button`);
             await drawnAgain(() => press('[data-action="sit-out"]'));
             assert.deepEqual(await bet(), [...kind.pot, false], `${where}: the pot, after her own Sit out next hand drew the bar again`);
 
-            await page.locator('#raise-slider').fill(String(kind.slid));
+            await slideTo(12);
             await page.locator('#raise-slider').blur();
             assert.deepEqual(await bet(), [...kind.slidTo, false], `${where}: a bet sized with the slider`);
             await drawnAgain(() => table.act('Pam', { type: 'requestRebuy', amount: kind.asked }));
@@ -489,6 +499,12 @@ export const formChecks = (out: string): Check[] => {
             assert.deepEqual(await bet(), [...kind.typedTo, false], `${where}: a bet typed and left`);
             await drawnAgain(() => table.act('Quigs', { type: 'updateConfig', config: { actionSeconds: 45 } }));
             assert.deepEqual(await bet(), [...kind.typedTo, false], `${where}: the typed bet, after the host's change of the clock drew the bar again`);
+
+            // The keyboard left on the slider, and the blinds changed for the next hand: the slider has other stops now, and its fifteenth is another amount
+            await slideTo(15);
+            assert.deepEqual(await bet(), [...kind.heldTo, false], `${where}: a bet sized with the slider, the keyboard still on it`);
+            await drawnAgain(() => table.act('Quigs', { type: 'updateConfig', config: kind.blinds }));
+            assert.deepEqual([...(await bet()), await page.evaluate('document.activeElement?.id')], [...kind.heldTo, false, 'raise-slider'], `${where}: the slider's bet and the keyboard on the slider, after the host's change of the blinds drew the bar again`);
 
             await answeredAfter(page, () => press('[data-action="raise"]'));
             assert.equal(table.view('Pam').hand!.currentBet, kind.played, `${where}: what the bet that was kept played`);

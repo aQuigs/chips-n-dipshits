@@ -146,8 +146,10 @@ function turnPanel(table: Denominated & Pick<TableConfig, 'smallBlind' | 'bigBli
   const decision = decisionOf(hand);
   const raiseButton = h('button.btn.raise', { type: 'button', 'data-action': 'raise', 'data-hotkey': HOTKEYS.raise });
   const stops = betStops(minRaiseTo, maxRaiseTo, table);
-  // The keyboard goes to the bar drawn again for the same decision, and what was half typed with it (`Slot`). The bet itself is kept however it was sized (`keep`)
-  const slider = h('input', { type: 'range', id: 'raise-slider', min: 0, max: stops.last, step: 1, 'aria-label': 'Bet size', 'data-keep': decision });
+  // The keyboard goes to the bar drawn again for the same decision, and what was half typed in the box goes with it (`Slot`, `data-keep`).
+  // The bet itself is kept however it was sized (`keep`), and the slider follows the bet. What the slider stands at is never carried
+  // over: it is a stop, and stop 12 is another amount once the host has changed the blinds
+  const slider = h('input', { type: 'range', id: 'raise-slider', min: 0, max: stops.last, step: 1, 'aria-label': 'Bet size' });
   const amount = h('input', { type: 'text', id: 'raise-amount', inputmode: hasDecimals(table) ? 'decimal' : 'numeric', autocomplete: 'off', 'aria-label': 'Bet size', 'data-keep': decision });
 
   let raiseTo = minRaiseTo;

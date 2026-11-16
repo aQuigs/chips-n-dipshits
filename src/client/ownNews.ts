@@ -4,7 +4,7 @@
  * toast (`effects/ownNews.ts`). One wording for both places.
  */
 import { actorName } from '../engine/hosts.ts';
-import { turnedDownWords } from '../engine/seats.ts';
+import { requestedWords, turnedDownWords } from '../engine/seats.ts';
 import type { RequestKind } from '../engine/types.ts';
 import type { SeatView, TableView } from '../engine/view.ts';
 import { nightOver } from './render/night.ts';
@@ -31,7 +31,7 @@ export function timedOutText(view: TableView, seat: SeatView): string {
 }
 
 /** To a player whose request was turned down. It names nobody: a co-host may have been the one. */
-export const turnedDownText = (kind: RequestKind): string => `Your request for ${kind === 'seat' ? 'a seat' : 'chips'} was turned down`;
+export const turnedDownText = (kind: RequestKind): string => `Your request for ${requestedWords(kind)} was turned down`;
 
 const requestOf = (view: TableView) => view.requests.find((request) => request.playerId === view.you.id);
 

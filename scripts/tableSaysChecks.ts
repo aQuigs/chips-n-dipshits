@@ -107,7 +107,7 @@ const pillSaysTheState = (picturesIn: string): Check => [
     await says('Hand #1', false);
 
     table.act(HOST, { type: 'setLastHands', hands: 2 });
-    await says('2 more hands');
+    await says('2 hands left');
 
     // Of two things that hold, the one that changes what happens soonest: the next hand before the ones after it, and no next hand at all before either
     table.act(HOST, { type: 'setBombPot', on: true });
@@ -119,7 +119,7 @@ const pillSaysTheState = (picturesIn: string): Check => [
 
     table.act(HOST, { type: 'start' });
     table.act(HOST, { type: 'setBombPot', on: false });
-    await says('2 more hands');
+    await says('2 hands left');
 
     table.act(HOST, { type: 'setLastHands', hands: 0 });
     await says('Last hand');
@@ -215,7 +215,7 @@ const pillHoldsOnAPhone = (picturesIn: string): Check => [
 
     table.act(HOST, { type: 'start' });
     table.act(HOST, { type: 'setLastHands', hands: LIMITS.lastHands });
-    await holds(`${LIMITS.lastHands} more hands`);
+    await holds(`${LIMITS.lastHands} hands left`);
 
     table.act(HOST, { type: 'setBombPot', on: true });
     await holds('Bomb pot next');

@@ -82,8 +82,9 @@
     gap: 8px;
   }
 
+  /* The longest thing the pill says (`headline`) still leaves the stakes their one line under the name in a wide font */
   .pill {
-    padding-inline: 8px;
+    padding-inline: 6px;
   }
 }
 

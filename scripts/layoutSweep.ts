@@ -2701,7 +2701,7 @@ const toastKeepsClear: Check = [
     table.play(others({ type: 'fold' }), viewersTurn);
     const page = await table.open(VIEWER, 'smallPhone');
 
-    // Open, the chat's bar on a phone is right under the bar of the turn. Beside the table the chat is always open
+    // Open, the chat's bar on a phone is right under the bar of the turn, and its lines may have no room under it. Beside the table the chat is always open
     const phones = [SMALL_STANDING, LYING].flatMap((size) => [
       { ...size, open: false },
       { ...size, name: `${size.name} with the chat open`, open: true },

@@ -17,8 +17,7 @@ export function startText(view: TableView): string {
   return view.handCount === 0 ? 'Start the game' : 'Resume the game';
 }
 
-/** A count of the hands still to be dealt, as it is said wherever the night's last hands are counted. */
-export const handsText = (count: number): string => `${count} more hand${count === 1 ? '' : 's'}`;
+const hands = (count: number) => `${count} more hand${count === 1 ? '' : 's'}`;
 
 /**
  * How many hands are left tonight, or null while no last hands are called. Worded so that nobody
@@ -32,8 +31,8 @@ export function lastHandsText(view: TableView): string | null {
   }
 
   if (!view.hand) {
-    return `${handsText(left)} to play`;
+    return `${hands(left)} to play`;
   }
 
-  return left === 0 ? 'Last hand of the night' : `${handsText(left)} after this one`;
+  return left === 0 ? 'Last hand of the night' : `${hands(left)} after this one`;
 }

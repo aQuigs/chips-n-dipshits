@@ -1,5 +1,5 @@
 import type { TableView } from '../engine/view.ts';
-import { handsText, nightOver, onLastHand } from './render/night.ts';
+import { nightOver, onLastHand } from './render/night.ts';
 
 /** The few words in the top bar that say how the table stands. */
 export interface Headline {
@@ -44,7 +44,7 @@ export function headline(view: TableView): Headline {
   }
 
   if (view.handsLeft !== null) {
-    return state(handsText(view.handsLeft));
+    return state(`${view.handsLeft} hand${view.handsLeft === 1 ? '' : 's'} left`);
   }
 
   return { says: hand ? `Hand #${hand.number}` : 'Next hand', news: false };

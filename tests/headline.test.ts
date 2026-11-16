@@ -104,10 +104,10 @@ test('the last hands are counted down in the words the bar counts them in, to th
   const table = going();
 
   table.cmd(HOST, { type: 'setLastHands', hands: 2 });
-  assert.equal(says(table), '2 more hands');
+  assert.equal(says(table), '2 hands left');
 
   playOut(table);
-  assert.equal(says(table), '1 more hand');
+  assert.equal(says(table), '1 hand left');
 
   playOut(table);
   assert.equal(says(table), 'Last hand');

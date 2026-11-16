@@ -45,9 +45,9 @@
 /*
  * At a table it lies over the chat's bar (`createFeed`), which holds two lines of it: over the top bar
  * it hid the menu button and what the table's state is, and anywhere between the two it would be on
- * the table's cards or on the buttons of a turn. With the chat shut the bar is the last thing on a
- * phone's screen, so a line more than two grows upward, onto the foot of the bar under the table and
- * well short of the moves. The newest line it covers is back in a few seconds.
+ * the table's cards or on the buttons of a turn. The bar is the last thing on a phone's screen, or
+ * all but, so a line more than two grows upward, onto the foot of the bar under the table and well
+ * short of the moves. The newest line it covers is back in a few seconds.
  */
 .app:not(:has(> .overlay:not([hidden]), + .replay:not([hidden]))) .feed-bar > .toast {
   position: absolute;
@@ -66,14 +66,10 @@
 }
 
 /*
- * With the chat's lines under its bar, a line more than two grows downward onto the oldest of them in
- * sight: open on a phone, where the moves of a turn can be right over the bar, and beside the table
+ * Beside the table the chat's bar is right under the top bar, with the chat's lines always under it: a
+ * line more than two grows downward onto the oldest of them in sight. Not so on a phone with the chat
+ * open, where the lines can be squeezed to nothing and the toast would run off the screen
  */
-.app:not(:has(> .overlay:not([hidden]), + .replay:not([hidden]))) .feed.open .feed-bar > .toast {
-  inset: 0 0 auto;
-  border-width: 0 0 1px;
-}
-
 @container app (min-width: 900px) and (min-height: 521px) {
   .app:not(:has(> .overlay:not([hidden]), + .replay:not([hidden]))) .feed-bar > .toast {
     inset: 0 0 auto;

@@ -240,13 +240,11 @@ export function configForm(values: TableConfig, options: ConfigFormOptions): Con
     return element;
   };
 
-  const redraw = (key: ConfigKey, value?: SettingValue | readonly BountyRow[]): HTMLElement => {
+  const redraw = (key: ConfigKey, value?: SettingValue | readonly BountyRow[]): void => {
     const fresh = draw(key, value);
 
     fields.get(key)!.replaceWith(fresh);
     fields.set(key, fresh);
-
-    return fresh;
   };
 
   /** The rows of some settings that follow one another: each alone, or two to a row where both are narrow. */
@@ -324,10 +322,8 @@ export function configForm(values: TableConfig, options: ConfigFormOptions): Con
     fill(form, values) {
       table = { ...table, ...values };
 
-      for (const key of shown) {
-        if (key in values) {
-          redraw(key);
-        }
+      for (const key of shown.filter((key) => key in values)) {
+        redraw(key);
       }
 
       for (const [section, part] of parts) {

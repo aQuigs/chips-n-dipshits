@@ -5284,6 +5284,12 @@ const CHECKS: Check[] = [
           await one.waitForSelector('#host-name');
           await one.evaluate('document.fonts.ready.then(() => undefined)');
           await list.holding();
+
+          // The players to pick from come by themselves too, and move the form: they are in before the watch begins
+          if (rig.players.list().length > 0) {
+            await one.waitForSelector('.who-ask[data-who="pick"]');
+          }
+
           const controls = '.start-table :is(input, select, summary, button)';
 
           await one.evaluate(`${WHAT_COMES_UP_UNDER}(${JSON.stringify({ changing: '.preset-pick', lay: controls, comesUp: controls })})`);

@@ -3,6 +3,7 @@ import { prettyCards } from '../../../engine/cards.ts';
 import type { Card } from '../../../engine/cards.ts';
 import type { TonightRow } from '../../../engine/tonight.ts';
 import type { TableView } from '../../../engine/view.ts';
+import { ownPayments, settlement } from '../../settle.ts';
 import { countsOf, crownOf, leadersOf, missedOf, standingOf, tonightText } from '../../tonightText.ts';
 import { h, readableText, youMark } from '../../ui.ts';
 import { badgeList, badgeMarks } from '../badges.ts';
@@ -74,6 +75,23 @@ function copyEl(view: TableView, handlers: DialogHandlers): HTMLElement {
   return h('div.tonight-copy', null, button, h('small.note', null, 'To paste in the group chat.'), box);
 }
 
+/**
+ * Once the night is over, what everyone needs next: the viewer's own part of who pays whom, in the
+ * Ledger's own figures, and the way to the whole list.
+ */
+function settleEl(view: TableView, handlers: DialogHandlers): HTMLElement | null {
+  if (!nightOver(view) || settlement(view).length === 0) {
+    return null;
+  }
+
+  return h(
+    'div.tonight-settle',
+    null,
+    ownPayments(view).map((line) => h('b', null, line)),
+    h('button.btn', { type: 'button', 'data-action': 'settle-up', onclick: () => handlers.open({ kind: 'ledger' }) }, 'Settle up'),
+  );
+}
+
 function tonight(view: TableView, handlers: DialogHandlers): HTMLElement {
   const { players } = view.tonight;
   const missed = missedOf(view);
@@ -88,6 +106,7 @@ function tonight(view: TableView, handlers: DialogHandlers): HTMLElement {
     crownEl(view),
     h('p.note.tonight-standing', null, standingOf(view)),
     missed ? h('p.note.tonight-missed', null, missed) : null,
+    settleEl(view, handlers),
     leadersEl(view, handlers),
     h('ol.tonight-players', null, players.map((row) => playerEl(row, view, handlers))),
     copyEl(view, handlers),
@@ -97,6 +116,6 @@ function tonight(view: TableView, handlers: DialogHandlers): HTMLElement {
 export const tonightDialog: DialogKind<'tonight'> = {
   kind: 'tonight',
   menu: { group: 'scores', label: 'Tonight', who: everyone },
-  shows: (view) => [view.tonight, nightOver(view), view.config.unit, view.config.name, view.you.id],
+  shows: (view) => [view.tonight, nightOver(view), view.config.unit, view.config.name, view.you.id, nightOver(view) && view.ledger],
   draw: tonight,
 };

@@ -12,7 +12,7 @@ import type { BoardCard, Place } from '../motion.ts';
 import { boardSaid, hintSaid, LABELS, openSeatSaid, potSaid, seatSaid, seatsLabel } from '../spoken.ts';
 import type { ShownChances } from '../tableChances.ts';
 import { cardEl, h, sendingButton, sends } from '../ui.ts';
-import { nightOver, startingText, startText } from './night.ts';
+import { enoughSeated, nightOver, startingText, startText } from './night.ts';
 import { highHandMark } from './highHand.ts';
 import { MUTED_MARK } from '../mutes.ts';
 import { hostOrCohost, roleMark } from './roles.ts';
@@ -93,6 +93,8 @@ export interface TableHandlers {
   onSit?(seat: number): void;
   /** Resolves once the table has answered, as `onPlayOn` does: their buttons are held until then. */
   onStart(): Promise<unknown>;
+  /** Opens the invitation to the table. */
+  onInvite(): void;
   onPlayOn(): Promise<unknown>;
   /** Asks to see the cards hand number `hand` would have dealt (rabbit hunting). */
   onHunt(hand: number): void;
@@ -616,20 +618,21 @@ function messageEl(view: TableView, handlers: TableHandlers): HTMLElement | null
     );
   }
 
-  const seated = view.seats.filter((seat) => seat !== null).length;
-
   if (view.nextHandAt !== null) {
     return h('div.message', null, h('div', null, 'Next hand in ', h('span', { 'data-countdown': view.nextHandAt }, '…')));
   }
 
   if (!view.running) {
     if (hostOrCohost(view)) {
-      return h(
-        'div.message',
-        null,
-        h('div', null, seated < 2 ? 'Share the invite link, then start once two players are seated.' : 'Everyone ready?'),
-        sendingButton('button.btn.primary', { 'data-action': 'start' }, sends(startText(view), startingText(view)), handlers.onStart),
-      );
+      // The gold button is the next thing to do: with fewer than two seated that is getting people in, not starting
+      return enoughSeated(view)
+        ? h('div.message', null, h('div', null, 'Everyone ready?'), sendingButton('button.btn.primary', { 'data-action': 'start' }, sends(startText(view), startingText(view)), handlers.onStart))
+        : h(
+            'div.message',
+            null,
+            h('div', null, 'Share the invite link. The game can start once two players are seated.'),
+            h('button.btn.primary', { type: 'button', 'data-action': 'invite-players', onclick: handlers.onInvite }, 'Invite players'),
+          );
     }
 
     return h('div.message', null, view.handCount === 0 ? 'Waiting for the host to start the game' : 'The game is paused');

@@ -1,13 +1,23 @@
 import { formatAmount, signedAmount } from '../../../engine/amounts.ts';
 import type { TableView } from '../../../engine/view.ts';
-import { settleUp } from '../../settle.ts';
+import { settlement, settleUpText } from '../../settle.ts';
 import { h } from '../../ui.ts';
-import { everyone, frame } from './dialog.ts';
+import { copyOnClick, everyone, frame } from './dialog.ts';
 import type { DialogHandlers, DialogKind } from './dialog.ts';
+
+/** The list as text, for the group chat: nobody should have to type sums of money over again. */
+function copyEl(view: TableView, handlers: DialogHandlers): HTMLElement {
+  const box = h('textarea', { id: 'settle-text', readonly: true, hidden: true, rows: 5, 'aria-label': 'Who pays whom as text' });
+  const button = h('button.btn', { type: 'button', 'data-action': 'copy-settle' }, 'Copy as text');
+
+  copyOnClick(button, box, () => settleUpText(view), handlers);
+
+  return h('div.copy-text', null, button, h('small.note', null, 'To paste in the group chat.'), box);
+}
 
 function ledger(view: TableView, handlers: DialogHandlers): HTMLElement {
   const rows = [...view.ledger].sort((a, b) => b.net - a.net);
-  const payments = settleUp(rows);
+  const payments = settlement(view);
 
   // Only a table where chips were moved has the column, so the others keep the room on a phone
   const transfers = rows.some((row) => row.transferred !== 0);
@@ -46,6 +56,7 @@ function ledger(view: TableView, handlers: DialogHandlers): HTMLElement {
           h('h3', null, 'To settle up right now'),
           h('ul', null, payments.map((p) => h('li', null, h('b', null, p.from), ' pays ', h('b', null, p.to), ` ${formatAmount(p.amount, view.config)}`))),
           h('p.note', null, 'Counts chips still on the table as if everyone cashed out now.'),
+          copyEl(view, handlers),
         )
       : null,
   );

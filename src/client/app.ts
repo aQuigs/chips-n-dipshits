@@ -1048,6 +1048,8 @@ export class App {
             openRebuy: () => this.openDialog({ kind: 'rebuy' }),
             openAsked: () => this.openDialog({ kind: 'chipsAsked' }),
             openStanding: () => this.openDialog({ kind: 'straddles' }),
+            openLedger: () => this.openDialog({ kind: 'ledger' }),
+            openTonight: () => this.openDialog({ kind: 'tonight' }),
             replay: (hand) => this.replayHand(hand),
             sizing: screen.sizing,
             say: (message) => this.announcer.status(message),
@@ -1169,23 +1171,33 @@ export class App {
     const muted = screen.mutes.ids();
     const shows = [screen.shape, view.you, view.hostId, view.cohostIds, view.running, view.nextHandAt, view.nightEndedAt, view.config.actionSeconds, view.seats, handDrawn(view.hand), view.tonight.highHand.next, myRequest, picking, turning, chances, muted];
 
-    screen.stage.draw(shows, () => {
-      return tableEl(
-        view,
-        screen.shape,
-        this.clock.offset,
-        {
-          onSit: (seat) => this.openDialog({ kind: 'sit', seat }),
-          onStart: () => this.send({ type: 'start' }),
-          onPlayOn: () => this.send({ type: 'playOn' }),
-          onHunt: (hand) => void this.hunt(hand),
-          moving: screen.seatMoves.tableHandlers(),
-          muted: new Set(muted),
-        },
-        turning,
-        chances,
+    const draw = (): boolean =>
+      screen.stage.draw(shows, () =>
+        tableEl(
+          view,
+          screen.shape,
+          this.clock.offset,
+          {
+            onSit: (seat) => this.openDialog({ kind: 'sit', seat }),
+            onStart: () => this.send({ type: 'start' }),
+            onInvite: () => this.openDialog({ kind: 'invite' }),
+            onPlayOn: () => this.send({ type: 'playOn' }),
+            onHunt: (hand) => void this.hunt(hand),
+            moving: screen.seatMoves.tableHandlers(),
+            muted: new Set(muted),
+          },
+          turning,
+          chances,
+        ),
       );
-    });
+
+    // With no game on, the felt's gold button changes by itself: Invite players becomes Start the game as the second
+    // player sits down, and a tap on its way to the one must not start the game. During a game the table has no such button
+    if (view.running) {
+      draw();
+    } else {
+      screen.taps.byItself(draw);
+    }
 
     screen.seatMoves.redrawn();
 

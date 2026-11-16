@@ -1,3 +1,7 @@
+import { formatAmount } from '../engine/amounts.ts';
+import type { TableConfig } from '../engine/types.ts';
+import type { TableView } from '../engine/view.ts';
+
 export interface Balance {
   name: string;
   /** Chips won (positive) or lost (negative). */
@@ -42,4 +46,34 @@ export function settleUp(balances: readonly Balance[]): Payment[] {
   }
 
   return payments;
+}
+
+/**
+ * Who pays whom to square the table's ledger as it stands. The one list: the Ledger shows it, its
+ * text is copied from it and the recap of a night quotes the viewer's part of it, so no two places
+ * can say different sums of real money.
+ */
+export function settlement(view: TableView): Payment[] {
+  return settleUp([...view.ledger].sort((a, b) => b.net - a.net));
+}
+
+/** A payment in the words of the Ledger's list. */
+export const paymentText = (payment: Payment, config: TableConfig): string => `${payment.from} pays ${payment.to} ${formatAmount(payment.amount, config)}`;
+
+/** The list as text for the group chat: the table's name, then a payment a line. */
+export function settleUpText(view: TableView): string {
+  return [`${view.config.name}: to settle up`, ...settlement(view).map((payment) => paymentText(payment, view.config))].join('\n');
+}
+
+/** The payments the viewer is part of, said to them; none for someone who is square or never bought in. */
+export function ownPayments(view: TableView): string[] {
+  const me = view.ledger.find((row) => row.playerId === view.you.id)?.name;
+
+  return settlement(view)
+    .filter((payment) => payment.from === me || payment.to === me)
+    .map((payment) => {
+      const amount = formatAmount(payment.amount, view.config);
+
+      return payment.from === me ? `You pay ${payment.to} ${amount}` : `${payment.from} pays you ${amount}`;
+    });
 }

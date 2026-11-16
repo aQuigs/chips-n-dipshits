@@ -1,7 +1,7 @@
 import type { Command } from '../../../engine/types.ts';
 import type { TableView } from '../../../engine/view.ts';
 import { h, holdWhile, sends } from '../../ui.ts';
-import { nightOver, startingText, startText } from '../night.ts';
+import { enoughSeated, nightOver, startingText, startText } from '../night.ts';
 import { hostOrCohost } from '../roles.ts';
 import { everyone, frame, MENU_GROUPS, seated, sendAndLeave } from './dialog.ts';
 import type { DialogHandlers, DialogKind, MenuEntry } from './dialog.ts';
@@ -39,7 +39,7 @@ export const pauseGame: MenuSend = {
 
 export const startGame: MenuSend = {
   action: 'start',
-  menu: { group: 'run', label: startText, who: (view) => hostOrCohost(view) && !view.running && !nightOver(view) },
+  menu: { group: 'run', label: startText, who: (view) => hostOrCohost(view) && !view.running && !nightOver(view) && enoughSeated(view) },
   sends: { type: 'start' },
   doing: startingText,
 };

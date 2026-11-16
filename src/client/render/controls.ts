@@ -16,6 +16,7 @@ import { timedOutText, turnedDownText } from '../ownNews.ts';
 import { choiceOn } from '../pendingChoice.ts';
 import { AHEAD_ORDER, aheadLabel } from '../preActions.ts';
 import { FIT_ROW, fitted } from '../rowFit.ts';
+import { settlement } from '../settle.ts';
 import { showOffer } from '../showing.ts';
 import type { Waiting } from '../shownTable.ts';
 import { amountSaid, LABELS, NOT_ON_OFFER, sizedSaid } from '../spoken.ts';
@@ -34,6 +35,10 @@ export interface ControlHandlers {
   openAsked(): void;
   /** Opens the player's standing choices: the straddles and the chop the table does for them. */
   openStanding(): void;
+  /** Opens the Ledger, where who pays whom is. */
+  openLedger(): void;
+  /** Opens Tonight: the night's numbers, and its recap once it is over. */
+  openTonight(): void;
   /** Plays hand number `hand` back over the table, from the history. Resolves once it is up, or once the viewer has been told why not. */
   replay(hand: number): Promise<unknown>;
   sizing: Sizing;
@@ -537,8 +542,8 @@ function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandle
   const own = ownNote(settling.note, hand, view, turnedDown);
   const showCards = showCardsEl(view, seat, handlers);
   const replay = own ? null : replayEl(view, seat, handlers);
-  // Once the night is over the bar offers the last hand to see again, and nothing else
-  const line = nightOver(view) ? spareLine(replay) : spareLine(replay, showCards, ...settling.buttons);
+  // Once the night is over the bar offers what is left to do: settle up, look the night over, see the last hand again
+  const line = nightOver(view) ? spareLine(...nightOverButtons(view, handlers), replay) : spareLine(replay, showCards, ...settling.buttons);
 
   let main: HTMLElement;
   if (waiting === 'sent') {
@@ -592,6 +597,16 @@ function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandle
   }
 
   return h('div.controls.seated', null, main, line, h(`div.extras.${FIT_ROW}`, null, extras));
+}
+
+/**
+ * What a night that is over leaves to do, for anyone at the table: who pays whom, when anyone does,
+ * and the night's numbers. Each opens what the menu would, three taps sooner.
+ */
+function nightOverButtons(view: TableView, handlers: ControlHandlers): HTMLElement[] {
+  const open = (action: string, label: string, dialog: () => void): HTMLElement => h('button.chip-btn', { type: 'button', 'data-action': action, onclick: dialog }, label);
+
+  return [...(settlement(view).length > 0 ? [open('settle-up', 'Settle up', handlers.openLedger)] : []), open('tonight', 'Tonight', handlers.openTonight)];
 }
 
 /**
@@ -711,7 +726,12 @@ export function controlsEl(view: TableView, handlers: ControlHandlers, waiting: 
     return h('div.controls', null, waitingEl({ about: 'turned-down', text: [`${turnedDownText(turnedDown)}. Pick an open seat to ask again.`] }, view));
   }
 
-  return h('div.controls', null, waitingEl(nightOver(view) ? 'The night is over' : 'You are watching. Pick an open seat to play.', view));
+  if (nightOver(view)) {
+    // Someone watching may have played tonight too, and has the same to settle
+    return h('div.controls', null, waitingEl('The night is over', view), spareLine(...nightOverButtons(view, handlers)));
+  }
+
+  return h('div.controls', null, waitingEl('You are watching. Pick an open seat to play.', view));
 }
 
 /**
@@ -733,7 +753,7 @@ export function controlsSignature(view: TableView): string {
     seat && [seat.stack, seat.pendingAdd, seat.sittingOut, timedOutNote(view, seat), seat.straddles, seat.alwaysChop, seat.leaving, seat.owesBigBlind, seat.owesSmallBlind, seat.comesIn, seat.shown],
     hand && [hand.number, hand.stage, hand.street, hand.toAct, hand.turn, hand.currentBet, hand.pot, hand.options, hand.canOfferChop, hand.canAnswerChop, hand.canVote, hand.canShow, hand.passedOver],
     [hand?.ahead, view.preAction],
-    [view.running, view.nextHandAt !== null, view.handCount === 0, nightOver(view), hand?.stage === 'done' && onLastHand(view), seat && handToReplay(view, seat)],
+    [view.running, view.nextHandAt !== null, view.handCount === 0, nightOver(view), nightOver(view) && settlement(view).length > 0, hand?.stage === 'done' && onLastHand(view), seat && handToReplay(view, seat)],
     view.requests.filter((request) => request.playerId === view.you.id),
     [straddlesAllowed(view.config).map((kind) => kind.what), view.config.allowChop, view.config.maxBuyIn, view.config.smallBlind, view.config.bigBlind],
     nextHandNote(view),

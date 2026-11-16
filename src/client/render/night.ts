@@ -9,6 +9,13 @@ export const onLastHand = (view: TableView): boolean => view.hand !== null && vi
  * menu alike. With a hand still on the table the game was paused during it and plays it out, so
  * starting only takes the pause back.
  */
+/**
+ * Whether the game has the two players it takes. Until it has, starting it is not offered: a game
+ * started early deals its first hand as the second player sits down, and everyone who sits down after
+ * that begins the night owing a big blind.
+ */
+export const enoughSeated = (view: TableView): boolean => view.seats.filter((seat) => seat !== null).length >= 2;
+
 export function startText(view: TableView): string {
   if (view.hand) {
     return 'Call off the pause';

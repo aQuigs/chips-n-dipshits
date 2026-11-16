@@ -43,6 +43,7 @@ import { runChecks } from './checkRunner.ts';
 import { layoutSweep } from './layoutSweep.ts';
 import { confirmChecks } from './confirmChecks.ts';
 import { menuChecks } from './menuChecks.ts';
+import { nextStepChecks } from './nextStepChecks.ts';
 import { ownClockChecks } from './ownClockChecks.ts';
 import { PLAYERS_CHECKS } from './playersChecks.ts';
 import { preferencesChecks } from './preferencesChecks.ts';
@@ -13929,6 +13930,7 @@ const CHECKS: Check[] = [
   ...PLAYERS_CHECKS,
   ...tableSaysChecks(OUT),
   ...BUSY_CHECKS,
+  ...nextStepChecks(OUT),
 ];
 
 await mkdir(OUT, { recursive: true });

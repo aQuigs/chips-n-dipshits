@@ -605,7 +605,8 @@ interface Reactions {
   plates: Record<string, Box>;
 }
 
-// Run in the page: the reactions it shows, once it shows one of each of `kinds`
+// Run in the page: the reactions it shows, once it shows one of each of `kinds` at its own size. With motion
+// on a mark comes up small or lands squashed and is itself within half a second, and stays so until it goes
 const reactionsWith = (kinds: string[]) => `(() => {
   const box = (element) => {
     const { left, top, right, bottom } = element.getBoundingClientRect();
@@ -613,16 +614,20 @@ const reactionsWith = (kinds: string[]) => `(() => {
     return { left, top, right, bottom };
   };
 
-  const marks = [...document.querySelectorAll('.seat-reaction')].map((mark) => ({ kind: mark.dataset.reaction, seat: mark.dataset.seat, label: mark.getAttribute('aria-label'), box: box(mark) }));
+  const itself = (mark) => getComputedStyle(mark).scale.split(' ').every((part) => part === 'none' || Math.abs(Number(part) - 1) < 0.001);
+  const shown = [...document.querySelectorAll('.seat-reaction')];
+  const ofKind = (kind) => shown.filter((mark) => mark.dataset.reaction === kind);
+  const marks = shown.map((mark) => ({ kind: mark.dataset.reaction, seat: mark.dataset.seat, label: mark.getAttribute('aria-label'), box: box(mark) }));
   const plates = Object.fromEntries([...document.querySelectorAll('.seat[data-seat] .plate')].map((plate) => [plate.closest('.seat').dataset.seat, box(plate)]));
 
-  return ${JSON.stringify(kinds)}.every((kind) => marks.some((mark) => mark.kind === kind)) && { marks, plates };
+  return ${JSON.stringify(kinds)}.every((kind) => ofKind(kind).length > 0 && ofKind(kind).every(itself)) && { marks, plates };
 })()`;
 
 /**
- * The reactions a page shows in the moment it first has one of each of `kinds`, which is waited for. All
- * that is asked about them is read from this one look: the page takes a mark down after a few seconds by a
- * timer of its own, which a machine busy with other checks uses up between one reading and the next.
+ * The reactions a page shows in the moment it first has one of each of `kinds` standing at its own size,
+ * which is waited for. All that is asked about them is read from this one look: the page takes a mark down
+ * after a few seconds by a timer of its own, which a machine busy with other checks uses up between one
+ * reading and the next.
  */
 async function reactionsShown(page: Page, ...kinds: string[]): Promise<Reactions> {
   const read = await page.waitForFunction(reactionsWith(kinds)).catch((error: unknown) => {
@@ -8389,7 +8394,15 @@ const CHECKS: Check[] = [
         ['ledger', 'Ledger'],
       ] as const;
       const dialog = (label: string) => `.dialog[aria-label="${label}"]`;
-      const drawn = (label: string) => quigs.evaluate(`document.querySelector(${JSON.stringify(dialog(label))}).outerHTML`) as Promise<string>;
+
+      // Read once nothing in it is held back from a tap: a dialog comes up where the menu's lines lay, and what is
+      // held says so in its markup for a moment, which a reading made sooner has and one made later lacks
+      const drawn = async (label: string) => {
+        await tapsLive(quigs);
+
+        return quigs.evaluate(`document.querySelector(${JSON.stringify(dialog(label))}).outerHTML`) as Promise<string>;
+      };
+
       const open = async (action: string, label: string) => {
         await press('[data-action="menu"]');
         await press(`.menu [data-action="${action}"]`);

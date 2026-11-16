@@ -427,6 +427,22 @@ const TABLE_STATES = {
       return table;
     },
   },
+  peopleSaid: {
+    shows: 'the chat’s bar counting what people said with the list out of the viewer’s sight, one line of it naming them',
+    seats: [9],
+    build(rig, seats) {
+      const table = tableWithTrophy(rig, seats, EVEN);
+
+      table.dealNext({ holes: holesFor(seats) });
+
+      return table;
+    },
+    async onPage(page, table) {
+      table.act(WIDEST, { type: 'chat', text: `@${VIEWER} pizza is here` });
+      table.act(WIDEST, { type: 'chat', text: 'and it will not keep warm for as long as this hand is taking you' });
+      await table.heardBy(page);
+    },
+  },
 } satisfies Record<string, TableState>;
 
 interface Size {

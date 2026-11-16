@@ -37,6 +37,22 @@
   text-transform: uppercase;
 }
 
+/* How many lines people have said that the viewer has not had in sight, beside the bar's name: the bar shows one line, and the dealer's next takes it */
+.feed-toggle .unread {
+  flex: none;
+  min-width: 1.6em;
+  margin-left: -4px;
+  padding: 0 0.4em;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  color: var(--accent);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  line-height: 1.4;
+  text-align: center;
+}
+
 .feed-toggle .latest {
   flex: 1;
   min-width: 0;

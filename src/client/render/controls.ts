@@ -6,10 +6,11 @@ import { capitalized, cardWords } from '../../engine/handNames.ts';
 import { preActionFor } from '../../engine/preAction.ts';
 import { timesText } from '../../engine/runVote.ts';
 import { straddlesAllowed } from '../../engine/straddles.ts';
-import type { Command, PassedOver, RequestKind } from '../../engine/types.ts';
+import type { Command, PassedOver, RequestKind, TableConfig } from '../../engine/types.ts';
 import { LIMITS } from '../../engine/validate.ts';
 import type { HandView, SeatView, TableView } from '../../engine/view.ts';
 import { ownDeadline } from '../actionClock.ts';
+import { betStops } from '../betStops.ts';
 import { askedSays, chipsAsked, outOfChips, roomToAdd } from '../buyIns.ts';
 import { lastOnRecord } from '../handRecords.ts';
 import { HOTKEYS } from '../hotkeys.ts';
@@ -134,7 +135,7 @@ function ownClockEl(view: TableView): HTMLElement | null {
  * itself, so it survives until the turn changes. Every move names the decision it answers, so it can't
  * be played on a later one.
  */
-function turnPanel(table: Denominated, hand: HandView, stack: number, handlers: ControlHandlers, clock: HTMLElement | null): HTMLElement {
+function turnPanel(table: Denominated & Pick<TableConfig, 'smallBlind' | 'bigBlind'>, hand: HandView, stack: number, handlers: ControlHandlers, clock: HTMLElement | null): HTMLElement {
   const options = hand.options!;
   const { minRaiseTo, maxRaiseTo, callAmount, callCost } = options;
   const opening = hand.currentBet === 0;
@@ -142,8 +143,10 @@ function turnPanel(table: Denominated, hand: HandView, stack: number, handlers: 
 
   const decision = decisionOf(hand);
   const raiseButton = h('button.btn.raise', { type: 'button', 'data-action': 'raise', 'data-hotkey': HOTKEYS.raise });
+  // The slider counts its stops, which are amounts in whole blinds between two exact ends (`betStops`). The box takes any amount
+  const stops = betStops(minRaiseTo, maxRaiseTo, table);
   // A bet being sized outlasts the bar being drawn again for the same decision (`Slot`), as when the host approves chips mid-turn
-  const slider = h('input', { type: 'range', id: 'raise-slider', min: minRaiseTo, max: maxRaiseTo, step: 1, 'aria-label': 'Bet size', 'data-keep': decision });
+  const slider = h('input', { type: 'range', id: 'raise-slider', min: 0, max: stops.last, step: 1, 'aria-label': 'Bet size', 'data-keep': decision });
   const amount = h('input', { type: 'text', id: 'raise-amount', inputmode: hasDecimals(table) ? 'decimal' : 'numeric', autocomplete: 'off', 'aria-label': 'Bet size', 'data-keep': decision });
 
   let raiseTo = minRaiseTo;
@@ -153,7 +156,7 @@ function turnPanel(table: Denominated, hand: HandView, stack: number, handlers: 
     raiseTo = clamp(Math.round(value) || minRaiseTo, minRaiseTo, maxRaiseTo);
 
     if (from !== slider) {
-      slider.value = String(raiseTo);
+      slider.value = String(stops.stopOf(raiseTo));
     }
 
     if (from !== amount) {
@@ -162,7 +165,7 @@ function turnPanel(table: Denominated, hand: HandView, stack: number, handlers: 
 
     amount.setCustomValidity('');
     amount.removeAttribute('aria-invalid');
-    // The slider counts in the table's smallest unit, which is not how an amount is said
+    // The slider counts its stops, which is not how an amount is said
     slider.setAttribute('aria-valuetext', amountSaid(raiseTo, table));
     raiseButton.removeAttribute('aria-disabled');
     nameMove(raiseButton, raiseMove(), raiseTo, table);
@@ -197,7 +200,7 @@ function turnPanel(table: Denominated, hand: HandView, stack: number, handlers: 
     }
   };
 
-  slider.addEventListener('input', () => choose(Number(slider.value), slider));
+  slider.addEventListener('input', () => choose(stops.amountAt(Number(slider.value)), slider));
   amount.addEventListener('input', readBox);
   bareWhileTyped(amount, table);
   // Only the box is tidied. The box loses the keyboard as a press on Raise begins, and a button redrawn under that press never hears it

@@ -38,6 +38,7 @@ import type { Flight, Spots } from './pageSpies.ts';
 import { STAND_IN_HOST } from './standInHost.ts';
 import { focused, focusIn, heard, SPOKEN, spoken } from './a11y.ts';
 import { ACCESSIBILITY_CHECKS } from './accessibilityChecks.ts';
+import { barSmallChecks } from './barSmallChecks.ts';
 import { BUSY_CHECKS } from './busyChecks.ts';
 import { runChecks } from './checkRunner.ts';
 import { layoutSweep } from './layoutSweep.ts';
@@ -3736,9 +3737,10 @@ const CHECKS: Check[] = [
           assert.equal(await text(page, raiseButton), `Raise to ${expected}`, preset);
         }
 
-        await page.locator('#raise-slider').fill('4321');
-        assert.equal(await page.inputValue('#raise-amount'), '43.21');
-        assert.equal(await text(page, raiseButton), 'Raise to 43.21');
+        // The slider stops at whole blinds, read in dollars: the 85th after the least raise of 1.00 is 43.50 at 0.25/0.50
+        await page.locator('#raise-slider').fill('85');
+        assert.equal(await page.inputValue('#raise-amount'), '43.50');
+        assert.equal(await text(page, raiseButton), 'Raise to 43.50');
 
         // A third decimal is neither rounded nor swapped for the last amount that could be read
         await typeAmount('1.555');
@@ -13933,6 +13935,7 @@ const CHECKS: Check[] = [
   ...BUSY_CHECKS,
   ...nextStepChecks(OUT),
   ...formChecks(OUT),
+  ...barSmallChecks(OUT),
 ];
 
 await mkdir(OUT, { recursive: true });

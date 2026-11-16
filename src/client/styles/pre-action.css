@@ -3,15 +3,23 @@
 /*
  * The choices take the top of the bar and the waiting line goes to the bottom, where the buttons of a
  * turn come up: a tap meant for a choice that lands as the action arrives finds the bet sizes there,
- * which play nothing, never a move. `--ahead-height` is the room the choices take, by how many rows
- * the bar's shape lays them out in. It is kept on the slot the bar is drawn in, which beside a table
- * lying down sizes itself by it (sideways.css).
+ * which play nothing, never a move. `--ahead-height` is the room the choices take of what a turn
+ * takes, by how many rows the bar's shape lays them out in. It is kept on the slot the bar is drawn
+ * in, which beside a table lying down sizes itself by it (sideways.css).
+ *
+ * Where the line that says what the choices are for is a line of its own, over them, `--ahead-title`
+ * is its height with the gap under it. The bar has that much to spare only while its notes are short:
+ * with word of the hands to come and of a straddle passed over, each at its longest, it has 14px at
+ * the usual size of text and less at the largest. So most of the line lies in the bar's own padding
+ * over the choices (`--ahead-lift`), it is as small as the page's small print, and it does not grow.
  */
 .controls-slot {
   --ahead-row: 34px;
   --ahead-rows: 1;
   --ahead-gap: 6px;
-  --ahead-height: calc(var(--ahead-rows) * (var(--ahead-row) + var(--ahead-gap)) - var(--ahead-gap));
+  --ahead-title: 14px;
+  --ahead-lift: 8px;
+  --ahead-height: calc(var(--ahead-title) - var(--ahead-lift) + var(--ahead-rows) * (var(--ahead-row) + var(--ahead-gap)) - var(--ahead-gap));
 }
 
 /* As tall as the chip buttons a finger gets */
@@ -28,7 +36,8 @@
  */
 .controls.seated > .waiting.choosing {
   align-content: space-between;
-  min-height: max(var(--turn-height), calc(var(--ahead-height) + 8px + 50px));
+  min-height: calc(max(var(--turn-height), calc(var(--ahead-height) + 8px + 50px)) + var(--ahead-lift));
+  margin-top: calc(-1 * var(--ahead-lift));
 }
 
 /*
@@ -90,23 +99,28 @@
 }
 
 /*
- * Under a table on a phone the five share one row, each as wide as its longest words need, and say
- * what they are for to a screen reader only: a second row would cost the bar what it keeps for word
- * of the next hand.
+ * Under a table on a phone the five share one row, each as wide as its longest words need: a second
+ * row would cost the bar what it keeps for word of the next hand. What they are for is a small line
+ * over them: without it a new player takes Fold for a button that folds now.
  */
 .ahead {
+  position: relative;
   display: grid;
   grid-template-columns: 7fr 9fr 8fr 12fr 9fr;
   grid-auto-rows: var(--ahead-row);
   gap: var(--ahead-gap);
   width: 100%;
+  padding-top: var(--ahead-title);
 }
 
 .ahead-title {
-  display: none;
-  align-self: center;
+  position: absolute;
+  top: 0;
+  left: 0;
   color: var(--muted);
-  font-size: calc(12px * var(--text-scale));
+  font-size: 11px;
+  line-height: 12px;
+  white-space: nowrap;
 }
 
 .ahead-btn {
@@ -150,10 +164,50 @@
   color: var(--bad-ink);
 }
 
-/* Anywhere but under the table of a phone standing up there is room for bigger words, and for what the choices are for at their head */
+/*
+ * The choice that is set says so by more than its fill, which is one color among five to an eye that
+ * tells few apart and nothing at all where the system draws the colors: a check mark on its corner,
+ * clear of the words, which have no width to give it.
+ */
+.ahead-btn[aria-pressed='true'] {
+  position: relative;
+}
+
+.ahead-btn[aria-pressed='true']::after {
+  content: '✓';
+  position: absolute;
+  top: -6px;
+  right: 2px;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border: 1px solid currentcolor;
+  border-radius: 50%;
+  background: var(--bg-raised);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.ahead-fold[aria-pressed='true']::after {
+  color: var(--bad);
+}
+
+/* Anywhere but under the table of a phone standing up there is room for bigger words, and what the choices are for stands at their head, not over them */
 @container app ((min-width: 640px) and (min-height: 521px)) or ((min-width: 560px) and (max-height: 520px)) {
+  .controls-slot {
+    --ahead-title: 0px;
+    --ahead-lift: 0px;
+  }
+
   .ahead-title {
-    display: block;
+    position: static;
+    align-self: center;
+    font-size: calc(12px * var(--text-scale));
+    line-height: inherit;
+    white-space: normal;
   }
 
   .ahead-btn {
@@ -196,6 +250,18 @@
   }
 
   .app:has(.feed.open) .waiting.choosing:not(:has([aria-pressed='true'])) .ahead {
+    display: none;
+  }
+}
+
+/* And where the line over the choices is a line of its own, it goes with them: the one that is left is the viewer's own choice */
+@container app (max-width: 559.98px) or ((max-width: 639.98px) and (min-height: 521px)) {
+  .app:has(.feed.open) .controls-slot {
+    --ahead-title: 0px;
+    --ahead-lift: 0px;
+  }
+
+  .app:has(.feed.open) .ahead-title {
     display: none;
   }
 }

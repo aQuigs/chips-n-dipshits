@@ -53,17 +53,17 @@ export const MAY_BE_CUT: MayBeCut[] = [
   { is: '.tag .name .detail', whole: 'title', orLeftOut: true },
   { is: '.sidepots', whole: 'title' },
   { is: '.waiting.choosing .waiting-for', whole: 'title' },
-  { is: '.waiting.choosing .named', whole: 'title' },
+  { is: '.waiting.set-close .named', whole: 'title' },
 ];
 
 // The least of a name that may be left to read when it is cut short, in its own font size; a shorter one shows whole
 const LEAST_OF_A_NAME_EM = 3;
 
 /** The parts of the screen that scroll: what is scrolled out of sight in one is not missing. */
-export const SCROLLS = '.entries, .dialog-body, .scroll-x, .react-panel, .replay-line, .replay-log, .who-list, #mention-list, .lobby, .extras, .controls-slot';
+export const SCROLLS = '.entries, .dialog-body, .scroll-x, .react-panel, .replay-line, .replay-log, .who-list, #mention-list, .lobby, .controls-slot';
 
 /** The few of them that are a line swiped along. The rest scroll down, and what is past the side of one of those is cut off, not scrolled away. */
-export const SWIPED = '.scroll-x, .extras, #mention-list';
+export const SWIPED = '.scroll-x, #mention-list';
 
 /** What is missing even so when it has to be scrolled to: the moves of a turn, with the clock running on them. */
 export const ALWAYS_IN_SIGHT = '.turn .buttons button, .turn .buttons button *';

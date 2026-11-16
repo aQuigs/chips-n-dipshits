@@ -36,9 +36,10 @@
  * table waits for, the hands to come and a straddle passed over, each at its longest, made it taller
  * than the turn's, and the table jumped when the turn came. So beside the choices the rest is set
  * closer: word of the hands to come runs on as one piece of text, the notes are a size smaller, and a
- * name is cut short where it would take a line more, the whole of it in its title.
+ * name is cut short where it would take a line more, the whole of it in its title. The notes are set
+ * the same over the bar's spare line of buttons (controls.css), which comes out of that height too.
  */
-.controls.seated > .waiting.choosing {
+.controls.seated > .waiting.set-close {
   gap: 2px;
 }
 
@@ -49,22 +50,22 @@
   white-space: nowrap;
 }
 
-.waiting.choosing :is(.next-hand, .own-note) {
+.waiting.set-close :is(.next-hand, .own-note) {
   font-size: 13px;
   line-height: 1.25;
 }
 
-.controls.seated > .waiting.choosing .next-hand {
+.controls.seated > .waiting.set-close .next-hand {
   display: block;
 }
 
-.waiting.choosing .next-hand span + span::before {
+.waiting.set-close .next-hand span + span::before {
   content: ' · ';
 }
 
 /* Only under the table of a phone standing up, the one bar where the whole name costs the note a line */
 @container app (max-width: 639.98px) {
-  .waiting.choosing .named {
+  .waiting.set-close .named {
     display: inline-block;
     max-width: 9ch;
     overflow: hidden;

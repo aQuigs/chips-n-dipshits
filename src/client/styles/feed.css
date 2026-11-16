@@ -59,8 +59,8 @@
 
 /*
  * Stacked, as on a phone held upright, an open chat takes its room from the bar under the table
- * before it takes the table's: the bar gives up the height it keeps for a turn, and its extras go on
- * one line. With the chat closed the bar is as tall as ever, so the table doesn't jump between turns.
+ * before it takes the table's: the bar gives up the height it keeps for a turn. With the chat closed
+ * the bar is as tall as ever, so the table doesn't jump between turns.
  */
 @container app ((max-width: 899.98px) and (min-height: 521px)) or (max-width: 559.98px) {
   /*
@@ -80,19 +80,13 @@
     --turn-height: 0px;
   }
 
-  /* With no height kept for a turn, the line of the button to see the last hand again would come out of the table's */
-  .app:has(.feed.open) .controls > .replay-last {
+  /*
+   * With no height kept for a turn, the bar's spare line comes out of the chat's. For the button to see
+   * the last hand again that is not worth it, and the button is left out. Cards to show at a hand's end
+   * and blinds to settle are: the line takes its height for as long as they are on it, as a turn does.
+   */
+  .app:has(.feed.open) :is(.replay-last, .spare-line:has(> .replay-last:only-child)) {
     display: none;
-  }
-
-  .app:has(.feed.open) .extras {
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    scrollbar-width: none;
-  }
-
-  .app:has(.feed.open) .extras > * {
-    flex: none;
   }
 }
 

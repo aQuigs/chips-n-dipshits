@@ -1117,6 +1117,14 @@ export function overlap(a: Box, b: Box): boolean {
   return a.left < b.right - 1 && b.left < a.right - 1 && a.top < b.bottom - 1 && b.top < a.bottom - 1;
 }
 
+/**
+ * What each element matching a selector says in full. On a row of the bar held to one line a label may
+ * be said in brief (src/client/rowFit.ts), and how much of it depends on the screen and the font.
+ */
+export function saidInFull(page: Page, selector: string): Promise<string[]> {
+  return page.evaluate(`[...document.querySelectorAll(${JSON.stringify(selector)})].map((one) => one.querySelector('.fitted')?.dataset.full ?? one.innerText)`) as Promise<string[]>;
+}
+
 /** The text of every element matching a selector that has less room than its text needs, so not all of it can be read. */
 export async function squeezed(page: Page, selector: string): Promise<string[]> {
   return page.evaluate(

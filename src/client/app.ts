@@ -26,6 +26,7 @@ import { pagePace } from './pagePace.ts';
 import { TapGuard } from './pageTapGuard.ts';
 import { noReplayLine, pageTicker } from './replayPlayer.ts';
 import { ReplayScreen } from './replayScreen.ts';
+import { RowFit } from './rowFit.ts';
 import { neededBy } from './replayTurn.ts';
 import { ReactionMarks } from './reactionMarks.ts';
 import { ReactionPicker } from './render/reactionPicker.ts';
@@ -81,6 +82,8 @@ interface TableScreen {
   controls: Slot;
   /** Holds back a tap on a control of the bar that came up where another lay a moment before. */
   taps: TapGuard;
+  /** Keeps each row of the bar that is held to one line on its line. */
+  rows: RowFit;
   overlay: Slot;
   modal: Modal;
   feed: Feed;
@@ -641,6 +644,7 @@ export class App {
       banners: new Slot(h('section.banners', { 'aria-label': LABELS.notices, tabindex: -1, hidden: true }), taps),
       stage,
       controls,
+      rows: new RowFit(bar, (fit) => taps.byItself(fit)),
       taps,
       overlay,
       modal: new Modal(overlay.element),
@@ -710,6 +714,7 @@ export class App {
     this.screen?.picker.dispose();
     this.screen?.seatMoves.dispose();
     this.screen?.taps.dispose();
+    this.screen?.rows.dispose();
     this.screen?.stopMutes();
     this.screen?.replay.close();
     this.screen = null;
@@ -937,20 +942,24 @@ export class App {
     const waiting = screen.shown.waiting;
     // A choice of a move ahead draws the bar again the moment it is pressed, and whoever pressed it with a key is still on it:
     // the slot finds that button again. It finds no other, so no key press lands on a button of the turn that came up in its place
-    const redrawn = screen.controls.draw([controlsSignature(view), waiting], () =>
-      controlsEl(
-        view,
-        {
-          send: (command) => this.send(command),
-          showCards: (hand, places) => this.showCards(hand, places),
-          openRebuy: () => this.openDialog({ kind: 'rebuy' }),
-          openStraddles: () => this.openDialog({ kind: 'straddles' }),
-          replay: (hand) => this.replayHand(hand),
-          sizing: screen.sizing,
-          say: (message) => this.announcer.status(message),
-        },
-        waiting,
-      ),
+    const redrawn = screen.controls.draw(
+      [controlsSignature(view), waiting],
+      () =>
+        controlsEl(
+          view,
+          {
+            send: (command) => this.send(command),
+            showCards: (hand, places) => this.showCards(hand, places),
+            openRebuy: () => this.openDialog({ kind: 'rebuy' }),
+            openStanding: () => this.openDialog({ kind: 'straddles' }),
+            replay: (hand) => this.replayHand(hand),
+            sizing: screen.sizing,
+            say: (message) => this.announcer.status(message),
+          },
+          waiting,
+        ),
+      // Before the tap guard looks: a label that shortens moves the buttons beside it
+      () => screen.rows.drawn(),
     );
 
     if (redrawn) {

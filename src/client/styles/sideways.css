@@ -90,6 +90,12 @@
     --turn-height: 0px;
   }
 
+  /* Nor holding to one line: the bar is narrow here, and what does not fit a line goes onto the next */
+  .fit-row {
+    flex-wrap: wrap;
+    height: auto;
+  }
+
   .turn .buttons {
     grid-auto-flow: row;
     grid-template-columns: 1fr 1fr;

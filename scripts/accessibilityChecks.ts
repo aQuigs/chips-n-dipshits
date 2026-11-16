@@ -1038,8 +1038,6 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
       type Measured = { dialog: number; bar: number; title: number; own: number; pot: number; others: number; sizing: number[]; moves: number; extraRows: number; movesInSight: boolean; offTheSide: number };
       // What a move's words may add to the height of their row by taking a second line
       const SECOND_LINE = 8;
-      // The rows the switches under the moves take at 360 wide as drawn, which the table already makes room for
-      const EXTRA_ROWS = 2;
       // Sizes as the browser reports them, which is to a fraction of a pixel no eye can tell
       const sized = (found: number[], expected: number[], where: string) =>
         assert.ok(
@@ -1080,12 +1078,12 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
           }
 
           // Under the table the bar takes its height from the table's, so it keeps its rows whatever the font: no row of the
-          // bet's sizes wraps, the moves grow by a second line at most, and the switches under them take no more rows than
-          // the table has room for. Beside the table, on a phone on its side, its height costs the table nothing
+          // bet's sizes wraps, the moves grow by a second line at most, and the switches under them stay on their one line.
+          // Beside the table, on a phone on its side, its height costs the table nothing
           if (screen === 'smallPhone') {
             assert.deepEqual(found.sizing, drawn.sizing, `${where}: a row of the bet’s sizes is taller than it was drawn`);
             assert.ok(found.moves - drawn.moves <= SECOND_LINE, `${where}: the moves’ row grew by ${found.moves - drawn.moves}px`);
-            assert.ok(found.extraRows <= Math.max(drawn.extraRows, EXTRA_ROWS), `${where}: the switches under the moves take ${found.extraRows} rows`);
+            assert.equal(found.extraRows, 1, `${where}: the switches under the moves take ${found.extraRows} rows`);
           }
         }
       }

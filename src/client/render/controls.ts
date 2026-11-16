@@ -12,10 +12,13 @@ import { lastOnRecord } from '../handRecords.ts';
 import { HOTKEYS } from '../hotkeys.ts';
 import { choiceOn } from '../pendingChoice.ts';
 import { AHEAD_ORDER, aheadLabel } from '../preActions.ts';
+import { FIT_ROW, fitted } from '../rowFit.ts';
 import { showOffer } from '../showing.ts';
 import type { Waiting } from '../shownTable.ts';
 import { amountSaid, LABELS, NOT_ON_OFFER, sizedSaid } from '../spoken.ts';
+import { standingOf, standingSays } from '../standing.ts';
 import { cardEl, h, holdWhile } from '../ui.ts';
+import type { Child } from '../ui.ts';
 import { lastHandsText, nightOver, onLastHand } from './night.ts';
 
 export interface ControlHandlers {
@@ -24,8 +27,8 @@ export interface ControlHandlers {
   /** Shows the table the player's cards at `places` of that hand, 0 on their left. Resolves as `send` does. */
   showCards(hand: number, places: number[]): Promise<unknown>;
   openRebuy(): void;
-  /** Opens the player's own choice of straddles, at a table that allows more than one kind. */
-  openStraddles(): void;
+  /** Opens the player's standing choices: the straddles and the chop the table does for them. */
+  openStanding(): void;
   /** Plays hand number `hand` back over the table, from the history. Resolves once it is up, or once the viewer has been told why not. */
   replay(hand: number): Promise<unknown>;
   sizing: Sizing;
@@ -73,7 +76,7 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 /** A button for something other than a move in the hand. It waits for its own answer before it can be pressed again. */
-function commandButton(spec: `button.${string}`, action: string, label: string, send: () => Promise<unknown>): HTMLButtonElement {
+function commandButton(spec: `button.${string}`, action: string, label: Child, send: () => Promise<unknown>): HTMLButtonElement {
   const button = h(spec, { type: 'button', 'data-action': action }, label);
   button.addEventListener('click', () => holdWhile(button, send));
 
@@ -284,7 +287,7 @@ function runsQuestion(hand: HandView, handlers: ControlHandlers): HTMLElement {
   );
 }
 
-function toggle(label: string, on: boolean, action: string, onChange: (next: boolean) => Promise<unknown>): HTMLElement {
+function toggle(label: Child, on: boolean, action: string, onChange: (next: boolean) => Promise<unknown>): HTMLElement {
   const button = h('button.toggle', { type: 'button', role: 'switch', 'aria-checked': String(on), 'data-action': action }, h('i'), label);
   button.addEventListener('click', () => holdWhile(button, () => onChange(!on)));
 
@@ -364,7 +367,7 @@ function settlingOf(view: TableView, seat: SeatView, handlers: ControlHandlers):
   const amount = (seat.owesBigBlind ? view.config.bigBlind : 0) + (seat.owesSmallBlind ? view.config.smallBlind : 0);
   const owed = formatAmount(amount, view.config);
 
-  // Short, since they share a row of a phone with the switch for sitting out: the line above them says the rest
+  // Short, since they share a line of a phone: the note above them says the rest
   const post = (label: string) => commandButton('button.chip-btn', 'post-blinds', label, () => handlers.send({ type: 'comeIn', post: true }));
   const wait = (spec: `button.${string}`) => commandButton(spec, 'wait-for-blind', 'Wait for big blind', () => handlers.send({ type: 'comeIn', post: false }));
 
@@ -469,12 +472,13 @@ function aheadEl(view: TableView, hand: HandView, stack: number, handlers: Contr
   return h('div.ahead', { role: 'group', 'aria-label': 'Your move when the action reaches you' }, h('span.ahead-title', null, 'On your turn'), buttons);
 }
 
-function waitingEl(text: string, view: TableView, own: OwnNote | null = null, ahead: HTMLElement | null = null): HTMLElement {
+/** What the bar says while the viewer has no move to make. With `sharing`, a line of buttons under it (`spareLine`) comes out of the same height, and the notes are set closer for it (pre-action.css). */
+function waitingEl(text: string, view: TableView, own: OwnNote | null = null, ahead: HTMLElement | null = null, sharing = false): HTMLElement {
   const note = nextHandNote(view);
 
   return h(
     'div.waiting',
-    { class: ahead ? 'choosing' : '' },
+    { class: [ahead && 'choosing', (ahead || sharing) && 'set-close'].filter(Boolean).join(' ') },
     ahead,
     // Beside the choices the bar keeps the height of a turn, and its first line is cut short before it takes a second: the whole of it is its title
     ahead ? h('span.waiting-for', { title: text }, text) : text,
@@ -499,6 +503,10 @@ function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandle
   // With the night over no hand is coming to settle anything in; the seat still says who is waiting
   const settling = nightOver(view) ? { note: null, buttons: [] } : settlingOf(view, seat, handlers);
   const own = ownNote(settling.note, hand, view);
+  const showCards = showCardsEl(view, seat, handlers);
+  const replay = own ? null : replayEl(view, seat, handlers);
+  // Once the night is over the bar offers the last hand to see again, and nothing else
+  const line = nightOver(view) ? spareLine(replay) : spareLine(replay, showCards, ...settling.buttons);
 
   let main: HTMLElement;
   if (waiting === 'sent') {
@@ -514,66 +522,55 @@ function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandle
   } else {
     const text = waiting === 'unconfirmed' ? `Waiting for the table to confirm your ${seat.lastAction ?? 'move'}…` : waitingText(view, hand);
 
-    main = waitingEl(text, view, own, hand && aheadEl(view, hand, seat.stack, handlers));
+    main = waitingEl(text, view, own, hand && aheadEl(view, hand, seat.stack, handlers), line !== null);
   }
-
-  const showCards = showCardsEl(view, seat, handlers);
 
   // On the way out, nothing else here would still take effect: the seat is gone when the hand is
   if (seat.leaving) {
-    return h('div.controls.seated', null, h('div.waiting', null, 'You leave your seat when this hand ends'), h('div.extras', null, showCards));
+    return h('div.controls.seated', null, h('div.waiting', null, 'You leave your seat when this hand ends'), spareLine(showCards));
   }
-
-  const replay = own ? null : replayEl(view, seat, handlers);
 
   // Sitting out, straddling and adding chips are all for hands that are not coming
   if (nightOver(view)) {
-    return h('div.controls.seated', null, main, replay);
+    return h('div.controls.seated', null, main, line);
   }
 
   const extras: HTMLElement[] = [];
 
-  // Coming back owing blinds is a choice between two ways of settling them, which takes the place of the one button
+  // Coming back owing blinds is a choice between two ways of settling them, on the line above, which takes the place of the one button
   if (!seat.sittingOut && !seat.away) {
-    extras.push(toggle('Sit out next hand', false, 'sit-out', () => handlers.send({ type: 'sitOut' })));
+    extras.push(toggle(fitted({ full: 'Sit out next hand', brief: 'Sit out' }), false, 'sit-out', () => handlers.send({ type: 'sitOut' })));
   } else if (settling.buttons.length === 0) {
     extras.push(commandButton('button.chip-btn.strong', 'sit-in', "I'm back", () => handlers.send({ type: 'sitIn' })));
   }
 
-  extras.push(...settling.buttons);
+  const standing = standingOf(view);
 
-  const straddles = straddlesAllowed(view.config);
-  const [only] = straddles;
-
-  // One kind is a switch, as it always was. Several would not fit under a phone's table, so they are chosen in a dialog
-  if (only && straddles.length === 1) {
-    // The kind every table starts with is the one players know as the straddle; any other alone has to say which it is
-    const name = only.byDefault ? 'Straddle' : only.label;
-
-    extras.push(toggle(name, seat.straddles.includes(only.what), 'straddle', (on) => handlers.send({ type: 'setStraddle', kind: only.what, on })));
-  } else if (only) {
-    const on = seat.straddles.length;
-
-    extras.push(h('button.chip-btn', { type: 'button', 'data-action': 'straddles', onclick: handlers.openStraddles }, `Straddles: ${on > 0 ? `${on} on` : 'off'}`));
-  }
-
-  if (view.config.allowChop) {
-    extras.push(toggle('Always chop', seat.alwaysChop, 'always-chop', (on) => handlers.send({ type: 'setAlwaysChop', on })));
-  }
-
-  if (showCards) {
-    extras.push(showCards);
+  // What a player sets once a night is a tap away, in a dialog. A straddle that is on stands out: it costs chips every round
+  if (standing) {
+    extras.push(h('button.chip-btn', { type: 'button', class: standing.straddling.length > 0 ? 'strong' : '', 'data-action': 'straddles', onclick: handlers.openStanding }, fitted(standingSays(standing))));
   }
 
   if (myRequest?.kind === 'rebuy') {
-    extras.push(
-      commandButton('button.chip-btn', 'cancel-request', `Rebuy of ${formatAmount(myRequest.amount, view.config)} waiting for the host · Cancel`, () => handlers.send({ type: 'cancelRequest' })),
-    );
+    const full = `Rebuy of ${formatAmount(myRequest.amount, view.config)} waiting for the host · Cancel`;
+
+    // In brief without the amount, which can be as long as the rest of it
+    extras.push(commandButton('button.chip-btn', 'cancel-request', fitted({ full, brief: 'Rebuy waiting · Cancel' }), () => handlers.send({ type: 'cancelRequest' })));
   } else if (room > 0) {
     extras.push(h('button.chip-btn', { type: 'button', class: seat.stack === 0 ? 'strong' : '', 'data-action': 'rebuy', onclick: handlers.openRebuy }, 'Add chips'));
   }
 
-  return h('div.controls.seated', null, main, replay, h('div.extras', null, extras));
+  return h('div.controls.seated', null, main, line, h(`div.extras.${FIT_ROW}`, null, extras));
+}
+
+/**
+ * A line of buttons between what the bar says and its row of switches: the hand just played to see
+ * again and, once it is over, the player's cards to show, or the ways to settle the blinds a player
+ * owes. It comes out of the height the bar keeps for a turn (controls.css), the one room at the table
+ * nothing else is using while the player has no move to make, so the table gives up nothing for it.
+ */
+function spareLine(...buttons: (HTMLElement | null)[]): HTMLElement | null {
+  return buttons.some((button) => button !== null) ? h(`div.spare-line.${FIT_ROW}`, null, buttons) : null;
 }
 
 /**
@@ -597,10 +594,9 @@ function handToReplay(view: TableView, seat: SeatView): number | null {
 }
 
 /**
- * A button to see the last hand again. Its line comes out of the height the bar keeps for a turn
- * (controls.css), the one room at the table nothing else is using while the player has no move to
- * make, so the table gives up nothing for it. That holds while the bar says one thing: word of the
- * hands to come needs the height itself, as a line for the player alone does, and the button is left out.
+ * A button to see the last hand again, for the bar's spare line (`spareLine`). The line's height is
+ * spare while the bar says one thing: word of the hands to come needs it, as a line for the player
+ * alone does, and the button is left out.
  */
 function replayEl(view: TableView, seat: SeatView, handlers: ControlHandlers): HTMLElement | null {
   const number = handToReplay(view, seat);
@@ -609,7 +605,7 @@ function replayEl(view: TableView, seat: SeatView, handlers: ControlHandlers): H
     return null;
   }
 
-  const button = commandButton('button.chip-btn.replay-last', 'replay-last', `Replay hand #${number}`, () => handlers.replay(number));
+  const button = commandButton('button.chip-btn.replay-last', 'replay-last', fitted({ full: `Replay hand #${number}`, brief: 'Replay' }), () => handlers.replay(number));
 
   // The button for another hand is another button
   button.dataset.hand = String(number);
@@ -674,7 +670,7 @@ export function controlsEl(view: TableView, handlers: ControlHandlers, waiting: 
       'div.controls',
       null,
       waitingEl(`Asked the host for seat ${myRequest.seat + 1} with ${formatAmount(myRequest.amount, view.config)}`, view),
-      h('div.extras', null, commandButton('button.chip-btn', 'cancel-request', 'Cancel request', () => handlers.send({ type: 'cancelRequest' }))),
+      h(`div.extras.${FIT_ROW}`, null, commandButton('button.chip-btn', 'cancel-request', 'Cancel request', () => handlers.send({ type: 'cancelRequest' }))),
     );
   }
 

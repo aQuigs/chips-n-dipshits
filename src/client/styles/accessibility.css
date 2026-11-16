@@ -140,7 +140,7 @@
     }
   }
 
-  /* The switches under the moves give up padding, as the bet's sizes do: a third row of them takes from the table what it has not got to give, and the pot goes under the viewer's bet */
+  /* The switches under the moves give up padding, as the bet's sizes do, before a label on their one line has to be cut short (rowFit.ts) */
   :is([data-text-size='large'], [data-text-size='largest']) .extras .toggle {
     gap: 6px;
     padding: 0 8px 0 4px;

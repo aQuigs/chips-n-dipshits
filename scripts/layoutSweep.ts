@@ -110,17 +110,36 @@ function waitingBehindTheLongestCall(rig: Rig, seats: number): RigTable {
  * the night's last hands are counted, and the next hand is a bomb pot on two boards. Every stack is the
  * longest a seat writes out in full, nine characters.
  */
-function waitingWithEveryNote(rig: Rig, seats: number): RigTable {
+function waitingWithEveryNote(rig: Rig, seats: number, config: Partial<TableConfig> = {}): RigTable {
   const button = seats - 3;
   const others = NAMES.filter((name) => name !== VIEWER && name !== WIDEST);
   const seated = Array.from({ length: seats }, (_seat, seat) => (seat === 0 ? VIEWER : seat === button ? WIDEST : others.shift()!));
-  const table = rig.table(seated.map((name, seat) => ({ name, stack: LONGEST_WRITTEN_OUT, seat })), { actionSeconds: 30, ...CENTS, allowStraddle: true, allowButtonStraddle: true, bombPotAmount: 999_999, bombPotBoards: 'two' });
+  const table = rig.table(seated.map((name, seat) => ({ name, stack: LONGEST_WRITTEN_OUT, seat })), { actionSeconds: 30, ...CENTS, allowStraddle: true, allowButtonStraddle: true, bombPotAmount: 999_999, bombPotBoards: 'two', ...config });
 
   table.act(VIEWER, { type: 'setStraddle', kind: 'straddle', on: true });
   table.act(WIDEST, { type: 'setStraddle', kind: 'button straddle', on: true });
   table.deal({ button, holes: holesFor(seats) });
   table.act(VIEWER, { type: 'setLastHands', hands: LIMITS.lastHands });
   table.act(VIEWER, { type: 'setBombPot', on: true });
+
+  return table;
+}
+
+/**
+ * The bar at its fullest once a hand is over: at the table of `waitingWithEveryNote` the viewer takes the
+ * pot with no call, so their cards are theirs to show beside every note, and the row under them is as
+ * full as it gets: a rebuy of the longest amount asked for, and every choice behind its button switched on.
+ */
+function shownWithEveryNote(rig: Rig, seats: number): RigTable {
+  const table = waitingWithEveryNote(rig, seats, { allowChop: true, maxBuyIn: 2 * LONGEST_WRITTEN_OUT });
+
+  table.act(VIEWER, { type: 'setStraddle', kind: 'button straddle', on: true });
+  table.act(VIEWER, { type: 'setAlwaysChop', on: true });
+  // A rebuy of the host's own, or a co-host's, waits for nobody: the viewer hands the table on, and asks as a player does
+  table.act(VIEWER, { type: 'transferHost', playerId: table.auth(WIDEST).id });
+  table.act(WIDEST, { type: 'setCohost', playerId: table.auth(VIEWER).id, on: false });
+  table.act(VIEWER, { type: 'requestRebuy', amount: LONGEST_WRITTEN_OUT });
+  table.play((view, name) => (name === VIEWER ? { type: 'raise', to: view.hand!.options!.minRaiseTo } : { type: 'fold' }), (view) => view.hand!.stage === 'done');
 
   return table;
 }
@@ -243,6 +262,11 @@ const TABLE_STATES = {
     shows: 'the bar of a player waiting, with the moves to choose ahead, the hands to come and a straddle passed over, each at its longest',
     seats: [6, 9],
     build: waitingWithEveryNote,
+  },
+  everyNoteAndShow: {
+    shows: 'the bar of a player whose hand is over, with their cards to show, the hands to come and a straddle passed over, each at its longest, over a row with a rebuy asked for and every choice behind its button on',
+    seats: [6, 9],
+    build: shownWithEveryNote,
   },
   runsChoice: {
     shows: 'the choice of how many times to run it, with a side pot a player and every hand’s chance',
@@ -930,17 +954,20 @@ const KNOWN_DEFECTS: KnownDefect[] = [
 
 const REPLAY_LAST = '.controls [data-action="replay-last"]';
 
-// Run in the page: how much taller the table is with the bar's replay button taken out of the page, which is then put back.
+// The button under the table that says which of a player's straddles are on and opens the dialog to set them
+const STRADDLES = '.controls [data-action="straddles"]';
+
+// Run in the page: how much taller the table is with the line of the bar's replay button taken out of the page, which is then put back.
 // Measured on the one page as it stands: from one moment of a hand to the next the bar has other reasons to change
 const TABLE_GAINS_WITHOUT_THE_BUTTON = `(() => {
   const table = document.querySelector('.stage');
-  const button = document.querySelector('${REPLAY_LAST}');
-  const [bar, next] = [button.parentNode, button.nextSibling];
+  const line = document.querySelector('${REPLAY_LAST}').parentNode;
+  const [bar, next] = [line.parentNode, line.nextSibling];
   const withIt = table.getBoundingClientRect().height;
 
-  button.remove();
+  line.remove();
   const without = table.getBoundingClientRect().height;
-  bar.insertBefore(button, next);
+  bar.insertBefore(line, next);
 
   return without - withIt;
 })()`;
@@ -961,7 +988,8 @@ const replayFromTheBar = (picturesIn: string): Check => [
     assert.equal(await page.locator(REPLAY_LAST).count(), 0, 'the bar offers a hand again to a player in the one on the table, where the buttons of their turn go');
 
     const asksFor = async (number: number, when: string) => {
-      await page.waitForSelector(`${REPLAY_LAST}:has-text("Replay hand #${number}")`);
+      // Its words in full, which it cuts to "Replay" where its line has not the room (rowFit.ts)
+      await page.waitForSelector(`${REPLAY_LAST}:has([data-full="Replay hand #${number}"])`);
       await settled(page);
       assert.equal(await page.evaluate(TABLE_GAINS_WITHOUT_THE_BUTTON), 0, `the table gave up height to the button, ${when}`);
       await page.screenshot({ path: `${picturesIn}defect-replay-from-the-bar-${pictureName(when)}.png` });
@@ -1489,6 +1517,17 @@ const ARRIVALS: Arrival[] = [
     build: raisedFromTheBigBlind,
     step: everyoneFolds,
     then: '.controls [data-action="show-card"]',
+    forGood: 'Show ',
+  },
+  {
+    when: 'the viewer’s turn is on screen, their raise is made away from this page and everyone folds to it in the same view: the offer to show a card comes where the moves were',
+    build: (rig) => inTheBigBlind(rig, { rabbitHunting: true }, () => 60),
+    step(table) {
+      table.act(VIEWER, { type: 'raise', to: 200 });
+      everyoneFolds(table);
+    },
+    then: '.controls [data-action="show-card"]',
+    inOneView: true,
     forGood: 'Show ',
   },
   {
@@ -2092,7 +2131,7 @@ const aHoldRunsOutOnTime: Check = [
       // The viewer's own switch, thrown from their other device, draws the bar anew each time with every button where it was
       for (let nth = 0; nth < REDRAWS_IN_A_HOLD; nth += 1) {
         table.act(VIEWER, { type: 'setStraddle', kind: 'straddle', on: nth % 2 === 0 });
-        await page.waitForSelector(`.controls [data-action="straddle"][aria-checked="${nth % 2 === 0}"]`);
+        await page.waitForSelector(`${STRADDLES}:has-text("Straddle: ${nth % 2 === 0 ? 'on' : 'off'}")`);
       }
 
       const ones = (await watched(page)).held.filter((hold) => hold.what.includes(one.held));
@@ -2210,7 +2249,7 @@ const onlyWhatCameUpOverAnotherIsHeld: Check = [
     table.act(VIEWER, { type: 'setStraddle', kind: 'straddle', on: true });
 
     for (const [nth, { page, where }] of pages.entries()) {
-      await page.waitForSelector('.controls [data-action="straddle"][aria-checked="true"]');
+      await page.waitForSelector(`${STRADDLES}:has-text("Straddle: on")`);
       assert.equal((await watched(page)).held.length, heldBefore[nth], `${where}: a button was held back when the bar was drawn again with every button where it was`);
     }
   },
@@ -2280,6 +2319,225 @@ const barKeepsTheTurnsHeight = (picturesIn: string): Check => [
   },
 ];
 
+/** A table of six between hands, the first of them on record, where the viewer hosts nothing: what they ask for waits for the host. */
+const betweenHands = (rig: Rig, config: Partial<TableConfig> = {}) => tableWithTrophy(rig, TABLE_OF_SIX, EVEN, config);
+
+/** The viewer sat out until the big blind had come to their seat and gone by, and owes it. */
+function owingTheBigBlind(rig: Rig): RigTable {
+  const table = betweenHands(rig);
+  const owes = () => table.view(VIEWER).seats[0]!.owesBigBlind;
+
+  table.act(VIEWER, { type: 'sitOut' });
+
+  for (let hands = 0; hands < TABLE_OF_SIX && !owes(); hands += 1) {
+    table.dealNext();
+    playOut(table, passive);
+  }
+
+  assert.ok(owes(), 'the viewer owes no blind: the state no longer shows what it is here for');
+
+  return table;
+}
+
+/** A bar of the viewer's: what is on it, and what its row of switches says in full, whatever of that a narrow screen cuts to its brief form. */
+interface BarState {
+  name: string;
+  build(rig: Rig): RigTable;
+  row: string[];
+  /** The buttons of its turn are up, which may take a second line of words at a larger size of text, and the bar that much more height. */
+  turn?: boolean;
+}
+
+/**
+ * The bars a seated player has while hands are to come, each with as much on it as its kind gets. The
+ * first is the bar of a turn at the standard size of text, the height every other is held to.
+ */
+const BAR_STATES: BarState[] = [
+  { name: 'the viewer’s turn', build: facingTheLongestCall, row: ['Sit out next hand', 'Straddle: off', 'Add chips'], turn: true },
+  { name: 'waiting with the moves to choose ahead and every note', build: (rig) => waitingWithEveryNote(rig, 9), row: ['Sit out next hand', 'Straddle: on', 'Add chips'] },
+  {
+    name: 'a hand won with no call, the cards to show beside the hand to see again',
+    build(rig) {
+      const table = raisedFromTheBigBlind(rig);
+
+      everyoneFolds(table);
+
+      return table;
+    },
+    row: ['Sit out next hand', 'Straddle: off', 'Add chips'],
+  },
+  {
+    name: 'the cards to show under every note, a rebuy asked for and every choice behind its button on',
+    build: (rig) => shownWithEveryNote(rig, 9),
+    row: ['Sit out next hand', '2 straddles and chop: on', 'Rebuy of 99,999.99 waiting for the host · Cancel'],
+  },
+  {
+    name: 'sitting out',
+    build(rig) {
+      const table = betweenHands(rig, { allowChop: true });
+
+      table.act(VIEWER, { type: 'sitOut' });
+
+      return table;
+    },
+    row: ["I'm back", 'Straddle and chop: off', 'Add chips'],
+  },
+  { name: 'sitting out and owing a blind, with the two ways to settle it', build: owingTheBigBlind, row: ['Straddle: off', 'Add chips'] },
+  {
+    name: 'back at the table owing a blind, with the other way to settle it',
+    build(rig) {
+      const table = owingTheBigBlind(rig);
+
+      table.act(VIEWER, { type: 'sitIn' });
+
+      return table;
+    },
+    row: ['Sit out next hand', 'Straddle: off', 'Add chips'],
+  },
+  {
+    name: 'a rebuy asked for at a table of every kind of straddle',
+    build(rig) {
+      const table = betweenHands(rig, { allowDoubleStraddle: true, allowButtonStraddle: true, allowMississippiStraddle: true });
+
+      table.act(VIEWER, { type: 'requestRebuy', amount: 1000 });
+
+      return table;
+    },
+    row: ['Sit out next hand', 'Straddles: off', 'Rebuy of 1,000 waiting for the host · Cancel'],
+  },
+];
+
+const TEXT_SIZES = ['standard', 'large', 'largest'];
+
+// Run in the page: the table's height, and of each row of the bar that is held to one line, what a player would find wrong with it
+const BAR_ROWS = `(() => {
+  const says = (control) => control.innerText.trim().replace(/\\s+/g, ' ');
+  // In sight: under a phone's open chat the button to see the last hand again is left out, and its line with it when it holds nothing else
+  const shown = (element) => element.getClientRects().length > 0;
+  const rows = [...document.querySelectorAll('.controls .fit-row')].filter(shown).map((row) => {
+    const box = row.getBoundingClientRect();
+    const controls = [...row.children].filter(shown);
+    const boxes = controls.map((control) => control.getBoundingClientRect());
+
+    return {
+      switches: row.classList.contains('extras'),
+      height: box.height,
+      lines: new Set(boxes.map((one) => Math.round(one.top))).size,
+      scrolls: row.scrollWidth > row.clientWidth,
+      past: controls.filter((_control, nth) => boxes[nth].left < box.left - 1 || boxes[nth].right > box.right + 1 || boxes[nth].top < box.top - 1 || boxes[nth].bottom > box.bottom + 1).map(says),
+      cut: controls.filter((control) => control.scrollWidth > control.clientWidth + 1 || control.scrollHeight > control.clientHeight + 1).map(says),
+      // A label that is as short in full as in brief has nothing to cut
+      words: [...row.querySelectorAll('.fitted')]
+        .filter((label) => label.dataset.full !== label.dataset.brief)
+        .map((label) => (label.textContent === label.dataset.full ? 'full' : label.textContent === label.dataset.brief ? 'brief' : label.textContent)),
+      inFull: [...row.querySelectorAll('button')].map((button) => button.querySelector('.fitted')?.dataset.full ?? says(button)),
+    };
+  });
+
+  return { table: ${STAGE_HEIGHT}, rows };
+})()`;
+
+interface Bar {
+  table: number;
+  rows: BarRow[];
+}
+
+interface BarRow {
+  switches: boolean;
+  height: number;
+  lines: number;
+  scrolls: boolean;
+  past: string[];
+  cut: string[];
+  words: string[];
+  inFull: string[];
+}
+
+/**
+ * A second line of switches under a phone's table came out of the table's height, enough on a small
+ * phone to lay the table on its side, and the line came and went with the hand. The rows of the bar
+ * keep to one line each (rowFit.ts), and the table to one height.
+ */
+const barRowsKeepToOneLine = (picturesIn: string): Check => [
+  `the row of switches under the table is one line of one height, with nothing on it cut off, scrolled to or past its end, and the table is as tall as on the viewer’s turn, on a 360, a 375 and a 390 phone at every size of text, under an open chat too but for the table’s height, and on the desktop, where every label is said in full: ${BAR_STATES.map((state) => state.name).join('; ')}`,
+  async (rig) => {
+    const phones = [SCREENS.smallPhone, SCREENS.phone, SCREENS.tallPhone];
+    const turnsTable = new Map<number, number>();
+    let rowHeight: number | null = null;
+
+    for (const state of BAR_STATES) {
+      const table = state.build(rig);
+      const page = await table.open(VIEWER, 'smallPhone');
+      const desktop = await table.open(VIEWER, 'desktop');
+
+      await page.waitForSelector('.controls .extras');
+
+      // `held` is the height the table has to have kept
+      const look = async (where: string, held?: number): Promise<Bar> => {
+        const bar = (await page.evaluate(BAR_ROWS)) as Bar;
+        const wrong = bar.rows.flatMap((row) => [
+          ...(row.lines === 1 ? [] : [`a row takes ${row.lines} lines`]),
+          ...(row.scrolls ? ['a row has more on it than it shows'] : []),
+          ...row.past.map((said) => `“${said}” runs past its row`),
+          ...row.cut.map((said) => `“${said}” is cut off`),
+          ...(/^(brief,)*(full,)*$/.test(row.words.map((form) => `${form},`).join('')) ? [] : [`labels are cut short out of turn: ${row.words.join(', ')}`]),
+        ]);
+
+        if (held !== undefined && bar.table !== held) {
+          wrong.push(`the table is ${bar.table}px tall, and ${held}px on the viewer’s turn`);
+        }
+
+        if (wrong.length > 0) {
+          await page.screenshot({ path: `${picturesIn}defect-the-bar-on-one-line-${pictureName(`${state.name} ${where}`)}.png` });
+        }
+
+        assert.deepEqual(wrong, [], `${state.name}, ${where}`);
+
+        return bar;
+      };
+
+      for (const size of phones) {
+        await page.setViewportSize(size);
+
+        for (const text of TEXT_SIZES) {
+          const where = `${size.width} wide, ${text} text`;
+
+          await page.evaluate(`document.querySelector('#app').setAttribute('data-text-size', ${JSON.stringify(text)})`);
+          await settled(page);
+
+          // The height every bar is held to is the turn's own, at the size of text the bar was drawn for
+          const bar = await look(where, state.turn ? undefined : turnsTable.get(size.width));
+          const switches = bar.rows.find((row) => row.switches)!;
+
+          if (state.turn && text === 'standard') {
+            turnsTable.set(size.width, bar.table);
+          }
+
+          rowHeight ??= switches.height;
+          assert.equal(switches.height, rowHeight, `${state.name}, ${where}: the row of switches changed height`);
+          assert.deepEqual(switches.inFull, state.row, `${state.name}, ${where}: what the row of switches says, in full`);
+        }
+      }
+
+      // Under an open chat the bar keeps no height for a turn, and the table's height is the chat's to take: the rows keep to their lines
+      await page.setViewportSize(SCREENS.smallPhone);
+      await page.locator('.feed-toggle').click();
+      await page.waitForSelector('.feed.open');
+      await settled(page);
+      await look('360 wide, largest text, the chat open');
+
+      await desktop.waitForSelector('.controls .extras');
+      await settled(desktop);
+
+      const { rows } = (await desktop.evaluate(BAR_ROWS)) as Bar;
+
+      assert.deepEqual(rows.flatMap((row) => row.words.filter((form) => form !== 'full')), [], `${state.name}, on the desktop: a label is cut short with room for all of it`);
+      await page.context().close();
+      await desktop.context().close();
+    }
+  },
+];
+
 /** The checks of the sweep. Pictures of what a look finds, and of the state each known defect showed in, go into `picturesIn`, a folder ending in a slash. */
 export function layoutSweep(picturesIn: string): Check[] {
   const tables = Object.values<TableState>(TABLE_STATES).map((state): Check => [
@@ -2331,5 +2589,5 @@ export function layoutSweep(picturesIn: string): Check[] {
     },
   ]);
 
-  return [...defects, replayFromTheBar(picturesIn), historyGainsTheHand, barKeepsTheTurnsHeight(picturesIn), choicesKeepTheirPlaces, chatMakesWayForTheTurn(picturesIn), keyboardInTheBoxKeepsTheChat, lookSeesWhatATapPassesThrough, ...underTheFinger(), ...secondTapFindsNothingNew, commitsWaitFromWhenTheyAreDrawn, aRowThatMovesUpIsHeld, aHoldRunsFromWhenThePageIsFree, aHoldRunsOutOnTime, aPageInTheBackgroundLetsGo, onlyWhatCameUpOverAnotherIsHeld, marksFollowTheTableTurned, ...tables, ...screens];
+  return [...defects, replayFromTheBar(picturesIn), historyGainsTheHand, barKeepsTheTurnsHeight(picturesIn), barRowsKeepToOneLine(picturesIn), choicesKeepTheirPlaces, chatMakesWayForTheTurn(picturesIn), keyboardInTheBoxKeepsTheChat, lookSeesWhatATapPassesThrough, ...underTheFinger(), ...secondTapFindsNothingNew, commitsWaitFromWhenTheyAreDrawn, aRowThatMovesUpIsHeld, aHoldRunsFromWhenThePageIsFree, aHoldRunsOutOnTime, aPageInTheBackgroundLetsGo, onlyWhatCameUpOverAnotherIsHeld, marksFollowTheTableTurned, ...tables, ...screens];
 }

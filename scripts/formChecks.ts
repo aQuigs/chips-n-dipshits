@@ -1,14 +1,15 @@
 /*
  * The checks of a form that is turned down and of how its boxes write an amount: that the reason stands
  * in a line by the button pressed until the next try and in no toast, with the box it is about marked
- * and in sight; and that an amount is written in its box as the table writes it. They run with the other
- * browser checks (`screenChecks.ts`).
+ * and in sight; that an amount is written in its box as the table writes it; and that the five themes
+ * fit their row. They run with the other browser checks (`screenChecks.ts`).
  */
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
 
 import type { Page } from 'playwright';
 
+import { THEMES } from '../src/client/themes.ts';
 import { SPOKEN, spoken } from './a11y.ts';
 import { Sweep } from './accessibilityChecks.ts';
 import type { Check } from './checkRunner.ts';
@@ -16,6 +17,7 @@ import { telling, unreadable } from './covered.ts';
 import { letGoEarly, NEXT_FRAME } from './layoutSweep.ts';
 import { answeredAfter, opsSent, refusalTold, toasts, toastTold } from './pageSpies.ts';
 import { boxes, Gate, pressOn, squeezed, unfolded } from './rig.ts';
+import type { Box } from './rig.ts';
 import { tellingOf, watched, watchTheBar } from './underTheFinger.ts';
 
 const BLINDS = "The big blind can't be smaller than the small blind";
@@ -434,6 +436,74 @@ export const formChecks = (out: string): Check[] => {
             await answeredAfter(page, () => press('[data-action="raise"]'));
             assert.equal(table.view('Quigs').hand!.currentBet, kind.played, `${where}: what a pasted 2,000 played`);
             await page.context().close();
+          }
+        }
+      },
+    ],
+    [
+      'the five themes fit under the first screen and the screen for joining: all five in one row on the desktop, three over two on a phone wherever three names have room in a row, and two, two and one where they have not, every row as wide as the picker with no tile left beside a gap, and no name on two lines or cut off',
+      async (rig) => {
+        const table = rig.table([{ name: 'Quigs', stack: 1000 }]);
+        const GAP = 8;
+        const rows = (tiles: Box[]) => [...new Set(tiles.map((tile) => Math.round(tile.top)))].map((top) => tiles.filter((tile) => Math.round(tile.top) === top));
+        // The room a tile's name takes on one line, whatever its row gives it
+        const NEEDS = `[...document.querySelectorAll('.theme-option')].map((tile) => {
+          tile.style.flex = 'none';
+
+          const { width } = tile.getBoundingClientRect();
+
+          tile.style.flex = '';
+
+          return width;
+        })`;
+
+        for (const screen of ['smallPhone', 'tallPhone', 'phoneSideways', 'desktop'] as const) {
+          for (const [where, path, ready] of [['first', '', '#host-name'], ['join', `?table=${table.id}`, '[data-action="join-table"]:enabled']] as const) {
+            for (const textSize of ['regular', 'largest'] as const) {
+              const page = await rig.page(screen, 'a visitor');
+
+              await page.addInitScript(`localStorage.setItem('cnd.textSize', '${textSize}')`);
+              await page.goto(`${rig.url}${path}`);
+              await page.waitForSelector(ready);
+              await page.evaluate('document.fonts.ready.then(() => undefined)');
+              await page.locator('.theme-options').scrollIntoViewIfNeeded();
+
+              const what = `${screen}, the ${where} screen at the ${textSize} text size`;
+              const tiles = await boxes(page, '.theme-option');
+              const [picker] = await boxes(page, '.theme-options');
+              const laid = rows(tiles)
+                .map((row) => row.length)
+                .join(' over ');
+
+              // Which font the names are set in is the browser's to say, so whether three have room in a row is measured, not known
+              const needs = (await page.evaluate(NEEDS)) as number[];
+              const third = (picker!.right - picker!.left - 2 * GAP) / 3;
+              const fits = needs.slice(0, 3).every((need) => need <= third) ? ['3 over 2', '5'] : ['3 over 2', '2 over 2 over 1', '5'];
+
+              assert.equal(tiles.length, THEMES.length);
+              assert.ok(screen === 'desktop' && where === 'first' ? laid === '5' : fits.includes(laid), `${what}: the tiles stand ${laid}, their names needing ${needs.map(Math.ceil).join(', ')} of ${Math.floor(picker!.right - picker!.left)}`);
+
+              for (const row of rows(tiles)) {
+                assert.ok(Math.abs(row[0]!.left - picker!.left) <= 1 && Math.abs(row.at(-1)!.right - picker!.right) <= 1, `${what}: a row of ${row.length} leaves a gap beside it`);
+              }
+
+              assert.deepEqual(await squeezed(page, '.theme-option, .theme-option b'), [], `${what}: a name is cut off`);
+              assert.deepEqual(
+                await page.evaluate(`[...document.querySelectorAll('.theme-option b')].filter((name) => { const range = document.createRange(); range.selectNodeContents(name); return new Set([...range.getClientRects()].map((line) => Math.round(line.top))).size > 1; }).map((name) => name.textContent)`),
+                [],
+                `${what}: a name is on two lines`,
+              );
+
+              const { width } = page.viewportSize()!;
+
+              assert.ok(tiles.every((tile) => tile.left >= 0 && tile.right <= width), `${what}: a tile is off the side of the screen`);
+
+              if (textSize === 'largest') {
+                await page.screenshot({ path: join(out, `themes-${where}-${screen}.png`) });
+              }
+
+              await page.context().close();
+            }
           }
         }
       },

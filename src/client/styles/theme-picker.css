@@ -5,8 +5,31 @@
   gap: 8px;
 }
 
+/*
+ * Five themes, where rows of two or of four leave one tile alone on the last. A tile here stands its dots over
+ * its name and is never narrower than that name on one line, and a row's tiles share its width: all five in one
+ * row where there is room, and three over two on a phone.
+ */
 .theme-options.compact {
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  display: flex;
+  flex-wrap: wrap;
+}
+
+.theme-options.compact .theme-option {
+  flex: 1 1 96px;
+  flex-direction: column;
+  gap: 8px;
+  min-width: max-content;
+  padding: 10px 6px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+/* Under the width the first screen has two columns from, a tile starts from a third of the row, less the gaps: a row never takes four and leaves the fifth alone */
+@container app (max-width: 647.98px) {
+  .theme-options.compact .theme-option {
+    flex-basis: calc((100% - 16px) / 3 - 1px);
+  }
 }
 
 .theme-option {

@@ -51,7 +51,9 @@ export interface ControlHandlers {
 
 /**
  * The bet a player is sizing, kept apart from the buttons, so that a panel drawn again for the same
- * decision still has it: after a move the server refused, the buttons come back as they were left.
+ * decision still has it. The bar is drawn again within one decision by the player's own Sit out next
+ * hand, by chips they ask for and the host's answer, by a clock or blinds the host changes and by a
+ * pause, and after a move the server refused: each time the buttons come back as they were left.
  */
 export interface Sizing {
   /** What stood in the amount box for the decision numbered `turn`; null when nothing was kept for it. */
@@ -144,7 +146,7 @@ function turnPanel(table: Denominated & Pick<TableConfig, 'smallBlind' | 'bigBli
   const decision = decisionOf(hand);
   const raiseButton = h('button.btn.raise', { type: 'button', 'data-action': 'raise', 'data-hotkey': HOTKEYS.raise });
   const stops = betStops(minRaiseTo, maxRaiseTo, table);
-  // A bet being sized outlasts the bar being drawn again for the same decision (`Slot`), as when the host approves chips mid-turn
+  // The keyboard goes to the bar drawn again for the same decision, and what was half typed with it (`Slot`). The bet itself is kept however it was sized (`keep`)
   const slider = h('input', { type: 'range', id: 'raise-slider', min: 0, max: stops.last, step: 1, 'aria-label': 'Bet size', 'data-keep': decision });
   const amount = h('input', { type: 'text', id: 'raise-amount', inputmode: hasDecimals(table) ? 'decimal' : 'numeric', autocomplete: 'off', 'aria-label': 'Bet size', 'data-keep': decision });
 
@@ -199,20 +201,28 @@ function turnPanel(table: Denominated & Pick<TableConfig, 'smallBlind' | 'bigBli
     }
   };
 
-  slider.addEventListener('input', () => choose(stops.amountAt(Number(slider.value)), slider));
-  amount.addEventListener('input', readBox);
+  // What is in the box is kept whenever its player sizes the bet, not only as a move goes out: the bar drawn again
+  // for the same decision would else offer the smallest raise under a thumb on its way to the bet that was sized
+  const keep = (): void => handlers.sizing.keep(turn, amount.value);
+
+  slider.addEventListener('input', () => {
+    choose(stops.amountAt(Number(slider.value)), slider);
+    keep();
+  });
+  amount.addEventListener('input', () => {
+    readBox();
+    keep();
+  });
   bareWhileTyped(amount, table);
   // Only the box is tidied. The box loses the keyboard as a press on Raise begins, and a button redrawn under that press never hears it
   amount.addEventListener('blur', () => {
     if (amount.validity.valid) {
       amount.value = formatAmount(raiseTo, table);
+      keep();
     }
   });
-  // What is in the box is kept as a move goes out: should the move come off again, the panel drawn then has the bet as it was left
-  const play = (move: BettingAction | { type: 'offerChop' }): void => {
-    handlers.sizing.keep(turn, amount.value);
-    void handlers.send({ ...move, turn });
-  };
+
+  const play = (move: BettingAction | { type: 'offerChop' }): void => void handlers.send({ ...move, turn });
 
   raiseButton.addEventListener('click', () => {
     if (amount.reportValidity()) {
@@ -225,6 +235,7 @@ function turnPanel(table: Denominated & Pick<TableConfig, 'smallBlind' | 'bigBli
   // A size button changes the amount on the button beside it and says nothing itself, so what it set is said
   const size = (value: number): void => {
     choose(value);
+    keep();
     handlers.say(sizedSaid(raiseMove(), raiseTo, table));
   };
 

@@ -1,8 +1,9 @@
 /*
  * The checks of a form that is turned down and of how its boxes write an amount: that the reason stands
  * in a line by the button pressed until the next try and in no toast, with the box it is about marked
- * and in sight; that an amount is written in its box as the table writes it; and that the five themes
- * fit their row. They run with the other browser checks (`screenChecks.ts`).
+ * and in sight; that an amount is written in its box as the table writes it, and a bet that was sized
+ * stays in the bar's box while the decision is the same; and that the five themes fit their row. They
+ * run with the other browser checks (`screenChecks.ts`).
  */
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
@@ -435,6 +436,70 @@ export const formChecks = (out: string): Check[] => {
 
             await answeredAfter(page, () => press('[data-action="raise"]'));
             assert.equal(table.view('Quigs').hand!.currentBet, kind.played, `${where}: what a pasted 2,000 played`);
+            await page.context().close();
+          }
+        }
+      },
+    ],
+    [
+      'a bet that was sized stays when the bar is drawn again for the same decision with the keyboard nowhere near the box, in whole chips and in dollars and cents, on a phone and the desktop: sized with a size button, through the player’s own Sit out next hand; with the slider, through their own request for chips and the host’s yes to it; typed and left, through a clock the host changes; the button names it throughout and plays it, and the next decision starts from the smallest bet',
+      async (rig) => {
+        const kinds = [
+          { name: 'chips', config: { maxBuyIn: 20_000 }, stack: 9000, asked: 500, pot: ['70', 'Raise to 70'], slid: 1500, slidTo: ['1,500', 'Raise to 1,500'], typed: '2500', typedTo: ['2,500', 'Raise to 2,500'], played: 2500, next: ['20', 'Bet 20'] },
+          { name: 'cents', config: { unit: 'cents', smallBlind: 25, bigBlind: 50, minBuyIn: 1000, maxBuyIn: 2_000_000 }, stack: 900_000, asked: 50_000, pot: ['1.75', 'Raise to 1.75'], slid: 150_000, slidTo: ['1,500.00', 'Raise to 1,500.00'], typed: '2500.5', typedTo: ['2,500.50', 'Raise to 2,500.50'], played: 250_050, next: ['0.50', 'Bet 0.50'] },
+        ] as const;
+
+        for (const kind of kinds) {
+          for (const screen of ['phone', 'desktop'] as const) {
+            const table = rig.table(['Quigs', 'Pam', 'Stu'].map((name) => ({ name, stack: kind.stack })), kind.config);
+
+            // Pam is first to act, and Quigs is the host
+            table.deal({ button: 1 });
+
+            const page = await table.open('Pam', screen);
+            const where = `${kind.name}, ${screen}`;
+            const press = pressOn(page, screen);
+            const bet = async () => [await page.inputValue('#raise-amount'), await page.getAttribute('[data-action="raise"]', 'aria-label'), await page.evaluate(`document.activeElement?.id === 'raise-amount'`)];
+
+            // The bar built again from nothing, by something that happens at a table while one player is deciding
+            const drawnAgain = async (by: () => unknown) => {
+              await page.evaluate(`void (document.querySelector('#raise-amount').old = true)`);
+              await by();
+              await page.waitForFunction(`document.querySelector('#raise-amount') !== null && document.querySelector('#raise-amount').old !== true`);
+            };
+
+            await page.waitForSelector('#raise-amount');
+            await press('.presets button:text-is("Pot")');
+            assert.deepEqual(await bet(), [...kind.pot, false], `${where}: the pot, sized with its button`);
+            await drawnAgain(() => press('[data-action="sit-out"]'));
+            assert.deepEqual(await bet(), [...kind.pot, false], `${where}: the pot, after her own Sit out next hand drew the bar again`);
+
+            await page.locator('#raise-slider').fill(String(kind.slid));
+            await page.locator('#raise-slider').blur();
+            assert.deepEqual(await bet(), [...kind.slidTo, false], `${where}: a bet sized with the slider`);
+            await drawnAgain(() => table.act('Pam', { type: 'requestRebuy', amount: kind.asked }));
+            assert.deepEqual(await bet(), [...kind.slidTo, false], `${where}: the slider's bet, after her own request for chips drew the bar again`);
+            await drawnAgain(() => table.act('Quigs', { type: 'approve', playerId: table.auth('Pam').id }));
+            assert.deepEqual(await bet(), [...kind.slidTo, false], `${where}: the slider's bet, after the host's yes to her chips drew the bar again`);
+
+            await press('#raise-amount');
+            await page.keyboard.press('ControlOrMeta+a');
+            await page.keyboard.type(kind.typed);
+            await page.locator('#raise-amount').blur();
+            assert.deepEqual(await bet(), [...kind.typedTo, false], `${where}: a bet typed and left`);
+            await drawnAgain(() => table.act('Quigs', { type: 'updateConfig', config: { actionSeconds: 45 } }));
+            assert.deepEqual(await bet(), [...kind.typedTo, false], `${where}: the typed bet, after the host's change of the clock drew the bar again`);
+
+            await answeredAfter(page, () => press('[data-action="raise"]'));
+            assert.equal(table.view('Pam').hand!.currentBet, kind.played, `${where}: what the bet that was kept played`);
+
+            // Her next decision is another one, and has nothing of this one's
+            table.play(
+              (view) => ({ type: view.hand!.options!.canCheck ? 'check' : 'call' }),
+              (view) => view.hand!.street === 'flop' && view.hand!.toAct === view.seats.findIndex((seat) => seat?.name === 'Pam'),
+            );
+            await page.waitForSelector('#raise-amount');
+            assert.deepEqual(await bet(), [...kind.next, false], `${where}: the bet of one decision was carried to the next`);
             await page.context().close();
           }
         }

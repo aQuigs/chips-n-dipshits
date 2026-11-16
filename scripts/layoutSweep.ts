@@ -2463,7 +2463,7 @@ const BUSY_AS_IT_DRAWS = `(({ selector, busy }) => {
 /**
  * A hold lasts as long as it takes to see that the page has changed, so its time begins when the page is
  * free to show the change and to take a tap, not when the drawing began. A slow phone, or a machine
- * running these checks four at a time, takes a good part of a hold to lay out what a hand's end
+ * running these checks several at a time, takes a good part of a hold to lay out what a hand's end
  * brought: counted from before that, a hold is over almost as soon as its button can be tapped.
  */
 const aHoldRunsFromWhenThePageIsFree: Check = [

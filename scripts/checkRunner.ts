@@ -5,6 +5,7 @@
  */
 import assert from 'node:assert/strict';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { availableParallelism } from 'node:os';
 import { format, inspect } from 'node:util';
 
 import { runPool } from './pool.ts';
@@ -25,17 +26,20 @@ export interface CheckRun {
 }
 
 /*
- * Chosen by timing 65 checks on a ten-core laptop: 193 s on one worker, 101 on two, 71 on three, 54 on
- * four, 46 on five, 41 on six, 37 on eight. Four use two and a half cores between them, which leaves
- * room for two other suites on that machine, and for CI, which has four cores: beside two other runs of
- * the checks, eight workers were no faster than four and slowed the six-player game twice as much.
+ * A check keeps about one core busy between its pages, so a machine runs a few more than half as many
+ * at once as it has cores, and the rest are left to whatever else it is doing: a second suite beside
+ * this one, the other tests, the desktop. Timed on 67 checks on a ten-core laptop with two cores busy
+ * elsewhere: 82 s at four at a time, 78 at six, 72 to 81 at eight and 72 at ten. The whole machine was
+ * a quarter idle at four and a sixth at six; from eight up nothing was, and a check took half as long
+ * again. CI has four cores, which four checks fill, and keeps its four.
  */
-const DEFAULT_WORKERS = 4;
+const FEWEST_WORKERS = 4;
+const fittingWorkers = () => Math.max(FEWEST_WORKERS, Math.floor(availableParallelism() / 2) + 1);
 
 // A stalled run spends nearly all its time waiting, on about one core between twelve workers
 const STALLED_WORKERS = 12;
 
-// Six times what the slowest check takes, and short enough that one stuck check is told well inside the timeout of the test that runs them all.
+// Three times what the slowest check takes, and with the grace after it shorter than the silence a run of them all is stopped for (tests/e2e.test.ts).
 // A stalled run waits out its stall after every step: the check with the most steps has about 150
 const LIMIT_MS = 90_000 + 150 * STALL_MS;
 
@@ -46,10 +50,10 @@ const GRACE_MS = 20_000;
 const CLOSED_UNDER_IT = 'Target page, context or browser has been closed';
 const SLOWEST_SHOWN = 5;
 
-/** How many checks run at once: CHECK_WORKERS when it is set. */
+/** How many checks run at once: CHECK_WORKERS when it is set, and otherwise what the machine has cores for. */
 function workerCount(): number {
   const asked = process.env.CHECK_WORKERS;
-  const count = asked === undefined ? (STALL_MS > 0 ? STALLED_WORKERS : DEFAULT_WORKERS) : Number(asked);
+  const count = asked === undefined ? (STALL_MS > 0 ? STALLED_WORKERS : fittingWorkers()) : Number(asked);
   assert.ok(Number.isInteger(count) && count >= 1, `CHECK_WORKERS is how many checks run at once, a whole number from 1 up, not "${asked}"`);
 
   return count;

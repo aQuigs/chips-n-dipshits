@@ -115,22 +115,65 @@ test('a request that went any other way was not turned down', () => {
   );
 });
 
-test('a request taken back while another player is turned down is told from theirs, by name', () => {
-  const table = new TestTable({ stacks: [1000], names: ['Quigs'] });
-  const al = joins(table, 'Al');
-  const bigAl = joins(table, 'Big Al');
+test('a request taken back while another player is turned down is told from theirs, whatever that player is called', () => {
+  // The second is a name whose line ends in the very words of one about Al
+  for (const other of ['Big Al', 'x turned down Al']) {
+    const table = new TestTable({ stacks: [1000], names: ['Quigs'] });
+    const al = joins(table, 'Al');
+    const named = joins(table, other);
 
-  table.cmd(al, { type: 'requestSeat', seat: 5, buyIn: 500 });
-  table.cmd(bigAl, { type: 'requestSeat', seat: 6, buyIn: 500 });
+    table.cmd(al, { type: 'requestSeat', seat: 5, buyIn: 500 });
+    table.cmd(named, { type: 'requestSeat', seat: 6, buyIn: 500 });
+
+    assert.equal(
+      over(table, al, () => {
+        table.cmd(al, { type: 'cancelRequest' });
+        table.cmd(HOST, { type: 'deny', playerId: table.ids[named]! });
+      }),
+      null,
+      other,
+    );
+    assert.ok(table.feedText().includes(`The host turned down ${other}'s request for a seat`));
+  }
+});
+
+test('a co-host who turns a request down is taken at their word like the host', () => {
+  const table = twoSeated();
+  const zed = joins(table, 'Zed');
+
+  table.cmd(HOST, { type: 'setCohost', playerId: table.ids[1]!, on: true });
+  table.cmd(zed, { type: 'requestSeat', seat: 5, buyIn: 500 });
 
   assert.equal(
-    over(table, al, () => {
-      table.cmd(al, { type: 'cancelRequest' });
-      table.cmd(HOST, { type: 'deny', playerId: table.ids[bigAl]! });
-    }),
-    null,
+    over(table, zed, () => table.cmd(1, { type: 'deny', playerId: table.ids[zed]! })),
+    'seat',
   );
-  assert.ok(table.feedText().includes("The host turned down Big Al's request for a seat"));
+  assert.ok(table.feedText().includes("Co-host Danny turned down Zed's request for a seat"));
+});
+
+test('a request turned down, asked again and granted before the page looked is not told as turned down', () => {
+  const table = new TestTable({ stacks: [1000, 1000, 1000], names: ['Quigs', 'Danny', 'Marge'] });
+  const zed = joins(table, 'Zed');
+  const again = (player: number, ask: () => void) =>
+    over(table, player, () => {
+      table.cmd(HOST, { type: 'deny', playerId: table.ids[player]! });
+      ask();
+      table.cmd(HOST, { type: 'approve', playerId: table.ids[player]! });
+    });
+  const seat = (): void => table.cmd(zed, { type: 'requestSeat', seat: 5, buyIn: 500 });
+  const chips = (): void => table.cmd(1, { type: 'requestRebuy', amount: 300 });
+
+  seat();
+  assert.equal(again(zed, seat), null, 'a seat');
+
+  chips();
+  assert.equal(again(1, chips), null, 'chips between hands');
+  assert.equal(table.state.seats[1]!.stack, 1300);
+
+  table.deal({ button: 0 });
+  chips();
+  assert.equal(again(1, chips), null, 'chips waiting for the hand to end');
+  assert.equal(table.state.seats[1]!.pendingAdd, 300);
 });
 
 /** A page's memory of its viewer's requests, taking up the table as `player` sees it. */

@@ -3,6 +3,7 @@
  * in the play-by-play if at all: in the bar under the table for as long as it stands, and once in a
  * toast (`effects/ownNews.ts`). One wording for both places.
  */
+import { actorName } from '../engine/hosts.ts';
 import { turnedDownWords } from '../engine/seats.ts';
 import type { RequestKind } from '../engine/types.ts';
 import type { SeatView, TableView } from '../engine/view.ts';
@@ -34,21 +35,36 @@ export const turnedDownText = (kind: RequestKind): string => `Your request for $
 
 const requestOf = (view: TableView) => view.requests.find((request) => request.playerId === view.you.id);
 
+const rebuysOf = (view: TableView): number => view.tonight.players.find((row) => row.playerId === view.you.id)?.rebuys ?? 0;
+
+const chipsComing = (view: TableView): number => (view.you.seat === null ? 0 : (view.seats[view.you.seat]?.pendingAdd ?? 0));
+
+/**
+ * A request granted leaves a mark on the view, where one turned down leaves none: the seat they are
+ * in, chips waiting for the hand to end, or one more rebuy in the night's numbers.
+ */
+const granted = (before: TableView, view: TableView, kind: RequestKind): boolean =>
+  kind === 'seat' ? view.you.seat !== null : chipsComing(view) > chipsComing(before) || rebuysOf(view) > rebuysOf(before);
+
 /**
  * The kind of request of the viewer's that `view` shows turned down since `before`: theirs was waiting
  * and is gone, and the play-by-play has a new line that says who turned it down. Nothing else that
  * takes a request away says that: one granted, taken back, or dropped because its seat was taken.
+ * A view can be more than one step on from the last, as on a phone that slept: a request turned
+ * down, asked again elsewhere and granted since is not told as turned down.
  */
 export function turnedDown(before: TableView, view: TableView): RequestKind | null {
   const asked = requestOf(before);
 
-  if (!asked || requestOf(view)) {
+  if (!asked || requestOf(view) || granted(before, view, asked.kind)) {
     return null;
   }
 
   const known = new Map(before.feed.map((entry) => [entry.seq, entry.at]));
   const words = turnedDownWords(view.you.name, asked.kind);
-  const said = view.feed.some((entry) => entry.kind === 'system' && known.get(entry.seq) !== entry.at && entry.text.endsWith(words));
+  // The whole line, as each of those who may turn a request down would have it written: a name can end in the words of another player's line
+  const lines = new Set(view.members.filter((member) => member.id === view.hostId || view.cohostIds.includes(member.id)).map((member) => `${actorName(view, member)}${words}`));
+  const said = view.feed.some((entry) => entry.kind === 'system' && known.get(entry.seq) !== entry.at && lines.has(entry.text));
 
   return said ? asked.kind : null;
 }

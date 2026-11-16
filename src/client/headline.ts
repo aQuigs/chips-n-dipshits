@@ -38,7 +38,8 @@ export function headline(view: TableView): Headline {
     return state('Waiting');
   }
 
-  if (view.nextBombPot) {
+  // At a table that plays one every hand it is no news, and would be all the pill ever said
+  if (view.nextBombPot && view.config.bombPotEvery !== 1) {
     return state('Bomb pot next');
   }
 

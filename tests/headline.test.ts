@@ -74,6 +74,14 @@ test('a game that is on with nobody to deal to says it is waiting', () => {
   assert.equal(says(table), 'Next hand');
 });
 
+test('at a table that plays a bomb pot every hand the next one is no news, and the pill keeps to the hand’s number', () => {
+  const table = new TestTable({ stacks: [1000, 1000, 1000], config: { bombPotEvery: 1, bombPotAmount: 20 } });
+
+  table.cmd(HOST, { type: 'start' });
+  assert.ok(table.view(HOST).nextBombPot);
+  assert.equal(says(table), 'Next hand');
+});
+
 test('a bomb pot called for the next hand is said until that hand is dealt, or the call is taken back', () => {
   const table = new TestTable({ stacks: [1000, 1000, 1000] });
 

@@ -2694,16 +2694,28 @@ const OUTGROW_THE_BAR = `(() => {
  * with a toast up says so.
  */
 const toastKeepsClear: Check = [
-  'a toast a line too long for the chat’s bar grows clear of the top bar and of the moves of a turn, on a 360 phone standing and lying and on the desktop, and is at the top of the screen, clear of a dialog, while one is up',
+  'a toast a line too long for the chat’s bar grows clear of the top bar and of the moves of a turn, on a 360 phone standing and lying with the chat shut and open and on the desktop, and is at the top of the screen, clear of a dialog, while one is up',
   async (rig) => {
     const table = waitingBehindTheLongestCall(rig, TABLE_OF_SIX);
 
     table.play(others({ type: 'fold' }), viewersTurn);
     const page = await table.open(VIEWER, 'smallPhone');
 
-    for (const size of [SMALL_STANDING, LYING, { name: 'the desktop', ...SCREENS.desktop }]) {
+    // Open, the chat's bar on a phone is right under the bar of the turn. Beside the table the chat is always open
+    const phones = [SMALL_STANDING, LYING].flatMap((size) => [
+      { ...size, open: false },
+      { ...size, name: `${size.name} with the chat open`, open: true },
+    ]);
+
+    for (const size of [...phones, { name: 'the desktop', ...SCREENS.desktop, open: false }]) {
       await page.setViewportSize(size);
       await page.waitForSelector('.turn [data-action="call"]:enabled');
+
+      if (size.open) {
+        await page.click('.feed-toggle');
+        await page.waitForSelector('.feed.open');
+      }
+
       await settled(page);
       await page.evaluate(toastUp(true));
       await page.evaluate(OUTGROW_THE_BAR);
@@ -2723,6 +2735,11 @@ const toastKeepsClear: Check = [
       }
 
       await page.evaluate(toastUp(false));
+
+      if (size.open) {
+        await page.click('.feed-toggle');
+        await page.waitForSelector('.feed:not(.open)');
+      }
     }
 
     await page.setViewportSize(SMALL_STANDING);

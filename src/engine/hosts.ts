@@ -64,6 +64,6 @@ export function requireMayRemove(state: TableState, sender: Member, target: Memb
 }
 
 /** How the chat names whoever used the host's powers, which no name a player picks can pass for. */
-export function actorName(state: TableState, member: Member): string {
-  return member.id === state.hostId ? 'The host' : `Co-host ${member.name}`;
+export function actorName(table: { hostId: string }, member: { id: string; name: string }): string {
+  return member.id === table.hostId ? 'The host' : `Co-host ${member.name}`;
 }

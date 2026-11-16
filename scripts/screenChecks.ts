@@ -462,28 +462,37 @@ async function assertHintFits(page: Page): Promise<void> {
   await assertBetsApart(page);
 }
 
+/** A shape of a phone's table, and the height of its part of the screen that gives it that shape. */
+type Shape = [shape: string, height: number];
+
 /**
- * Runs `look` on a phone's table standing up and lying down, which one it is being left to how the
- * buttons under it wrap: standing at the least height it stands at, lying at the most, and, while
- * someone can act and the buttons for it take room, lying at a short one.
+ * The shapes the table of a phone `width` wide is looked at in, standing up and lying down, which one it
+ * is being left to how the buttons under it wrap: standing at the least height it stands at, lying at the
+ * most, and, while someone can act and the buttons for it take room, lying at a short one.
  */
-async function inEveryShape(page: Page, look: (shape: string) => Promise<void>, { buttonsUp = true } = {}): Promise<void> {
-  const { width } = page.viewportSize()!;
-  const shapes: [string, number][] = [
+function shapesOf(width: number, buttonsUp: boolean): Shape[] {
+  const shapes: Shape[] = [
     ['tall', Math.ceil(width / WIDE_ASPECT) + 1],
     ['wide', Math.floor(width / WIDE_ASPECT) - 1],
   ];
 
   // The shortest a phone's table gets with a turn's buttons under it, measured on a 360 and a 375 phone in each font
-  if (buttonsUp) {
-    shapes.push(['wide', Math.round(width * 0.78)]);
-  }
+  return buttonsUp ? [...shapes, ['wide', Math.round(width * 0.78)]] : shapes;
+}
 
-  for (const [shape, height] of shapes) {
-    await setStageHeight(page, height);
-    await page.waitForSelector(`.table.${shape}`);
-    await dealt(page);
-    await look(`${shape}-${height}`);
+/** Puts a phone's table in a shape and waits for it to settle there. Resolves to what the shape is called in a message. */
+async function inShape(page: Page, [shape, height]: Shape): Promise<string> {
+  await setStageHeight(page, height);
+  await page.waitForSelector(`.table.${shape}`);
+  await dealt(page);
+
+  return `${shape}-${height}`;
+}
+
+/** Runs `look` on a phone's table in each of its shapes (`shapesOf`). */
+async function inEveryShape(page: Page, look: (shape: string) => Promise<void>, { buttonsUp = true } = {}): Promise<void> {
+  for (const shape of shapesOf(page.viewportSize()!.width, buttonsUp)) {
+    await look(await inShape(page, shape));
   }
 }
 
@@ -590,19 +599,62 @@ function assertInside(box: Box, around: Box, what: string): void {
   assert.ok(x >= around.left && x <= around.right && y >= around.top && y <= around.bottom, `${what}: ${JSON.stringify(box)} is not over ${JSON.stringify(around)}`);
 }
 
-/** That the page shows reaction `kind` over the seat `seat`, named `label`, standing on the top of its plate. */
+/** The reactions a page shows at one moment: every mark, in the order the page has them, and the plate of every seat by its number. */
+interface Reactions {
+  marks: { kind: string; seat: string; label: string | null; box: Box }[];
+  plates: Record<string, Box>;
+}
+
+// Run in the page: the reactions it shows, once it shows one of each of `kinds`
+const reactionsWith = (kinds: string[]) => `(() => {
+  const box = (element) => {
+    const { left, top, right, bottom } = element.getBoundingClientRect();
+
+    return { left, top, right, bottom };
+  };
+
+  const marks = [...document.querySelectorAll('.seat-reaction')].map((mark) => ({ kind: mark.dataset.reaction, seat: mark.dataset.seat, label: mark.getAttribute('aria-label'), box: box(mark) }));
+  const plates = Object.fromEntries([...document.querySelectorAll('.seat[data-seat] .plate')].map((plate) => [plate.closest('.seat').dataset.seat, box(plate)]));
+
+  return ${JSON.stringify(kinds)}.every((kind) => marks.some((mark) => mark.kind === kind)) && { marks, plates };
+})()`;
+
+/**
+ * The reactions a page shows in the moment it first has one of each of `kinds`, which is waited for. All
+ * that is asked about them is read from this one look: the page takes a mark down after a few seconds by a
+ * timer of its own, which a machine busy with other checks uses up between one reading and the next.
+ */
+async function reactionsShown(page: Page, ...kinds: string[]): Promise<Reactions> {
+  const read = await page.waitForFunction(reactionsWith(kinds)).catch((error: unknown) => {
+    throw new Error(`The page never showed ${kinds.join(' and ')} together`, { cause: error });
+  });
+
+  return read.jsonValue() as Promise<Reactions>;
+}
+
+/** Where the marks that take up room are drawn, as `boxes` tells it of anything else. */
+const drawn = (marks: Reactions['marks']) => marks.map(({ box }) => box).filter((box) => box.right > box.left && box.bottom > box.top);
+
+/** That reaction `kind` is shown over the seat `seat`, named `label`, standing on the top of its plate. */
+function assertMark({ marks, plates }: Reactions, kind: string, seat: number, label: string): void {
+  const ofKind = marks.filter((mark) => mark.kind === kind);
+  const [shown] = drawn(ofKind);
+  const last = ofKind.at(-1);
+  const plate = plates[seat];
+
+  assert.equal(last?.seat, String(seat), `${kind} is over the wrong seat`);
+  assert.equal(last?.label, label);
+  assert.ok(shown && plate, `${kind} or the plate of seat ${seat} takes up no room`);
+
+  const x = middle(shown).x;
+
+  assert.ok(x >= plate.left && x <= plate.right, `${kind} is not over seat ${seat}'s plate: ${JSON.stringify(shown)} and ${JSON.stringify(plate)}`);
+  assert.ok(shown.top < plate.top && shown.bottom > plate.top - (shown.bottom - shown.top), `${kind} does not stand on seat ${seat}'s plate: ${JSON.stringify(shown)} and ${JSON.stringify(plate)}`);
+}
+
+/** That the page shows reaction `kind` over the seat `seat`, named `label`, standing on the top of its plate: looked at as soon as it comes. */
 async function assertMarkOn(page: Page, kind: string, seat: number, label: string): Promise<void> {
-  const mark = page.locator(`.seat-reaction[data-reaction="${kind}"]`).last();
-
-  assert.equal(await mark.getAttribute('data-seat'), String(seat), `${kind} is over the wrong seat`);
-  assert.equal(await mark.getAttribute('aria-label'), label);
-
-  const [shown] = await boxes(page, `.seat-reaction[data-reaction="${kind}"]`);
-  const [plate] = await boxes(page, `.seat[data-seat="${seat}"] .plate`);
-  const x = middle(shown!).x;
-
-  assert.ok(x >= plate!.left && x <= plate!.right, `${kind} is not over seat ${seat}'s plate: ${JSON.stringify(shown)} and ${JSON.stringify(plate)}`);
-  assert.ok(shown!.top < plate!.top && shown!.bottom > plate!.top - (shown!.bottom - shown!.top), `${kind} does not stand on seat ${seat}'s plate: ${JSON.stringify(shown)} and ${JSON.stringify(plate)}`);
+  assertMark(await reactionsShown(page, kind), kind, seat, label);
 }
 
 /** Whether one thing lies with its middle on the middle of another. */
@@ -2256,9 +2308,9 @@ const CHECKS: Check[] = [
       await quigs.tap('[data-action="reactions"]');
       await quigs.tap('[data-react="clap"]');
       await quigs.waitForSelector('.seat-reaction[data-reaction="clap"]');
+      await assertMarkOn(quigs, 'clap', 0, 'Quigs is clapping');
       await gate.holding();
       assert.equal(await stu.locator('.seat-reaction').count(), 0, 'another page shows what the server has not heard');
-      await assertMarkOn(quigs, 'clap', 0, 'Quigs is clapping');
       await gate.open();
 
       await stu.waitForSelector('.seat-reaction[data-reaction="clap"]');
@@ -2268,17 +2320,18 @@ const CHECKS: Check[] = [
       table.act('Pam', { type: 'react', kind: 'laugh' });
       table.act('Al', { type: 'react', kind: 'chicken', to: table.auth('Dot').id });
 
-      for (const [page, screen] of [
-        [quigs, 'smallPhone'],
-        [stu, 'desktop'],
-      ] as const) {
-        await page.waitForSelector('.seat-reaction[data-reaction="chicken"]');
-        await assertMarkOn(page, 'laugh', 2, 'Pam is laughing');
-        await assertMarkOn(page, 'chicken', 6, 'Al threw a chicken at Dot');
+      // Both pages at once: the marks of the one are not kept waiting while the other is looked at
+      const look = async (page: Page, screen: ScreenName) => {
+        const shown = await reactionsShown(page, 'laugh', 'chicken');
+
+        assertMark(shown, 'laugh', 2, 'Pam is laughing');
+        assertMark(shown, 'chicken', 6, 'Al threw a chicken at Dot');
+        assertOnScreen(drawn(shown.marks), screen, 'a reaction');
         assert.equal(await page.locator('.stand-in').count(), 0, 'something flew with motion off');
-        assertOnScreen(await boxes(page, '.seat-reaction'), screen, 'a reaction');
         await shot(page, `reactions-nine-seats-${screen}`);
-      }
+      };
+
+      await Promise.all([look(quigs, 'smallPhone'), look(stu, 'desktop')]);
 
       // Each goes by itself after its few seconds, on the page's own timer
       await quigs.waitForSelector('.seat-reaction', { state: 'detached' });
@@ -2293,7 +2346,7 @@ const CHECKS: Check[] = [
         table.act('Dot', { type: 'react', kind: 'fume' });
         await quigs.waitForSelector('.seat-reaction[data-reaction="fume"]');
 
-        const onDot = await boxes(quigs, '.seat-reaction[data-seat="6"]');
+        const onDot = drawn((await reactionsShown(quigs, 'tomato', 'rose', 'beer', 'fume')).marks.filter((mark) => mark.seat === '6'));
         const [stage] = await boxes(quigs, '.stage');
         assert.equal(onDot.length, 4, glyph);
         onDot.forEach((mark, index) => assertApart([mark], onDot.slice(index + 1), `two things on one seat (${glyph})`));
@@ -2335,13 +2388,13 @@ const CHECKS: Check[] = [
         const before = table.version;
         table.act('Sam', { type: 'react', kind: 'tomato', to: table.auth('Pam').id });
         await page.waitForSelector('.seat-reaction[data-reaction="tomato"]');
+        await assertMarkOn(page, 'tomato', 2, 'Sam threw a tomato at Pam');
         const [flight, ...others] = await flown(page, before);
 
         assert.deepEqual(others, [], `more moved than the throw (${glyph})`);
         assert.ok(flight && flight.name === 'throw' && flight.what === 'mark' && flight.standIn && flight.text === '🍅', JSON.stringify(flight));
         assertInside(flight.from, (await boxes(page, '.seat[data-seat="4"] .plate'))[0]!, `the throw leaves from Sam (${glyph})`);
         assertInside(flight.to, (await boxes(page, '.seat[data-seat="2"] .plate'))[0]!, `the throw lands on Pam (${glyph})`);
-        await assertMarkOn(page, 'tomato', 2, 'Sam threw a tomato at Pam');
         await page.waitForSelector('.thrown.stand-in', { state: 'detached' });
         await shot(page, `reactions-throw-landed-${glyph}-smallPhone`);
       }
@@ -2359,6 +2412,7 @@ const CHECKS: Check[] = [
         if (throwing) {
           table.act('Lu', { type: 'react', kind: 'beer', to: table.auth('Quigs').id });
           await page.waitForSelector('.seat-reaction[data-reaction="beer"]');
+          await assertMarkOn(page, 'beer', 0, 'Lu threw a beer at Quigs');
         }
 
         await page.waitForFunction(`${flightsSince(before)}.filter((flight) => flight.name === 'deal').length === ${2 * NINE_REACTING.length}`);
@@ -2370,7 +2424,6 @@ const CHECKS: Check[] = [
       const quiet = await deal(false);
       const busy = await deal(true);
       assert.deepEqual(busy, { deal: quiet.deal, throws: 1 }, 'the deal went out otherwise with a throw beside it');
-      await assertMarkOn(page, 'beer', 0, 'Lu threw a beer at Quigs');
     },
   ],
   [
@@ -2382,8 +2435,8 @@ const CHECKS: Check[] = [
       const page = await table.open('Quigs', 'phone', MOTION);
       table.act('Sam', { type: 'react', kind: 'fish', to: table.auth('Quigs').id });
       await page.waitForSelector('.seat-reaction[data-reaction="fish"]');
-      assert.equal(await page.evaluate(`${flightsSince()}.length`), 0, 'something moved with motion off');
       await assertMarkOn(page, 'fish', 0, 'Sam threw a fish at Quigs');
+      assert.equal(await page.evaluate(`${flightsSince()}.length`), 0, 'something moved with motion off');
 
       await page.tap('[data-action="menu"]');
       await page.tap('.menu [data-action="preferences"]');
@@ -9961,7 +10014,14 @@ const CHECKS: Check[] = [
   [
     'on a 360 phone the offer and the hunted cards stand clear of a reaction popped up over a seat and a throw landed on one, with emoji as this machine draws them and far wider',
     async (rig) => {
-      for (const glyph of ['own-emoji', 'wide-emoji']) {
+      /*
+       * A table for every look, with the reactions made once the table is in the shape looked at. The
+       * page takes a mark down after a few seconds of its own, so marks made before the first look are
+       * gone by the later ones on any machine not quick enough, which then find nothing to be in the
+       * way. And one table has no second pair to show: a player reacts once in a while by the game's
+       * clock, and moving that clock on takes the finished hand, and the offer with it, off the table.
+       */
+      const look = async (glyph: string, state: 'offer' | 'hunted', shape: Shape) => {
         const table = rabbitTable(rig);
         foldedTo(table, 3);
 
@@ -9970,33 +10030,34 @@ const CHECKS: Check[] = [
           await stu.addStyleTag({ content: WIDE_EMOJI });
         }
 
-        table.act('Pam', { type: 'react', kind: 'laugh' });
-        table.act('Quigs', { type: 'react', kind: 'tomato', to: table.auth('Stu').id });
-        await stu.waitForSelector('.seat-reaction[data-reaction="laugh"]');
-        await stu.waitForSelector('.seat-reaction[data-reaction="tomato"]');
-
-        for (const state of ['offer', 'hunted'] as const) {
-          if (state === 'hunted') {
-            await pressOn(stu, 'smallPhone')('[data-action="hunt"]');
-            await stu.waitForSelector('.rabbit-note');
-          }
-
-          await inShapesOf(
-            stu,
-            'smallPhone',
-            async (shape) => {
-              const where = `${state} beside reactions, ${glyph}, ${shape}`;
-
-              await assertRabbitFits(stu, 'smallPhone', where);
-              assert.deepEqual(await squeezed(stu, '.message.result .rabbit-note'), [], `${where}: the note is cut off`);
-              assertApart(await boxes(stu, '.seat-reaction'), await boxes(stu, '.message.result > *, .board .card'), `${where}: a reaction and the middle of the table`);
-              await shot(stu, `rabbit-${state}-reactions-${glyph}-smallPhone-${shape}`);
-            },
-            { buttonsUp: false },
-          );
+        if (state === 'hunted') {
+          await pressOn(stu, 'smallPhone')('[data-action="hunt"]');
+          await stu.waitForSelector('.rabbit-note');
         }
 
+        const shaped = await inShape(stu, shape);
+        const where = `${state} beside reactions, ${glyph}, ${shaped}`;
+
+        table.act('Pam', { type: 'react', kind: 'laugh' });
+        table.act('Quigs', { type: 'react', kind: 'tomato', to: table.auth('Stu').id });
+
+        const marks = drawn((await reactionsShown(stu, 'laugh', 'tomato')).marks);
+
+        assert.equal(marks.length, 2, `${where}: a reaction takes up no room`);
+        assertApart(marks, await boxes(stu, '.message.result > *, .board .card'), `${where}: a reaction and the middle of the table`);
+        await shot(stu, `rabbit-${state}-reactions-${glyph}-smallPhone-${shaped}`);
+
+        await assertRabbitFits(stu, 'smallPhone', where);
+        assert.deepEqual(await squeezed(stu, '.message.result .rabbit-note'), [], `${where}: the note is cut off`);
         await stu.context().close();
+      };
+
+      for (const glyph of ['own-emoji', 'wide-emoji']) {
+        for (const state of ['offer', 'hunted'] as const) {
+          for (const shape of shapesOf(SCREENS.smallPhone.width, false)) {
+            await look(glyph, state, shape);
+          }
+        }
       }
     },
   ],

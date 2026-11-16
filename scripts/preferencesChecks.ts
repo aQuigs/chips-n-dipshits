@@ -215,6 +215,9 @@ const textSizeInPreferences: Check = [
     assert.equal(await page.locator('.dialog select').count(), 0, 'Preferences still has a list to open');
     assert.ok(standard! < large! && large! < largest!, `the names are written ${standard}, ${large} and ${largest} px high, which does not show which is larger`);
 
+    // A tile comes up where the menu's line was pressed, and is kept from the second tap of two
+    await tapsLive(page);
+
     for (const step of ['largest', 'standard', 'large', 'largest', 'standard']) {
       const [box] = await boxes(page, `#pref-textSize .tile[data-text-size="${step}"]`);
       const at = middle(box!);

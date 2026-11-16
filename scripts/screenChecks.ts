@@ -12875,6 +12875,8 @@ const CHECKS: Check[] = [
 
           const lay = await save();
 
+          // On a phone lying down Save comes up where the menu's line was pressed, and is kept from the second tap of two
+          await tapsLive(page);
           assert.equal(await page.evaluate(SAVE_IN_REACH), true, `Save is out of reach as the dialog opens: ${JSON.stringify(lay)} on ${size.width}x${size.height}`);
           assert.deepEqual(await squeezed(page, '.dialog summary h3, .dialog .holds, .dialog-foot .btn'), [], 'a heading, the line under one or Save is cut off');
           await assertNoSidewaysScroll(page);

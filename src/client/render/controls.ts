@@ -143,7 +143,6 @@ function turnPanel(table: Denominated & Pick<TableConfig, 'smallBlind' | 'bigBli
 
   const decision = decisionOf(hand);
   const raiseButton = h('button.btn.raise', { type: 'button', 'data-action': 'raise', 'data-hotkey': HOTKEYS.raise });
-  // The slider counts its stops, which are amounts in whole blinds between two exact ends (`betStops`). The box takes any amount
   const stops = betStops(minRaiseTo, maxRaiseTo, table);
   // A bet being sized outlasts the bar being drawn again for the same decision (`Slot`), as when the host approves chips mid-turn
   const slider = h('input', { type: 'range', id: 'raise-slider', min: 0, max: stops.last, step: 1, 'aria-label': 'Bet size', 'data-keep': decision });

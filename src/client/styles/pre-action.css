@@ -36,7 +36,7 @@
  */
 .controls.seated > .waiting.choosing {
   align-content: space-between;
-  min-height: calc(max(var(--turn-height), calc(var(--ahead-height) + 8px + 50px)) + var(--ahead-lift));
+  min-height: calc(max(var(--turn-height), var(--ahead-height) + 8px + 50px) + var(--ahead-lift));
   margin-top: calc(-1 * var(--ahead-lift));
 }
 
@@ -147,6 +147,7 @@
 }
 
 .ahead-btn[aria-pressed='true'] {
+  position: relative;
   border-color: var(--accent);
   background: var(--accent);
   color: var(--accent-ink);
@@ -170,10 +171,6 @@
  * text they reach the button's corners, so the mark has none of the button's own room: it lies on the
  * gap before the button, and reaches into the padding at the gap's two sides and no further.
  */
-.ahead-btn[aria-pressed='true'] {
-  position: relative;
-}
-
 .ahead-btn[aria-pressed='true']::after {
   --mark: 14px;
 

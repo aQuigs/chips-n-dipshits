@@ -355,7 +355,6 @@ export class App {
       this.pointAddress(null);
     }
 
-    const taps = this.lobbyTaps;
     const lobby = lobbyEl(this.visitor(), this.themePicker(), this.wayBack(), {
       create: async (as, config) => {
         const went = await this.createTable(as, config);
@@ -366,14 +365,14 @@ export class App {
 
         return went === 'refused';
       },
-      byItself: (change) => taps.byItself(change),
+      byItself: (change) => this.lobbyTaps.byItself(change),
       say: (message) => this.announcer.status(message),
       openTable: (code) => this.openTable(code.trim().toUpperCase()),
       standings: () => this.showStandings(),
     });
 
     // Whoever tapped their way here, from the menu of a table or the screen for joining one, may tap twice
-    taps.byThePlayer(() => this.mount(lobby.element));
+    this.lobbyTaps.byThePlayer(() => this.mount(lobby.element));
     void this.offerPresets(lobby);
     void this.offerPlayers(lobby);
   }
@@ -569,23 +568,25 @@ export class App {
   private async createTable(as: Answer, config: Partial<TableConfig>): Promise<'made' | 'refused' | 'failed'> {
     const asked = this.leaves;
     const response = await this.arrivals.ask({ op: 'create', ...as, config });
-    const made = response?.ok && response.kind === 'joined' ? response : null;
-
-    if (made) {
-      this.remember(made.view.id, made.auth);
-    }
 
     // Whoever left the form before the answer came, by the way back to a table or by a table's code, stays
     // where they went: the new table keeps their seat, and nothing is said of a try they walked away from
-    if (asked !== this.leaves) {
-      return made ? 'made' : 'failed';
+    const stayed = asked === this.leaves;
+
+    if (response?.ok && response.kind === 'joined') {
+      this.remember(response.view.id, response.auth);
+
+      if (stayed) {
+        this.enterTable({ tableId: response.view.id, auth: response.auth }, response.view);
+        this.openDialog({ kind: 'invite' });
+        this.noteWho(as, response.view);
+      }
+
+      return 'made';
     }
 
-    if (made) {
-      this.enterTable({ tableId: made.view.id, auth: made.auth }, made.view);
-      this.openDialog({ kind: 'invite' });
-      this.noteWho(as, made.view);
-      return 'made';
+    if (!stayed) {
+      return 'failed';
     }
 
     this.fail(response && !response.ok ? response.error : 'Could not create the table. Check your connection and try again.');
@@ -785,8 +786,8 @@ export class App {
   private leaveTableScreen(): void {
     const view = this.shownView();
 
-    if (this.table && view) {
-      this.left = { tableId: this.table.session.tableId, name: view.config.name };
+    if (view) {
+      this.left = { tableId: view.id, name: view.config.name };
     }
 
     this.leaves += 1;

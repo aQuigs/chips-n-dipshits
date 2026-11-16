@@ -723,6 +723,18 @@ const SCREEN_STATES: ScreenState[] = [
     },
   },
   {
+    shows: 'the first screen as whoever left a table finds it, the way back first under the longest name a table can have',
+    alsoOn: 'phoneSideways',
+    async walk(rig, screen, look) {
+      const table = rig.table(players(2, BIGGEST), { name: LONGEST_LINES.name });
+      const page = await table.open(WIDEST, screen);
+
+      await openFromMenu(page, 'lobby');
+      await page.waitForSelector('[data-action="back-to-table"]');
+      await look(page, 'the first screen with a way back');
+    },
+  },
+  {
     shows: 'the host’s menu, and the table settings folded under their longest lines, then with every section unfolded, as many bounty hands as a table can have and a change not saved',
     async walk(rig, screen, look) {
       const table = rig.table(players(2, BIGGEST), { ...CENTS, ...LONGEST_LINES });

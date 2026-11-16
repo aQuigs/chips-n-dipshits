@@ -42,7 +42,7 @@ import { layoutSweep } from './layoutSweep.ts';
 import { confirmChecks } from './confirmChecks.ts';
 import { menuChecks } from './menuChecks.ts';
 import { preferencesChecks } from './preferencesChecks.ts';
-import { tapsLive } from './underTheFinger.ts';
+import { namedByTheWatch, tapsLive, tellingOf, watched, watchTheBar } from './underTheFinger.ts';
 
 const OUT = fileURLToPath(new URL('../screenshots/', import.meta.url));
 
@@ -10064,6 +10064,171 @@ const CHECKS: Check[] = [
         await page.waitForSelector(screenOf);
         assert.equal(await toastsTold(page), 0);
 
+        await page.context().close();
+      }
+    },
+  ],
+  [
+    'whoever leaves a table for the first screen finds the way back to it there, first on the page and by the table’s name, on every screen and whole under the longest name at the largest text; it leads to the seat they left, for someone watching too and after a look at another table; a second tap on the menu’s line does not press it; and it is gone once the server has said the seat or the table is',
+    async (rig) => {
+      const WAY_BACK = '[data-action="back-to-table"]';
+      const LINE = '.menu [data-action="lobby"]';
+      const LONGEST = 'WWWWWWW WWWWWWW WWWWWWW WWWWWWW WWWWWWWW';
+      const twoAt = (name: string) => rig.table([{ name: 'Quigs', stack: 1000 }, { name: 'Stu', stack: 1000 }], { name });
+      const seatKept = (page: Page, table: RigTable) => page.evaluate(`localStorage.getItem('cnd.seat.${table.id}')`);
+      const leave = async (page: Page, press: (selector: string) => Promise<void>) => {
+        await press('[data-action="menu"]');
+        await page.locator(LINE).scrollIntoViewIfNeeded();
+        await press(LINE);
+        await page.waitForSelector('[data-action="create-table"]');
+        await tapsLive(page);
+      };
+
+      assert.equal(LONGEST.length, LIMITS.tableNameLength);
+      assert.equal(await (await rig.lobby('smallPhone')).locator(WAY_BACK).count(), 0, 'a visitor who was at no table is offered a way back');
+
+      // A table put away while its player was on the first screen says so in the way back's place. Ahead of the rest: a sweep puts away the few tables left longest, and this one has to be among them
+      {
+        const table = twoAt('Friday Night');
+        const page = await table.open('Stu', 'desktop');
+
+        await leave(page, pressOn(page, 'desktop'));
+        rig.advance(PUT_AWAY_AFTER_MS);
+        assert.equal(rig.ask({ op: 'create', name: 'Pam' }).ok, true);
+        await page.click(WAY_BACK);
+        await page.waitForSelector('[data-screen="put-away"]');
+        await page.click('[data-action="start-new-table"]');
+        await page.waitForSelector('[data-action="create-table"]');
+        assert.equal(await page.locator(WAY_BACK).count(), 0, 'the way back to a table that was put away is still offered');
+        await page.context().close();
+      }
+
+      for (const screen of ['smallPhone', 'tallPhone', 'phoneSideways', 'desktop'] as const) {
+        const table = twoAt('Friday Night');
+        const page = await table.open('Stu', screen);
+        const press = pressOn(page, screen);
+        const seat = await seatKept(page, table);
+
+        await leave(page, press);
+        assert.equal(await text(page, WAY_BACK), 'Back to Friday Night');
+        assert.equal(await page.evaluate(`document.querySelector('main.lobby :is(button, input, select, summary, a[href])').dataset.action`), 'back-to-table', `${screen}: something of the first screen comes before the way back`);
+
+        const [back] = await boxes(page, WAY_BACK);
+        const rest = await boxes(page, '[data-action="standings"], .join-strip, .start-table');
+
+        assertOnScreen([back!], screen, `${screen}: the way back`);
+        assert.equal(rest.length, 3);
+        assert.ok(rest.every((part) => part.top >= back!.bottom), `${screen}: the way back is not above the rest of the first screen`);
+        assert.deepEqual(await squeezed(page, WAY_BACK), [], `${screen}: the way back is cut off`);
+        await assertNoSidewaysScroll(page);
+        assert.equal(new URL(page.url()).searchParams.get('table'), table.id, `${screen}: the address no longer names the table`);
+        await shot(page, `way-back-${screen}`);
+
+        // A page loaded again here is at the table at once: the way back is for the page that stayed
+        await press(WAY_BACK);
+        await page.waitForSelector('.seat.me');
+        assert.equal(await text(page, '.seat.me .name > span:first-child'), 'Stu', `${screen}: the way back led to someone else’s seat`);
+        assert.equal(await seatKept(page, table), seat, `${screen}: the browser remembers another seat`);
+        assert.equal(await toastsTold(page), 0);
+        await page.context().close();
+      }
+
+      // The longest name a table can have, at the largest text on the smallest phone: the button grows to hold all of it
+      {
+        const table = twoAt(LONGEST);
+        const page = await table.open('Stu', 'smallPhone');
+
+        await choose(page, { textSize: 'largest' });
+        await leave(page, pressOn(page, 'smallPhone'));
+        assert.equal(await text(page, WAY_BACK), `Back to ${LONGEST}`);
+        assert.deepEqual(await squeezed(page, WAY_BACK), [], 'the longest name is cut off');
+        within(await textBoxes(page, WAY_BACK), await boxes(page, WAY_BACK), 'the words of the way back');
+        assertApart(await boxes(page, WAY_BACK), await boxes(page, '.brand, [data-action="standings"]'), 'the way back and what is around it');
+        assertOnScreen(await boxes(page, WAY_BACK), 'smallPhone', 'the way back under the longest name');
+        await assertNoSidewaysScroll(page);
+        await shot(page, 'way-back-longest-name-largest-text-small-phone');
+        await page.context().close();
+      }
+
+      // Someone only watching is known at the table too, and comes back to watching; a look at another table on the way changes nothing
+      {
+        const table = twoAt('Friday Night');
+        const other = twoAt('Tuesday nickels');
+
+        table.join('Kibitz');
+
+        const page = await table.open('Kibitz', 'tallPhone');
+        const press = pressOn(page, 'tallPhone');
+
+        await leave(page, press);
+        await page.fill('#table-code', other.id);
+        await press('button:has-text("Find table")');
+        await page.waitForSelector('[data-action="join-table"]:not(:disabled)');
+        await press('button:has-text("Start my own table instead")');
+        await page.waitForSelector('[data-action="create-table"]');
+        await tapsLive(page);
+        assert.equal(await text(page, WAY_BACK), 'Back to Friday Night', 'a look at another table lost the way back');
+        assert.equal(new URL(page.url()).search, '', 'the address still names a table nobody joined');
+
+        await press(WAY_BACK);
+        await page.waitForSelector('.stage .table');
+        assert.equal(await text(page, '.topbar .title b'), 'Friday Night');
+        assert.equal(await page.locator('.seat.me').count(), 0);
+        assert.equal(new URL(page.url()).searchParams.get('table'), table.id);
+
+        // Removed while on the first screen, they learn of it from the way back, which leads to the table's door and is then gone
+        await leave(page, press);
+        table.act('Quigs', { type: 'kick', playerId: table.auth('Kibitz').id });
+        await press(WAY_BACK);
+        await page.waitForSelector('[data-action="join-table"]:not(:disabled)');
+        assert.deepEqual((await toasts(page)).map((toast) => toast.text), ['This browser is not at the table anymore. Join again to keep playing.']);
+        assert.equal(await seatKept(page, table), null);
+        await press('button:has-text("Start my own table instead")');
+        await page.waitForSelector('[data-action="create-table"]');
+        assert.equal(await page.locator(WAY_BACK).count(), 0, 'the way back to a table that took the seat away is still offered');
+        await page.context().close();
+      }
+
+      // The second tap of two on the menu's line: a phone lying down, just short enough for that line to lie where the way back comes up
+      {
+        const table = twoAt('Friday Night');
+        const page = await table.open('Stu', 'phoneSideways');
+        const press = pressOn(page, 'phoneSideways');
+        const { width, height } = SCREENS.phoneSideways;
+        const middleOf = async (selector: string) => middle((await boxes(page, selector))[0]!).y;
+
+        // Where the way back lies does not hang on how tall the screen is, and where the foot of the menu lies does
+        await leave(page, press);
+        const back = await middleOf(WAY_BACK);
+        await press(WAY_BACK);
+        await page.waitForSelector('.seat.me');
+
+        await press('[data-action="menu"]');
+        await page.locator(LINE).scrollIntoViewIfNeeded();
+        await page.setViewportSize({ width, height: Math.round(height - ((await middleOf(LINE)) - back)) });
+        await page.locator(LINE).scrollIntoViewIfNeeded();
+        assert.ok(Math.abs((await middleOf(LINE)) - back) < 10, 'the menu’s line does not lie where the way back comes up: this is no longer the screen to look at');
+        await tapsLive(page);
+
+        const tapped = await namedByTheWatch(page, LINE);
+
+        await watchTheBar(page);
+        await press(LINE);
+        await page.waitForSelector(WAY_BACK);
+
+        const { found, held } = await watched(page);
+        const underTheTap = found.filter((one) => one.aimedAt === tapped);
+
+        const wayBack = await namedByTheWatch(page, WAY_BACK);
+
+        assert.ok(underTheTap.some((one) => one.cameUp === wayBack), `the way back did not come up under the tap: ${JSON.stringify(underTheTap)}`);
+        assert.deepEqual(underTheTap.flatMap(tellingOf), [], 'a second tap lands on what the first one brought up');
+        assert.ok(held.some((one) => one.is?.includes('data-action=back-to-table')), `the way back was not held back: ${JSON.stringify(held.map((one) => one.is ?? one.what))}`);
+        assert.ok(await page.locator(WAY_BACK).isVisible(), 'the second tap went back to the table');
+
+        // Its moment over, it takes a tap like any button
+        await press(WAY_BACK);
+        await page.waitForSelector('.seat.me');
         await page.context().close();
       }
     },

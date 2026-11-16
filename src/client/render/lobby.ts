@@ -28,6 +28,12 @@ export interface AsksWho {
   offerPlayers: WhoField['offer'];
 }
 
+/** A table the visitor was at, which the page can still take them back to. */
+export interface TableLeft {
+  name: string;
+  back(): void;
+}
+
 export interface LobbyHandlers {
   /** Resolves when the attempt is over, to whether the server refused it: its words then say what in the form is wrong. */
   create(as: Answer, config: Partial<TableConfig>): Promise<boolean>;
@@ -82,8 +88,8 @@ async function whilePending(button: HTMLButtonElement, label: string, action: ()
   }
 }
 
-/** The front door: start a table, or go to one with its code. */
-export function lobbyEl(visitor: Visitor, themePicker: HTMLElement, handlers: LobbyHandlers): LobbyScreen {
+/** The front door: start a table, or go to one with its code. `left` is the table the visitor came here from, to which the way back comes first. */
+export function lobbyEl(visitor: Visitor, themePicker: HTMLElement, left: TableLeft | null, handlers: LobbyHandlers): LobbyScreen {
   const who = whoField('host-name', visitor.name, visitor.player);
   const createButton = h('button.btn.primary', { type: 'submit', 'data-action': 'create-table' }, 'Create table');
 
@@ -176,8 +182,11 @@ export function lobbyEl(visitor: Visitor, themePicker: HTMLElement, handlers: Lo
     h('p.note', null, 'Who is up and who is down, over every night.'),
   );
 
+  // Ahead of everything else: whoever is here for a look, or by a slip of the thumb, has a seat waiting
+  const wayBack = left && h('div.way-back', null, h('button.btn.primary', { type: 'button', 'data-action': 'back-to-table', onclick: left.back }, `Back to ${left.name}`));
+
   return {
-    element: h('main.lobby', null, brand(), standings, h('div.panels', null, join, create), themeSection(themePicker)),
+    element: h('main.lobby', null, brand(), wayBack, standings, h('div.panels', null, join, create), themeSection(themePicker)),
     offerPlayers: who.offer,
 
     offerPresets(presets) {

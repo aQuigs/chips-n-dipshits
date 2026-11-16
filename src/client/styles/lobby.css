@@ -31,6 +31,24 @@
   color: var(--muted);
 }
 
+/*
+ * The way back to a table, by its name, which may be long: its words wrap where a button's never do.
+ * The button is not a row of the page itself: a row is as tall as the least its part may be, which
+ * for a button is one line, when the page is longer than the screen.
+ */
+.way-back {
+  display: grid;
+  width: min(100%, 360px);
+}
+
+.way-back .btn {
+  padding-block: 10px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  text-wrap: balance;
+  white-space: normal;
+}
+
 .panels {
   display: grid;
   grid-template-columns: minmax(0, 1fr);

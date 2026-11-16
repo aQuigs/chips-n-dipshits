@@ -43,7 +43,7 @@ import type { Dialog, DialogHandlers } from './render/dialogs/index.ts';
 import { createFeed } from './render/feed.ts';
 import type { Feed } from './render/feed.ts';
 import { joinScreen, lobbyEl, noticeEl, putAwayEl, welcomeBackEl } from './render/lobby.ts';
-import type { AsksWho, LobbyScreen, Visitor } from './render/lobby.ts';
+import type { AsksWho, LobbyScreen, TableLeft, Visitor } from './render/lobby.ts';
 import { nightOver } from './render/night.ts';
 import { outdatedEl } from './render/outdated.ts';
 import { hostOrCohost } from './render/roles.ts';
@@ -159,9 +159,19 @@ export class App {
   private playersAsked = 0;
   private readonly hotkeys: HotkeyPresser;
 
+  /**
+   * The tap guard of the first screen. It is there from the start and not made with that screen: a tap is
+   * what brings the screen up, and only a guard that saw it can keep the second tap of two off what came up under it.
+   */
+  private readonly lobbyTaps = new TapGuard();
+
   /** The table this page is at, from sitting down at its screen until that screen is left. */
   private table: TableConnection | null = null;
   private screen: TableScreen | null = null;
+
+  /** The table this page was last at, by the name it had then: where the first screen's way back leads. */
+  private left: { tableId: string; name: string } | null = null;
+
   /** Takes the standings off a screen that has no table, while they are up over one. */
   private closeStandings: (() => void) | null = null;
   private dialog: Dialog | null = null;
@@ -345,9 +355,8 @@ export class App {
       this.pointAddress(null);
     }
 
-    // Its holds end by themselves a moment after the one change it guards, so it needs no putting away
-    const taps = new TapGuard();
-    const lobby = lobbyEl(this.visitor(), this.themePicker(), {
+    const taps = this.lobbyTaps;
+    const lobby = lobbyEl(this.visitor(), this.themePicker(), this.wayBack(), {
       create: async (as, config) => {
         const went = await this.createTable(as, config);
 
@@ -363,9 +372,21 @@ export class App {
       standings: () => this.showStandings(),
     });
 
-    this.mount(lobby.element);
+    // Whoever tapped their way here, from the menu of a table or the screen for joining one, may tap twice
+    taps.byThePlayer(() => this.mount(lobby.element));
     void this.offerPresets(lobby);
     void this.offerPlayers(lobby);
+  }
+
+  /**
+   * The way back to the table this page was last at, for as long as the browser remembers a seat there.
+   * That is what a reload goes by, however the page is served, and what the server's word that the seat
+   * or the table is gone takes away.
+   */
+  private wayBack(): TableLeft | null {
+    const left = this.left;
+
+    return left && this.rememberedSeat(left.tableId) ? { name: left.name, back: () => this.openTable(left.tableId) } : null;
   }
 
   /**
@@ -750,6 +771,12 @@ export class App {
   }
 
   private leaveTableScreen(): void {
+    const view = this.shownView();
+
+    if (this.table && view) {
+      this.left = { tableId: this.table.session.tableId, name: view.config.name };
+    }
+
     this.leaves += 1;
     this.replayWanted = null;
     this.table?.close();

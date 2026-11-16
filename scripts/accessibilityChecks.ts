@@ -962,7 +962,7 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
     },
   ],
   [
-    'the screens before a table break no rule of the rule engine in any theme, each has one main heading and says its language: the lobby, its form for a new table folded and with every section unfolded from the keyboard, joining, the standings, a table that is gone',
+    'the screens before a table break no rule of the rule engine in any theme, each has one main heading and says its language: the lobby, its form for a new table folded and with every section unfolded from the keyboard, joining, the standings, a table that is gone, and the lobby as someone finds it who left a table, the way back to it the first thing the keyboard comes to',
     async (rig) => {
       const sweep = new Sweep();
       const table = threeHanded(rig);
@@ -1042,7 +1042,21 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
         'the parts of the table screen a screen reader can jump between',
       );
 
-      sweep.done(10);
+      // Left for the first screen from the menu, by keyboard: the way back is a button by the table's name, and the first thing Tab comes to
+      await tabTo(seated, '[data-action="menu"]');
+      await seated.keyboard.press('Enter');
+      await tabTo(seated, '.menu [data-action="lobby"]');
+      await seated.keyboard.press('Enter');
+      await seated.waitForSelector('[data-action="back-to-table"]');
+      assert.deepEqual(await structure(seated), { language: 'en', headings: 1, mains: 1 }, 'the lobby with a way back');
+      assert.equal((await tree(seated, 'main.lobby')).split('\n').map((line) => line.trim()).find((line) => /^- (button|textbox|link)/.test(line)), '- button "Back to Friday Night"', 'the first control of the first screen');
+      await sweep.over(seated, 'the lobby with a way back to a table');
+      await seated.keyboard.press('Tab');
+      assert.equal(await focused(seated), 'back-to-table', 'the keyboard does not come to the way back first');
+      await seated.keyboard.press('Enter');
+      await seated.waitForSelector('.seat.me');
+
+      sweep.done(11);
     },
   ],
   [

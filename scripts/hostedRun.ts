@@ -342,6 +342,38 @@ try {
     await host.waitForSelector('.controls .waiting:has-text("not started")');
   }
 
+  console.log('The lobby reached from a table has the way back to it first, by the table’s name, and it leads to the same seat: with the address Google’s own, and with the frame’s storage refused too');
+  {
+    for (const storage of ['kept', 'refused'] as const) {
+      const page = await open(browser);
+
+      if (storage === 'refused') {
+        // A browser that gives another site's frame no storage at all: the page has only what it holds itself
+        await page.addInitScript(`Object.defineProperty(window, 'localStorage', { get() { throw new DOMException('The operation is insecure.', 'SecurityError'); } })`);
+      }
+
+      await page.goto(`${server.url}?table=${tableId}&me=${hostMember}`);
+      await page.click('[data-action="confirm-member"]');
+      await page.waitForSelector('.seat.me');
+
+      const tableName = await page.innerText('.topbar .title b');
+      const address = () => [inAddress(page, 'table'), inAddress(page, 'me')];
+
+      await page.click('[data-action="menu"]');
+      await page.click('.menu [data-action="lobby"]');
+      await page.waitForSelector('[data-action="create-table"]');
+      assert.equal(await page.innerText('[data-action="back-to-table"]'), `Back to ${tableName}`, `storage ${storage}`);
+      assert.equal(await page.evaluate(`document.querySelector('main.lobby :is(button, input, select, summary, a[href])').dataset.action`), 'back-to-table', `storage ${storage}: the way back is not first on the page`);
+      assert.deepEqual(address(), [tableId, hostMember], `storage ${storage}: the address keeps the table and the seat while the lobby is showing`);
+
+      await page.click('[data-action="back-to-table"]');
+      await page.waitForSelector('.seat.me');
+      assert.equal(await page.innerText('.seat.me .name > span:first-child'), 'Quigs', `storage ${storage}: the way back led to another seat`);
+      assert.deepEqual(address(), [tableId, hostMember], `storage ${storage}`);
+      await page.context().close();
+    }
+  }
+
   const friend = await open(browser);
   await friend.goto(`${server.url}?table=${tableId}`);
   await friend.fill('#join-name', 'Danny');

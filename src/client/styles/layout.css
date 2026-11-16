@@ -35,14 +35,18 @@
   background: var(--bg-raised);
 }
 
+/* The table's name over its stakes, and beside the two the pill that says how the table stands */
 .topbar .title {
   display: grid;
+  grid-template: 'name pill' auto 'stakes pill' auto / minmax(0, 1fr) auto;
+  column-gap: 10px;
   flex: 1;
   min-width: 0;
   line-height: 1.2;
 }
 
 .topbar .title b {
+  grid-area: name;
   overflow: hidden;
   font: var(--display-weight) calc(16px * var(--display-scale) * var(--text-scale)) / 1.2 var(--font-display);
   letter-spacing: var(--display-spacing);
@@ -54,6 +58,10 @@
 .topbar .title span {
   color: var(--muted);
   font-size: calc(12px * var(--text-scale));
+}
+
+.topbar .title > span {
+  grid-area: stakes;
 }
 
 .topbar .title .ante {
@@ -70,8 +78,14 @@
   white-space: nowrap;
 }
 
+.topbar .title > .pill {
+  grid-area: pill;
+  align-self: center;
+  line-height: 1.4;
+}
+
 /* A state of the table, where the hand's number usually is (`headline`): in the color of what is on, to be noticed there */
-.pill.news {
+.topbar .title > .pill.news {
   border-color: var(--accent);
   color: var(--accent);
 }
@@ -82,9 +96,21 @@
     gap: 8px;
   }
 
-  /* The longest thing the pill says (`headline`) still leaves the stakes their one line under the name in a wide font */
-  .pill {
-    padding-inline: 6px;
+  /*
+   * The pill says more than one thing in the course of a hand (`headline`), some of it long. Beside the
+   * name alone, and small enough for the name's line, it leaves the stakes the whole width under both:
+   * whatever it says, the stakes take the lines they would without it and the table keeps its height
+   */
+  .topbar .title {
+    grid-template-areas:
+      'name pill'
+      'stakes stakes';
+    column-gap: 8px;
+  }
+
+  .topbar .title > .pill {
+    padding: 1px 6px;
+    line-height: 1.2;
   }
 }
 

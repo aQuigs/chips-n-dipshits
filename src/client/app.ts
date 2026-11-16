@@ -1111,8 +1111,14 @@ export class App {
       h('button.icon.menu-button', { type: 'button', 'aria-label': menuLabel(waiting), 'data-action': 'menu', onclick: () => this.openDialog({ kind: 'menu' }) }, '☰', waiting > 0 ? h('span.dot', null, String(waiting)) : null),
       // The ante takes the place of the word: a small phone has no room for both beside the hand's number.
       // It is a piece of its own, so where there is no room for it either it moves to the next line whole
-      h('div.title', null, h('b', { role: 'heading', 'aria-level': '1', title: view.config.name }, view.config.name), ante ? h('span', null, `${blinds} `, h('span.ante', null, `· ${ante}`)) : h('span', null, `${blinds} hold’em`)),
-      h('span.pill', { class: state.news && 'news' }, state.says),
+      // The pill is laid out with the name and the stakes (layout.css), so that what it says never decides how many lines the stakes take
+      h(
+        'div.title',
+        null,
+        h('b', { role: 'heading', 'aria-level': '1', title: view.config.name }, view.config.name),
+        ante ? h('span', null, `${blinds} `, h('span.ante', null, `· ${ante}`)) : h('span', null, `${blinds} hold’em`),
+        h('span.pill', { class: state.news && 'news' }, state.says),
+      ),
       voiceLinkEl(view.config.voiceLink),
       h('button.btn.small', { type: 'button', 'data-action': 'invite', onclick: () => this.openDialog({ kind: 'invite' }) }, 'Invite'),
     ]);

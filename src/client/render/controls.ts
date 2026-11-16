@@ -7,6 +7,7 @@ import { preActionFor } from '../../engine/preAction.ts';
 import { timesText } from '../../engine/runVote.ts';
 import { straddlesAllowed } from '../../engine/straddles.ts';
 import type { Command, PassedOver, RequestKind } from '../../engine/types.ts';
+import { LIMITS } from '../../engine/validate.ts';
 import type { HandView, SeatView, TableView } from '../../engine/view.ts';
 import { ownDeadline } from '../actionClock.ts';
 import { askedSays, chipsAsked, outOfChips, roomToAdd } from '../buyIns.ts';
@@ -253,7 +254,7 @@ function turnPanel(table: Denominated, hand: HandView, stack: number, handlers: 
     'div.turn',
     null,
     // The clock is read after the bet's sizes and before the moves. Where it stands is the stylesheet's (own-clock.css): on the line that has room for it, or first in the row of the moves
-    options.canRaise ? h('div.sizing', null, h('div.presets', { role: 'group', 'aria-label': LABELS.sizes }, presetButtons), clock, h('div.amount', null, slider, amount)) : clock,
+    options.canRaise ? h('div.sizing', null, h('div.presets', { role: 'group', 'aria-label': LABELS.sizes }, presetButtons), clock, h('div.amount', { 'data-widest': formatAmount(LIMITS.chips, table) }, slider, amount)) : clock,
     h(
       'div.buttons',
       null,

@@ -158,14 +158,36 @@
   }
 }
 
+/*
+ * The box is as wide as the largest stack a table allows, written as the box writes it at rest
+ * (`data-widest`). That amount stands unseen in the box's column, in the box's type and with its
+ * padding, and the box fills the column: a count of characters is too wide in one font or too narrow in
+ * the next, since a comma is as wide as the font makes it, and what is too wide comes off the slider.
+ */
+.amount::after {
+  content: attr(data-widest);
+  grid-area: 1 / 2;
+  min-width: 132px;
+  height: 0;
+  padding: 0 10px 0 9px;
+  visibility: hidden;
+  white-space: nowrap;
+}
+
 .amount input[type='text'] {
-  /* Wide enough for the largest stack a table allows as the box writes it at rest, ten digits with their commas or with the point of a table of cents, in whatever font the digits are set */
-  width: max(132px, 12ch + 18px);
+  grid-area: 1 / 2;
+  /* No width of its own for the column to make room for, and all of the column's */
+  width: 0;
+  min-width: 100%;
   min-height: 40px;
   padding: 0 8px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--bg);
+}
+
+.amount::after,
+.amount input[type='text'] {
   font-size: calc(16px * var(--text-scale));
   font-weight: 700;
   font-variant-numeric: tabular-nums;

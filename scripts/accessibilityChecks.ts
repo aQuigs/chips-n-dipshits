@@ -592,7 +592,7 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
         await page.waitForSelector('.menu');
       }
 
-      assert.deepEqual(opened, ['Invite players', 'Players', 'Last hands', 'Table settings', 'Shuffle the seats?', 'Ledger', 'Tonight', 'Hand history', 'Standings', 'Show or muck', 'Mute players', 'Preferences', 'Theme', 'Who you are', 'Stand up?']);
+      assert.deepEqual(opened, ['Invite players', 'Players', 'Last hands', 'Table settings', 'Shuffle the seats?', 'Ledger', 'Tonight', 'Hand history', 'Standings', 'Show or muck', 'Mute players', 'Preferences', 'Who you are', 'Stand up?']);
       sweep.done(opened.length + 1);
     },
   ],
@@ -1097,11 +1097,15 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
       await page.keyboard.press('Enter');
       await tabTo(page, '.menu-item[data-action="preferences"]');
       await page.keyboard.press('Enter');
-      await tabTo(page, 'select[data-pref="textSize"]');
-      assert.match(await tree(page, '.dialog'), /heading "Text" \[level=3\]\n\s+- text: Text size\n\s+- combobox "Text size [^"]*":\n\s+- option "Standard" \[selected\]\n\s+- option "Large"\n\s+- option "Largest"/);
-      await page.selectOption('select[data-pref="textSize"]', 'largest');
+      await tabTo(page, '#pref-textSize input:checked');
+      assert.match(await tree(page, '.dialog'), /heading "Look" \[level=3\]\n(?:.*\n)*?\s+- radiogroup "Text size":\n\s+- text: Text size [^\n]*\n\s+- radio "Standard" \[checked\]\n\s+- text: Standard\n\s+- radio "Large"\n\s+- text: Large\n\s+- radio "Largest"\n/);
+
+      // One of a few is picked as radio buttons are, with the arrows: each step is made at once
+      await page.keyboard.press('ArrowRight');
+      await page.waitForSelector('#app[data-text-size="large"]');
+      await page.keyboard.press('ArrowRight');
       await page.waitForSelector('#app[data-text-size="largest"]');
-      assert.equal(await focused(page), '#pref-textSize', 'the choice was made and the keyboard is no longer on it');
+      assert.equal(await page.evaluate(`document.activeElement.matches('#pref-textSize input[value="largest"]:checked')`), true, `the choice was made and the keyboard is no longer on it, but on ${await focused(page)}`);
       assert.equal(await page.evaluate(`localStorage.getItem('cnd.textSize')`), 'largest');
     },
   ],

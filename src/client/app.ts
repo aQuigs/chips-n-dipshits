@@ -32,7 +32,7 @@ import { ReactionPicker } from './render/reactionPicker.ts';
 import type { Platform } from './platform.ts';
 import { PREFERENCES, Preferences } from './prefs.ts';
 import { movePromptEl, SeatMoves } from './seatMoves.ts';
-import type { Abilities, AppPreferences } from './prefs.ts';
+import type { Abilities, Ability, AppPreferences } from './prefs.ts';
 import { controlsEl, controlsSignature, lockTurn, sizingMemory } from './render/controls.ts';
 import type { Sizing } from './render/controls.ts';
 import { frame } from './render/dialogs/dialog.ts';
@@ -203,7 +203,10 @@ export class App {
     }
     this.sounds = new Sounds(pageSounds(), this.prefs, { inView: this.watching.inView });
     this.attention = new Attention(this.prefs, pageWays({ sounds: this.sounds, touch: pageTouch(), root, ownsTab: platform.ownsTab }));
-    this.abilities = { of: (key) => (key === 'motion' ? motionAbility(this.watching) : this.attention.of(key)), ask: (key) => this.attention.ask(key) };
+    // What the device says to a preference that is no way of getting attention
+    const own: Record<string, () => Ability> = { motion: () => motionAbility(this.watching), hotkeys: () => this.hotkeys.ability() };
+
+    this.abilities = { of: (key) => (Object.hasOwn(own, key) ? own[key]!() : this.attention.of(key)), ask: (key) => this.attention.ask(key) };
     this.server = new ServerLine(platform.transport, platform.build, () => this.showOutdated());
     this.hotkeys = new HotkeyPresser(this.prefs, { root, controls: () => this.screen?.controls.element ?? null, dialogOpen: () => this.tableCovered() });
 
@@ -1308,6 +1311,7 @@ export class App {
       prefs: this.prefs,
       mutes: this.screen!.mutes,
       abilities: this.abilities,
+      resizing: (change) => this.screen!.taps.byItself(change),
       toLobby: () => this.showLobby(true),
       pickSeat: (playerId) => {
         this.closeDialog();

@@ -1,42 +1,66 @@
+import { PREF_GROUPS } from '../../prefs.ts';
 import type { Abilities, ChoicePref, OnOffPref, Pref, Preferences } from '../../prefs.ts';
 import { cardEl, h } from '../../ui.ts';
+import { themeSwatch } from '../themePicker.ts';
 import { everyone, frame } from './dialog.ts';
 import type { DialogHandlers, DialogKind } from './dialog.ts';
 
 /** The store as this dialog uses it: whatever is in the registry, by the kind of each entry. */
 type AnyPreferences = Preferences<Record<string, Pref>>;
 
+type Resizing = DialogHandlers['resizing'];
+
 // Radios with one name are one group across the document, and the showcase page holds two apps
 let groupsDrawn = 0;
 
-/** A choice whose options are drawn as samples: one tile per option, each showing what picking it looks like. */
-function samples(prefs: AnyPreferences, key: string, pref: ChoicePref, preview: NonNullable<ChoicePref['preview']>): HTMLElement {
-  const name = `pref-${key}-${(groupsDrawn += 1)}`;
-  const tiles = pref.options.map((option) => {
-    const sample = h('span.sample', { 'aria-hidden': 'true' }, preview.map(cardEl));
-    sample.dataset[key] = option.value;
+function sample(preview: ChoicePref['preview']): HTMLElement | null {
+  return preview ? h('span.sample', { 'aria-hidden': 'true' }, preview === 'swatch' ? themeSwatch() : preview.map(cardEl)) : null;
+}
 
-    return h(
+/**
+ * Picks an option whose choice may resize what is read above its tile, as a text size does, and scrolls
+ * the dialog by as much, so the tile stays under the finger that picked it. Where the dialog cannot
+ * scroll that far, at its top with everything above the tile grown smaller, what comes up under the
+ * finger instead is held back for a moment.
+ */
+function pickInPlace(tile: HTMLElement, resizing: Resizing, pick: () => void): void {
+  resizing(() => {
+    const top = tile.getBoundingClientRect().top;
+
+    pick();
+    tile.closest('.dialog-body')?.scrollBy(0, tile.getBoundingClientRect().top - top);
+  });
+}
+
+/** A choice of one among a few: a tile per option, each showing what picking it looks like. */
+function tiles(prefs: AnyPreferences, resizing: Resizing, key: string, pref: ChoicePref): HTMLElement {
+  const name = `pref-${key}-${(groupsDrawn += 1)}`;
+  const options = pref.options.map((option) => {
+    const tile: HTMLElement = h(
       'label.tile',
       null,
       // A click, not a change: picking the option already marked still applies it, as after it was chosen in another tab
-      h('input', { type: 'radio', name, value: option.value, checked: prefs.get(key) === option.value, onclick: () => prefs.set(key, option.value) }),
-      sample,
+      h('input', { type: 'radio', name, value: option.value, checked: prefs.get(key) === option.value, onclick: () => pickInPlace(tile, resizing, () => prefs.set(key, option.value)) }),
+      sample(pref.preview),
       h('span', null, option.label),
     );
+
+    tile.dataset[key] = option.value;
+
+    return tile;
   });
 
   return h(
     'div.samples',
-    { role: 'radiogroup', id: `pref-${key}`, 'data-pref': key, 'aria-labelledby': `pref-${key}-label` },
+    { role: 'radiogroup', id: `pref-${key}`, 'data-pref': key, 'aria-labelledby': `pref-${key}-label`, 'aria-describedby': pref.hint ? `pref-${key}-hint` : null },
     h('span', { id: `pref-${key}-label` }, pref.label),
-    pref.hint ? h('small', null, pref.hint) : null,
-    h('div.tiles', null, tiles),
+    pref.hint ? h('small', { id: `pref-${key}-hint` }, pref.hint) : null,
+    h('div.tiles', null, options),
   );
 }
 
 // Said in place of the hint of a switch whose ability the player said no to in the browser
-const BLOCKED = 'Blocked in this browser’s settings';
+const BLOCKED = 'Blocked in this browser’s settings.';
 
 /**
  * An on/off switch, showing on only while the device can do what it switches on. Where the browser
@@ -48,19 +72,14 @@ function onOff(prefs: AnyPreferences, abilities: Abilities, key: string, id: str
   }
 
   const note = h('small');
-  const button = h(
-    'button.toggle.pref',
-    { type: 'button', role: 'switch', id, 'data-pref': key, class: pref.compact ? 'compact' : null, title: pref.compact ? pref.hint : null },
-    h('i'),
-    h('span', null, pref.label, note),
-  );
+  const button = h('button.toggle.pref', { type: 'button', role: 'switch', id, 'data-pref': key }, h('i'), h('span', null, pref.label, note));
 
   const paint = () => {
     const ability = abilities.of(key);
 
     button.setAttribute('aria-checked', String(ability === 'yes' && prefs.get(key)));
     button.setAttribute('aria-disabled', String(ability === 'blocked'));
-    note.textContent = ability === 'blocked' ? (pref.blocked ?? BLOCKED) : pref.compact ? '' : (pref.hint ?? '');
+    note.textContent = ability === 'blocked' ? (pref.blocked ?? BLOCKED) : (pref.hint ?? '');
   };
 
   button.addEventListener('click', async () => {
@@ -85,29 +104,16 @@ function onOff(prefs: AnyPreferences, abilities: Abilities, key: string, id: str
  * The control for one preference. It keeps itself up to date as it is used, so the dialog is drawn
  * once and the keyboard stays on the control that was just changed.
  */
-function control(prefs: AnyPreferences, abilities: Abilities, key: string, pref: Pref): HTMLElement | null {
+function control(handlers: DialogHandlers, key: string, pref: Pref): HTMLElement | null {
+  const prefs: AnyPreferences = handlers.prefs;
   const id = `pref-${key}`;
-  const hint = pref.hint ? h('small', null, pref.hint) : null;
-  const field = (input: HTMLElement) => h('label.field', { for: id }, h('span', null, pref.label), input, hint);
 
   switch (pref.kind) {
     case 'onOff':
-      return onOff(prefs, abilities, key, id, pref);
+      return onOff(prefs, handlers.abilities, key, id, pref);
 
-    case 'choice': {
-      if (pref.preview) {
-        return samples(prefs, key, pref, pref.preview);
-      }
-
-      const select = h(
-        'select',
-        { id, 'data-pref': key, onchange: () => prefs.set(key, select.value) },
-        pref.options.map((option) => h('option', { value: option.value }, option.label)),
-      );
-      select.value = String(prefs.get(key));
-
-      return field(select);
-    }
+    case 'choice':
+      return tiles(prefs, handlers.resizing, key, pref);
 
     case 'range': {
       const slider = h('input', {
@@ -121,7 +127,7 @@ function control(prefs: AnyPreferences, abilities: Abilities, key: string, pref:
         oninput: () => prefs.set(key, Number(slider.value)),
       });
 
-      return field(slider);
+      return h('label.field.slider', { for: id }, h('span', null, pref.label), slider, pref.hint ? h('small', null, pref.hint) : null);
     }
   }
 }
@@ -134,42 +140,29 @@ function glossary(key: string, lines: NonNullable<Pref['glossary']>): HTMLElemen
   );
 }
 
+/** The controls of one part of the dialog, in the registry's order. A preference this device can do nothing with has none, and neither has what goes with it. */
+function controlsOf(group: string, handlers: DialogHandlers): HTMLElement[] {
+  return (Object.entries(handlers.prefs.registry) as [string, Pref][])
+    .filter(([, pref]) => pref.group === group)
+    .flatMap(([key, pref]) => {
+      const drawn = control(handlers, key, pref);
+
+      return drawn ? [drawn, ...(pref.glossary ? [glossary(key, pref.glossary)] : [])] : [];
+    });
+}
+
 function preferences(handlers: DialogHandlers): HTMLElement {
-  const prefs: AnyPreferences = handlers.prefs;
-  const groups = new Map<string, HTMLElement[]>();
-
-  for (const [key, pref] of Object.entries(prefs.registry)) {
-    if (!pref.group) {
-      continue;
-    }
-
-    const drawn = control(prefs, handlers.abilities, key, pref);
-    if (!drawn) {
-      continue;
-    }
-
-    const controls = groups.get(pref.group) ?? [];
-    const row = controls.at(-1);
-    const compact = pref.kind === 'onOff' && pref.compact;
-
-    groups.set(pref.group, controls);
-
-    if (compact && row?.classList.contains('switches')) {
-      row.append(drawn);
-    } else {
-      controls.push(compact ? h('div.switches', null, drawn) : drawn);
-    }
-
-    if (pref.glossary) {
-      controls.push(glossary(key, pref.glossary));
-    }
-  }
+  const parts = Object.entries(PREF_GROUPS).map(([group, heading]) => ({ group, heading, controls: controlsOf(group, handlers) }));
 
   return frame(
     'Preferences',
     handlers,
-    ...[...groups].map(([group, controls]) => h('section', null, h('h3', null, group), controls)),
-    h('p.note', null, 'These are yours alone, and are kept on this device.'),
+    h(
+      'div.prefs',
+      null,
+      parts.filter((part) => part.controls.length > 0).map(({ group, heading, controls }) => h('section', { 'data-group': group }, h('h3', null, heading), controls)),
+      h('p.note', null, 'These are yours alone, kept on this device.'),
+    ),
   );
 }
 

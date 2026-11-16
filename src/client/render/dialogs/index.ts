@@ -19,7 +19,6 @@ import { shuffleSeats } from './shuffle.ts';
 import { sitDialog } from './sit.ts';
 import { standingsDialog } from './standings.ts';
 import { straddlesDialog } from './straddles.ts';
-import { themeDialog } from './theme.ts';
 import { tonightDialog } from './tonight.ts';
 import { transferDialog } from './transfer.ts';
 import { whoDialog } from './who.ts';
@@ -50,7 +49,6 @@ const REGISTERED = [
   autoShowDialog,
   muteDialog,
   preferencesDialog,
-  themeDialog,
   whoDialog,
   standUp,
   toLobby,

@@ -58,11 +58,10 @@ async function setTheme(page: Page, id: string): Promise<void> {
     return;
   }
 
-  await page.click('[data-action="menu"]');
-  await page.click('[data-action="theme"]');
+  await openFromMenu(page, 'preferences');
 
   const fonts = page.waitForResponse((response) => response.url().startsWith('https://fonts.googleapis.com/'), { timeout: 5000 }).catch(() => null);
-  await page.click(`.theme-option[data-theme="${id}"]`);
+  await page.click(`#pref-theme .tile[data-theme="${id}"]`);
   await fonts;
 
   await page.click('[data-action="close"]');
@@ -272,8 +271,8 @@ try {
   await shot(phone.page, '10-ledger-phone');
   await phone.page.click('[data-action="close"]');
   await phone.page.click('[data-action="menu"]');
-  await phone.page.click('.menu [data-action="theme"]');
-  await shot(phone.page, '10-theme-phone');
+  await phone.page.click('.menu [data-action="preferences"]');
+  await shot(phone.page, '10-preferences-phone');
   await phone.page.click('[data-action="close"]');
 
   // ---- Carrying on from another device by personal link ----

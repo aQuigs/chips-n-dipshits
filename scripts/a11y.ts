@@ -109,11 +109,6 @@ export const EXCEPTIONS: readonly Exception[] = [
     why: 'Card Room writes a loss and a fold in its red on a panel at 4.31 to 1, short of 4.5. The themes there were keep their look; the high-contrast theme is for whoever needs more, and the sign before the amount says the same as the color.',
   },
   {
-    rule: 'color-contrast-enhanced',
-    says: 'at button[data-theme="',
-    why: 'In the theme picker each button is a sample of its theme, drawn in that theme’s colors whichever is in use, so the small print on another theme’s button is at that theme’s contrast, not the 7 to 1 of the high-contrast one. Its name is in the theme’s text color, which every theme holds to 7 to 1.',
-  },
-  {
     rule: 'region',
     says: 'at .above',
     why: 'The layer over the table holds the reactions panel and, for a few seconds each, the reactions over the seats. It is empty the rest of the time, and a part of the page that is nearly always empty is no help as a landmark. The panel takes the keyboard when it opens and gives it back, and each reaction is said as it comes.',

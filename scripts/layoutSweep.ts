@@ -768,6 +768,22 @@ const SCREEN_STATES: ScreenState[] = [
     },
   },
   {
+    shows: 'Preferences, part by part, with every choice a device is offered',
+    async walk(rig, screen, look) {
+      const table = tableWithTrophy(rig, 3, EVEN);
+      const page = await table.open(VIEWER, screen);
+
+      await openFromMenu(page, 'preferences');
+      await page.waitForSelector('.prefs #pref-sound');
+
+      // Longer than the screen it is on: each part is brought into sight, since a look reads only the head and the foot of what scrolls
+      for (const part of await page.locator('.prefs > section').all()) {
+        await part.scrollIntoViewIfNeeded();
+        await look(page, `Preferences, ${await part.locator('h3').textContent()}`);
+      }
+    },
+  },
+  {
     shows: 'the menu with every line that says how things stand saying it at its longest, for the host during a hand and between hands, and for a player',
     async walk(rig, screen, look) {
       // The widest name hosts and holds the high hand, at a table of cents where the bonus on it and a bomb pot are the longest amounts written out

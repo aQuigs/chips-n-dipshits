@@ -9,8 +9,8 @@ import type { Redrawn } from './ui.ts';
  */
 const SETTLING = 'taps-settling';
 
-/** Everything on a page that takes a tap. */
-const TAPPED = 'button, input, select, textarea, a[href], summary, [role="switch"], [role="button"]';
+/** Everything on a page that takes a tap. A tile is the label over a radio that is not drawn, and takes the tap for it. */
+const TAPPED = 'button, input, select, textarea, a[href], summary, [role="switch"], [role="button"], label.tile';
 
 /** What lies behind a dialog and closes it when tapped. It takes that tap only around the dialog. */
 const BACKDROP = '.overlay';
@@ -158,8 +158,10 @@ export class TapGuard implements Redrawn {
   }
 
   /**
-   * Runs a change of the page that is the game's own doing and no slot's redraw, a replay that opens or
-   * is set aside by itself: what it brings up or uncovers is held back like anything drawn anew.
+   * Runs a change of the page that is no slot's redraw: the game's own doing, a replay that opens or is
+   * set aside by itself, or a choice of the player's that moves what they were not aiming at, a text
+   * size that resizes the dialog it is picked in. What it brings up or uncovers is held back like
+   * anything drawn anew.
    */
   byItself(change: () => void): void {
     this.leaving();

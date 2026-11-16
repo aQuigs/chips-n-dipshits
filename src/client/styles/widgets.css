@@ -144,6 +144,19 @@
   font-weight: 400;
 }
 
+.field select {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: calc(16px * var(--text-scale));
+  font-weight: 500;
+}
+
 .check {
   display: flex;
   align-items: center;

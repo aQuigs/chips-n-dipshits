@@ -6,8 +6,8 @@
  */
 import type { Page } from 'playwright';
 
-/** Everything on a page that takes a tap. */
-const TAPPED = 'button, input, select, textarea, a[href], summary, [role="switch"], [role="button"]';
+/** Everything on a page that takes a tap, as the page has it (pageTapGuard.ts). */
+const TAPPED = 'button, input, select, textarea, a[href], summary, [role="switch"], [role="button"], label.tile';
 
 /** What lies behind a dialog and closes it when tapped. */
 const BACKDROP = '.overlay';
@@ -206,12 +206,13 @@ const WATCH = `(({ tapped, backdrop, bar, playsNothing, settling, byName }) => {
         holding.set(target, { what: named(target), is: marksOf(target), from, lasted: null, sinceFirst: null, sameLetGo: null });
         watched.held.push(holding.get(target));
 
-        for (const kind of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
-          reached?.dispatchEvent(new MouseEvent(kind, { bubbles: true, cancelable: true, composed: true, view: window, clientX: x, clientY: y }));
-        }
-
+        // A backdrop lies around its dialog: its own middle is the dialog, where a tap is on whichever line of it is there
         if (target.matches(backdrop)) {
           underTheBackdrop(target);
+        } else {
+          for (const kind of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+            reached?.dispatchEvent(new MouseEvent(kind, { bubbles: true, cancelable: true, composed: true, view: window, clientX: x, clientY: y }));
+          }
         }
       } else if (!held && holding.has(target)) {
         holding.get(target).lasted = performance.now() - holding.get(target).from;

@@ -40,6 +40,7 @@ import { ACCESSIBILITY_CHECKS } from './accessibilityChecks.ts';
 import { runChecks } from './checkRunner.ts';
 import { layoutSweep } from './layoutSweep.ts';
 import { menuChecks } from './menuChecks.ts';
+import { preferencesChecks } from './preferencesChecks.ts';
 import { tapsLive } from './underTheFinger.ts';
 
 const OUT = fileURLToPath(new URL('../screenshots/', import.meta.url));
@@ -2836,8 +2837,9 @@ const CHECKS: Check[] = [
         await press('[data-action="menu"]');
         await press('.menu [data-action="preferences"]');
         await page.waitForSelector('#pref-deck');
+        await page.locator('.prefs [data-group="table"]').scrollIntoViewIfNeeded();
 
-        assertOnScreen(await boxes(page, '.dialog, .samples .tile'), screen, 'the Preferences dialog with its cards');
+        assertOnScreen(await boxes(page, '.dialog, #pref-deck .tile, #pref-cardBack .tile'), screen, 'the Preferences dialog with its cards');
         assert.deepEqual(await squeezed(page, '.dialog h3, .samples > span, .tile > span:last-child'), [], 'a choice of cards is cut off');
         assert.equal(await page.evaluate(`document.querySelector('.dialog-body').scrollWidth <= document.querySelector('.dialog-body').clientWidth`), true, 'the dialog scrolls sideways');
         const tiles = await boxes(page, '.samples .tile');
@@ -5449,11 +5451,12 @@ const CHECKS: Check[] = [
     'the Preferences dialog offers the ways a device can get your attention, on the page served here and in Apps Script’s frame, and only a tap asks the browser',
     async (rig) => {
       const offered: Record<string, string[]> = {
-        'here-phone': ['buzz', 'flash', 'tabTitle'],
-        'here-desktop': ['flash', 'notify', 'tabTitle'],
-        'frame-phone': ['buzz', 'flash'],
-        'frame-desktop': ['flash'],
+        'here-phone': ['sound', 'volume', 'buzz', 'flash', 'tabTitle'],
+        'here-desktop': ['sound', 'volume', 'flash', 'notify', 'tabTitle'],
+        'frame-phone': ['sound', 'volume', 'buzz', 'flash'],
+        'frame-desktop': ['sound', 'volume', 'flash'],
       };
+      const WAYS = '.prefs [data-group="turn"]';
 
       for (const where of ['here', 'frame'] as const) {
         for (const screen of PHONE_AND_DESKTOP) {
@@ -5466,13 +5469,13 @@ const CHECKS: Check[] = [
 
           await press('[data-action="menu"]');
           await press('.menu [data-action="preferences"]');
-          await page.waitForSelector('.switches');
-          await page.locator('.switches').scrollIntoViewIfNeeded();
+          await page.waitForSelector(WAYS);
+          await page.locator(WAYS).scrollIntoViewIfNeeded();
 
-          assert.deepEqual(await page.locator('.switches [data-pref]').evaluateAll((found) => found.map((element) => element.getAttribute('data-pref'))), offered[`${where}-${screen}`]);
-          assertOnScreen(await boxes(page, '.switches [data-pref]'), screen, 'the switches for your turn');
-          assert.deepEqual(await squeezed(page, '.switches [data-pref], .switches [data-pref] span'), [], 'a switch is cut off');
-          const switches = await boxes(page, '.switches [data-pref]');
+          assert.deepEqual(await page.locator(`${WAYS} [data-pref]`).evaluateAll((found) => found.map((element) => element.getAttribute('data-pref'))), offered[`${where}-${screen}`]);
+          assertOnScreen(await boxes(page, `${WAYS} [data-pref]`), screen, 'the switches for your turn');
+          assert.deepEqual(await squeezed(page, `${WAYS} [data-pref], ${WAYS} [data-pref] span`), [], 'a switch is cut off');
+          const switches = await boxes(page, `${WAYS} [data-pref]`);
           switches.forEach((one, index) => assertApart([one], switches.slice(index + 1), 'two switches'));
           assert.deepEqual(await page.evaluate('window.asks'), [], 'the page asked for notifications on its own');
           await shot(page, `preferences-attention-${where}-${screen}`);
@@ -5501,9 +5504,9 @@ const CHECKS: Check[] = [
       await page.click('#pref-notify', { force: true });
       assert.match(await text(page, '#pref-notify'), /Blocked in this browser’s settings/);
       assert.deepEqual(await page.evaluate('window.asks'), []);
-      await page.locator('.switches').scrollIntoViewIfNeeded();
-      assert.deepEqual(await squeezed(page, '.switches [data-pref], .switches [data-pref] span'), [], 'the blocked switch is cut off');
-      assertOnScreen(await boxes(page, '.switches [data-pref]'), 'desktop', 'the blocked switch');
+      await page.locator(WAYS).scrollIntoViewIfNeeded();
+      assert.deepEqual(await squeezed(page, `${WAYS} [data-pref], ${WAYS} [data-pref] span`), [], 'the blocked switch is cut off');
+      assertOnScreen(await boxes(page, `${WAYS} [data-pref]`), 'desktop', 'the blocked switch');
       await shot(page, 'preferences-attention-blocked-desktop');
       await page.context().close();
     },
@@ -6337,7 +6340,7 @@ const CHECKS: Check[] = [
 
       await preferences();
       assert.equal(await page.getAttribute('#pref-motion', 'aria-checked'), 'true');
-      assert.match(await text(page, '#pref-motion'), /^Animations\s*Cards are dealt around the table and chips slide to the pot$/);
+      assert.match(await text(page, '#pref-motion'), /^Animations\s*Cards are dealt and chips slide\.$/);
       assertOnScreen(await boxes(page, '#pref-motion'), 'phone', 'the switch for animations');
       assert.deepEqual(await squeezed(page, '#pref-motion, #pref-motion span'), [], 'the switch for animations is cut off');
       await shot(page, 'preferences-motion-phone');
@@ -12702,6 +12705,7 @@ const CHECKS: Check[] = [
   ],
   ...ACCESSIBILITY_CHECKS,
   ...menuChecks(OUT),
+  ...preferencesChecks(OUT),
 ];
 
 await mkdir(OUT, { recursive: true });

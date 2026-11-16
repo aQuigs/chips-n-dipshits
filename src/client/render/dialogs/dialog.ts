@@ -30,6 +30,11 @@ export interface DialogHandlers {
   mutes: MuteList;
   /** What this device can do of what the preferences switch on. */
   abilities: Abilities;
+  /**
+   * Runs a choice of the viewer's that resizes what the dialog shows, a text size: what it brings up
+   * where something else lay takes no tap for a moment (`TapGuard`), so a second tap is not on it.
+   */
+  resizing(change: () => void): void;
   toLobby(): void;
   /** Leaves the dialog for the table, where an open seat is picked for the player. */
   pickSeat(playerId: string): void;

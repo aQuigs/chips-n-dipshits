@@ -103,7 +103,7 @@ function start(root: HTMLElement): void {
     }
   }
 
-  // The theme can also be changed from the menu inside either screen; whichever way, both screens and the picker follow
+  // The theme can also be changed in the Preferences of either screen; whichever way, both screens and the picker follow
   new MutationObserver(() => choose(preview.dataset.theme ?? DEFAULT_THEME)).observe(preview, { attributes: true, attributeFilter: ['data-theme'] });
 
   root.append(picker.element, preview);

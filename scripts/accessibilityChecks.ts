@@ -979,6 +979,13 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
         assert.deepEqual(await structure(lobby), { language: 'en', headings: 1, mains: 1 }, `the lobby, ${screen}`);
         await sweep.over(lobby, `the lobby, ${screen}`);
 
+        // A table's code is asked for in a strip with a heading and a name for its box, and the keyboard comes to it before the form for a new table
+        assert.equal(await tree(lobby, '.lobby .join-strip'), ['- heading "Join a table" [level=2]', '- textbox "Table code"', '- button "Find table"'].join('\n'), `the strip for a table’s code, ${screen}`);
+        await tabTo(lobby, '#table-code');
+        await lobby.keyboard.press('Tab');
+        await lobby.keyboard.press('Tab');
+        assert.equal(await focused(lobby), '#host-name', `the keyboard does not go from a table’s code to the form for a new table, ${screen}`);
+
         // The form for a new table: a folded section is a group under its heading and the line of what it holds, with Create table right after the last
         assert.match(
           await tree(lobby, '.lobby form:has([data-action="create-table"])'),

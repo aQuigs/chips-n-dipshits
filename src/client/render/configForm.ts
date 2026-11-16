@@ -28,7 +28,7 @@ export interface ConfigFormOptions {
   open(section: ConfigSection): boolean;
   /** The section the form leads with, ahead of the registry's order. */
   first?: ConfigSection;
-  /** Told when a choice has started the amounts over: what the last fill brought is no longer all there, and nothing is marked as what it changed. */
+  /** Told when a choice has started the amounts over: what the last fill brought is no longer all there. */
   startedOver?(): void;
   /** Told whenever what the fields hold may have changed, with what of it their user has changed (`changed`). */
   edited?(changed: Partial<TableConfig>): void;
@@ -36,17 +36,13 @@ export interface ConfigFormOptions {
 
 export interface ConfigForm {
   /** One part per section of the settings, each under its heading, to put inside a form. */
-  sections: HTMLElement[];
+  sections: HTMLDetailsElement[];
   /** What the fields hold now, for the settings the form lets be changed. One that does not apply is left out: its field is out of sight, so nobody is changing it. */
   read(form: HTMLFormElement): Partial<TableConfig>;
   /** What of that its user has changed: whatever is not as the form itself last put it in the fields. */
   changed(form: HTMLFormElement): Partial<TableConfig>;
-  /**
-   * Puts `values` in the fields of the settings it names and folds the sections as `open` now says.
-   * Each field it changed is marked, with the heading of its section, and it says which sections those
-   * were, in the form's order.
-   */
-  fill(form: HTMLFormElement, values: Partial<TableConfig>): ConfigSection[];
+  /** Puts `values` in the fields of the settings it names, and folds the sections as `open` now says. */
+  fill(form: HTMLFormElement, values: Partial<TableConfig>): void;
   /** Unfolds the sections these settings stand in, for when something is about to be said of them. */
   unfold(keys: ConfigKey[]): void;
 }
@@ -227,10 +223,8 @@ export function configForm(values: TableConfig, options: ConfigFormOptions): Con
       redraw(key, spec.kind === 'handAmounts' ? bountiesHeld(form, idOf(key), table).map(([hand]): BountyRow => [hand, null]) : table[key]);
     }
 
+    // An amount left empty is theirs to write again, and the line it is folded under still says the old one
     for (const part of parts.values()) {
-      part.element.querySelectorAll('.changed').forEach((marked) => marked.classList.remove('changed'));
-
-      // An amount left empty is theirs to write again, and the line it is folded under still says the old one
       part.element.open ||= part.element.querySelector(':invalid') !== null;
     }
 
@@ -332,29 +326,21 @@ export function configForm(values: TableConfig, options: ConfigFormOptions): Con
     unfold,
 
     fill(form, values) {
-      const before = { ...table, ...read(form) };
-      const after = { ...before, ...values };
-      const filled = shown.filter((key) => key in values);
-      const changed = new Set(filled.filter((key) => applies(key, after) && !sameSetting(before[key], values[key])));
-      const sections = order.filter((section) => settingsOf(section).some((key) => changed.has(key)));
-
       table = { ...table, ...values };
 
-      for (const key of filled) {
-        redraw(key).classList.toggle('changed', changed.has(key));
+      for (const key of shown) {
+        if (key in values) {
+          redraw(key);
+        }
       }
 
       for (const [section, part] of parts) {
-        part.summary.classList.toggle('changed', sections.includes(section));
-
         if (!theirs.has(section)) {
           part.element.open = options.open(section);
         }
       }
 
       follow(form);
-
-      return sections;
     },
   };
 }

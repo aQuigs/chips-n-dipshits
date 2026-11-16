@@ -1,7 +1,6 @@
 import { bountiesText } from '../../engine/bounties.ts';
 import { startingConfig } from '../../engine/config.ts';
 import type { ConfigKey } from '../../engine/config.ts';
-import { CONFIG_SECTIONS } from '../../engine/configSections.ts';
 import { fromPreset, PRESET_KEYS } from '../../engine/presets.ts';
 import type { Preset } from '../../engine/presets.ts';
 import { stakesText } from '../../engine/stakes.ts';
@@ -100,25 +99,29 @@ export function lobbyEl(visitor: Visitor, themePicker: HTMLElement, handlers: Lo
     creating: true,
     first: 'table',
     open: (section) => section === 'table' || (section === 'stakes' && !preset),
+    // A warning may speak of an amount that has started over since
     startedOver: () => notes.replaceChildren(),
   });
+
+  // The sections it opens on, and the folded rest as one stack: a wide screen stands them side by side
+  const opensOn = settings.sections.filter((section) => section.open);
+  const rest = settings.sections.filter((section) => !section.open);
 
   const pick = (chosen: Preset | null): void => {
     const used = fromPreset(chosen ? chosen.settings : usual);
 
     preset = chosen;
 
-    // Only what a preset keeps: the rest is still as the host has it
-    const changed = settings.fill(create, Object.fromEntries(PRESET_KEYS.map((key) => [key, used.config[key]])));
-
-    notes.replaceChildren(
-      h('p.note', null, changed.length > 0 ? `Changed here: ${changed.map((section) => CONFIG_SECTIONS[section].label).join(', ')}.` : 'The form already held these settings.'),
-      ...used.notes.map((note) => h('p.note.warn', null, note)),
-    );
+    // The stakes fold or unfold where the list of presets was just open, and Create table moves with them: a second press on a preset must not land on it
+    handlers.byItself(() => {
+      // Only what a preset keeps: the rest is still as the host has it
+      settings.fill(create, Object.fromEntries(PRESET_KEYS.map((key) => [key, used.config[key]])));
+      notes.replaceChildren(...used.notes.map((note) => h('p.note.warn', null, note)));
+    });
   };
 
   const create: HTMLFormElement = h(
-    'form.card-panel',
+    'form.card-panel.start-table',
     {
       onsubmit: (event: Event) => {
         event.preventDefault();
@@ -134,13 +137,14 @@ export function lobbyEl(visitor: Visitor, themePicker: HTMLElement, handlers: Lo
     h('h2', null, 'Start a table'),
     who.element,
     presetPick,
-    h('div.sections', null, settings.sections),
+    h('div.sections', null, opensOn, h('div.rest', null, rest)),
     createButton,
     h('p.note', null, 'You become the host. Everything but what the table plays with can be changed later in Table settings.'),
   );
 
+  // One row, ahead of the host's form: nobody with a table's code reads through that form to reach it
   const join = h(
-    'form.card-panel.join-door',
+    'form.card-panel.join-strip',
     {
       onsubmit: (event: Event) => {
         event.preventDefault();
@@ -148,13 +152,17 @@ export function lobbyEl(visitor: Visitor, themePicker: HTMLElement, handlers: Lo
       },
     },
     h('h2', null, 'Join a table'),
-    h(
-      'label.field',
-      { for: 'table-code' },
-      h('span', null, 'Table code'),
-      h('input', { type: 'text', id: 'table-code', name: 'table-code', maxlength: CODE_LENGTH, required: true, autocapitalize: 'characters', autocomplete: 'off', placeholder: 'e.g. K7QF2M' }),
-    ),
-    h('p.note', null, 'Got a link from the host? Opening it brings you straight to the table.'),
+    h('input', {
+      type: 'text',
+      id: 'table-code',
+      name: 'table-code',
+      'aria-label': 'Table code',
+      maxlength: CODE_LENGTH,
+      required: true,
+      autocapitalize: 'characters',
+      autocomplete: 'off',
+      placeholder: 'Table code',
+    }),
     h('button.btn', { type: 'submit' }, 'Find table'),
   );
 
@@ -166,7 +174,7 @@ export function lobbyEl(visitor: Visitor, themePicker: HTMLElement, handlers: Lo
   );
 
   return {
-    element: h('main.lobby', null, brand(), standings, h('div.panels', null, create, join), themeSection(themePicker)),
+    element: h('main.lobby', null, brand(), standings, h('div.panels', null, join, create), themeSection(themePicker)),
     offerPlayers: who.offer,
 
     offerPresets(presets) {

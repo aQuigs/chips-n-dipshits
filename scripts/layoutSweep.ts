@@ -624,11 +624,15 @@ interface ScreenState {
   shows: string;
   /** What the game has to know before any page opens, set once for every screen looked at. */
   known?(rig: Rig): void;
+  /** A screen it is laid out on in a way of its own, looked at besides the two every state is. */
+  alsoOn?: keyof typeof SCREENS_SAID;
   /** A walk through it on one screen, stopping to look wherever it is full. */
   walk(rig: Rig, screen: ScreenName, look: (page: Page, where: string) => Promise<void>): Promise<void>;
 }
 
-const OTHER_SCREENS: ScreenName[] = ['smallPhone', 'desktop'];
+const OTHER_SCREENS = ['smallPhone', 'desktop'] as const;
+
+const SCREENS_SAID = { smallPhone: 'a 360 phone', desktop: 'desktop', phoneSideways: 'a phone lying down' } satisfies Partial<Record<ScreenName, string>>;
 
 // Forty names of every width, for everyone the game knows
 const FORTY = Array.from({ length: 40 }, (_player, nth) => [`${'W'.repeat(13)}${String(nth).padStart(3, '0')}`, `Ünïcödé Ñandú ${String(nth).padStart(2, '0')}`, `你好你好你好你好 ${nth}`, `Player ${nth}`][nth % 4]!);
@@ -694,6 +698,8 @@ const SCREEN_STATES: ScreenState[] = [
       // No table plays these, so the clock can be at its longest too
       rig.presets.save({ name: LONGEST_PRESET, settings: presetSettings({ ...DEFAULT_CONFIG, ...CENTS, ...LONGEST_LINES, actionSeconds: LIMITS.maxActionSeconds }), savedAt: 0, savedBy: WIDEST }, false);
     },
+    // Wide enough for two columns of the form for a new table and not for its three
+    alsoOn: 'phoneSideways',
     async walk(rig, screen, look) {
       const page = await rig.lobby(screen);
       await page.waitForSelector('.who-list .who-pill');
@@ -2753,14 +2759,14 @@ export function layoutSweep(picturesIn: string): Check[] {
   ]);
 
   const screens = SCREEN_STATES.map((state): Check => [
-    `nothing a player reads is covered: ${state.shows}, on a 360 phone and the desktop`,
+    `nothing a player reads is covered: ${state.shows}, on a 360 phone and the desktop${state.alsoOn ? ` and ${SCREENS_SAID[state.alsoOn]}` : ''}`,
     async (rig) => {
       const sweep = new Sweep(picturesIn, state.shows.slice(0, 40));
 
       state.known?.(rig);
 
-      for (const screen of OTHER_SCREENS) {
-        await state.walk(rig, screen, (page, where) => sweep.lookThrough(page, `${where}, ${screen === 'desktop' ? 'desktop' : 'a 360 phone'}`));
+      for (const screen of [...OTHER_SCREENS, ...(state.alsoOn ? [state.alsoOn] : [])]) {
+        await state.walk(rig, screen, (page, where) => sweep.lookThrough(page, `${where}, ${SCREENS_SAID[screen]}`));
       }
 
       sweep.done();

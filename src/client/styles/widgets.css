@@ -126,6 +126,7 @@
 }
 
 .field input:where(:not([type='radio'], [type='checkbox'])),
+.join-strip input,
 .say input,
 .copy input,
 .who-filter {

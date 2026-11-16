@@ -1440,28 +1440,51 @@ const AS_MUCH_IN_SIGHT_AS_FITS = `(section) => {
   return part.open && heading.top >= room.top - 1 && Math.min(whole.bottom, room.bottom) - heading.top >= Math.min(whole.height, room.height) - 1;
 }`;
 
-// Run in the page before a section unfolds by itself: writes down, the moment it does, the fields of it that lie
-// where the control `lay` was, which of them take a tap, and what a tap at the middle of where that control was reaches
-const WHAT_COMES_UP_UNDER = `(({ unfolding, lay }) => {
-  const part = document.querySelector(unfolding);
-  const was = document.querySelector(lay).getBoundingClientRect();
+// Run in the page before a section folds or unfolds by itself: writes down, the moment it does, the controls matching
+// `comesUp` (its own fields unless said) that lie where a control matching `lay` was, which of them take a tap, and what
+// a tap reaches in the middle of what one of them covers of such a place
+const WHAT_COMES_UP_UNDER = `(({ changing, lay, comesUp = changing + ' input' }) => {
+  const were = [...document.querySelectorAll(lay)].map((control) => control.getBoundingClientRect());
+  const covered = (box) =>
+    were
+      .map((was) => ({ left: Math.max(box.left, was.left), right: Math.min(box.right, was.right), top: Math.max(box.top, was.top), bottom: Math.min(box.bottom, was.bottom) }))
+      .find((both) => both.right - both.left > 2 && both.bottom - both.top > 2);
+  const named = ({ control }) => control.id || control.name || control.dataset.action;
 
   new MutationObserver((_changes, watch) => {
-    const fields = [...part.querySelectorAll('input')].filter((field) => {
-      const box = field.getBoundingClientRect();
-
-      return box.bottom > was.top + 2 && box.top < was.bottom - 2;
-    });
-    const reached = document.elementFromPoint((was.left + was.right) / 2, (was.top + was.bottom) / 2)?.closest('label, input, button, summary, a');
+    const arrived = [...document.querySelectorAll(comesUp)].map((control) => ({ control, at: covered(control.getBoundingClientRect()) })).filter(({ at }) => at);
+    const reached = arrived.map(({ at }) => document.elementFromPoint((at.left + at.right) / 2, (at.top + at.bottom) / 2)?.closest('label, input, button, summary, a')).find(Boolean);
 
     watch.disconnect();
     window.__cameUpUnder = {
-      fields: fields.map((field) => field.id || field.name),
-      live: fields.filter((field) => getComputedStyle(field).pointerEvents !== 'none').map((field) => field.id || field.name),
+      arrived: arrived.map(named),
+      live: arrived.filter(({ control }) => getComputedStyle(control).pointerEvents !== 'none').map(named),
       tapReaches: reached ? reached.tagName + ' ' + reached.textContent.trim().slice(0, 30) : null,
     };
-  }).observe(part, { attributes: true, attributeFilter: ['open'] });
+  }).observe(document.querySelector(changing), { attributes: true, attributeFilter: ['open'] });
 })`;
+
+/** What `WHAT_COMES_UP_UNDER` wrote down. */
+interface CameUpUnder {
+  arrived: string[];
+  live: string[];
+  tapReaches: string | null;
+}
+
+/**
+ * The first screen in a browser that remembers being `name`, one of the players the game knows. Who they are takes
+ * one line there whoever else is on the list, where a visitor is given the list to pick from once it has anyone.
+ */
+async function lobbyRemembering(rig: Rig, screen: ScreenName, name: string): Promise<Page> {
+  const page = await rig.page(screen, 'a returning host');
+
+  await page.addInitScript(`localStorage.setItem('cnd.player', ${JSON.stringify(JSON.stringify(rig.players.add(name, rig.now())))})`);
+  await page.goto(rig.url);
+  await page.waitForSelector('.who-remembered:visible');
+  await page.evaluate('document.fonts.ready.then(() => undefined)');
+
+  return page;
+}
 
 /** A section of the form for a new table, on the first screen. */
 const LOBBY_SECTION = (section: string) => `.lobby .fold-section[data-section="${section}"]`;
@@ -5225,7 +5248,7 @@ const CHECKS: Check[] = [
     },
   ],
   [
-    'the form for a new table offers the presets there are, picking one fills the form and says what changed, and the table made from it plays its stakes',
+    'the form for a new table offers the presets there are, picking one fills the form and warns of what it could not keep, and the table made from it plays its stakes',
     async (rig) => {
       try {
         const keep = (name: string, config: Partial<TableConfig>, extra: Record<string, unknown> = {}) =>
@@ -5244,7 +5267,7 @@ const CHECKS: Check[] = [
           assert.deepEqual(await texts(one, '#new-table-preset option'), ['The usual settings', 'Friday 25/50']);
           assert.equal(await one.inputValue('#new-table-preset'), '', 'a preset was picked for the host');
           assert.deepEqual(await stakes(one), ['chips', '10', '20', '400', '2000']);
-          assert.equal(await one.locator('.preset-notes p, .changed').count(), 0, 'the form says something changed before anything was picked');
+          assert.equal(await one.locator('.preset-notes p').count(), 0, 'the form warns of a preset before one was picked');
           await one.context().close();
 
           for (let index = 0; index < 13; index++) {
@@ -5276,7 +5299,7 @@ const CHECKS: Check[] = [
           assert.equal(await page.inputValue('#new-table-ante'), '0.10');
           assert.equal(await page.inputValue('#new-table-name'), "Chips n' Dipshits", 'the preset names the table');
           assert.equal(await page.inputValue('#new-table-voice-link'), 'https://discord.gg/abc', 'the call typed in was thrown away');
-          assert.deepEqual(await texts(page, '.preset-notes p'), ['Changed here: Table, Stakes, Bounties and high hand, House rules.']);
+          assert.deepEqual(await texts(page, '.preset-notes p'), [], 'a preset whose every value is still allowed came with a warning');
           assert.deepEqual(await texts(page, '.lobby .fold-section .holds:visible'), [
             '0.25/0.50 · ante 0.10 · buy-in 20.00 to 100.00',
             '1.00 each · only when called · one board',
@@ -5285,23 +5308,23 @@ const CHECKS: Check[] = [
           ]);
           assert.deepEqual([await page.inputValue('#new-table-bounties .bounty-hand'), await page.inputValue('#new-table-bounties .bounty-row input:not(.bounty-hand)')], ['72', '1.00'], 'the seven-deuce bounty of a preset saved before bounties were a list');
           assert.deepEqual([await page.inputValue('#new-table-action-seconds'), await page.isChecked('#new-table-allow-straddle')], ['20', false], 'what the preset says of the clock and the straddle is not in the form');
-          assert.deepEqual(
-            await page.evaluate(`[...document.querySelectorAll('.lobby .fold-body .changed')].map((field) => field.id || field.getAttribute('for') || field.querySelector('input').id)`),
-            ['new-table-name', 'new-table-unit', 'new-table-small-blind', 'new-table-big-blind', 'new-table-ante', 'new-table-min-buy-in', 'new-table-max-buy-in', 'new-table-bounties', 'new-table-action-seconds', 'new-table-allow-straddle'],
-          );
-          assert.equal(await page.locator('#new-table-unit.changed, label[for="new-table-small-blind"].changed').count(), 2);
-          assert.equal(await page.locator('label[for="new-table-voice-link"].changed, label[for="new-table-host-name"].changed').count(), 0);
 
           await page.locator('#new-table-preset').scrollIntoViewIfNeeded();
-          assertOnScreen(await boxes(page, '#new-table-preset, .preset-notes p'), screen, 'the presets in the form for a new table');
-          assert.deepEqual(await squeezed(page, '.preset-pick .field span, .preset-notes p'), [], 'part of what the picker says is cut off');
+          assertOnScreen(await boxes(page, '#new-table-preset'), screen, 'the presets in the form for a new table');
           await assertNoSidewaysScroll(page);
           await shot(page, `presets-picked-${screen}`);
 
           await page.selectOption('#new-table-preset', { label: 'From before' });
           assert.deepEqual(await stakes(page), ['chips', '5', '10', '400', '2000']);
-          assert.deepEqual(await texts(page, '.preset-notes p.warn'), ['The action clock went back to 30: the preset’s is no longer allowed.']);
+          assert.deepEqual(await texts(page, '.preset-notes p'), ['The action clock went back to 30: the preset’s is no longer allowed.']);
+          assertOnScreen(await boxes(page, '#new-table-preset, .preset-notes p'), screen, 'the presets in the form for a new table, and what one could not keep');
+          assert.deepEqual(await squeezed(page, '.preset-pick .field span, .preset-notes p'), [], 'part of what the picker says is cut off');
+          await assertNoSidewaysScroll(page);
           await shot(page, `presets-outdated-${screen}`);
+
+          // The amounts start over with what the table plays with, and the warning with them: it may have been of one
+          await press(await unfolded(page, '#new-table-unit label:has-text("Dollars and cents")'));
+          assert.deepEqual(await texts(page, '.preset-notes p'), [], 'the form still warns of the preset, with its amounts started over');
 
           await page.selectOption('#new-table-preset', { label: 'The usual settings' });
           assert.deepEqual(await stakes(page), ['chips', '10', '20', '400', '2000']);
@@ -5323,26 +5346,22 @@ const CHECKS: Check[] = [
 
           await page.selectOption('#new-table-preset', { label: 'Bombs in cents' });
           assert.equal(await page.inputValue('#new-table-bomb-pot-amount'), '5.00');
-          assert.equal(await page.locator(`${LOBBY_SECTION('bombPots')} > summary.changed`).count(), 1);
           await press('#new-table-unit label:has-text("Whole chips")');
           assert.equal(await page.inputValue('#new-table-bomb-pot-amount'), '100');
-          assert.equal(await page.locator('.lobby .changed').count(), 0, 'a heading or a field is still marked as what the preset changed, with its amounts started over');
-          assert.deepEqual(await texts(page, '.preset-notes p'), [], 'the form still says what the preset changed, with its amounts started over');
 
-          // One board or two is marked like any field a preset changes, and a preset from before there were two says one
-          const boardsMarked = () => page.locator('#new-table-bomb-pot-boards.changed input:checked').inputValue();
+          // One board or two comes with a preset like any setting, on the line of the bomb pots too, and a preset from before there were two says one
+          const boards = () => page.locator('#new-table-bomb-pot-boards input:checked').inputValue();
 
           await page.selectOption('#new-table-preset', { label: 'Bombs in chips' });
-          assert.equal(await boardsMarked(), 'two');
-          assert.equal(await text(page, '.preset-notes p'), 'Changed here: Bomb pots.');
-          assert.equal(await text(page, `${LOBBY_SECTION('bombPots')}:not([open]) > summary.changed .holds`), '300 each · every 5 hands · two boards');
+          assert.equal(await boards(), 'two');
+          assert.equal(await text(page, `${LOBBY_SECTION('bombPots')}:not([open]) > summary .holds`), '300 each · every 5 hands · two boards');
 
           await page.locator(await unfolded(page, '#new-table-bomb-pot-boards')).scrollIntoViewIfNeeded();
-          assertOnScreen(await boxes(page, '#new-table-bomb-pot-boards'), screen, 'the boards of a bomb pot, marked as changed');
+          assertOnScreen(await boxes(page, '#new-table-bomb-pot-boards'), screen, 'the boards of a bomb pot a preset brought');
           await shot(page, `presets-boards-${screen}`);
 
           await page.selectOption('#new-table-preset', { label: 'From before' });
-          assert.equal(await boardsMarked(), 'one');
+          assert.equal(await boards(), 'one');
 
           // Edited after picking, before the table is made
           await page.selectOption('#new-table-preset', { label: 'Tuesday cents' });
@@ -7379,11 +7398,10 @@ const CHECKS: Check[] = [
         await lobby.selectOption('#new-table-preset', { label: 'Button and Mississippi' });
         assert.deepEqual(await allowed(), ['button-straddle', 'mississippi-straddle']);
         assert.equal(await text(lobby, `${house} .holds`), '30 s clock · Straddles: button, Mississippi · run it up to 3 times · missed blinds owed');
-        assert.equal(await lobby.locator(`${house}:not([open]) > summary.changed`).count(), 1, 'the house rules a preset changed are not marked on the line they are folded under');
-        assert.deepEqual(await texts(lobby, '.preset-notes p'), ['Changed here: Table, House rules.']);
+        assert.equal(await lobby.locator(`${house}:not([open])`).count(), 1, 'the house rules a preset brought are not folded under their line');
         await lobby.locator(`${house} > summary`).scrollIntoViewIfNeeded();
         assertOnScreen(await boxes(lobby, `${house} > summary`), screen, 'the line the house rules of a preset are folded under');
-        assert.deepEqual(await squeezed(lobby, `${house} .holds, .preset-notes p`), [], 'part of what the form says of a preset is cut off');
+        assert.deepEqual(await squeezed(lobby, `${house} .holds`), [], 'part of what the form says of a preset is cut off');
         await assertNoSidewaysScroll(lobby);
         await shot(lobby, `straddles-preset-${screen}`);
 
@@ -12997,7 +13015,7 @@ const CHECKS: Check[] = [
         await page.fill(await unfolded(page, '#table-voice-link'), 'meet.example/abc');
         await press(`${part('table')} > summary`);
         assert.equal(await isOpen('table'), false);
-        await page.evaluate(`${WHAT_COMES_UP_UNDER}(${JSON.stringify({ unfolding: part('table'), lay: `${part('presets')} > summary` })})`);
+        await page.evaluate(`${WHAT_COMES_UP_UNDER}(${JSON.stringify({ changing: part('table'), lay: `${part('presets')} > summary` })})`);
 
         await press('[data-action="save-settings"]');
         await toastTold(page, 'must start with https://');
@@ -13005,9 +13023,9 @@ const CHECKS: Check[] = [
         assert.equal(await page.inputValue('#table-voice-link'), 'meet.example/abc', 'a refused save threw away what was typed');
         assert.deepEqual([await isOpen('bombPots'), await isOpen('house')], [false, false], 'a section nothing was changed in unfolded with the one that was refused');
 
-        const cameUp = (await page.evaluate('window.__cameUpUnder')) as { fields: string[]; live: string[]; tapReaches: string | null };
+        const cameUp = (await page.evaluate('window.__cameUpUnder')) as CameUpUnder;
 
-        assert.ok(cameUp.fields.length > 0, 'no field came up where the heading of the presets lay: the check no longer shows what it is here for');
+        assert.ok(cameUp.arrived.length > 0, 'no field came up where the heading of the presets lay: the check no longer shows what it is here for');
         assert.deepEqual(cameUp.live, [], 'a field that came up by itself where a heading lay takes a tap at once');
         assert.equal(cameUp.tapReaches, null, 'a tap for the heading that lay there lands on what came up');
         await shot(page, `settings-refused-by-the-table-${screen}`);
@@ -13126,7 +13144,7 @@ const CHECKS: Check[] = [
     },
   ],
   [
-    'the form for a new table has every setting of the table settings and opens on the table and its stakes, the rest folded under what it holds with Create table right after; a table’s code is asked for first on a phone and beside the form on a wider screen; and a table made with nothing touched plays the usual settings',
+    'the form for a new table has every setting of the table settings and opens on the table and its stakes, the rest folded under what it holds with Create table right after; a wider screen stands its sections side by side, and a desktop has Create table within a quarter of a screen; a table’s code is asked for first on every screen, on one row; and a table made with nothing touched plays the usual settings',
     async (rig) => {
       for (const screen of ['smallPhone', 'phoneSideways', 'desktop'] as const) {
         const page = await rig.lobby(screen);
@@ -13149,16 +13167,29 @@ const CHECKS: Check[] = [
         assert.equal(await page.evaluate(`document.querySelector('.lobby .sections').nextElementSibling.dataset.action`), 'create-table', 'something stands between the last section and Create table');
         assert.equal(await text(page, '.lobby [data-action="create-table"] + .note'), 'You become the host. Everything but what the table plays with can be changed later in Table settings.');
 
-        const [start, join] = await boxes(page, '.lobby .panels > form');
+        // Whoever has a table's code comes to its box before the form for a new table, by sight and by keyboard alike
+        const [join, start] = await boxes(page, '.lobby .panels > form');
+        const [code, find] = await boxes(page, '#table-code, .join-strip button');
 
-        if (screen === 'smallPhone') {
-          assert.ok(join!.bottom <= start!.top, 'on a phone a table’s code is asked for under the whole form for a new table');
-          assertOnScreen(await boxes(page, '.join-door, #table-code, .join-door button'), screen, 'where a table’s code goes, as the first screen opens');
-        } else {
-          assert.ok(Math.abs(join!.top - start!.top) <= 1 && join!.left >= start!.right, `with room for both, the two forms are not side by side: ${JSON.stringify([start, join])}`);
+        assert.equal(await page.locator('.lobby .panels > form:first-child #table-code').count(), 1, 'the form for a new table comes before a table’s code in the page');
+        assert.ok(join!.bottom <= start!.top, `a table’s code is not asked for above the form for a new table: ${JSON.stringify([join, start])}`);
+        assert.ok(find!.left >= code!.right && find!.top < code!.bottom && find!.bottom > code!.top, `the box for a table’s code and its button are not on one row: ${JSON.stringify([code, find])}`);
+        assertOnScreen(await boxes(page, '.join-strip, .join-strip h2, #table-code, .join-strip button'), screen, 'where a table’s code goes, as the first screen opens');
+
+        // One column on a phone, the stakes beside the table with room for two, and the folded rest beside both with room for three
+        const [table, stakes, rest] = await boxes(page, `${LOBBY_SECTION('table')}, ${LOBBY_SECTION('stakes')}, .lobby .rest`);
+        const beside = (left: Box, right: Box) => right.left >= left.right && right.top < left.bottom;
+        const stood = { smallPhone: [false, false], phoneSideways: [true, false], desktop: [true, true] }[screen];
+
+        assert.deepEqual([beside(table!, stakes!), beside(stakes!, rest!)], stood, `the sections of the form for a new table: ${JSON.stringify([table, stakes, rest])}`);
+
+        if (screen === 'desktop') {
+          const [create] = await boxes(page, '[data-action="create-table"]');
+
+          assert.ok(create!.bottom <= SCREENS.desktop.height * 1.25, `Create table is more than a quarter of a screen under the first one on a desktop: ${JSON.stringify(create)}`);
         }
 
-        assert.deepEqual(await squeezed(page, '.lobby summary h3, .lobby .holds, .lobby .card-panel .note'), [], 'a heading, a folded line or a note is cut off');
+        assert.deepEqual(await squeezed(page, '.lobby h2, .lobby summary h3, .lobby .holds, .lobby .card-panel .note'), [], 'a heading, a folded line or a note is cut off');
         await assertNoSidewaysScroll(page);
         await page.locator('[data-action="create-table"]').scrollIntoViewIfNeeded();
         await shot(page, `new-table-form-${screen}`);
@@ -13204,7 +13235,7 @@ const CHECKS: Check[] = [
     },
   ],
   [
-    'picking a preset folds the stakes of the form for a new table under what the preset brought and marks each section it changed, the usual settings unfold them again, a section its host opened, folded or changed by hand stays as they left it, and the table is made with everything the preset holds',
+    'picking a preset folds the stakes of the form for a new table under what the preset brought, which on a desktop leaves Create table on the first screen, the usual settings unfold them again, a section its host opened, folded or changed by hand stays as they left it, and the table is made with everything the preset holds',
     async (rig) => {
       try {
         const friday = { name: 'Friday Night', smallBlind: 25, bigBlind: 50, minBuyIn: 1000, maxBuyIn: 5000, actionSeconds: 20, bounties: [['72', 100]] as Bounty[] };
@@ -13216,9 +13247,6 @@ const CHECKS: Check[] = [
           const press = pressOn(page, screen);
           const unfoldedOnes = () => page.evaluate(UNFOLDED_IN('.lobby'));
           const pick = (label: string) => page.selectOption('#new-table-preset', { label });
-          // The mark a host sees: on the line of a folded section, and of an unfolded one on its fields alone
-          const marked = () =>
-            page.evaluate(`[...document.querySelectorAll('.lobby .fold-section > summary.changed')].filter((heading) => getComputedStyle(heading, '::before').content !== 'none').map((heading) => heading.dataset.section)`);
 
           await page.waitForSelector('#new-table-preset');
           await page.fill('#host-name', `Quigs ${screen}`);
@@ -13235,14 +13263,12 @@ const CHECKS: Check[] = [
             '72 pays 100',
             '20 s clock · Straddle under the gun · run it up to 3 times · missed blinds owed',
           ]);
-          assert.deepEqual(await marked(), ['stakes', 'sideMoney', 'house']);
-          assert.equal(await page.locator('label[for="new-table-name"].changed').count(), 1, 'the name the preset gave the table is not marked');
-          assert.deepEqual(await texts(page, '.preset-notes p'), ['Changed here: Table, Stakes, Bounties and high hand, House rules.']);
+          assert.deepEqual(await texts(page, '.preset-notes p'), [], 'a preset whose every value is still allowed came with a warning');
           assert.deepEqual([await page.inputValue('#new-table-name'), await page.inputValue('#new-table-voice-link')], ['Friday Night', 'https://discord.gg/abc'], 'the call typed in was thrown away');
           assert.equal(await focused(page), '#new-table-preset', 'the keyboard left the list of presets when the form folded');
 
           await page.locator(`${LOBBY_SECTION('house')} > summary`).scrollIntoViewIfNeeded();
-          assert.deepEqual(await squeezed(page, '.lobby .holds, .preset-notes p'), [], 'part of what the form says of the preset is cut off');
+          assert.deepEqual(await squeezed(page, '.lobby .holds'), [], 'part of what the form says of the preset is cut off');
           await assertNoSidewaysScroll(page);
           await shot(page, `new-table-preset-${screen}`);
 
@@ -13261,8 +13287,6 @@ const CHECKS: Check[] = [
           await pick('Friday 25/50');
           assert.deepEqual(await unfoldedOnes(), ['table', 'stakes', 'bombPots']);
           assert.equal(await page.inputValue('#new-table-small-blind'), '25');
-          assert.equal(await page.locator('label[for="new-table-small-blind"].changed').count(), 1);
-          assert.deepEqual(await marked(), ['sideMoney', 'house']);
 
           // Folded by hand, they stay folded when the preset is given up
           await press(`${LOBBY_SECTION('stakes')} > summary`);
@@ -13285,20 +13309,43 @@ const CHECKS: Check[] = [
           assert.equal(await again.inputValue('#new-table-big-blind'), '50');
           await again.context().close();
         }
+
+        // A host the browser remembers, back for another night: the preset picked, a desktop has Create table on its first screen.
+        // It comes up there under the list of presets that was just open, and takes no press in that moment
+        const back = await lobbyRemembering(rig, 'desktop', 'Quigs');
+
+        await back.waitForSelector('#new-table-preset');
+        await back.evaluate(
+          `${WHAT_COMES_UP_UNDER}(${JSON.stringify({ changing: LOBBY_SECTION('stakes'), lay: `${LOBBY_SECTION('stakes')} input`, comesUp: '[data-action="create-table"]' })})`,
+        );
+        await back.selectOption('#new-table-preset', { label: 'Friday 25/50' });
+
+        const cameUp = (await back.evaluate('window.__cameUpUnder')) as CameUpUnder;
+
+        assert.deepEqual(cameUp.arrived, ['create-table'], 'Create table came up where no field of the stakes lay: the check no longer shows what it is here for');
+        assert.deepEqual(cameUp.live, [], 'Create table takes a press the moment a preset brings it up where the stakes lay');
+        assert.equal(cameUp.tapReaches, null, 'a second press on a preset lands on what came up where the stakes lay');
+        await tapsLive(back);
+        assertOnScreen(await boxes(back, '[data-action="create-table"]'), 'desktop', 'Create table, as a desktop shows a returning host the form with a preset picked');
+        await shot(back, 'new-table-returning-host-desktop');
+        await back.context().close();
       } finally {
         forgetPresets(rig);
       }
     },
   ],
   [
-    'a field of the form for a new table that is refused is never left folded away: the browser’s refusal unfolds its section and puts the keyboard in it, the server’s unfolds what the host changed and nothing else with what was typed still there, a field that comes up then where a heading lay takes no tap for a moment, and a change of what the table plays with unfolds the bounties it emptied',
+    'a field of the form for a new table that is refused is never left folded away: the browser’s refusal unfolds its section and puts the keyboard in it, the server’s unfolds what the host changed and nothing else with what was typed still there, a field that comes up then where a heading or Create table lay takes no tap for a moment, and a change of what the table plays with unfolds the bounties it emptied',
     async (rig) => {
       for (const screen of ['smallPhone', 'desktop'] as const) {
-        const page = await rig.lobby(screen);
+        // On a desktop as a host the browser remembers: under a list of players to pick from, the column of the table is the longest and nothing under it moves
+        const page = screen === 'desktop' ? await lobbyRemembering(rig, screen, 'Quigs at a desk') : await rig.lobby(screen);
         const press = pressOn(page, screen);
         const isOpen = (section: string) => page.evaluate(`document.querySelector(${JSON.stringify(LOBBY_SECTION(section))}).open`);
 
-        await page.fill('#host-name', `Quigs ${screen}`);
+        if (screen !== 'desktop') {
+          await page.fill('#host-name', `Quigs ${screen}`);
+        }
 
         // An amount nobody can read, in a section folded again
         await page.fill(await unfolded(page, '#new-table-bomb-pot-amount'), 'lots');
@@ -13314,14 +13361,17 @@ const CHECKS: Check[] = [
         await page.fill('#new-table-bomb-pot-amount', '100');
         await press(`${LOBBY_SECTION('bombPots')} > summary`);
 
-        // Blinds the server refuses, in a section folded again with the heading of the bomb pots right under its own. Its
-        // heading is in sight with Create table: a browser may hold the screen still under a section that unfolds above it
+        // Blinds the server refuses, in a section folded again. In one column the heading of the bomb pots is right under
+        // its own; side by side with the table, what is under it is Create table, where the finger that sent the form still is.
+        // Its heading is in sight with Create table: a browser may hold the screen still under a section that unfolds above it
+        const lay = screen === 'desktop' ? '[data-action="create-table"]' : `${LOBBY_SECTION('bombPots')} > summary`;
+
         await page.fill('#new-table-big-blind', '5');
         await press(`${LOBBY_SECTION('stakes')} > summary`);
         assert.equal(await isOpen('stakes'), false);
         await page.evaluate(`document.querySelector(${JSON.stringify(`${LOBBY_SECTION('stakes')} > summary`)}).scrollIntoView({ block: 'start' })`);
         assertOnScreen(await boxes(page, `${LOBBY_SECTION('stakes')} > summary, [data-action="create-table"]`), screen, 'the stakes folded, and Create table under them');
-        await page.evaluate(`${WHAT_COMES_UP_UNDER}(${JSON.stringify({ unfolding: LOBBY_SECTION('stakes'), lay: `${LOBBY_SECTION('bombPots')} > summary` })})`);
+        await page.evaluate(`${WHAT_COMES_UP_UNDER}(${JSON.stringify({ changing: LOBBY_SECTION('stakes'), lay })})`);
 
         await press('[data-action="create-table"]');
         await toastTold(page, "The big blind can't be smaller than the small blind");
@@ -13329,11 +13379,11 @@ const CHECKS: Check[] = [
         assert.equal(await page.inputValue('#new-table-big-blind'), '5', 'a refused form threw away what was typed');
         assert.deepEqual(await page.evaluate(UNFOLDED_IN('.lobby')), ['table', 'stakes'], 'a section nothing is changed in unfolded with the one that was refused');
 
-        const cameUp = (await page.evaluate('window.__cameUpUnder')) as { fields: string[]; live: string[]; tapReaches: string | null };
+        const cameUp = (await page.evaluate('window.__cameUpUnder')) as CameUpUnder;
 
-        assert.ok(cameUp.fields.length > 0, 'no field came up where the heading of the bomb pots lay: the check no longer shows what it is here for');
-        assert.deepEqual(cameUp.live, [], 'a field that came up by itself where a heading lay takes a tap at once');
-        assert.equal(cameUp.tapReaches, null, 'a tap for the heading that lay there lands on what came up');
+        assert.ok(cameUp.arrived.length > 0, `no field came up where ${lay} lay: the check no longer shows what it is here for`);
+        assert.deepEqual(cameUp.live, [], `a field that came up by itself where ${lay} lay takes a tap at once`);
+        assert.equal(cameUp.tapReaches, null, `a tap for ${lay} lands on what came up there`);
         await shot(page, `new-table-refused-by-the-server-${screen}`);
 
         await tapsLive(page);

@@ -1065,6 +1065,8 @@ export class App {
       return;
     }
 
+    // Before the table, which takes a slow phone as long as the bar after it: a finger's time is counted to now, not to when the bar's turn comes
+    screen.taps.busy();
     this.drawTopbar(screen, view);
     this.drawBanners(screen, view);
     this.drawStage(screen, view);

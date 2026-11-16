@@ -1,4 +1,4 @@
-import { holds, holdsUnderTap, shownAt, stillAimedAt, stillHeld } from './tapGuard.ts';
+import { holds, holdsUnderTap, outOfSightAt, replacedAt, shownAt, stillHeld } from './tapGuard.ts';
 import type { Box, Drawing, Hold, Spot } from './tapGuard.ts';
 import { controlKey } from './ui.ts';
 import type { Redrawn } from './ui.ts';
@@ -131,6 +131,12 @@ export class TapGuard implements Redrawn {
   private held: Hold<Element>[] = [];
   private timer: ReturnType<typeof setTimeout> | null = null;
   private whenFree: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * When the page became busy with what it is drawing, null while it is free. Every part it replaces
+   * before it is free again is replaced as of then (`replacedAt`): it takes no tap in between, so one
+   * that comes down while an earlier part is built lands on what a later part brings.
+   */
+  private busySince: number | null = null;
   private playersOwn = false;
   /** What the player last tapped, as it lay at the tap: where the second tap of two lands. */
   private tapped: Drawing<Element> | null = null;
@@ -155,9 +161,25 @@ export class TapGuard implements Redrawn {
     part.addEventListener('scroll', () => (this.last = lying()), { passive: true });
   }
 
+  /**
+   * The page begins to draw what the game brought. Each guarded part says so itself as it is replaced;
+   * this is for whoever draws something slow ahead of them, as a table is ahead of its bar.
+   */
+  busy(): number {
+    // The real clock and a timer, never the table's: a finger moves in real time, and a hold has to end by itself
+    this.busySince ??= performance.now();
+    // What was replaced leaves the screen, and what came up starts its hold, once the page is next free to show it
+    this.whenFree ??= setTimeout(() => this.shown(), 0);
+
+    return this.busySince;
+  }
+
   leaving(): void {
     if (!this.playersOwn) {
-      this.left(lying());
+      // Before looking at where things lie, which lays out all the page has built so far
+      const since = this.busy();
+
+      this.drawings = replacedAt(this.drawings, lying(), since);
     }
   }
 
@@ -174,6 +196,9 @@ export class TapGuard implements Redrawn {
    * land on what the first one brought up.
    */
   byThePlayer(redraw: () => void): void {
+    // Before the redraw, not after it: a second tap that comes down while a slow phone builds a dialog waits for it, and lands on what was built
+    const began = performance.now();
+
     this.playersOwn = true;
 
     try {
@@ -182,7 +207,7 @@ export class TapGuard implements Redrawn {
       this.playersOwn = false;
     }
 
-    this.holdUnderTheTap();
+    this.holdUnderTheTap(began);
   }
 
   /**
@@ -211,15 +236,8 @@ export class TapGuard implements Redrawn {
   }
 
   private moved(): void {
-    this.left(this.last);
+    this.drawings = replacedAt(this.drawings, this.last, this.busy());
     this.hold();
-  }
-
-  // Time here is the real clock and a timer, never the table's: a finger moves in real time, and a hold has to end by itself
-  private left(spots: Spot<Element>[]): void {
-    const at = performance.now();
-
-    this.drawings = [...stillAimedAt(this.drawings, at), { left: at, spots }];
   }
 
   /** Looks at the page as it now stands, and holds back what has come up where something else lay. */
@@ -234,19 +252,12 @@ export class TapGuard implements Redrawn {
       spot.control.classList.add(SETTLING);
     }
 
-    // The time of what came up begins when the page is next free, to show it and to take a tap: looking at a drawing
-    // lays it out, which takes a slow phone a good part of a hold, and the rest of what the view brought is drawn after
-    if (this.held.some((hold) => hold.until === null)) {
-      this.whenFree ??= setTimeout(() => this.shown(), 0);
-    }
-
     this.letGo(at);
   }
 
   /** Holds back what the player's own redraw brought up where they tapped, beside whatever is held already. */
-  private holdUnderTheTap(): void {
-    const at = performance.now();
-    const cameUp = this.tapped ? holdsUnderTap(this.tapped, playing(lying()), at) : [];
+  private holdUnderTheTap(began: number): void {
+    const cameUp = this.tapped ? holdsUnderTap(this.tapped, playing(lying()), began) : [];
 
     if (cameUp.length === 0) {
       return;
@@ -261,13 +272,15 @@ export class TapGuard implements Redrawn {
     }
 
     this.whenFree ??= setTimeout(() => this.shown(), 0);
-    this.letGo(at);
+    this.letGo(performance.now());
   }
 
   private shown(): void {
     const at = performance.now();
 
     this.whenFree = null;
+    this.busySince = null;
+    this.drawings = outOfSightAt(this.drawings, at);
     this.held = shownAt(this.held, at);
     this.letGo(at);
   }

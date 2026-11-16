@@ -2256,14 +2256,16 @@ const MORE_ON_THE_LAST_OF_NINE: Omit<OwnDialog, 'when'> = {
   under: 'remove',
 };
 
+const ADD_CHIPS_DIALOG: OwnDialog = {
+  when: 'Add chips, whose dialog lays the button that asks the host under the tap',
+  build: (rig) => betweenHands(rig),
+  tap: ADD_CHIPS,
+  then: '.dialog #rebuy-amount',
+  under: 'confirm-rebuy',
+};
+
 const OWN_DIALOGS: OwnDialog[] = [
-  {
-    when: 'Add chips, whose dialog lays the button that asks the host under the tap',
-    build: (rig) => betweenHands(rig),
-    tap: ADD_CHIPS,
-    then: '.dialog #rebuy-amount',
-    under: 'confirm-rebuy',
-  },
+  ADD_CHIPS_DIALOG,
   {
     when: 'the chips asked for, whose dialog lays the button that takes the request back under the tap',
     build: askedForChips,
@@ -2346,10 +2348,11 @@ const SHEET_PHONES: Size[] = [SMALL_STANDING, { name: '390 standing', ...SCREENS
  * A dialog a player opens or closes is no surprise to them, and what it brings up or uncovers is live at
  * once: all but what comes up under the tap that did it, where the second tap of two lands
  * (`holdsUnderTap` in src/client/tapGuard.ts). The watch taps each control the page holds back the moment
- * it does, which is that second tap, and nothing may come of it.
+ * it does, which is that second tap, and nothing may come of it. `slow` keeps the page busy building the
+ * dialog, as a slow phone is (`buildsSlowly`).
  */
-const secondTapPressesNothingOfADialog = OWN_DIALOGS.map((own): Check => [
-  `the second tap of two presses nothing that the first one’s dialog brought up or uncovered: ${own.when}${own.phone ? '' : ', on a 360 and a 390 phone'}`,
+const secondTapOnADialog = (own: OwnDialog, says: string, slow = false): Check => [
+  says,
   async (rig) => {
     for (const size of own.phone ? [own.phone] : SHEET_PHONES) {
       const table = own.build(rig);
@@ -2370,6 +2373,10 @@ const secondTapPressesNothingOfADialog = OWN_DIALOGS.map((own): Check => [
       const tapped = await namedByTheWatch(page, own.tap);
       const [finger] = own.over ? await boxes(page, own.over) : [];
 
+      if (slow) {
+        await buildsSlowly(page, '.overlay');
+      }
+
       await watchTheBar(page);
       await page.locator(own.tap).tap(finger && { position: { x: (finger.left + finger.right) / 2, y: (finger.top + finger.bottom) / 2 } });
       await page.waitForSelector(own.then);
@@ -2378,6 +2385,7 @@ const secondTapPressesNothingOfADialog = OWN_DIALOGS.map((own): Check => [
       const underTheTap = found.filter((one) => one.aimedAt === tapped && (behind === null || one.cameUp === behind));
       const waited = held.filter((one) => one.is?.includes(`data-action=${own.under}`));
 
+      assert.ok(!slow || (await builds(page)).length > 0, `${size.name}: the page was not kept busy as it built the dialog: the check no longer shows what it is here for`);
       assert.ok(underTheTap.length > 0, `${size.name}: nothing came up where the tapped control lay: the tap no longer shows what it is here for`);
       assert.deepEqual(underTheTap.flatMap(tellingOf), [], `${size.name}: a second tap lands on what the first one brought up`);
       assert.ok(waited.length > 0, `${size.name}: ${own.under} was not held back: ${JSON.stringify(held.map((one) => one.is ?? one.what))}`);
@@ -2389,7 +2397,11 @@ const secondTapPressesNothingOfADialog = OWN_DIALOGS.map((own): Check => [
       await page.close();
     }
   },
-]);
+];
+
+const secondTapPressesNothingOfADialog = OWN_DIALOGS.map((own) =>
+  secondTapOnADialog(own, `the second tap of two presses nothing that the first one’s dialog brought up or uncovered: ${own.when}${own.phone ? '' : ', on a 360 and a 390 phone'}`),
+);
 
 /** A tap of the player's own whose answer brings up a button that commits for good. */
 interface CommitsAfter {
@@ -2638,15 +2650,17 @@ interface HeldAsItComes {
   held: string;
 }
 
+const RAISE_OVER_A_SWITCH: HeldAsItComes = {
+  what: 'Raise, which comes up where a switch lay beside a table lying down',
+  size: LYING,
+  build: (rig) => waitingBehindTheLongestCall(rig, TABLE_OF_SIX),
+  step: (table) => table.play(others({ type: 'fold' }), viewersTurn),
+  then: '.turn [data-action="call"]:enabled',
+  held: 'Raise',
+};
+
 const HELD_AS_THEY_COME: HeldAsItComes[] = [
-  {
-    what: 'Raise, which comes up where a switch lay beside a table lying down',
-    size: LYING,
-    build: (rig) => waitingBehindTheLongestCall(rig, TABLE_OF_SIX),
-    step: (table) => table.play(others({ type: 'fold' }), viewersTurn),
-    then: '.turn [data-action="call"]:enabled',
-    held: 'Raise',
-  },
+  RAISE_OVER_A_SWITCH,
   {
     what: 'the offer to show a card, which commits for good',
     size: SMALL_STANDING,
@@ -2715,6 +2729,152 @@ const aHoldRunsFromWhenThePageIsFree: Check = [
     }
   },
 ];
+
+// How long a slow phone may take to build what a view brought, before the guard looks at it: longer than a hold
+const BUILDING_TAKES_MS = TAPS_SETTLE_MS + 50;
+
+/**
+ * Keeps the page busy for `BUILDING_TAKES_MS` inside every redraw of `part` from now on, or with `nth`
+ * inside that one alone, counted from 0: once the guard has noted what lay there and before it looks at
+ * what came. Each redraw is noted with when it began and when the page went on with it (`builds`).
+ */
+const buildsSlowly = (page: Page, part: string, nth?: number) =>
+  page.evaluate(`(({ part, nth }) => {
+    const emptied = Element.prototype.replaceChildren;
+
+    window.__builds = [];
+
+    Element.prototype.replaceChildren = function (...nodes) {
+      if (this.matches(part)) {
+        const began = performance.now();
+
+        for (const until = began + (nth === undefined || nth === window.__builds.length ? ${BUILDING_TAKES_MS} : 0); performance.now() < until; ) {}
+
+        window.__builds.push({ began, wentOn: performance.now() });
+      }
+
+      return emptied.apply(this, nodes);
+    };
+  })(${JSON.stringify({ part, nth })})`);
+
+/** The redraws noted since `buildsSlowly`, by the page's clock. */
+const builds = (page: Page) => page.evaluate('window.__builds') as Promise<{ began: number; wentOn: number }[]>;
+
+/**
+ * What a drawing replaces stays on the screen until the page has built the next and shown it, with a
+ * finger on its way to it all that while: the time building takes is no part of the time a finger has
+ * had. A machine running these checks several at a time took longer than a hold to build a bar in a wide
+ * font, and held nothing of what came up where the turn's buttons lay.
+ */
+const aSlowDrawingIsStillAimedAt: Check = [
+  `a button that comes up where another lay is held back, and takes no tap aimed at the other, though building its bar kept the page busy for ${BUILDING_TAKES_MS} ms, longer than a hold: ${RAISE_OVER_A_SWITCH.what}`,
+  async (rig) => {
+    const { table, page } = await waitingAt(RAISE_OVER_A_SWITCH, rig);
+
+    await buildsSlowly(page, '.controls-slot');
+    await watchTheBar(page);
+
+    RAISE_OVER_A_SWITCH.step(table);
+    await page.waitForSelector(RAISE_OVER_A_SWITCH.then);
+
+    const { found, held } = await watched(page);
+
+    assert.ok((await builds(page)).length > 0, 'the page was not kept busy as it built its bar: the check no longer shows what it is here for');
+    assert.deepEqual(found.flatMap(tellingOf), [], 'a tap lands on what it was not aimed at');
+    assert.ok(held.some((hold) => hold.what.includes(RAISE_OVER_A_SWITCH.held)), 'Raise was not held back');
+    await page.close();
+  },
+];
+
+/** A part of the page that is slow to build in one of two views, the first of them 0. */
+interface SlowIn {
+  part: string;
+  view: number;
+}
+
+/**
+ * The viewer's turn on a 360 phone, and then two views: their raise made away from this page, which puts
+ * words where the moves were, and everyone folding to it, which brings Replay up where Fold lay two views
+ * back. Says whether Replay was held back. With `slow` the second view comes right behind the first, and
+ * `behind` is how long after the page went on with the first's slow part the second's began, or null with
+ * nothing slow; without, it comes when the page has had more than a hold to show the first.
+ */
+async function replayWhereFoldLay(rig: Rig, slow?: SlowIn): Promise<{ held: boolean; behind: number | null }> {
+  const table = inTheBigBlind(rig, { rabbitHunting: true }, () => 60);
+  const page = await table.open(VIEWER, 'smallPhone');
+  const raise = () => table.act(VIEWER, { type: 'raise', to: 200 });
+
+  await page.waitForSelector('.turn [data-action="fold"]:enabled');
+  await settled(page);
+  await watchTheBar(page);
+
+  if (slow) {
+    const polls = await Gate.on(page, 'polls');
+
+    // The raise's view waits at the gate until the folds are played: the page's next poll, sent as it has drawn that view, is answered at once
+    await polls.close('answers');
+    raise();
+    await polls.holding();
+    everyoneFolds(table);
+    await buildsSlowly(page, slow.part, slow.view);
+    await polls.open();
+  } else {
+    raise();
+    await page.waitForSelector('.controls .waiting');
+    await pastAHold(page);
+    everyoneFolds(table);
+  }
+
+  await page.waitForSelector('.controls [data-action="replay-last"]');
+
+  const held = (await watched(page)).held.some((hold) => hold.what.includes('Replay'));
+  const [first, second] = slow ? await builds(page) : [];
+
+  assert.ok(!slow || (first && second), 'the page did not draw two views: the check no longer shows what it is here for');
+  await page.close();
+
+  return { held, behind: first && second ? second.began - first.wentOn : null };
+}
+
+const TWO_VIEWS = 'Replay where Fold lay, the viewer’s raise made away from this page and everyone folding to it in the next view, on a 360 phone';
+
+/**
+ * The same of what lay there two views back: the turn's bar is on the screen until the page has built the
+ * view that replaced it, however long that took, so a view right behind that one still has a finger on
+ * its way to the turn's buttons, and one that comes a hold later has none. The second view is the page's
+ * next poll: on a machine too busy to answer that inside a hold, the first of these shows nothing.
+ */
+const aViewBehindASlowOneIsStillAimedAt: Check = [
+  `a button that comes up where another lay two views back is held back when the view between kept the page busy for ${BUILDING_TAKES_MS} ms, longer than a hold, building its bar, and is live at once when the page has had a hold to show that view: ${TWO_VIEWS}`,
+  async (rig) => {
+    const rightBehind = await replayWhereFoldLay(rig, { part: '.controls-slot', view: 0 });
+    const aHoldLater = await replayWhereFoldLay(rig);
+
+    assert.ok(rightBehind.behind! >= TAPS_SETTLE_MS || rightBehind.held, 'Replay was not held back where Fold lay a moment before');
+    assert.ok(!aHoldLater.held, 'Replay was held back, though the turn’s bar had been off the screen for longer than a hold');
+  },
+];
+
+/**
+ * And of the time a view takes before its bar's turn comes: the table is drawn first, and takes a slow
+ * phone as long. A tap that comes down meanwhile waits for all of it, so a finger's time is counted to
+ * when the page began on the view.
+ */
+const aSlowTableAheadOfItsBarIsCounted: Check = [
+  `a button that comes up where another lay two views back is held back though the view that brings it kept the page busy for ${BUILDING_TAKES_MS} ms, longer than a hold, drawing the table before its bar: ${TWO_VIEWS}`,
+  async (rig) => {
+    const { held, behind } = await replayWhereFoldLay(rig, { part: '.stage', view: 1 });
+
+    assert.ok(behind! >= TAPS_SETTLE_MS || held, 'Replay was not held back where Fold lay a moment before');
+  },
+];
+
+/** The same of a dialog the player opens themselves: the second tap of two comes down while the page builds it, and lands on what was built. */
+const aSlowDialogIsStillUnderTheTap = secondTapOnADialog(
+  { ...ADD_CHIPS_DIALOG, phone: SMALL_STANDING },
+  `the second tap of two presses nothing of a dialog whose building kept the page busy for ${BUILDING_TAKES_MS} ms, longer than a hold: ${ADD_CHIPS_DIALOG.when}, on a 360 phone`,
+  true,
+);
 
 /**
  * A hold has one clock, started when its control first came up. A bar drawn again meanwhile, as it is
@@ -3316,5 +3476,5 @@ export function layoutSweep(picturesIn: string): Check[] {
     },
   ]);
 
-  return [...defects, replayFromTheBar(picturesIn), historyGainsTheHand, barKeepsTheTurnsHeight(picturesIn), barRowsKeepToOneLine(picturesIn), choicesKeepTheirPlaces, chatMakesWayForTheTurn(picturesIn), keyboardInTheBoxKeepsTheChat, lookSeesWhatATapPassesThrough, toastKeepsClear, ...underTheFinger(), ...secondTapFindsNothingNew, ...secondTapPressesNothingOfADialog, commitsWaitFromWhenTheyAreDrawn, ...whatAnAnswerUncoversWaits, aRowThatMovesUpIsHeld, aHoldRunsFromWhenThePageIsFree, aHoldRunsOutOnTime, aPageInTheBackgroundLetsGo, onlyWhatCameUpOverAnotherIsHeld, marksFollowTheTableTurned, ...tables, ...screens];
+  return [...defects, replayFromTheBar(picturesIn), historyGainsTheHand, barKeepsTheTurnsHeight(picturesIn), barRowsKeepToOneLine(picturesIn), choicesKeepTheirPlaces, chatMakesWayForTheTurn(picturesIn), keyboardInTheBoxKeepsTheChat, lookSeesWhatATapPassesThrough, toastKeepsClear, ...underTheFinger(), ...secondTapFindsNothingNew, ...secondTapPressesNothingOfADialog, commitsWaitFromWhenTheyAreDrawn, ...whatAnAnswerUncoversWaits, aRowThatMovesUpIsHeld, aHoldRunsFromWhenThePageIsFree, aSlowDrawingIsStillAimedAt, aViewBehindASlowOneIsStillAimedAt, aSlowTableAheadOfItsBarIsCounted, aSlowDialogIsStillUnderTheTap, aHoldRunsOutOnTime, aPageInTheBackgroundLetsGo, onlyWhatCameUpOverAnotherIsHeld, marksFollowTheTableTurned, ...tables, ...screens];
 }

@@ -42,9 +42,13 @@ export interface Spot<C> {
   forGood: boolean;
 }
 
-/** Every control as it lay when a drawing left the screen, at `left`. */
+/**
+ * Every control as it lay in a drawing that has been replaced. It left the screen at `left`, when the
+ * page was free to show what replaced it. Null until then: the page is still busy building that, and
+ * this is what the screen shows (`outOfSightAt`).
+ */
 export interface Drawing<C> {
-  left: number;
+  left: number | null;
   spots: Spot<C>[];
 }
 
@@ -66,8 +70,18 @@ const inPlace = (a: Box, b: Box): boolean => [a.left - b.left, a.top - b.top, a.
 /** Whether `spot` lies where a different control lay in one of `drawings`. */
 const tookAPlaceIn = <C>(drawings: readonly Drawing<C>[], spot: Spot<C>): boolean => drawings.some((drawing) => drawing.spots.some((was) => !same(was, spot) && share(was.box, spot.box)));
 
-/** The drawings a finger may still be on its way to at `at`. */
-export const stillAimedAt = <C>(drawings: readonly Drawing<C>[], at: number): Drawing<C>[] => drawings.filter((drawing) => at - drawing.left < TAPS_SETTLE_MS);
+/** The drawings a finger may still be on its way to at `at`: those still on the screen, and those that left it less than the settle time before. */
+const stillAimedAt = <C>(drawings: readonly Drawing<C>[], at: number): Drawing<C>[] => drawings.filter((drawing) => drawing.left === null || at - drawing.left < TAPS_SETTLE_MS);
+
+/**
+ * The drawings a finger may be on its way to as the page begins, at `at`, to draw what replaces `spots`,
+ * which is the last of them. Not once it has drawn it: a tap that comes down meanwhile waits for the
+ * page, and lands on what was drawn.
+ */
+export const replacedAt = <C>(drawings: readonly Drawing<C>[], spots: Spot<C>[], at: number): Drawing<C>[] => [...stillAimedAt(drawings, at), { left: null, spots }];
+
+/** The drawings once the page is free again, at `at`, to show what it built: those replaced since it last was leave the screen now. */
+export const outOfSightAt = <C>(drawings: readonly Drawing<C>[], at: number): Drawing<C>[] => drawings.map((drawing) => (drawing.left === null ? { left: at, spots: drawing.spots } : drawing));
 
 /** The holds among `held` that are not over at `at`. */
 export const stillHeld = <C>(held: readonly Hold<C>[], at: number): Hold<C>[] => held.filter((hold) => hold.until === null || hold.until > at);
@@ -81,19 +95,18 @@ export const shownAt = <C>(held: readonly Hold<C>[], at: number): Hold<C>[] => h
 
 /**
  * The controls among `now`, as the page stands at `at` with the last of `drawings` just gone, that take
- * no tap yet, each with when it does:
+ * no tap yet, each with when it does. `drawings` are those a finger may still be on its way to
+ * (`replacedAt`):
  *
- * - One that has come up, or moved, to where a different control lay in a drawing a finger may still
- *   be on its way to: for the settle time from when the page shows it. Every such drawing counts, not
- *   only the last: a part drawn twice in a moment still has a finger on its way to what the first one
- *   showed.
+ * - One that has come up, or moved, to where a different control lay in one of them: for the settle
+ *   time from when the page shows it. Every such drawing counts, not only the last: a part drawn twice
+ *   in a moment still has a finger on its way to what the first one showed.
  * - One that commits for good and was not in the drawing just gone: for the settle time from when the
  *   page shows it.
  * - One that lies where it lay in the drawing just gone has not come up at all: it is live, or among
  *   `held`, the holds of that drawing, has the rest of the time it had.
  */
 export function holds<C>(drawings: readonly Drawing<C>[], now: readonly Spot<C>[], at: number, held: readonly Hold<C>[] = []): Hold<C>[] {
-  const aimedAt = stillAimedAt(drawings, at);
   const justGone = drawings.at(-1)?.spots ?? [];
 
   return now.flatMap((spot): Hold<C>[] => {
@@ -107,16 +120,16 @@ export function holds<C>(drawings: readonly Drawing<C>[], now: readonly Spot<C>[
 
     const cameUpForGood = spot.forGood && before.length === 0;
 
-    return tookAPlaceIn(aimedAt, spot) || cameUpForGood ? [{ spot, until: null }] : [];
+    return tookAPlaceIn(drawings, spot) || cameUpForGood ? [{ spot, until: null }] : [];
   });
 }
 
 /**
- * The controls among `now` that take no tap yet after a change the player made themselves at `at`, a
- * dialog they opened or closed. It is no surprise to them, so what it brought up is live at once: all
- * but what came up where they tapped, which is where the second tap of two lands. `tapped` is that
- * place as a drawing of one spot, left at the tap: the control, or for a tap on none, as on the backdrop
- * that closes a dialog, the part of the page under the finger.
+ * The controls among `now` that take no tap yet after a change the player made themselves, a dialog
+ * they opened or closed, which the page began to build at `at`. It is no surprise to them, so what it
+ * brought up is live at once: all but what came up where they tapped, which is where the second tap of
+ * two lands. `tapped` is that place as a drawing of one spot, left at the tap: the control, or for a tap
+ * on none, as on the backdrop that closes a dialog, the part of the page under the finger.
  */
 export function holdsUnderTap<C>(tapped: Drawing<C>, now: readonly Spot<C>[], at: number): Hold<C>[] {
   return now.filter((spot) => tookAPlaceIn(stillAimedAt([tapped], at), spot)).map((spot) => ({ spot, until: null }));

@@ -1,15 +1,16 @@
 import { bountiesText } from '../../engine/bounties.ts';
 import { startingConfig } from '../../engine/config.ts';
-import type { ConfigKey } from '../../engine/config.ts';
 import { fromPreset, PRESET_KEYS } from '../../engine/presets.ts';
 import type { Preset } from '../../engine/presets.ts';
 import { stakesText } from '../../engine/stakes.ts';
 import type { KnownPlayer, TableConfig } from '../../engine/types.ts';
 import type { TableInfo } from '../../server/api.ts';
+import type { RefusalPlace } from '../connection.ts';
 import type { Answer } from '../knownPlayers.ts';
 import { h, holdWhile, sends } from '../ui.ts';
 import { configForm } from './configForm.ts';
 import { inputOf } from './forms.ts';
+import { refusalLine } from './refusal.ts';
 import { whoField } from './whoField.ts';
 import type { WhoField } from './whoField.ts';
 
@@ -35,13 +36,14 @@ export interface TableLeft {
 }
 
 export interface LobbyHandlers {
-  /** Resolves when the attempt is over, to whether the server refused it: its words then say what in the form is wrong. */
-  create(as: Answer, config: Partial<TableConfig>): Promise<boolean>;
+  /** Resolves when the attempt is over. If no table came of it the visitor has been told why. */
+  create(as: Answer, config: Partial<TableConfig>, refused: RefusalPlace): Promise<void>;
   /** Makes a change to the screen that the game and not the visitor brings about, as on the server's answer: what comes up under a finger takes no tap for a moment (`TapGuard`). */
   byItself(change: () => void): void;
   /** Says a line to a screen reader alone, of a change the page itself shows the eye. */
   say(message: string): void;
-  openTable(code: string): void;
+  /** Goes to the table with that code. Resolves once the visitor is on their way, or has been told that no table has it. */
+  openTable(code: string, refused: RefusalPlace): Promise<void>;
   /** Shows the standings over this screen, which stays as it is underneath. */
   standings(): void;
 }
@@ -53,7 +55,9 @@ export interface LobbyScreen extends AsksWho {
 
 export interface JoinHandlers {
   /** Resolves when the attempt is over, whichever way it went. */
-  join(as: Answer): Promise<void>;
+  join(as: Answer, refused: RefusalPlace): Promise<void>;
+  /** As `LobbyHandlers.byItself`. */
+  byItself(change: () => void): void;
   toLobby(): void;
 }
 
@@ -74,6 +78,9 @@ function themeSection(themePicker: HTMLElement): HTMLElement {
 export function lobbyEl(visitor: Visitor, themePicker: HTMLElement, left: TableLeft | null, handlers: LobbyHandlers): LobbyScreen {
   const who = whoField('host-name', visitor.name, visitor.player);
   const createButton = h('button.btn.primary', { type: 'submit', 'data-action': 'create-table' }, sends('Create table', 'Setting up…'));
+  const notCreated = refusalLine(createButton, handlers.byItself);
+  const findButton = h('button.btn', { type: 'submit', 'data-action': 'find-table' }, sends('Find table', 'Looking…'));
+  const notFound = refusalLine(findButton, handlers.byItself, true);
 
   // The table's name starts out with the apostrophe the page's own title has
   const usual: TableConfig = { ...startingConfig(), name: 'Chips n’ Dipshits' };
@@ -117,13 +124,11 @@ export function lobbyEl(visitor: Visitor, themePicker: HTMLElement, left: TableL
       onsubmit: (event: Event) => {
         event.preventDefault();
 
+        // The server's words name the host or something the host changed, which may be folded away by now
+        const refused = notCreated.trying((reason) => [...who.refusedAt(reason), ...settings.refusedAt(create, reason)]);
+
         // The form itself stays as it is, so nothing typed is lost if the attempt fails, and it cannot be sent twice
-        holdWhile(createButton, async () => {
-          if (await handlers.create(who.answer(), settings.read(create))) {
-            // The server's words name something the host changed, which may be folded away by now
-            handlers.byItself(() => settings.unfold(Object.keys(settings.changed(create)) as ConfigKey[]));
-          }
-        });
+        holdWhile(createButton, () => handlers.create(who.answer(), settings.read(create), refused));
       },
     },
     h('h2', null, 'Start a table'),
@@ -140,7 +145,19 @@ export function lobbyEl(visitor: Visitor, themePicker: HTMLElement, left: TableL
     {
       onsubmit: (event: Event) => {
         event.preventDefault();
-        handlers.openTable(inputOf(event.target as HTMLFormElement, 'table-code').value);
+
+        const code = inputOf(event.target as HTMLFormElement, 'table-code');
+
+        // Nothing but spaces is no code: the box is emptied, and the browser says of it what it says of any empty one
+        if (code.value.trim() === '') {
+          code.value = '';
+          code.reportValidity();
+          return;
+        }
+
+        const refused = notFound.trying(() => [code]);
+
+        holdWhile(findButton, () => handlers.openTable(code.value, refused));
       },
     },
     h('h2', null, 'Join a table'),
@@ -155,7 +172,7 @@ export function lobbyEl(visitor: Visitor, themePicker: HTMLElement, left: TableL
       autocomplete: 'off',
       placeholder: 'Table code',
     }),
-    h('button.btn', { type: 'submit' }, 'Find table'),
+    findButton,
   );
 
   const standings = h(
@@ -206,13 +223,17 @@ export function joinScreen(tableId: string, visitor: Visitor, themePicker: HTMLE
   const who = whoField('join-name', visitor.name, visitor.player);
   const about = h('div.about', null, h('h2', null, `Table ${tableId}`), h('p.note', null, 'Looking for the table…'));
   const joinButton = h('button.btn.primary', { type: 'submit', disabled: true, 'data-action': 'join-table' }, sends('Join table', 'Joining…'));
+  const notJoined = refusalLine(joinButton, handlers.byItself);
 
   const form = h(
     'form.card-panel',
     {
       onsubmit: (event: Event) => {
         event.preventDefault();
-        holdWhile(joinButton, () => handlers.join(who.answer()));
+
+        const refused = notJoined.trying(who.refusedAt);
+
+        holdWhile(joinButton, () => handlers.join(who.answer(), refused));
       },
     },
     about,

@@ -2,6 +2,7 @@
  * What a player's name may be, and when two names read as one. The one rule for a name, whether it
  * is typed at a table or kept on the game's list of players.
  */
+import { refusalNames, SUBJECTS } from './subjects.ts';
 import { GameError } from './types.ts';
 import { LIMITS, text } from './validate.ts';
 
@@ -57,9 +58,18 @@ export function listedLike<P extends { name: string }>(players: readonly P[], na
   return players.find((player) => readAlike(squeezed(player.name), squeezed(name))) ?? null;
 }
 
+// Words that only a refusal of a name has, one for each of those a name can get: from here, from a table
+// that has the name (`joiningName`) and from the list of players (`NameOnList`)
+const NAME_WORDS = ['Names ', ' is already called ', 'That name reads too much like ', ' is already on the list of players'];
+
+/** Whether a refusal is about the name someone typed, so that the form it was typed in can point at the box. */
+export function refusesName(refusal: string): boolean {
+  return refusalNames(refusal, SUBJECTS.name) || NAME_WORDS.some((words) => refusal.includes(words));
+}
+
 /** A name as it is kept, or the reason it can't be one. */
 export function playerName(value: unknown): string {
-  const name = text(value, 'Your name', LIMITS.nameLength);
+  const name = text(value, SUBJECTS.name, LIMITS.nameLength);
 
   if (!NAME_PATTERN.test(name)) {
     throw new GameError('Names start with a letter or number and use only letters, numbers, spaces and . _ - \' ! ?');

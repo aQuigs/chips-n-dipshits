@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { CONFIG_KEYS, CONFIG_SPECS, DEFAULT_CONFIG, newConfig, sameSetting, startingConfig, validatedConfig, validSetting } from '../src/engine/index.ts';
-import type { Bounty, ChoiceSpec, NumberSpec } from '../src/engine/index.ts';
-import { seededRng, sevenDeuceBounty, TestTable } from './helpers.ts';
+import { CONFIG_KEYS, CONFIG_SPECS, DEFAULT_CONFIG, fixedAtCreation, LIMITS, newConfig, sameSetting, settingsRefused, startingConfig, validatedConfig, validSetting } from '../src/engine/index.ts';
+import type { Bounty, ChoiceSpec, ConfigSpec, NumberSpec } from '../src/engine/index.ts';
+import { refusalOf, seededRng, sevenDeuceBounty, TestTable } from './helpers.ts';
 import { randomConfig, randomSetting } from './randomConfig.ts';
 
 test('the default settings are the registry\'s defaults, and the table accepts them', () => {
@@ -48,6 +48,65 @@ test('a refusal names the setting and says what it may be', () => {
   assert.throws(settings({ name: 7 }), { message: 'The table name is missing' });
   assert.throws(settings({ bigBlind: 5 }), { message: "The big blind can't be smaller than the small blind" });
   assert.throws(settings({ minBuyIn: 3000 }), { message: "The maximum buy-in can't be smaller than the minimum" });
+});
+
+test('a refusal is traced back to the settings it is about, and to none when it names none', () => {
+  const refusal = (config: object): string => refusalOf(() => validatedConfig(config, DEFAULT_CONFIG));
+
+  // Every setting by itself, refused for a value no setting takes
+  for (const key of CONFIG_KEYS) {
+    assert.deepEqual(settingsRefused(refusal({ [key]: null }), DEFAULT_CONFIG), [key], key);
+  }
+
+  // And every other way a value can be wrong for a setting of its kind
+  const wrong = (spec: ConfigSpec): unknown[] => {
+    switch (spec.kind) {
+      case 'text':
+        return ['', 'x'.repeat(spec.maxLength + 1), 42];
+      case 'link':
+        return ['meet.example/abc', 'http://meet.example/abc', `https://meet.example/${'x'.repeat(spec.maxLength)}`, 42];
+      case 'chips':
+        return [spec.min - 1, (spec.max ?? LIMITS.chips) + 1, 1.5, 'lots'];
+      case 'count':
+      case 'seconds':
+        return [spec.min - 1, ...(spec.max === undefined ? [] : [spec.max + 1]), 1.5, 'lots'];
+      case 'toggle':
+        return ['yes', 1];
+      case 'choice':
+        return ['none of them', 99.5];
+      case 'handAmounts':
+        return ['72'];
+    }
+  };
+
+  for (const key of CONFIG_KEYS) {
+    for (const value of wrong(CONFIG_SPECS[key])) {
+      const told = refusal({ [key]: value });
+
+      assert.deepEqual(settingsRefused(told, DEFAULT_CONFIG), [key], `${key} sent as ${JSON.stringify(value)}: "${told}"`);
+    }
+  }
+
+  // One chosen for good, sent as something else it could have been
+  for (const key of CONFIG_KEYS.filter(fixedAtCreation)) {
+    const other = (CONFIG_SPECS[key] as ChoiceSpec).options.find((option) => option.value !== DEFAULT_CONFIG[key])!.value;
+
+    assert.deepEqual(settingsRefused(refusal({ [key]: other }), DEFAULT_CONFIG), [key], key);
+  }
+
+  // A rule between settings names every setting it reads, whichever of them its words begin with
+  const between = (config: Partial<typeof DEFAULT_CONFIG>) => settingsRefused(refusal(config), { ...DEFAULT_CONFIG, ...config });
+
+  assert.deepEqual(between({ bigBlind: 5 }), ['smallBlind', 'bigBlind']);
+  assert.deepEqual(between({ smallBlind: 50 }), ['smallBlind', 'bigBlind']);
+  assert.deepEqual(between({ minBuyIn: 3000 }), ['minBuyIn', 'maxBuyIn']);
+  assert.deepEqual(between({ actionSeconds: 4 }), ['actionSeconds']);
+  assert.deepEqual(between({ bounties: [['72', 10], ['J4s', 20], ['72', 30]] as Bounty[] }), ['bounties']);
+
+  // Words that are no setting's: one bounty of several, and a refusal that is not about the settings at all
+  assert.deepEqual(between({ bounties: [['72', -5]] as Bounty[] }), []);
+  assert.deepEqual(settingsRefused('Stu is in the current hand, so wait until it is over', DEFAULT_CONFIG), []);
+  assert.deepEqual(settingsRefused('The table is busy, try again', DEFAULT_CONFIG), []);
 });
 
 test('when several things are wrong, the complaint is about the one that was always checked first', () => {

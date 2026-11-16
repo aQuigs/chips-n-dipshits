@@ -96,6 +96,8 @@ const throwIn = (page: Page, message: string) =>
   }, message);
 
 const inAddress = (page: Page, name: string) => new URL(page.url()).searchParams.get(name);
+/** A form's own line saying why it was turned down, in words that have `words` in them (`refusalLine`). */
+const saidByItsForm = (words: string) => `.refusal:not(.stale):visible:has-text(${JSON.stringify(words)})`;
 const remembered = (page: Page, tableId: string) => page.evaluate(`localStorage.getItem('cnd.seat.${tableId}')`) as Promise<string | null>;
 /** A page's own seat, the chips in front of it, the pot and the board, as they are drawn, less the turn's clock, which never stands still. */
 const ownPart = (page: Page) =>
@@ -237,6 +239,33 @@ try {
     await page.unroute('**/api');
     await page.waitForSelector('[data-action="confirm-member"]');
     assert.equal(inAddress(page, 'me'), hostMember);
+    await page.context().close();
+  }
+
+  console.log('A code typed in the lobby is looked up from the lobby: one no table has is said by its box with the rest of the screen as typed, and a table’s own leads to its screen, asked for once');
+  {
+    const page = await open(browser);
+    const asked = opsSent(page);
+
+    await page.goto(server.url);
+    await page.fill('#host-name', 'Half typed');
+    await page.fill('#new-table-big-blind', '50');
+    await page.fill('#table-code', 'nosuchtable1');
+    await page.click('[data-action="find-table"]');
+    await page.waitForSelector(saidByItsForm('There is no table with the code NOSUCHTABLE1.'));
+
+    assert.equal(await page.getAttribute('#table-code', 'aria-invalid'), 'true', 'the code is what was refused');
+    assert.deepEqual([await page.inputValue('#table-code'), await page.inputValue('#host-name'), await page.inputValue('#new-table-big-blind')], ['nosuchtable1', 'Half typed', '50'], 'a code no table has cost what was typed');
+    assert.equal(await page.locator('.toast:visible').count(), 0, 'the form says it, so a toast would say it twice');
+    assert.equal(inAddress(page, 'table'), null, 'the address names a table that is not there');
+
+    asked.length = 0;
+    await page.fill('#table-code', tableId);
+    await page.click('[data-action="find-table"]');
+    await page.waitForSelector('[data-action="join-table"]:not([disabled])');
+
+    assert.equal(inAddress(page, 'table'), tableId);
+    assert.deepEqual(asked.filter((op) => op === 'info'), ['info'], 'the table was asked for again by the screen the lobby led to');
     await page.context().close();
   }
 
@@ -963,7 +992,7 @@ try {
 
     assert.equal(await lobby.innerText('.outdated p'), 'Reload to keep playing.', 'with no table yet, it promises no place at one');
     assert.equal(await lobby.locator('.stage').count(), 0, 'no table was made');
-    assert.equal(await lobby.locator('.toast:visible').count(), 0);
+    assert.equal(await lobby.locator('.toast:visible, .refusal:visible').count(), 0);
     assert.equal(await lobby.locator('.outdated [data-action="reload"]').getAttribute('href'), server.url);
 
     await lobby.click('.outdated [data-action="reload"]');
@@ -1197,7 +1226,8 @@ try {
       await guest.waitForSelector('[data-action="join-table"]:not([disabled])');
       await guest.fill('#join-name', 'Jo');
       await guest.click('[data-action="join-table"]');
-      await guest.waitForSelector('.toast:has-text("Could not join the table")');
+      await guest.waitForSelector(saidByItsForm('Could not join the table'));
+      assert.equal(await guest.locator('.toast:visible').count(), 0, 'the form says it, so a toast would say it twice');
       assert.deepEqual(tables.read(id)!.members.map((member) => member.name), ['Ivy', 'Jo'], 'the table did not let the guest in the first time, so the case shows nothing');
 
       const joins = () => bodies.filter((body) => body.includes('"op":"join"')).map((body) => (JSON.parse(body) as { key?: string }).key);
@@ -1327,7 +1357,9 @@ try {
 
       // Someone new under a name the list has is told whose it is, stays on the form with everything as typed, and nothing is lost
       await guest.click('[data-action="join-table"]');
-      await guest.waitForSelector('.toast:has-text("Bob is already on the list of players")');
+      await guest.waitForSelector(saidByItsForm('Bob is already on the list of players'));
+      assert.equal(await guest.locator('.toast:visible').count(), 0, 'the form says it, so a toast would say it twice');
+      assert.equal(await guest.getAttribute('#join-name', 'aria-invalid'), 'true', 'the name is what was refused');
       assert.equal(await guest.inputValue('#join-name'), 'Bob');
       assert.deepEqual([await player(guest), await remembered(guest, first)], [{ id: idOf('Bob'), name: 'Bob' }, guestSeat]);
 

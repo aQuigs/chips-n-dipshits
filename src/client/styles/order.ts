@@ -58,6 +58,7 @@ export const STYLESHEETS = [
   'sections.css',
   'add-chips.css',
   'own-clock.css',
+  'refusal.css',
   'accessibility.css',
   'forced-colors.css',
 ];

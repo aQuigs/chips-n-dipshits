@@ -79,6 +79,15 @@
     padding-block: 8px;
   }
 
+  /* Why a form was turned down is more than fits beside the button: it has the row over the two */
+  .dialog-foot > .refusal {
+    grid-area: 1 / 1 / auto / span 2;
+  }
+
+  .dialog-foot:has(> .refusal) > :not(.refusal) {
+    grid-row: 2;
+  }
+
   .controls-slot {
     border-top: 0;
     border-left: 1px solid var(--line);

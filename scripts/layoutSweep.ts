@@ -770,7 +770,7 @@ export const menuStartsWith = (action: string, words: string) => `.menu > sectio
 
 const SCREEN_STATES: ScreenState[] = [
   {
-    shows: 'the first screen asking who you are, with forty players known, then with a preset picked and the table folded by hand, every section of the form under its longest line, then with every section unfolded',
+    shows: 'the first screen asking who you are, with forty players known, then with a preset picked and the table folded by hand, every section of the form under its longest line, then with every section unfolded, then turned down for a name the list of players has, in the longest words a form is turned down with',
     known(rig) {
       FORTY.forEach((name, nth) => rig.players.add(name, rig.now() + nth));
       // No table plays these, so the clock can be at its longest too
@@ -798,6 +798,12 @@ const SCREEN_STATES: ScreenState[] = [
 
       await page.evaluate(`document.querySelector('.lobby').scrollTop = 0`);
       await look(page, 'the first screen, every section unfolded');
+
+      await page.locator('.start-table [data-action="someone-new"]').click();
+      await page.fill('#host-name', FORTY[0]!);
+      await page.locator('[data-action="create-table"]').click();
+      await page.waitForSelector('.start-table .refusal:not(.stale)');
+      await look(page, 'the first screen, a new table turned down');
     },
   },
   {
@@ -813,7 +819,7 @@ const SCREEN_STATES: ScreenState[] = [
     },
   },
   {
-    shows: 'the host’s menu, and the table settings folded under their longest lines, then with every section unfolded, as many bounty hands as a table can have and a change not saved',
+    shows: 'the host’s menu, and the table settings folded under their longest lines, then with every section unfolded, as many bounty hands as a table can have and a change not saved, then turned down for their blinds',
     async walk(rig, screen, look) {
       const table = rig.table(players(2, BIGGEST), { ...CENTS, ...LONGEST_LINES });
       // A hand in play, so the settings say when a change to the blinds applies
@@ -841,6 +847,14 @@ const SCREEN_STATES: ScreenState[] = [
       await page.waitForSelector('.preset-panel [data-says="table-unchanged"]:visible');
       await page.evaluate(`document.querySelector('.dialog-body').scrollTop = 0`);
       await look(page, 'the table settings, every section unfolded');
+
+      // The last bounty hand filled in, so it is the table and not the browser that turns the form down
+      await page.fill(`#table-bounties-hand-${BOUNTIES.length}`, 'KK');
+      await page.fill(`#table-bounties-amount-${BOUNTIES.length}`, '1.00');
+      await page.fill('#table-small-blind', '2.00');
+      await page.locator('[data-action="save-settings"]').click();
+      await page.waitForSelector('.dialog .refusal:not(.stale)');
+      await look(page, 'the table settings turned down');
     },
   },
   {

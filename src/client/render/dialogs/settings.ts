@@ -37,17 +37,22 @@ function settings(view: TableView, handlers: DialogHandlers): HTMLElement {
         const sent = fields.changed(form);
 
         // The table's words name a setting that was sent, which may be folded away by now
-        submit(event, handlers, { type: 'updateConfig', config: sent }, () => handlers.byItself(() => fields.unfold(Object.keys(sent) as ConfigKey[])));
+        submit(event, handlers, { type: 'updateConfig', config: sent }, (reason) => fields.refusedAt(form, reason));
       },
     },
     fields.sections,
   );
 
-  const presets = presetsPanel(view.config, handlers.presets, {
-    current: () => ({ ...view.config, ...fields.read(form) }),
-    // The browser points at a field it can't read, which unfolds the section it is in
-    readable: () => form.reportValidity(),
-  });
+  const presets = presetsPanel(
+    view.config,
+    handlers.presets,
+    {
+      current: () => ({ ...view.config, ...fields.read(form) }),
+      // The browser points at a field it can't read, which unfolds the section it is in
+      readable: () => form.reportValidity(),
+    },
+    handlers.byItself,
+  );
 
   return footed(
     frame('Table settings', handlers, h('div.sections', null, form, presets.element)),

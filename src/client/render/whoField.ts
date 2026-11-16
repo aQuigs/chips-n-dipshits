@@ -1,5 +1,7 @@
+import { refusesName } from '../../engine/names.ts';
 import type { KnownPlayer } from '../../engine/types.ts';
 import { LIMITS } from '../../engine/validate.ts';
+import type { RefusalPlace } from '../connection.ts';
 import { answerOf, offerOf } from '../knownPlayers.ts';
 import type { Answer, Asked } from '../knownPlayers.ts';
 import { h, Slot } from '../ui.ts';
@@ -16,7 +18,7 @@ export interface PlayerHandlers {
   /** Who the browser remembers being, by what it last knew. */
   remembered(): KnownPlayer | null;
   /** Tells the table who this member is. Resolves to whether it took that; if not, the player has been told why. */
-  identify(as: Answer): Promise<boolean>;
+  identify(as: Answer, refused: RefusalPlace): Promise<boolean>;
 }
 
 export interface WhoField {
@@ -25,6 +27,8 @@ export interface WhoField {
   offer(listed: Listed): void;
   /** What the form it stands in sends. */
   answer(): Answer;
+  /** The box a refusal of that is about: the name, when one was typed and the words are about a name (`Faults`). */
+  refusedAt(reason: string): HTMLElement[];
 }
 
 /**
@@ -134,5 +138,6 @@ export function whoField(id: string, typed: string, remembered: KnownPlayer | nu
     },
 
     answer: () => answerOf({ ...asked, typed: nameInput.value }),
+    refusedAt: (reason) => (!nameRow.hidden && refusesName(reason) ? [nameInput] : []),
   };
 }

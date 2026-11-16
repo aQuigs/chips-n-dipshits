@@ -61,6 +61,13 @@ export type TurnLock = 'open' | 'sent' | 'unanswered';
  */
 export type SendOutcome = 'taken' | 'refused' | 'unanswered';
 
+/**
+ * Somewhere better than a toast to say why what was asked for did not go, handed along with the request
+ * by whoever asked: a form says it by the button that was pressed. It answers whether it has said it. If
+ * not, as when the form is gone by then, the reason is told the way any other is.
+ */
+export type RefusalPlace = (reason: string) => boolean;
+
 /** A member at a table. */
 export interface Session {
   tableId: string;
@@ -258,8 +265,12 @@ export class TableConnection {
     this.awaitingWord.splice(0).forEach((heard) => heard());
   }
 
-  /** How the command fared. For a choice ahead (`CHOICES`), how the latest of them did, once all are accounted for. */
-  send(command: Command): Promise<SendOutcome> {
+  /**
+   * How the command fared. For a choice ahead (`CHOICES`), how the latest of them did, once all are accounted
+   * for. The table's words for turning it down go to `refused` when whoever sends it has such a place; a
+   * reaction or a choice ahead, which no form sends, has none.
+   */
+  send(command: Command, refused?: RefusalPlace): Promise<SendOutcome> {
     if (FLEETING.has(command.type)) {
       return this.sendFleeting(command);
     }
@@ -272,7 +283,7 @@ export class TableConnection {
       return this.choosing;
     }
 
-    return this.carry(command);
+    return this.carry(command, refused);
   }
 
   private async sendChoices(): Promise<SendOutcome> {
@@ -298,7 +309,7 @@ export class TableConnection {
     return outcome;
   }
 
-  private async carry(command: Command): Promise<SendOutcome> {
+  private async carry(command: Command, refused?: RefusalPlace): Promise<SendOutcome> {
     const { tableId, auth } = this.session;
     const move = MOVES.has(command.type);
 
@@ -337,7 +348,7 @@ export class TableConnection {
     }
 
     if (!response.ok) {
-      this.fail(response);
+      this.fail(response, refused);
     }
 
     return response.ok ? 'taken' : 'refused';
@@ -375,10 +386,10 @@ export class TableConnection {
     this.listener.status();
   }
 
-  private fail(error: ApiError): void {
+  private fail(error: ApiError, place?: RefusalPlace): void {
     if (error.code === 'unauthorized' || error.code === 'not_found') {
       this.listener.refused(error);
-    } else {
+    } else if (!place?.(error.error)) {
       this.listener.notice(error.error);
     }
   }

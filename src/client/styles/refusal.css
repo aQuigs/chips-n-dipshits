@@ -1,0 +1,55 @@
+/* ---- A form's refusal: the line just above its button, and the mark on the boxes it is about (`refusalLine`) ---- */
+
+.refusal {
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-inline-start: 4px solid var(--bad);
+  border-radius: var(--radius);
+  background: var(--panel-raised);
+  color: var(--text);
+  font-size: calc(13px * var(--text-scale));
+  font-weight: 600;
+  line-height: 1.35;
+  text-align: start;
+  overflow-wrap: anywhere;
+}
+
+/*
+ * While a box it is about is marked, the line keeps in sight at the foot of what is showing wherever its form
+ * is scrolled: on the first screen that box may be a long way above the button the line stands over, and is
+ * brought into sight with the reason still beside it.
+ */
+.refusal.pointing {
+  position: sticky;
+  bottom: 8px;
+  z-index: 1;
+  box-shadow: var(--shadow-raised);
+}
+
+/* From the next try on its words are out of sight and its room is kept, so nothing moves under the finger on the button */
+.refusal.stale {
+  visibility: hidden;
+}
+
+/* A row of its own in a form that is laid out in columns */
+:is(.start-table, .join-strip, .preset-save) > .refusal {
+  grid-column: 1 / -1;
+}
+
+/* Over a button that stands in the middle of a wide form, as wide as its words and in the middle too */
+@container app (min-width: 648px) {
+  .start-table > .refusal {
+    justify-self: center;
+    max-width: 100%;
+  }
+}
+
+:is(.field, .join-strip, .bounty-row) :is(input, select)[aria-invalid='true'] {
+  border-color: var(--bad);
+  box-shadow: 0 0 0 1px var(--bad);
+}
+
+/* Brought into sight clear of the edge, and of the line at the foot */
+.field:has([aria-invalid='true']) {
+  scroll-margin-block: 16px 72px;
+}

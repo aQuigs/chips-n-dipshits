@@ -33,6 +33,7 @@ export const ALLOWED_ON_TOP: OnTop[] = [
   { what: 'a toast at a table, over the chat’s bar and the chat’s lines under it, and nothing of the game or of the top bar', is: '.feed-bar > .toast', over: '.feed-bar *, .feed .entries *' },
   { what: 'a toast away from a table, over the top of the screen', is: '.cnd > .toast', over: '.brand *' },
   { what: 'a toast while a dialog or a replay is in front of the table, over the top bar they have shut off', is: '.app:has(> .overlay:not([hidden]), + .replay:not([hidden])) .toast', over: '.topbar *' },
+  { what: 'a form’s reason while a box it is about is marked, kept in sight at the foot of that form and of no other', is: '.refusal.pointing', over: 'form *', sameAs: 'form' },
   { what: 'a seat’s plate, over the foot of the cards behind it, never their rank or more than half their suit', is: '.plate', over: '.hole .pip', sameAs: '.seat', upTo: 0.5 },
   { what: 'a reaction or a landed throw, over another player’s cards and name, never the board or the pot', is: '.seat-reaction:not(.own)', over: '.seat:not(.me) .hole *, .seat:not(.me) .plate .name *' },
   { what: 'a reaction or a landed throw on the viewer’s own seat, over their own name, stack and status, never their cards', is: '.seat-reaction.own', over: '.seat.me .plate *' },

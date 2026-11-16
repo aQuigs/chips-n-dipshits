@@ -1,4 +1,4 @@
-import { CONFIG_SPECS, fixedAtCreation, holdsAmounts, sameSetting, settingText, startingConfig } from '../../engine/config.ts';
+import { CONFIG_SPECS, fixedAtCreation, holdsAmounts, sameSetting, settingsRefused, settingText, startingConfig } from '../../engine/config.ts';
 import type { ConfigKey, ConfigSpec, SettingValue } from '../../engine/config.ts';
 import { CONFIG_SECTION_KEYS, CONFIG_SECTIONS, sectionOf } from '../../engine/configSections.ts';
 import type { ConfigSection } from '../../engine/configSections.ts';
@@ -41,8 +41,12 @@ export interface ConfigForm {
   changed(form: HTMLFormElement): Partial<TableConfig>;
   /** Puts `values` in the fields of the settings it names, and folds the sections as `open` now says. */
   fill(form: HTMLFormElement, values: Partial<TableConfig>): void;
-  /** Unfolds the sections these settings stand in, for when something is about to be said of them. */
-  unfold(keys: ConfigKey[]): void;
+  /**
+   * The boxes of the settings a refusal is about, their sections unfolded, for the form's line to mark
+   * (`refusalLine`). Of the settings a rule between them reads, those the form's user changed are the ones
+   * to look at.
+   */
+  refusedAt(form: HTMLFormElement, reason: string): HTMLElement[];
 }
 
 /** The field for one setting. `table` is the table its amounts are written for. */
@@ -317,7 +321,18 @@ export function configForm(values: TableConfig, options: ConfigFormOptions): Con
     sections: order.map((section) => parts.get(section)!.element),
     read,
     changed: (form) => changedOf(read(form)),
-    unfold,
+
+    refusedAt(form, reason) {
+      const held = read(form);
+      const changed = changedOf(held);
+      const named = settingsRefused(reason, { ...table, ...held }).filter((key) => fields.get(key)?.hidden === false);
+      const theirs = named.filter((key) => key in changed);
+      const at = theirs.length > 0 ? theirs : named;
+
+      unfold(at);
+
+      return at.flatMap((key) => [...fields.get(key)!.querySelectorAll<HTMLElement>('input, select')]);
+    },
 
     fill(form, values) {
       table = { ...table, ...values };

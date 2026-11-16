@@ -1,9 +1,11 @@
 import type { Command, HandRecord } from '../../../engine/types.ts';
 import type { TableView } from '../../../engine/view.ts';
-import type { SendOutcome } from '../../connection.ts';
+import type { RefusalPlace, SendOutcome } from '../../connection.ts';
 import type { MuteList } from '../../mutes.ts';
 import type { Abilities, AppPreferences } from '../../prefs.ts';
 import type { PresetHandlers } from '../presets.ts';
+import { refusalLine } from '../refusal.ts';
+import type { Faults, RefusalLine } from '../refusal.ts';
 import type { StandingsHandlers } from '../standings.ts';
 import type { PlayerHandlers } from '../whoField.ts';
 import { h, holdWhile } from '../../ui.ts';
@@ -11,8 +13,8 @@ import type { Child } from '../../ui.ts';
 import type { Dialog } from './index.ts';
 
 export interface DialogHandlers {
-  /** Resolves to whether the table took the command. */
-  send(command: Command): Promise<SendOutcome>;
+  /** Resolves to whether the table took the command. Its words for turning it down go to `refused`, for a form that says them itself. */
+  send(command: Command, refused?: RefusalPlace): Promise<SendOutcome>;
   open(dialog: Dialog): void;
   /** Leaves for the table whatever the dialog was opened from: for an answer that puts something else on the screen by itself. */
   toTable(): void;
@@ -183,14 +185,15 @@ export function copyOnClick(button: HTMLButtonElement, field: HTMLInputElement |
 
 /**
  * What a press in a dialog does that sends `command`: once the table has answered, the dialog is left
- * (`answered`, for the table when `forTable`). A refusal leaves the dialog as it was, with the reason in
- * a toast. With no answer the table may have taken it all the same and is being asked what happened, so
- * the dialog is left rather than invite a second try: the host adding chips twice would get them twice.
+ * (`answered`, for the table when `forTable`). A refusal leaves the dialog as it was, with the reason at
+ * `refused` for a form that says it itself, and in a toast otherwise. With no answer the table may have
+ * taken it all the same and is being asked what happened, so the dialog is left rather than invite a
+ * second try: the host adding chips twice would get them twice.
  */
 export const sendAndLeave =
-  (handlers: DialogHandlers, command: Command, forTable = false) =>
+  (handlers: DialogHandlers, command: Command, forTable = false, refused?: RefusalPlace) =>
   async (): Promise<SendOutcome> => {
-    const outcome = await handlers.send(command);
+    const outcome = await handlers.send(command, refused);
 
     if (outcome !== 'refused') {
       handlers.answered(forTable);
@@ -199,22 +202,22 @@ export const sendAndLeave =
     return outcome;
   };
 
+// The line of each form's button, made the first time the button is pressed
+const lines = new WeakMap<HTMLButtonElement, RefusalLine>();
+
 /**
  * Sends what a form asks for, its button held, and leaves the dialog on the answer (`sendAndLeave`). After
- * a refusal the form is as it was typed, and `refused` is told, for a form that has to bring what was
- * refused into sight.
+ * a refusal the form is as it was typed, with the reason in a line just above its button until the next
+ * try (`refusalLine`); `at` finds the boxes a refusal is about, for a form that can tell.
  */
-export function submit(event: Event, handlers: DialogHandlers, command: Command, refused?: () => void): void {
+export function submit(event: Event, handlers: DialogHandlers, command: Command, at?: Faults): void {
   event.preventDefault();
 
   // Among the form's own controls, wherever they stand: its button may be in the dialog's foot
   const controls = [...(event.target as HTMLFormElement).elements];
   const button = controls.find((control): control is HTMLButtonElement => control instanceof HTMLButtonElement && control.type === 'submit')!;
+  const line = lines.get(button) ?? refusalLine(button, handlers.byItself);
 
-  holdWhile(button, async () => {
-    // A dialog closed while the answer was on its way has nothing left to bring into sight
-    if ((await sendAndLeave(handlers, command)()) === 'refused' && button.isConnected) {
-      refused?.();
-    }
-  });
+  lines.set(button, line);
+  holdWhile(button, sendAndLeave(handlers, command, false, line.trying(at)));
 }

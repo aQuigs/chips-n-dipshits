@@ -754,9 +754,13 @@ export class Rig {
     })()`);
   }
 
-  /** The front page, as someone who has not joined any table. */
-  async lobby(screen: ScreenName): Promise<Page> {
+  /** The front page, as someone who has not joined any table. `init` runs in the page before anything of its own. */
+  async lobby(screen: ScreenName, init?: string): Promise<Page> {
     const page = await this.page(screen, 'a visitor');
+
+    if (init) {
+      await page.addInitScript(init);
+    }
 
     await page.goto(this.url);
     await page.waitForSelector('#host-name');
@@ -1113,6 +1117,9 @@ export async function setStageHeight(page: Page, height: number): Promise<void> 
   const [resized] = await boxes(page, '.stage');
   assert.ok(resized && Math.abs(resized.bottom - resized.top - height) <= 1, `the table's part of the screen is ${resized && resized.bottom - resized.top} tall, not ${height}`);
 }
+
+/** Taps on a touch screen and clicks on the desktop, as the rig opens every screen but the desktop as a touch one. */
+export const pressOn = (page: Page, screen: ScreenName) => (selector: string) => (screen === 'desktop' ? page.click(selector) : page.tap(selector));
 
 /**
  * A field of a form that puts its settings away in sections, with its section unfolded the way whoever

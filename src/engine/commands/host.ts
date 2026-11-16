@@ -13,6 +13,7 @@ import { movePlayer, shuffleEveryone } from '../reseating.ts';
 import { grant, isDealtIn, leaveSeat, turnAway } from '../seating.ts';
 import { addFeed, memberNamed, recordLedger, seatedMember, seatIndexOf, turnedDownWords } from '../seats.ts';
 import { dropStraddlesNotAllowed, STRADDLES, straddlesAllowed } from '../straddles.ts';
+import { SUBJECTS } from '../subjects.ts';
 import { transfer } from '../transfers.ts';
 import { GameError, SEAT_COUNT } from '../types.ts';
 import type { TableConfig } from '../types.ts';
@@ -96,7 +97,7 @@ export const setStack: Handler<'setStack'> = {
       throw new GameError(`${target.name} is in the current hand, so wait until it is over`);
     }
 
-    const stack = validAmount(command.stack, 'The stack', state.config, 0);
+    const stack = validAmount(command.stack, SUBJECTS.stack, state.config, 0);
     const change = stack - seat.stack;
     if (change !== 0) {
       seat.stack = stack;

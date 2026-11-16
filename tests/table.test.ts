@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { addMember, createTable, DEFAULT_CONFIG, ledgerOf, setIdentity, STATE_SCHEMA, viewFor } from '../src/engine/index.ts';
-import type { Ctx } from '../src/engine/index.ts';
+import { addMember, applyCommand, createTable, DEFAULT_CONFIG, ledgerOf, LIMITS, presetName, refusalNames, refusesName, setIdentity, STATE_SCHEMA, SUBJECTS, viewFor } from '../src/engine/index.ts';
+import type { Command, Ctx } from '../src/engine/index.ts';
+import { NameOnList } from '../src/server/playerStore.ts';
 import { restoreState } from '../src/server/store.ts';
-import { ledgerEntries, seededRng, sevenDeuceBounty, TestTable } from './helpers.ts';
+import { ledgerEntries, refusalOf, seededRng, sevenDeuceBounty, TestTable } from './helpers.ts';
 import { assertChipsConserved, assertViewsKeepSecrets } from './invariants.ts';
 
 function freshCtx(): Ctx {
@@ -46,6 +47,78 @@ test('names are unique at a table and cannot look like a spreadsheet formula', (
   assert.throws(() => addMember(state, 42, ctx), /missing/);
 
   assert.equal(addMember(state, "Big Al's 2nd", ctx).name, "Big Al's 2nd");
+});
+
+test('a refusal of a name is told from any other, for the form the name was typed in', () => {
+  const ctx = freshCtx();
+  const { state } = createTable('ABC123', 'Quigs', {}, ctx);
+
+  const refusal = (name: unknown): string => refusalOf(() => addMember(state, name, ctx));
+
+  addMember(state, 'TOM', ctx);
+
+  // Taken, like a formula, empty, too long, no text, two alphabets, and reading like someone here
+  for (const name of ['quigs', '=SUM(A1)', '', 'x'.repeat(17), 42, '\u0410lice', '\u0422\u041E\u041C']) {
+    const told = refusal(name);
+
+    assert.ok(refusesName(told), told);
+  }
+
+  assert.ok(refusesName(new NameOnList('Big Al').message), 'a name the list of players has');
+
+  while (state.members.length < LIMITS.members) {
+    addMember(state, `Guest ${state.members.length}`, ctx);
+  }
+
+  const full = refusal('Late');
+
+  assert.match(full, /table is full/);
+  assert.equal(refusesName(full), false, 'no room is not about the name');
+  assert.equal(refusesName('That player is no longer on the list. Pick again'), false, 'nor is a pick the list no longer has');
+  assert.equal(refusesName('The table is busy, try again'), false);
+});
+
+test('whatever a form sends for an amount or for the name of a preset, a refusal about it begins with the name the form knows its box by', () => {
+  // No number, not whole, under or over what any table holds: what a page other than this game's might send, and each as JSON carries it
+  const NOT_AMOUNTS = [-5, 1.5, 'lots', '100', null, undefined, Number.NaN, LIMITS.chips + 1];
+
+  for (const unit of ['chips', 'cents'] as const) {
+    const t = new TestTable({ stacks: [1000, 1000, 1000], config: { unit, minBuyIn: 100, maxBuyIn: 5000 } });
+    const [host, stu, pam] = t.ids as [string, string, string];
+    const watching = addMember(t.state, 'Marge', t.ctx()).id;
+
+    const refusal = (as: string, command: object): string => refusalOf(() => applyCommand(t.state, t.ctx(), as, command as Command));
+
+    // Each form's amount, with the amounts only that form is refused: under and over a buy-in, more than a seat has room for or holds
+    const forms: [subject: string, outOfRange: number[], ask: (amount: unknown) => string][] = [
+      [SUBJECTS.buyIn, [0, 99, 5001], (buyIn) => refusal(watching, { type: 'requestSeat', seat: 5, buyIn })],
+      [SUBJECTS.chipsAdded, [0, 4001], (amount) => refusal(stu, { type: 'requestRebuy', amount })],
+      [SUBJECTS.stack, [], (stack) => refusal(host, { type: 'setStack', playerId: stu, stack })],
+      [SUBJECTS.transferred, [0, 1001], (amount) => refusal(host, { type: 'transferChips', from: stu, to: pam, amount })],
+    ];
+
+    for (const [subject, outOfRange, ask] of forms) {
+      for (const amount of [...NOT_AMOUNTS, ...outOfRange]) {
+        const told = ask(amount);
+
+        assert.ok(refusalNames(told, subject), `${unit}, ${String(amount)}: "${told}" does not begin with "${subject}"`);
+      }
+    }
+
+    // And a refusal that is about no box begins with none of them
+    t.deal({ button: 0 });
+
+    for (const [subject, , ask] of forms.slice(2)) {
+      const told = ask(500);
+
+      assert.match(told, /current hand/);
+      assert.equal(refusalNames(told, subject), false, told);
+    }
+  }
+
+  for (const name of ['', '   ', 'x'.repeat(LIMITS.presetNameLength + 1), 42, null, undefined]) {
+    assert.throws(() => presetName(name), (error: Error) => refusalNames(error.message, SUBJECTS.presetName), String(name));
+  }
 });
 
 test('a name that reads like one already at the table is refused', () => {

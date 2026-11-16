@@ -49,7 +49,10 @@ export function formatAmount(amount: number, table: Denominated): string {
   return written(amount, table, true);
 }
 
-/** An amount as it is put in a box to be typed over: the same digits without the commas. */
+/**
+ * An amount as it stands in a box while it is typed over: the same digits without the commas. The number
+ * pad of a phone has no comma, so one left in could not be put back once a digit before it was deleted.
+ */
 export function editableAmount(amount: number, table: Denominated): string {
   return written(amount, table, false);
 }

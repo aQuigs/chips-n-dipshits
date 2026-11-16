@@ -1,8 +1,9 @@
-import { editableAmount, formatAmount } from '../../../engine/amounts.ts';
+import { formatAmount } from '../../../engine/amounts.ts';
+import { SUBJECTS } from '../../../engine/subjects.ts';
 import type { TableView } from '../../../engine/view.ts';
 import { offeredToAdd, roomToAdd } from '../../buyIns.ts';
 import { h, sends } from '../../ui.ts';
-import { amountInput, amountOf } from '../forms.ts';
+import { amountInput, amountOf, boxNamed, putAmount } from '../forms.ts';
 import { nightOver } from '../night.ts';
 import { hostOrCohost } from '../roles.ts';
 import { frame, submit } from './dialog.ts';
@@ -21,7 +22,7 @@ function rebuy(view: TableView, handlers: DialogHandlers): HTMLElement {
   const box = amountInput(AMOUNT, offered, view.config, 1, room);
 
   const fillInMost = (): void => {
-    box.value = editableAmount(room, view.config);
+    putAmount(box, room, view.config);
     // As if typed, so the box is checked again the way it always is
     box.dispatchEvent(new Event('input', { bubbles: true }));
   };
@@ -32,7 +33,7 @@ function rebuy(view: TableView, handlers: DialogHandlers): HTMLElement {
     h(
       'form',
       {
-        onsubmit: (event: Event) => submit(event, handlers, { type: 'requestRebuy', amount: amountOf(event.target as HTMLFormElement, AMOUNT, view.config) }),
+        onsubmit: (event: Event) => submit(event, handlers, { type: 'requestRebuy', amount: amountOf(event.target as HTMLFormElement, AMOUNT, view.config) }, boxNamed(box, SUBJECTS.chipsAdded)),
       },
       h(
         'div.field',

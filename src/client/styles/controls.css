@@ -159,8 +159,8 @@
 }
 
 .amount input[type='text'] {
-  /* Wide enough for the largest stack a table allows, ten digits and the point of a table of cents, in whatever font the digits are set */
-  width: max(132px, 11ch + 18px);
+  /* Wide enough for the largest stack a table allows as the box writes it at rest, ten digits with their commas or with the point of a table of cents, in whatever font the digits are set */
+  width: max(132px, 12ch + 18px);
   min-height: 40px;
   padding: 0 8px;
   border: 1px solid var(--line);

@@ -37,6 +37,7 @@ export * from './shown.ts';
 export * from './stakes.ts';
 export * from './startingHands.ts';
 export * from './straddles.ts';
+export * from './subjects.ts';
 export * from './table.ts';
 export * from './tonight.ts';
 export * from './types.ts';

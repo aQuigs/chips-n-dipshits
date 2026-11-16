@@ -14,6 +14,17 @@ export const DAY_MS = 24 * 60 * 60 * 1000;
 export { seededRng };
 
 /** A table's bounties when seven-deuce is the one hand on the list, as every table with a bounty had before there could be others. */
+/** The words something is refused in, for a test of the words themselves. Fails when it was taken. */
+export function refusalOf(attempt: () => unknown): string {
+  try {
+    attempt();
+  } catch (error) {
+    return (error as Error).message;
+  }
+
+  throw new Error('what should have been refused was taken');
+}
+
 export function sevenDeuceBounty(amount: number): Bounty[] {
   return [[SEVEN_DEUCE, amount]];
 }

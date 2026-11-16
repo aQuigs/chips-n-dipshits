@@ -5,6 +5,7 @@ import type { Bounty, BountyLimits } from './bounties.ts';
 import { capitalized } from './handNames.ts';
 import { STRADDLES } from './straddles.ts';
 import type { StraddleKind } from './straddles.ts';
+import { refusalNames } from './subjects.ts';
 import { GameError } from './types.ts';
 import type { TableConfig } from './types.ts';
 import { LIMITS, text, webAddress, wholeNumber, yesOrNo } from './validate.ts';
@@ -454,6 +455,17 @@ export function validatedConfig(input: unknown, current: TableConfig): TableConf
   }
 
   return config as unknown as TableConfig;
+}
+
+/**
+ * The settings a refusal of `validatedConfig` is about, for the form they were sent from to point at. A rule
+ * between settings is known by what it says of the settings `asked` for, and any other refusal by the setting
+ * it begins with. None where it names none here, as with one bounty of several.
+ */
+export function settingsRefused(refusal: string, asked: TableConfig): ConfigKey[] {
+  const broken = CONFIG_RULES.find(({ complaint }) => complaint(asked) === refusal);
+
+  return broken ? broken.keys : CONFIG_KEYS.filter((key) => refusalNames(refusal, CONFIG_SPECS[key].subject));
 }
 
 /**

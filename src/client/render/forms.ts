@@ -1,7 +1,9 @@
 import { editableAmount, formatAmount, hasDecimals, parseAmount } from '../../engine/amounts.ts';
 import type { Denominated } from '../../engine/amounts.ts';
+import { refusalNames } from '../../engine/subjects.ts';
 import { LIMITS } from '../../engine/validate.ts';
 import { h } from '../ui.ts';
+import type { Faults } from './refusal.ts';
 
 /** A labeled whole-number input, for what is counted or timed. The id doubles as the name the form's values are read by. */
 export function numberField(id: string, label: string, value: number, min: number, max?: number, hint?: string): HTMLElement {
@@ -39,12 +41,63 @@ export function amountField(id: string, label: string, value: number | null, tab
   return h('label.field', { for: id }, h('span', null, label), amountInput(id, value, table, min, max), hint ? h('small', null, hint) : null);
 }
 
+/** Puts an amount in a box the way the box holds one just now: as the table writes it, or in bare digits while the box has the keyboard (`editableAmount`). */
+export function putAmount(box: HTMLInputElement, amount: number, table: Denominated): void {
+  box.value = (document.activeElement === box ? editableAmount : formatAmount)(amount, table);
+}
+
+/**
+ * Has the amount in a box go to bare digits as the box takes the keyboard. How it stands once the box is
+ * left is its form's to say.
+ *
+ * Only an amount standing exactly as the table writes it is written again, which is how a box at rest
+ * holds one. Anything else is what its player is typing, and is theirs: a part of the page drawn again
+ * gives the keyboard back to a box that holds "1.5" on its way to "1.50".
+ */
+export function bareWhileTyped(box: HTMLInputElement, table: Denominated): void {
+  // Once whatever gave it the keyboard is done with it: a box is told it has the keyboard before all of it is selected
+  box.addEventListener('focus', () =>
+    queueMicrotask(() => {
+      const read = parseAmount(box.value, table);
+
+      if (document.activeElement !== box || !read.ok || box.value !== formatAmount(read.amount, table)) {
+        return;
+      }
+
+      const bare = editableAmount(read.amount, table);
+
+      if (bare === box.value) {
+        return;
+      }
+
+      // A box entered with the Tab key has all of it selected, to be typed over: writing it again would leave the caret at its end
+      const all = box.selectionStart === 0 && box.selectionEnd === box.value.length;
+
+      box.value = bare;
+
+      if (all) {
+        // Not `select`, which gives the box the keyboard: this may run after the keyboard has gone on
+        box.setSelectionRange(0, bare.length);
+      }
+    }),
+  );
+}
+
 /** The box of an `amountField` alone, for a form that labels it another way. */
 export function amountInput(id: string, value: number | null, table: Denominated, min: number, max = LIMITS.chips): HTMLInputElement {
-  const input = h('input', { type: 'text', id, name: id, value: value === null ? '' : editableAmount(value, table), inputmode: hasDecimals(table) ? 'decimal' : 'numeric', autocomplete: 'off', required: true });
+  const input = h('input', { type: 'text', id, name: id, value: value === null ? '' : formatAmount(value, table), inputmode: hasDecimals(table) ? 'decimal' : 'numeric', autocomplete: 'off', required: true });
   const check = () => input.setCustomValidity(complaint(input.value, table, min, max));
 
   input.addEventListener('input', check);
+  bareWhileTyped(input, table);
+  // What can't be read as an amount is left as it was typed, for the form to say what is wrong with it
+  input.addEventListener('blur', () => {
+    const read = parseAmount(input.value, table);
+
+    if (read.ok) {
+      input.value = formatAmount(read.amount, table);
+    }
+  });
   check();
 
   return input;
@@ -70,6 +123,11 @@ export function checkField(id: string, label: string, checked: boolean, hint?: s
 
 export function inputOf(form: HTMLFormElement, name: string): HTMLInputElement {
   return form.elements.namedItem(name) as HTMLInputElement;
+}
+
+/** For a form with one box the table can refuse by name: that box for a refusal that begins with `subject`, what the table calls it (`SUBJECTS`). */
+export function boxNamed(box: HTMLElement, subject: string): Faults {
+  return (reason) => (refusalNames(reason, subject) ? [box] : []);
 }
 
 export function numberOf(form: HTMLFormElement, name: string): number {

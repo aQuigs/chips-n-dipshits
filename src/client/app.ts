@@ -4,10 +4,10 @@ import { anteText, blindsText } from '../engine/stakes.ts';
 import type { Preset } from '../engine/presets.ts';
 import type { Command, HandRecord, TableConfig } from '../engine/types.ts';
 import type { TableView } from '../engine/view.ts';
-import type { ApiError, ApiRequest, ApiResponse, Auth } from '../server/api.ts';
+import type { ApiError, ApiRequest, ApiResponse, Auth, TableInfo } from '../server/api.ts';
 import { PageAnnouncer } from './announcer.ts';
 import { isRefusal, nextRetry, ServerClock, ServerLine, sleep, TableConnection } from './connection.ts';
-import type { SendOutcome, Session } from './connection.ts';
+import type { RefusalPlace, SendOutcome, Session } from './connection.ts';
 import { TableEffects } from './effects.ts';
 import { lastOnRecord } from './handRecords.ts';
 import { HotkeyPresser } from './hotkeyPresser.ts';
@@ -359,18 +359,14 @@ export class App {
     }
 
     const lobby = lobbyEl(this.visitor(), this.themePicker(), this.wayBack(), {
-      create: async (as, config) => {
-        const went = await this.createTable(as, config);
-
-        if (went !== 'made') {
+      create: async (as, config, refused) => {
+        if (!(await this.createTable(as, config, refused))) {
           void this.offerPlayers(lobby);
         }
-
-        return went === 'refused';
       },
       byItself: (change) => this.lobbyTaps.byItself(change),
       say: (message) => this.announcer.status(message),
-      openTable: (code) => this.openTable(code.trim().toUpperCase()),
+      openTable: (code, refused) => this.seekTable(code.trim().toUpperCase(), refused),
       standings: () => this.showStandings(),
     });
 
@@ -431,6 +427,34 @@ export class App {
   /** The compact theme picker for the screens before the table. */
   private themePicker(): HTMLElement {
     return createThemePicker(this.prefs.get('theme'), (id) => this.setTheme(id), true).element;
+  }
+
+  /**
+   * Goes to the table whose code was typed on the first screen. A code this browser has no seat for is
+   * looked up before that screen is left, so that a code no table has is said where it was typed, with
+   * whatever else is half filled in there as it was.
+   */
+  private async seekTable(tableId: string, refused: RefusalPlace): Promise<void> {
+    if (this.linked?.tableId === tableId || this.rememberedSeat(tableId)) {
+      this.openTable(tableId);
+      return;
+    }
+
+    const asked = this.leaves;
+    const response = await this.request({ op: 'info', tableId });
+
+    // The visitor may have gone elsewhere while the answer was on its way
+    if (asked !== this.leaves) {
+      return;
+    }
+
+    if (isRefusal(response) && !response.putAway) {
+      this.refuse(`There is no table with the code ${tableId}.`, refused);
+      return;
+    }
+
+    // Found, put away or not heard from: the screen for joining shows the first and sees to the rest
+    void this.showJoin(tableId, response?.ok && response.kind === 'info' ? response.table : null);
   }
 
   private openTable(tableId: string): void {
@@ -520,21 +544,28 @@ export class App {
     );
   }
 
-  private async showJoin(tableId: string): Promise<void> {
+  /** `found` is what the server has already said the table is, for whoever asked before coming here. */
+  private async showJoin(tableId: string, found: TableInfo | null = null): Promise<void> {
     this.leaveTableScreen();
     this.pointAddress(tableId);
 
     const screen = joinScreen(tableId, this.visitor(), this.themePicker(), {
-      join: async (as) => {
-        if (!(await this.joinTable(tableId, as))) {
+      join: async (as, refused) => {
+        if (!(await this.joinTable(tableId, as, refused))) {
           void this.offerPlayers(screen);
         }
       },
+      byItself: (change) => this.lobbyTaps.byItself(change),
       toLobby: () => this.showLobby(),
     });
 
     this.mount(screen.element);
     void this.offerPlayers(screen);
+
+    if (found) {
+      screen.showTable(found);
+      return;
+    }
 
     for (let retryIn = 0; ; ) {
       const response = await this.request({ op: 'info', tableId });
@@ -567,8 +598,8 @@ export class App {
     }
   }
 
-  /** Resolves to how it went. `'refused'` is the server turning down what it was asked for (code `invalid`), in words that say what. */
-  private async createTable(as: Answer, config: Partial<TableConfig>): Promise<'made' | 'refused' | 'failed'> {
+  /** Resolves to whether a table was made. If not, the visitor has been told why. */
+  private async createTable(as: Answer, config: Partial<TableConfig>, refused: RefusalPlace): Promise<boolean> {
     const asked = this.leaves;
     const response = await this.arrivals.ask({ op: 'create', ...as, config });
 
@@ -585,19 +616,18 @@ export class App {
         this.noteWho(as, response.view);
       }
 
-      return 'made';
+      return true;
     }
 
-    if (!stayed) {
-      return 'failed';
+    if (stayed) {
+      this.refuse(response && !response.ok ? response.error : 'Could not create the table. Check your connection and try again.', refused);
     }
 
-    this.fail(response && !response.ok ? response.error : 'Could not create the table. Check your connection and try again.');
-    return response && !response.ok && response.code === 'invalid' ? 'refused' : 'failed';
+    return false;
   }
 
   /** Resolves to whether the visitor is now somewhere other than the form they joined from. */
-  private async joinTable(tableId: string, as: Answer): Promise<boolean> {
+  private async joinTable(tableId: string, as: Answer, refused: RefusalPlace): Promise<boolean> {
     const response = await this.arrivals.ask({ op: 'join', tableId, ...as });
     if (response?.ok && response.kind === 'joined') {
       this.remember(tableId, response.auth);
@@ -611,7 +641,7 @@ export class App {
       return true;
     }
 
-    this.fail(response && !response.ok ? response.error : 'Could not join the table. Check your connection and try again.');
+    this.refuse(response && !response.ok ? response.error : 'Could not join the table. Check your connection and try again.', refused);
     return false;
   }
 
@@ -916,11 +946,11 @@ export class App {
     new Modal(notice).update(true);
   }
 
-  private async send(command: Command): Promise<SendOutcome> {
+  private async send(command: Command, refused?: RefusalPlace): Promise<SendOutcome> {
     this.sending += 1;
 
     try {
-      return (await this.table?.send(command)) ?? 'refused';
+      return (await this.table?.send(command, refused && this.heard(refused))) ?? 'refused';
     } finally {
       this.sending -= 1;
     }
@@ -1473,7 +1503,7 @@ export class App {
     const { session } = this.table!;
 
     return {
-      send: (command) => this.send(command),
+      send: (command, refused) => this.send(command, refused),
       open: (next) => this.openDialog(next, false, dialog),
       close: () => this.leaveDialog(),
       toTable: () => this.closeDialog(),
@@ -1496,13 +1526,13 @@ export class App {
       replay: (record) => this.openReplay(record),
       presets: {
         list: () => this.listPresets(),
-        save: (name, settings, replace) => this.changePresets({ op: 'savePreset', tableId: session.tableId, auth: session.auth, name, settings, replace }),
+        save: (name, settings, replace, refused) => this.changePresets({ op: 'savePreset', tableId: session.tableId, auth: session.auth, name, settings, replace }, refused),
         remove: (name) => this.changePresets({ op: 'deletePreset', tableId: session.tableId, auth: session.auth, name }),
       },
       players: {
         list: () => this.listPlayers(),
         remembered: () => this.me.get(),
-        identify: (as) => this.identify(session, as),
+        identify: (as, refused) => this.identify(session, as, refused),
       },
       standings: (you) => this.standingsHandlers(you),
       tableLink: () => this.platform.links.tableLink(session.tableId),
@@ -1670,7 +1700,7 @@ export class App {
   }
 
   /** Tells the table which known player this member is. Resolves to whether it took that; if not, the player is told why. */
-  private async identify(session: Session, as: Answer): Promise<boolean> {
+  private async identify(session: Session, as: Answer, refused: RefusalPlace): Promise<boolean> {
     const response = await this.request({ op: 'identify', tableId: session.tableId, auth: session.auth, ...as });
 
     if (response?.ok && response.kind === 'view' && response.view.you.identity !== null) {
@@ -1682,13 +1712,13 @@ export class App {
     }
 
     // A refusal here says nothing about the player's seat, so it never takes them from the table
-    this.fail(response && !response.ok ? response.error : 'No answer from the server. Try again in a moment.');
+    this.refuse(response && !response.ok ? response.error : 'No answer from the server. Try again in a moment.', refused);
 
     return false;
   }
 
   /** The presets after a change, or null when it was refused or got no answer, which the player is told. */
-  private async changePresets(request: ApiRequest): Promise<Preset[] | null> {
+  private async changePresets(request: ApiRequest, refused?: RefusalPlace): Promise<Preset[] | null> {
     const response = await this.request(request);
 
     if (response?.ok && response.kind === 'presets') {
@@ -1696,7 +1726,7 @@ export class App {
     }
 
     // A refusal here says nothing about the player's seat, so it never takes them from the table
-    this.fail(response && !response.ok ? response.error : 'No answer from the server. Checking the presets…');
+    this.refuse(response && !response.ok ? response.error : 'No answer from the server. Checking the presets…', refused);
 
     return null;
   }
@@ -1718,14 +1748,35 @@ export class App {
     this.announcer.toast(message);
   }
 
-  /** Word that something did not go as asked: shown like any other, and said to a screen reader at once. */
+  /** Word that something did not go as asked: shown with the edge of bad news, so it is not taken for the other kind, and said to a screen reader at once. */
   private fail(message: string): void {
-    this.showToast(message);
+    this.showToast(message, true);
     this.announcer.alert(message);
   }
 
-  private showToast(message: string): void {
+  /** A form's place for a refusal, which also says the reason to a screen reader, once, as the form shows it. */
+  private heard(place: RefusalPlace): RefusalPlace {
+    return (reason) => {
+      const shown = place(reason);
+
+      if (shown) {
+        this.announcer.alert(reason);
+      }
+
+      return shown;
+    };
+  }
+
+  /** Tells why what a form asked for did not go: at the form while it is up to say so by its button, else as any other word that something went wrong. */
+  private refuse(message: string, place?: RefusalPlace): void {
+    if (!place || !this.heard(place)(message)) {
+      this.fail(message);
+    }
+  }
+
+  private showToast(message: string, failed = false): void {
     this.toastEl.textContent = message;
+    this.toastEl.classList.toggle('failed', failed);
     this.toastEl.hidden = false;
 
     clearTimeout(this.toastTimer);

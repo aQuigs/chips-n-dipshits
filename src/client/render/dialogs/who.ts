@@ -1,5 +1,6 @@
 import type { TableView } from '../../../engine/view.ts';
 import { h, holdWhile, sends } from '../../ui.ts';
+import { refusalLine } from '../refusal.ts';
 import { whoField } from '../whoField.ts';
 import type { WhoField } from '../whoField.ts';
 import { everyone, frame } from './dialog.ts';
@@ -9,6 +10,7 @@ function who(view: TableView, handlers: DialogHandlers): HTMLElement {
   const status = h('p.note', { 'aria-live': 'polite' }, 'Looking for the list of players…');
   const button = h('button.btn.primary', { type: 'submit', 'data-action': 'say-who', disabled: true }, sends('That’s me', 'Saving…'));
   const place = h('div');
+  const refusal = refusalLine(button, handlers.byItself);
   let field: WhoField | null = null;
 
   const load = async (): Promise<void> => {
@@ -33,8 +35,10 @@ function who(view: TableView, handlers: DialogHandlers): HTMLElement {
       onsubmit: (event: Event) => {
         event.preventDefault();
 
+        const refused = refusal.trying(field!.refusedAt);
+
         holdWhile(button, async () => {
-          if (await handlers.players.identify(field!.answer())) {
+          if (await handlers.players.identify(field!.answer(), refused)) {
             handlers.answered();
           } else {
             // The usual reason is a name the list turned out to have, which is then there to pick

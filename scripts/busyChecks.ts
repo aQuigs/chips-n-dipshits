@@ -10,7 +10,7 @@ import type { Page } from 'playwright';
 
 import type { Command } from '../src/engine/index.ts';
 import type { Check } from './checkRunner.ts';
-import { buttonNow, commandsSent, toasts, toastTold } from './pageSpies.ts';
+import { buttonNow, commandsSent, refusalTold, toasts, toastTold } from './pageSpies.ts';
 import { ANSWER, CANCEL, CLOSE, dialogNamed, fromMenu, HOST, more, noDialog, on, seatedAndWatched } from './playersDialog.ts';
 import { Gate } from './rig.ts';
 import type { Rig, RigTable } from './rig.ts';
@@ -49,6 +49,8 @@ interface Sending {
   sends: Command['type'];
   /** The dialog the button is in, by its name. */
   inDialog: string | null;
+  /** Whether it is a form's button: the form says a refusal itself, in the line by the button (`refusalLine`), and no toast says it again. */
+  ofForm?: true;
   /** The buttons that answer the same thing, which take no press either until the table has answered (`heldTogether`). */
   beside?: string[];
   /** What else the page must show while the button is held. */
@@ -193,6 +195,7 @@ const SENDING: Sending[] = [
     doing: 'Saving…',
     sends: 'updateConfig',
     inDialog: 'Table settings',
+    ofForm: true,
     unanswered: { leavesFor: null },
     taken: noDialog,
   },
@@ -201,7 +204,7 @@ const SENDING: Sending[] = [
 const everyPath = SENDING.map((sending): Check => [
   `a button that sends is switched off and says what it is doing until the table answers, and is back after a refusal and after no answer, and gone with what it did on the try after that: ${sending.what}, on a phone`,
   async (rig) => {
-    const { build, open, button, says, doing, sends, inDialog, beside = [], whileHeld, unanswered, taken } = sending;
+    const { build, open, button, says, doing, sends, inDialog, ofForm, beside = [], whileHeld, unanswered, taken } = sending;
     const table = build(rig);
     const page = await table.open(HOST, 'smallPhone');
     const sent = commandsSent(page);
@@ -240,7 +243,7 @@ const everyPath = SENDING.map((sending): Check => [
     await pressed('refused');
     await gate.refuse();
     await back('refused');
-    await toastTold(page, 'The table is busy');
+    await (ofForm ? refusalTold(page, 'The table is busy') : toastTold(page, 'The table is busy'));
 
     // No answer, as when a phone drops off the network: the page says it is asking what happened, and the button is back, or left behind
     const told = (await toasts(page)).length;
@@ -432,14 +435,13 @@ const firstScreen: Check = [
     await pressed('refused');
     await gate.refuse();
     await back('refused');
-    await toastTold(page, 'The table is busy');
+    await refusalTold(page, 'The table is busy');
 
-    const told = (await toasts(page)).length;
-
+    // Asked again as it was, the table is made once: so this form says no answer where it says a refusal, by its button until the next try
     await pressed('no answer');
     await gate.lose();
     await back('no answer');
-    await toastTold(page, 'Could not create the table', told);
+    await refusalTold(page, 'Could not create the table');
 
     await gate.close('answers');
     await pressed('answered');

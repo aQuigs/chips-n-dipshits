@@ -1,16 +1,20 @@
 import { matchingPreset, presetName, sameName } from '../../engine/presets.ts';
 import type { Preset } from '../../engine/presets.ts';
+import { SUBJECTS } from '../../engine/subjects.ts';
 import type { TableConfig } from '../../engine/types.ts';
 import { LIMITS } from '../../engine/validate.ts';
+import type { RefusalPlace } from '../connection.ts';
 import { h, holdWhile, sendingButton, sends } from '../ui.ts';
 import { foldSection } from './foldSection.ts';
+import { boxNamed } from './forms.ts';
+import { refusalLine } from './refusal.ts';
 
 export interface PresetHandlers {
   /** Rejects when they could not be loaded. */
   list(): Promise<Preset[]>;
   /** The presets once it is saved, or null when it was refused or got no answer, which the player has been told. */
-  save(name: string, settings: TableConfig, replace: boolean): Promise<Preset[] | null>;
-  /** As `save`. */
+  save(name: string, settings: TableConfig, replace: boolean, refused: RefusalPlace): Promise<Preset[] | null>;
+  /** As `save`, with the reason told as any other: no form asks for it. */
   remove(name: string): Promise<Preset[] | null>;
 }
 
@@ -44,9 +48,10 @@ export interface PresetsPanel {
  * The section of a table's settings where its host or a co-host keeps them as a preset for the group,
  * and deletes ones the group no longer wants, folded under a line that says how the presets stand.
  * `table` is the table's settings, for saying whether it plays one; `form` is the settings form,
- * since what it holds is what a preset is saved from.
+ * since what it holds is what a preset is saved from; `byItself` makes a change an answer brings about
+ * (`TapGuard`).
  */
-export function presetsPanel(table: TableConfig, handlers: PresetHandlers, form: SettingsHeld): PresetsPanel {
+export function presetsPanel(table: TableConfig, handlers: PresetHandlers, form: SettingsHeld, byItself: (change: () => void) => void): PresetsPanel {
   let presets: Preset[] | null = null;
   let failed = false;
   let asking: Asking = null;
@@ -57,6 +62,7 @@ export function presetsPanel(table: TableConfig, handlers: PresetHandlers, form:
   // Saving a preset and saving the table are two things: said where one could be taken for the other
   const unsaved = h('p.note', { hidden: true, 'data-says': 'table-unchanged' }, 'A preset keeps what this form holds now. The table itself is unchanged until you press Save.');
   const status = h('p.note', { 'aria-live': 'polite' });
+  const refusal = refusalLine(saveButton, byItself, true);
   const question = h('div.preset-question', { hidden: true });
   const list = h('ul.rows.preset-list');
 
@@ -65,6 +71,7 @@ export function presetsPanel(table: TableConfig, handlers: PresetHandlers, form:
       presets = fresh;
       failed = false;
       status.textContent = said;
+      refusal.done();
     } else {
       void reload();
     }
@@ -86,7 +93,9 @@ export function presetsPanel(table: TableConfig, handlers: PresetHandlers, form:
 
   const save = (button: HTMLButtonElement, name: string, replace: boolean): void => {
     if (form.readable()) {
-      holdWhile(button, async () => show(await handlers.save(name, form.current(), replace), `Saved ${name}.`));
+      const refused = refusal.trying(boxNamed(nameInput, SUBJECTS.presetName));
+
+      holdWhile(button, async () => show(await handlers.save(name, form.current(), replace, refused), `Saved ${name}.`));
     }
   };
 

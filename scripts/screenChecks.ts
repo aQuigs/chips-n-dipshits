@@ -31,9 +31,9 @@ import { cardWords } from '../src/engine/handNames.ts';
 import type { Bounty, Card, Command, KnownPlayer, PreActionKind, Straddle, TableConfig, TableView } from '../src/engine/index.ts';
 import { PUT_AWAY_AFTER_MS, PUT_AWAY_MESSAGE } from '../src/server/putAway.ts';
 import { contrast } from '../tests/colorVision.ts';
-import { boxes, Gate, overlap, Rig, RigTable, saidInFull, SCREENS, setStageHeight, squeezed, textBoxes, unfolded, WIDE_ASPECT } from './rig.ts';
+import { boxes, Gate, overlap, pressOn, Rig, RigTable, saidInFull, SCREENS, setStageHeight, squeezed, textBoxes, unfolded, WIDE_ASPECT } from './rig.ts';
 import type { Box, RigDeal, RigPlayer, ScreenName } from './rig.ts';
-import { answeredAfter, answeredTo, BUZZ, complaints, flightsSince, LISTEN, MOTION, movesSent, NOTICES, opsSent, ownComplaints, replayDrawn, soundOf, SPOTS, TITLES, toastTold, toasts, toldOf } from './pageSpies.ts';
+import { answeredAfter, answeredTo, BUZZ, complaints, flightsSince, LISTEN, MOTION, movesSent, NOTICES, opsSent, ownComplaints, refusalTold, replayDrawn, soundOf, SPOTS, TITLES, toastTold, toasts, toldOf } from './pageSpies.ts';
 import type { Flight, Spots } from './pageSpies.ts';
 import { STAND_IN_HOST } from './standInHost.ts';
 import { focused, focusIn, heard, SPOKEN, spoken } from './a11y.ts';
@@ -42,6 +42,7 @@ import { BUSY_CHECKS } from './busyChecks.ts';
 import { runChecks } from './checkRunner.ts';
 import { layoutSweep } from './layoutSweep.ts';
 import { confirmChecks } from './confirmChecks.ts';
+import { formChecks } from './formChecks.ts';
 import { menuChecks } from './menuChecks.ts';
 import { nextStepChecks } from './nextStepChecks.ts';
 import { ownClockChecks } from './ownClockChecks.ts';
@@ -104,9 +105,6 @@ async function assertBetsApart(page: Page): Promise<void> {
   assertApart(await boxes(page, '.pot'), await boxes(page, '.seat .plate'), 'the pot and a seat');
   bets.forEach((bet, index) => assertApart([bet], bets.slice(index + 1), 'two bets'));
 }
-
-/** Taps on a touch screen and clicks on the desktop, as the rig opens every screen but the desktop as a touch one. */
-const pressOn = (page: Page, screen: ScreenName) => (selector: string) => (screen === 'desktop' ? page.click(selector) : page.tap(selector));
 
 async function closeDialog(page: Page, press: (selector: string) => Promise<void>): Promise<void> {
   await press('.dialog [data-action="close"]');
@@ -2534,8 +2532,8 @@ const CHECKS: Check[] = [
     async (rig) => {
       // The raises are a five-figure one, the everyday case, and two that are shortened: what a move costs is rounded up, so the button never says less than it takes
       const kinds = [
-        { config: {}, name: 'biggest-all-in-phone', allIn: 'All in 1B', box: '1000000000', raises: { '12345': 'Raise to 12,345', '12340001': 'Raise to 12.35M', '999999999': 'Raise to 1B' } },
-        { config: CENTS, name: 'cents-biggest-all-in-phone', allIn: 'All in 10M', box: '10000000.00', raises: { '12,345.67': 'Raise to 12,345.67', '123400.01': 'Raise to 123.41K', '9999999.99': 'Raise to 10M' } },
+        { config: {}, name: 'biggest-all-in-phone', allIn: 'All in 1B', box: '1,000,000,000', raises: { '12345': 'Raise to 12,345', '12340001': 'Raise to 12.35M', '999999999': 'Raise to 1B' } },
+        { config: CENTS, name: 'cents-biggest-all-in-phone', allIn: 'All in 10M', box: '10,000,000.00', raises: { '12,345.67': 'Raise to 12,345.67', '123400.01': 'Raise to 123.41K', '9999999.99': 'Raise to 10M' } },
       ];
 
       for (const { config, name, allIn, box, raises } of kinds) {
@@ -2700,7 +2698,7 @@ const CHECKS: Check[] = [
       await page.fill('#table-small-blind', '50');
       await page.fill('#table-big-blind', '10');
       await page.click('[data-action="save-settings"]');
-      await toastTold(page, 'big blind');
+      assert.deepEqual((await refusalTold(page, "The big blind can't be smaller than the small blind")).marked, ['table-small-blind', 'table-big-blind'], 'both blinds were changed, so both are what the refusal is about');
       assert.equal(await page.inputValue('#table-small-blind'), '50', 'a refused save threw away what was typed');
       await shot(page, 'refused-save-desktop');
 
@@ -3565,7 +3563,7 @@ const CHECKS: Check[] = [
       const typed = 'http://meet.google.com/abc-defg-hij';
       await cohost.fill(await unfolded(cohost, '#table-voice-link'), typed);
       await cohost.tap('[data-action="save-settings"]');
-      await toastTold(cohost, 'The voice chat link must start with https://');
+      assert.deepEqual((await refusalTold(cohost, 'The voice chat link must start with https://')).marked, ['table-voice-link']);
       assert.equal(await cohost.inputValue('#table-voice-link'), typed, 'a refused save threw away what was typed');
       await cohost.locator('#table-voice-link').scrollIntoViewIfNeeded();
       assertOnScreen(await boxes(cohost, '#table-voice-link'), 'phone', 'the voice chat link field');
@@ -3868,6 +3866,7 @@ const CHECKS: Check[] = [
           stack: 1000,
           fraction: '2.5',
           tooMuch: '5000',
+          kept: '5,000',
           refusal: 'The amount must be a whole number from 1 to 1,000',
           amount: '300',
           moved: `The host moved 300 from ${LONG} to Stu`,
@@ -3884,6 +3883,7 @@ const CHECKS: Check[] = [
           stack: 10_000,
           fraction: '1.234',
           tooMuch: '150.00',
+          kept: '150.00',
           refusal: 'The amount must be an amount to the cent from 0.01 to 100.00',
           amount: '12.34',
           moved: `The host moved 12.34 from ${LONG} to Stu`,
@@ -3919,8 +3919,9 @@ const CHECKS: Check[] = [
 
           await page.fill('#transfer-amount', kind.tooMuch);
           await press('[data-action="confirm-transfer"]');
-          await toastTold(page, kind.refusal);
-          assert.equal(await page.inputValue('#transfer-amount'), kind.tooMuch, 'the refused amount was thrown away');
+          assert.deepEqual((await refusalTold(page, kind.refusal)).marked, ['transfer-amount']);
+          // As the table writes it, since the box was left for the button
+          assert.equal(await page.inputValue('#transfer-amount'), kind.kept, 'the refused amount was thrown away');
           assert.deepEqual([await page.inputValue('#transfer-from'), await page.inputValue('#transfer-to')], [table.auth(LONG).id, table.auth('Stu').id], 'the players picked were thrown away');
 
           await page.fill('#transfer-amount', kind.amount);
@@ -3962,7 +3963,7 @@ const CHECKS: Check[] = [
         const pick = (label: string) => press(`#new-table-unit label:has-text("${label}")`);
 
         assert.equal(await page.isChecked('#new-table-unit input[value="chips"]'), true, 'whole chips is what a table plays unless its host says otherwise');
-        assert.deepEqual(await stakes(), ['10', '20', '400', '2000']);
+        assert.deepEqual(await stakes(), ['10', '20', '400', '2,000']);
         assert.equal(await text(page, '#new-table-unit small'), "Can't be changed once the table is created");
 
         await page.fill('#host-name', `Quigs ${screen}`);
@@ -3984,7 +3985,7 @@ const CHECKS: Check[] = [
         assert.ok(chips && cents && !overlap(chips, cents), 'the two choices are drawn over each other');
 
         await pick('Whole chips');
-        assert.deepEqual(await stakes(), ['10', '20', '400', '2000']);
+        assert.deepEqual(await stakes(), ['10', '20', '400', '2,000']);
         assert.equal(await page.getAttribute('#new-table-small-blind', 'inputmode'), 'numeric');
         await page.fill('#new-table-small-blind', '0.25');
         assert.equal(await complaintOf(page, '#new-table-small-blind'), 'This table plays whole chips, so an amount has no decimals');
@@ -5376,7 +5377,7 @@ const CHECKS: Check[] = [
           await tapsLive(one);
           assert.deepEqual(await texts(one, '#new-table-preset option'), ['The usual settings', 'Friday 25/50']);
           assert.equal(await one.inputValue('#new-table-preset'), '', 'a preset was picked for the host');
-          assert.deepEqual(await stakes(one), ['chips', '10', '20', '400', '2000']);
+          assert.deepEqual(await stakes(one), ['chips', '10', '20', '400', '2,000']);
           assert.equal(await one.locator('.preset-notes p').count(), 0, 'the form warns of a preset before one was picked');
           await one.context().close();
 
@@ -5425,7 +5426,7 @@ const CHECKS: Check[] = [
           await shot(page, `presets-picked-${screen}`);
 
           await page.selectOption('#new-table-preset', { label: 'From before' });
-          assert.deepEqual(await stakes(page), ['chips', '5', '10', '400', '2000']);
+          assert.deepEqual(await stakes(page), ['chips', '5', '10', '400', '2,000']);
           assert.deepEqual(await texts(page, '.preset-notes p'), ['The action clock went back to 30: the preset’s is no longer allowed.']);
           assertOnScreen(await boxes(page, '#new-table-preset, .preset-notes p'), screen, 'the presets in the form for a new table, and what one could not keep');
           assert.deepEqual(await squeezed(page, '.preset-pick .field span, .preset-notes p'), [], 'part of what the picker says is cut off');
@@ -5437,13 +5438,13 @@ const CHECKS: Check[] = [
           assert.deepEqual(await texts(page, '.preset-notes p'), ['The action clock went back to 30: the preset’s is no longer allowed.'], 'the warning of a setting that did not start over went with the amounts');
 
           await page.selectOption('#new-table-preset', { label: 'The usual settings' });
-          assert.deepEqual(await stakes(page), ['chips', '10', '20', '400', '2000']);
+          assert.deepEqual(await stakes(page), ['chips', '10', '20', '400', '2,000']);
           assert.equal(await page.inputValue('#new-table-name'), 'Chips n’ Dipshits');
 
           // The stakes of a preset are folded under their line, and what the table plays with is still theirs to change there: the amounts start over, and what is no amount stays
           await page.selectOption('#new-table-preset', { label: 'Tuesday cents' });
           await press(await unfolded(page, '#new-table-unit label:has-text("Whole chips")'));
-          assert.deepEqual(await stakes(page), ['chips', '10', '20', '400', '2000']);
+          assert.deepEqual(await stakes(page), ['chips', '10', '20', '400', '2,000']);
           assert.deepEqual([await page.inputValue('#new-table-action-seconds'), await page.isChecked('#new-table-allow-straddle')], ['20', false], 'the clock and the straddle of the preset started over with the amounts');
           await press('#new-table-unit label:has-text("Dollars and cents")');
 
@@ -10988,7 +10989,7 @@ const CHECKS: Check[] = [
       await visitor.waitForSelector('[data-action="join-table"]:enabled');
       await visitor.fill('#join-name', 'Bob');
       await visitor.click('[data-action="join-table"]');
-      await toastTold(visitor, 'Could not join the table');
+      assert.deepEqual((await refusalTold(visitor, 'Could not join the table')).marked, [], 'no answer is nothing against the name');
       assert.deepEqual(table.view('Quigs').members.map((member) => member.name), ['Quigs', 'Bob'], 'the table did not let him in the first time, so the check shows nothing');
 
       const joinKey = joining.asked()[0]!.key as string;
@@ -11025,7 +11026,7 @@ const CHECKS: Check[] = [
       await second.waitForSelector('[data-action="join-table"]:enabled');
       await second.fill('#join-name', 'Cy');
       await second.click('[data-action="join-table"]');
-      await toastTold(second, 'Could not join the table');
+      assert.equal((await refusalTold(second, 'Could not join the table')).text, 'Could not join the table. Check your connection and try again.');
       await second.waitForSelector('[data-action="pick-alike"]');
       assert.equal(await text(second, '.who-alike'), 'Cy is on the list already. I’m Cy');
 
@@ -11035,14 +11036,14 @@ const CHECKS: Check[] = [
       assert.deepEqual(table.view('Quigs').members.map((member) => member.name), ['Quigs', 'Bob', 'Cy']);
       assert.equal(await memberAt(second, table.id), again.lost[0]!.auth.id, 'she is not the member the first asking made');
       assert.deepEqual(rig.players.list().map((player) => player.name).sort(), ['Bob', 'Cy']);
-      assert.deepEqual((await toasts(second)).map((toast) => toast.text), ['Could not join the table. Check your connection and try again.'], 'she was told something went wrong after saying who she is');
+      assert.deepEqual((await toasts(second)).map((toast) => toast.text), [], 'she was told something went wrong after saying who she is');
 
       // A new table whose answer is lost: tried again, it is the table that was made, and Zed is on the list once
       const lobby = await rig.lobby('desktop');
       const making = await losingFirst(lobby, 'create');
       await lobby.fill('#host-name', 'Zed');
       await lobby.click('[data-action="create-table"]');
-      await toastTold(lobby, 'Could not create the table');
+      assert.deepEqual((await refusalTold(lobby, 'Could not create the table')).marked, [], 'no answer is nothing against what the form holds');
 
       const createKey = making.asked()[0]!.key as string;
       assert.match(String(createKey), KEY);
@@ -11280,11 +11281,12 @@ const CHECKS: Check[] = [
 
         // Trying anyway is refused in words that say what to do, and the form is as it was
         await press('[data-action="join-table"]');
-        const refusal = await toastTold(page);
+        const refusal = await refusalTold(page);
         assert.equal(refusal.text, 'Big Al is already on the list of players. If that is you, pick Big Al from the list. If not, add something to your name');
         await shot(page, `who-taken-name-refused-${screen}`);
         assert.equal(refusal.squeezed, false, 'the reason is cut off');
-        assertOnScreen([refusal.box], screen, 'the reason');
+        assertApart([refusal.box], await boxes(page, '#join-name, [data-action="join-table"], [data-action="pick-alike"]'), 'the reason and what is around it');
+        assert.deepEqual(refusal.marked, ['join-name'], 'the name is what was refused');
         assert.equal(await page.inputValue('#join-name'), 'big al');
         assert.equal(rig.players.list().length, 2);
         assert.equal(rig.store.read(table.id)!.members.filter((member) => member.identity === bigAl.id).length, screen === 'smallPhone' ? 0 : 1);
@@ -13332,21 +13334,22 @@ const CHECKS: Check[] = [
         await page.fill('#table-bomb-pot-amount', '100');
         await press(`${part('bombPots')} > summary`);
 
-        // An address the table refuses, in a section folded again with the heading of the presets right under its own
+        // An address the table refuses, in a section folded again with the headings of the others right over and under its own.
+        // The field is brought into sight as its section unfolds, so which heading it comes to lie on is the screen's to say
         await page.fill(await unfolded(page, '#table-voice-link'), 'meet.example/abc');
         await press(`${part('table')} > summary`);
         assert.equal(await isOpen('table'), false);
-        await page.evaluate(`${WHAT_COMES_UP_UNDER}(${JSON.stringify({ changing: part('table'), lay: `${part('presets')} > summary` })})`);
+        await page.evaluate(`${WHAT_COMES_UP_UNDER}(${JSON.stringify({ changing: part('table'), lay: '.dialog .fold-section > summary' })})`);
 
         await press('[data-action="save-settings"]');
-        await toastTold(page, 'must start with https://');
+        assert.deepEqual((await refusalTold(page, 'must start with https://')).marked, ['table-voice-link'], 'the address is what was refused');
         await page.waitForSelector(`${part('table')}[open]`);
         assert.equal(await page.inputValue('#table-voice-link'), 'meet.example/abc', 'a refused save threw away what was typed');
         assert.deepEqual([await isOpen('bombPots'), await isOpen('house')], [false, false], 'a section nothing was changed in unfolded with the one that was refused');
 
         const cameUp = (await page.evaluate('window.__cameUpUnder')) as CameUpUnder;
 
-        assert.ok(cameUp.arrived.length > 0, 'no field came up where the heading of the presets lay: the check no longer shows what it is here for');
+        assert.ok(cameUp.arrived.length > 0, 'no field came up where a heading lay: the check no longer shows what it is here for');
         assert.deepEqual(cameUp.live, [], 'a field that came up by itself where a heading lay takes a tap at once');
         assert.equal(cameUp.tapReaches, null, 'a tap for the heading that lay there lands on what came up');
         await shot(page, `settings-refused-by-the-table-${screen}`);
@@ -13699,7 +13702,7 @@ const CHECKS: Check[] = [
         await page.evaluate(`${WHAT_COMES_UP_UNDER}(${JSON.stringify({ changing: LOBBY_SECTION('stakes'), lay })})`);
 
         await press('[data-action="create-table"]');
-        await toastTold(page, "The big blind can't be smaller than the small blind");
+        assert.deepEqual((await refusalTold(page, "The big blind can't be smaller than the small blind")).marked, ['new-table-big-blind'], 'of the two blinds, the one the host changed');
         await page.waitForSelector(`${LOBBY_SECTION('stakes')}[open]`);
         assert.equal(await page.inputValue('#new-table-big-blind'), '5', 'a refused form threw away what was typed');
         assert.deepEqual(await page.evaluate(UNFOLDED_IN('.lobby')), ['table', 'stakes'], 'a section nothing is changed in unfolded with the one that was refused');
@@ -13740,8 +13743,8 @@ const CHECKS: Check[] = [
     async (rig) => {
       // What Stu has left of the 2,000 he bought at a table of 400 to 4,000, what the box starts on, and the most it takes
       const cases = [
-        { stack: 0, offered: '2000', most: '4,000' },
-        { stack: 300, offered: '2000', most: '3,700' },
+        { stack: 0, offered: '2,000', most: '4,000' },
+        { stack: 300, offered: '2,000', most: '3,700' },
         { stack: 3700, offered: '300', most: '300' },
         { stack: 4000, offered: null, most: null },
       ];
@@ -13782,9 +13785,7 @@ const CHECKS: Check[] = [
           }
 
           // The most is a button beside the box, left out where the box holds it already
-          const all = most!.replace(',', '');
-
-          if (offered === all) {
+          if (offered === most) {
             assert.equal(await page.locator(MOST).count(), 0, `${where}: a button for the most, which the box holds already`);
           } else {
             const [button] = await boxes(page, MOST);
@@ -13792,14 +13793,14 @@ const CHECKS: Check[] = [
             assert.equal(await page.getAttribute(MOST, 'aria-label'), `Max, ${most}`);
             assert.ok(button!.bottom - button!.top >= 44 && button!.right - button!.left >= 44, `${where}: the button for the most is too small to tap: ${JSON.stringify(button)}`);
             await press(MOST);
-            assert.equal(await page.inputValue('#rebuy-amount'), all, `${where}: what the button for the most fills in`);
+            assert.equal(await page.inputValue('#rebuy-amount'), most, `${where}: what the button for the most fills in`);
             // Back to the player's own amount for the one that is sent
             await page.fill('#rebuy-amount', offered);
           }
 
           await answeredTo(page, 'requestRebuy', () => press('.dialog [data-action="confirm-rebuy"]'));
           await page.waitForSelector('.dialog', { state: 'detached' });
-          assert.deepEqual(table.view('Quigs').requests.map((request) => [request.name, request.kind, request.amount]), [['Stu', 'rebuy', Number(offered)]], `${where}: what the host is asked`);
+          assert.deepEqual(table.view('Quigs').requests.map((request) => [request.name, request.kind, request.amount]), [['Stu', 'rebuy', Number(offered.replace(',', ''))]], `${where}: what the host is asked`);
           await page.context().close();
         }
       }
@@ -13931,6 +13932,7 @@ const CHECKS: Check[] = [
   ...tableSaysChecks(OUT),
   ...BUSY_CHECKS,
   ...nextStepChecks(OUT),
+  ...formChecks(OUT),
 ];
 
 await mkdir(OUT, { recursive: true });

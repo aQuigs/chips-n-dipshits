@@ -25,6 +25,22 @@
   pointer-events: none;
 }
 
+/*
+ * Word that something went wrong has the edge of bad news down its side, wherever the toast lies, so that
+ * it is not taken for the other kind.
+ */
+.toast.failed {
+  overflow: clip;
+}
+
+.toast.failed::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 5px;
+  background: var(--bad);
+}
+
 /* On a phone the words are many for the width, so the toast is the screen's whole width */
 @container app (max-width: 559.98px) {
   .toast {

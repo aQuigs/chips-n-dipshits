@@ -1,4 +1,4 @@
-import { editableAmount, formatAmount, hasDecimals, parseAmount, shortAmount } from '../../engine/amounts.ts';
+import { formatAmount, hasDecimals, parseAmount, shortAmount } from '../../engine/amounts.ts';
 import type { Denominated } from '../../engine/amounts.ts';
 import type { BettingAction } from '../../engine/betting.ts';
 import { bombPotName } from '../../engine/bombPots.ts';
@@ -23,6 +23,7 @@ import { amountSaid, LABELS, NOT_ON_OFFER, sizedSaid } from '../spoken.ts';
 import { standingOf, standingSays } from '../standing.ts';
 import { cardEl, h, holdWhile, sendingButton } from '../ui.ts';
 import type { Child } from '../ui.ts';
+import { bareWhileTyped, putAmount } from './forms.ts';
 import { lastHandsText, nightOver, onLastHand } from './night.ts';
 
 export interface ControlHandlers {
@@ -155,7 +156,7 @@ function turnPanel(table: Denominated, hand: HandView, stack: number, handlers: 
     }
 
     if (from !== amount) {
-      amount.value = editableAmount(raiseTo, table);
+      putAmount(amount, raiseTo, table);
     }
 
     amount.setCustomValidity('');
@@ -197,10 +198,11 @@ function turnPanel(table: Denominated, hand: HandView, stack: number, handlers: 
 
   slider.addEventListener('input', () => choose(Number(slider.value), slider));
   amount.addEventListener('input', readBox);
+  bareWhileTyped(amount, table);
   // Only the box is tidied. The box loses the keyboard as a press on Raise begins, and a button redrawn under that press never hears it
   amount.addEventListener('blur', () => {
     if (amount.validity.valid) {
-      amount.value = editableAmount(raiseTo, table);
+      amount.value = formatAmount(raiseTo, table);
     }
   });
   // What is in the box is kept as a move goes out: should the move come off again, the panel drawn then has the bet as it was left

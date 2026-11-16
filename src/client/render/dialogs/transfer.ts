@@ -1,6 +1,7 @@
+import { SUBJECTS } from '../../../engine/subjects.ts';
 import type { TableView } from '../../../engine/view.ts';
 import { h, sends } from '../../ui.ts';
-import { amountField, amountOf, inputOf, pickField } from '../forms.ts';
+import { amountField, amountOf, boxNamed, inputOf, pickField } from '../forms.ts';
 import { hostOrCohost } from '../roles.ts';
 import { frame, submit } from './dialog.ts';
 import type { DialogHandlers, DialogKind } from './dialog.ts';
@@ -12,7 +13,12 @@ function transfer(view: TableView, handlers: DialogHandlers): HTMLElement {
     const form = event.target as HTMLFormElement;
     const amount = amountOf(form, 'transfer-amount', view.config);
 
-    submit(event, handlers, { type: 'transferChips', from: inputOf(form, 'transfer-from').value, to: inputOf(form, 'transfer-to').value, amount });
+    submit(
+      event,
+      handlers,
+      { type: 'transferChips', from: inputOf(form, 'transfer-from').value, to: inputOf(form, 'transfer-to').value, amount },
+      boxNamed(inputOf(form, 'transfer-amount'), SUBJECTS.transferred),
+    );
   };
 
   return frame(

@@ -49,7 +49,7 @@ import { outdatedEl } from './render/outdated.ts';
 import { hostOrCohost } from './render/roles.ts';
 import { standingsEl } from './render/standings.ts';
 import type { StandingsHandlers } from './render/standings.ts';
-import { handDrawn, shapeFor, tableEl } from './render/table.ts';
+import { handDrawn, nextStep, shapeFor, tableEl } from './render/table.ts';
 import { createThemePicker } from './render/themePicker.ts';
 import { voiceLinkEl } from './render/voiceLink.ts';
 import type { Listed } from './render/whoField.ts';
@@ -117,6 +117,8 @@ interface TableScreen {
   resizeObserver: ResizeObserver;
   /** The trouble with the connection that a screen reader was last told of, which is told once and not with every redraw. */
   troubleSaid: 'unreachable' | 'struggling' | null;
+  /** The gold button the felt last had for whoever runs the game (`nextStep`), which tells the draw in which one becomes the other. */
+  nextStep: 'invite' | 'start' | null;
 }
 
 function parseMember(value: string | null | undefined): Auth | null {
@@ -744,6 +746,7 @@ export class App {
       shape: 'wide',
       resizeObserver: new ResizeObserver(() => this.reshape()),
       troubleSaid: null,
+      nextStep: null,
     };
 
     // Heard on its way down, before the press has drawn anything else over the control it was made on
@@ -1191,12 +1194,18 @@ export class App {
         ),
       );
 
-    // With no game on, the felt's gold button changes by itself: Invite players becomes Start the game as the second
-    // player sits down, and a tap on its way to the one must not start the game. During a game the table has no such button
-    if (view.running) {
-      draw();
-    } else {
+    // Invite players becomes Start the game by itself as the second player sits down, and a tap on its way to the one
+    // must not start the game: that one draw goes through the guard. No other draw of the table does, since the guard's
+    // mark on a control is no part of a table in play, and seats that move as the table takes its shape are under no finger
+    const step = nextStep(view);
+    const swapped = step !== null && screen.nextStep !== null && step !== screen.nextStep;
+
+    screen.nextStep = step;
+
+    if (swapped) {
       screen.taps.byItself(draw);
+    } else {
+      draw();
     }
 
     screen.seatMoves.redrawn();

@@ -594,6 +594,19 @@ function resultLineEl({ boards, says }: ResultLine): HTMLElement {
   return h('div', null, boards ? h('span.of-boards', { 'data-marks': boards.marks }, h('span.words', null, boards.words)) : null, says);
 }
 
+/**
+ * The gold button on the felt of whoever runs a game that is stopped with no hand on the table, which is
+ * the next thing for them to do: to invite until the game has the two players it takes, then to start.
+ * Null when the felt has neither.
+ */
+export function nextStep(view: TableView): 'invite' | 'start' | null {
+  if (view.hand || nightOver(view) || view.nextHandAt !== null || view.running || !hostOrCohost(view)) {
+    return null;
+  }
+
+  return enoughSeated(view) ? 'start' : 'invite';
+}
+
 function messageEl(view: TableView, handlers: TableHandlers): HTMLElement | null {
   const hand = view.hand;
 
@@ -622,19 +635,22 @@ function messageEl(view: TableView, handlers: TableHandlers): HTMLElement | null
     return h('div.message', null, h('div', null, 'Next hand in ', h('span', { 'data-countdown': view.nextHandAt }, '…')));
   }
 
-  if (!view.running) {
-    if (hostOrCohost(view)) {
-      // The gold button is the next thing to do: with fewer than two seated that is getting people in, not starting
-      return enoughSeated(view)
-        ? h('div.message', null, h('div', null, 'Everyone ready?'), sendingButton('button.btn.primary', { 'data-action': 'start' }, sends(startText(view), startingText(view)), handlers.onStart))
-        : h(
-            'div.message',
-            null,
-            h('div', null, 'Share the invite link. The game can start once two players are seated.'),
-            h('button.btn.primary', { type: 'button', 'data-action': 'invite-players', onclick: handlers.onInvite }, 'Invite players'),
-          );
-    }
+  const step = nextStep(view);
 
+  if (step === 'start') {
+    return h('div.message', null, h('div', null, 'Everyone ready?'), sendingButton('button.btn.primary', { 'data-action': 'start' }, sends(startText(view), startingText(view)), handlers.onStart));
+  }
+
+  if (step === 'invite') {
+    return h(
+      'div.message',
+      null,
+      h('div', null, 'Share the invite link. The game can start once two players are seated.'),
+      h('button.btn.primary', { type: 'button', 'data-action': 'invite-players', onclick: handlers.onInvite }, 'Invite players'),
+    );
+  }
+
+  if (!view.running) {
     return h('div.message', null, view.handCount === 0 ? 'Waiting for the host to start the game' : 'The game is paused');
   }
 

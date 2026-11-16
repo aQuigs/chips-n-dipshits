@@ -319,6 +319,9 @@ const RANK_LABELS: Record<number, string> = { 10: '10', 11: 'J', 12: 'Q', 13: 'K
 /** What follows the viewer's own name in a list of players. */
 export const youMark = (): HTMLElement => h('span.you', null, ' (you)');
 
+/** The mark on a line that unfolds (`summary > .fold` in widgets.css). The browser says whether the line is open, so the mark is for the eye alone. */
+export const foldMark = (): HTMLElement => h('span.fold', { 'aria-hidden': 'true' }, '▾');
+
 /** A playing card, face up, or face down when given null. It is one picture with one name, said in words. */
 export function cardEl(card: Card | null): HTMLElement {
   if (card === null) {

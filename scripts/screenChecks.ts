@@ -45,6 +45,7 @@ import { layoutSweep } from './layoutSweep.ts';
 import { confirmChecks } from './confirmChecks.ts';
 import { formChecks } from './formChecks.ts';
 import { inviteLinksChecks } from './inviteLinksChecks.ts';
+import { HISTORY_CHECKS } from './historyChecks.ts';
 import { menuChecks } from './menuChecks.ts';
 import { nextStepChecks } from './nextStepChecks.ts';
 import { ONCE_CHECKS } from './onceChecks.ts';
@@ -7192,7 +7193,8 @@ const CHECKS: Check[] = [
         await press('[data-action="menu"]');
         await press('.menu [data-action="history"]');
         await page.waitForSelector('.history summary');
-        assert.equal((await texts(page, '.history summary'))[0], 'Hand #123');
+        assert.match(await text(page, '.history summary'), /^Hand #123/);
+        assert.equal(await text(page, '.history summary small'), '');
 
         await page.context().close();
       }
@@ -13940,6 +13942,7 @@ const CHECKS: Check[] = [
   ...barSmallChecks(OUT),
   ...ONCE_CHECKS,
   ...inviteLinksChecks(OUT),
+  ...HISTORY_CHECKS,
 ];
 
 await mkdir(OUT, { recursive: true });

@@ -5,7 +5,7 @@ import type { TonightRow } from '../../../engine/tonight.ts';
 import type { TableView } from '../../../engine/view.ts';
 import { ownPayments, settlement } from '../../settle.ts';
 import { countsOf, crownOf, leadersOf, missedOf, standingOf, tonightText } from '../../tonightText.ts';
-import { h, readableText, youMark } from '../../ui.ts';
+import { foldMark, h, readableText, youMark } from '../../ui.ts';
 import { badgeList, badgeMarks } from '../badges.ts';
 import { nightOver } from '../night.ts';
 import { copyOnClick, everyone, frame } from './dialog.ts';
@@ -48,7 +48,7 @@ function playerEl(row: TonightRow, view: TableView, handlers: DialogHandlers): H
       { 'data-player': row.playerId },
       h('span.who', null, row.name, row.seated ? null : h('small', null, ' left'), row.playerId === view.you.id ? youMark() : null),
       h('b', { class: `net ${row.net > 0 ? 'up' : row.net < 0 ? 'down' : ''}` }, signedAmount(row.net, view.config)),
-      h('span.fold', { 'aria-hidden': 'true' }, '▾'),
+      foldMark(),
       h('small.counts', null, countsOf(row)),
       badgeMarks(row.badges),
     ),

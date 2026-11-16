@@ -1,4 +1,4 @@
-import { h } from '../ui.ts';
+import { foldMark, h } from '../ui.ts';
 import type { Child } from '../ui.ts';
 
 /** A part of a form or a dialog under a heading of its own, which folds away under one line saying what it holds. */
@@ -15,7 +15,7 @@ export interface FoldSection {
  */
 export function foldSection(key: string, label: string, open: boolean, ...content: Child[]): FoldSection {
   const holds = h('span.holds');
-  const summary = h('summary', { 'data-section': key }, h('h3', null, label), h('span.fold', { 'aria-hidden': 'true' }, '▾'), holds);
+  const summary = h('summary', { 'data-section': key }, h('h3', null, label), foldMark(), holds);
   const element = h('details.fold-section', { 'data-section': key, open }, summary, h('div.fold-body', null, content));
 
   // Opened by hand near the foot of what scrolls, a section would unfold out of sight and seem to do nothing

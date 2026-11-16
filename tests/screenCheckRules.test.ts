@@ -8,7 +8,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
-const CHECKS = ['scripts/screenChecks.ts', 'scripts/accessibilityChecks.ts', 'scripts/menuChecks.ts', 'scripts/preferencesChecks.ts', 'scripts/confirmChecks.ts', 'scripts/ownClockChecks.ts', 'scripts/playersChecks.ts', 'scripts/playersDialog.ts', 'scripts/tableSaysChecks.ts', 'scripts/busyChecks.ts', 'scripts/nextStepChecks.ts', 'scripts/formChecks.ts', 'scripts/barSmallChecks.ts', 'scripts/onceChecks.ts', 'scripts/inviteLinksChecks.ts'];
+const CHECKS = ['scripts/screenChecks.ts', 'scripts/accessibilityChecks.ts', 'scripts/menuChecks.ts', 'scripts/preferencesChecks.ts', 'scripts/confirmChecks.ts', 'scripts/ownClockChecks.ts', 'scripts/playersChecks.ts', 'scripts/playersDialog.ts', 'scripts/tableSaysChecks.ts', 'scripts/busyChecks.ts', 'scripts/nextStepChecks.ts', 'scripts/formChecks.ts', 'scripts/barSmallChecks.ts', 'scripts/onceChecks.ts', 'scripts/inviteLinksChecks.ts', 'scripts/historyChecks.ts'];
 const CLIENT = 'src/client';
 
 /** The lines of a file that match, each with where it is, so a failure says what to change. */

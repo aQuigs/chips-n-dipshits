@@ -194,6 +194,11 @@ const SETTLING = '.controls .spare-line button';
 const ROW = '.controls .extras button';
 const BAR_BUTTONS = `${SETTLING}, ${ROW}`;
 
+// Under the table: the button that opens Add chips, what stands in its place while chips asked for wait for the host, and in the dialog the button for the most
+const ADD_CHIPS = '.controls [data-action="rebuy"]';
+const CHIPS_ASKED = '.controls [data-action="chips-asked"]';
+const MOST = '.dialog [data-action="rebuy-most"]';
+
 /** What each button of the row under the table says, in full: the check of the row on one line (layoutSweep.ts) reads what it says where it has not the room. */
 const rowSays = (page: Page) => saidInFull(page, ROW);
 
@@ -7273,6 +7278,8 @@ const CHECKS: Check[] = [
         await pressOn(kibitz, layout.screen)('[data-sit]');
         await kibitz.waitForSelector('[data-action="confirm-sit"]');
         await pressOn(kibitz, layout.screen)('[data-action="close"]');
+        // The seat the dialog uncovered under its close button wears the mark of it for a moment (the tap guard)
+        await tapsLive(kibitz);
       }
 
       await shown('the big pot');
@@ -13100,6 +13107,193 @@ const CHECKS: Check[] = [
         await shot(page, `new-table-sections-${screen}`);
         await page.context().close();
       }
+    },
+  ],
+  [
+    'Add chips starts on what the player last bought in for and never on more than the seat has room for, with the range under the box and the most a tap away, and a seat at the table maximum is offered none',
+    async (rig) => {
+      // What Stu has left of the 2,000 he bought at a table of 400 to 4,000, what the box starts on, and the most it takes
+      const cases = [
+        { stack: 0, offered: '2000', most: '4,000' },
+        { stack: 300, offered: '2000', most: '3,700' },
+        { stack: 3700, offered: '300', most: '300' },
+        { stack: 4000, offered: null, most: null },
+      ];
+
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        for (const { stack, offered, most } of cases) {
+          const table = rig.table(['Quigs', 'Stu', 'Pam'].map((name) => ({ name, stack: 2000 })), { smallBlind: 10, bigBlind: 20, minBuyIn: 400, maxBuyIn: 4000 });
+
+          // The rest of his chips are Pam's, as if she had won them
+          table.alter((state) => {
+            state.seats[2]!.stack += 2000 - stack;
+            state.seats[1]!.stack = stack;
+          });
+
+          const page = await table.open('Stu', screen);
+          const press = pressOn(page, screen);
+          const where = `${screen}, with ${stack}`;
+
+          await page.waitForSelector('.controls [data-action="sit-out"]');
+
+          if (offered === null) {
+            assert.equal(await page.locator(ADD_CHIPS).count(), 0, `${where}: a seat at the table maximum is offered chips`);
+            await page.context().close();
+            continue;
+          }
+
+          await press(ADD_CHIPS);
+          assert.equal(await text(page, '.dialog h2'), 'Add chips');
+          assert.equal(await page.inputValue('#rebuy-amount'), offered, `${where}: what the box starts on`);
+          assert.equal(await text(page, '.dialog .field small'), `Up to ${most}, which brings you to the table maximum`);
+          assert.equal(await text(page, '.dialog [data-action="confirm-rebuy"]'), 'Add chips');
+          assert.deepEqual(await squeezed(page, '.dialog .field small, .dialog .note, .dialog button'), [], `${where}: part of the dialog is cut off`);
+          assertOnScreen(await boxes(page, '.dialog, .dialog #rebuy-amount, .dialog button'), screen, `${where}: the dialog`);
+          await assertNoSidewaysScroll(page);
+
+          if (stack === 0) {
+            await shot(page, `add-chips-${screen}`);
+          }
+
+          // The most is a button beside the box, left out where the box holds it already
+          const all = most!.replace(',', '');
+
+          if (offered === all) {
+            assert.equal(await page.locator(MOST).count(), 0, `${where}: a button for the most, which the box holds already`);
+          } else {
+            const [button] = await boxes(page, MOST);
+
+            assert.equal(await page.getAttribute(MOST, 'aria-label'), `Max, ${most}`);
+            assert.ok(button!.bottom - button!.top >= 44 && button!.right - button!.left >= 44, `${where}: the button for the most is too small to tap: ${JSON.stringify(button)}`);
+            await press(MOST);
+            assert.equal(await page.inputValue('#rebuy-amount'), all, `${where}: what the button for the most fills in`);
+            // Back to the player's own amount for the one that is sent
+            await page.fill('#rebuy-amount', offered);
+          }
+
+          await answeredTo(page, 'requestRebuy', () => press('.dialog [data-action="confirm-rebuy"]'));
+          await page.waitForSelector('.dialog', { state: 'detached' });
+          assert.deepEqual(table.view('Quigs').requests.map((request) => [request.name, request.kind, request.amount]), [['Stu', 'rebuy', Number(offered)]], `${where}: what the host is asked`);
+          await page.context().close();
+        }
+      }
+    },
+  ],
+  [
+    'chips asked for are said under the table as a seat asked for is on it, in the words the host reads, and are taken back only with the button that says so: a tap on the words opens it and withdraws nothing, and it closes by itself when the host answers',
+    async (rig) => {
+      for (const screen of ['smallPhone', 'desktop'] as const) {
+        const table = rig.table(['Quigs', 'Stu', 'Pam'].map((name) => ({ name, stack: 1000 })));
+        const page = await table.open('Stu', screen);
+        const host = await table.open('Quigs', 'desktop');
+        const press = pressOn(page, screen);
+        const stu = table.auth('Stu').id;
+        const asking = () => table.view('Quigs').requests.map((request) => [request.name, request.amount]);
+
+        const ask = async () => {
+          await press(ADD_CHIPS);
+          await page.fill('#rebuy-amount', '1500');
+          await answeredTo(page, 'requestRebuy', () => press('.dialog [data-action="confirm-rebuy"]'));
+          await page.waitForSelector(CHIPS_ASKED);
+        };
+
+        const openAsked = async () => {
+          await press(CHIPS_ASKED);
+          await page.waitForSelector('.dialog [data-action="cancel-request"]');
+        };
+
+        // Asked: the row says what for in place of the button, and the host reads the same of it on the table and in Players
+        await ask();
+        assert.equal(await page.locator('.dialog').count(), 0);
+        assert.deepEqual(await rowSays(page), ['Sit out next hand', 'Straddle: off', 'Asked the host for 1,500 more chips']);
+        assert.equal(await page.locator(ADD_CHIPS).count(), 0, 'chips can be asked for twice');
+        await assertOwedBarFits(page, screen);
+        await assertNoSidewaysScroll(page);
+        await shot(page, `chips-asked-${screen}`);
+
+        await host.waitForSelector('.banner [data-action="approve"]');
+        assert.match(await text(host, '.banner'), /^Stu wants to add 1,500/);
+        await host.click('[data-action="menu"]');
+        await host.click('.menu [data-action="players"]');
+        await host.waitForSelector('.rows li:has-text("Stu")');
+        assert.match(await text(host, '.rows li:has-text("Stu")'), /wants to add 1,500/);
+        await host.keyboard.press('Escape');
+        await host.waitForSelector('.dialog', { state: 'detached' });
+
+        // A tap on the words opens what was asked, and nothing is taken back by it, nor by closing it
+        const sent = opsSent(page);
+
+        await openAsked();
+        assert.equal(await text(page, '.dialog h2'), 'Add chips');
+        assert.deepEqual(await texts(page, '.dialog p'), ['Asked the host for 1,500 more chips', 'The chips arrive once the host approves and the current hand is over.']);
+        assert.equal(await text(page, '.dialog [data-action="cancel-request"]'), 'Cancel request');
+        assert.deepEqual(await squeezed(page, '.dialog p, .dialog button'), [], 'part of the dialog is cut off');
+        assertOnScreen(await boxes(page, '.dialog, .dialog button'), screen, 'what was asked');
+        await shot(page, `chips-asked-opened-${screen}`);
+        await closeDialog(page, press);
+        assert.deepEqual(sent.filter((op) => op === 'act'), [], 'looking at what was asked sent the table something');
+        assert.deepEqual(asking(), [['Stu', 1500]], 'the request was taken back with no button pressed for it');
+
+        // The button that says so takes it back
+        await openAsked();
+        await answeredTo(page, 'cancelRequest', () => press('.dialog [data-action="cancel-request"]'));
+        await page.waitForSelector('.dialog', { state: 'detached' });
+        await page.waitForSelector(ADD_CHIPS);
+        assert.deepEqual(asking(), []);
+        assert.deepEqual(await rowSays(page), ['Sit out next hand', 'Straddle: off', 'Add chips']);
+        await host.waitForSelector('.banner', { state: 'detached' });
+
+        // Open when the host answers, it closes by itself, and the play-by-play says what was added in the same word
+        for (const answer of ['approve', 'deny'] as const) {
+          await ask();
+          await openAsked();
+          table.act('Quigs', { type: answer, playerId: stu });
+          await page.waitForSelector('.dialog', { state: 'detached' });
+          await page.waitForSelector(ADD_CHIPS);
+          assert.equal(await text(page, '.seat.me .stack'), '2,500', `the stack after the host’s ${answer}`);
+
+          if (answer === 'approve') {
+            assert.match(await text(page, screen === 'desktop' ? '.entries li:last-child' : '.feed-toggle .latest'), /Stu adds 1,500/);
+          }
+        }
+
+        await page.context().close();
+        await host.context().close();
+      }
+    },
+  ],
+  [
+    'Add chips stands out only for a player with no chips and nothing riding on a hand: not while they are all in with the cards to come, and not with chips',
+    async (rig) => {
+      const table = rig.table(['Quigs', 'Stu', 'Pam'].map((name) => ({ name, stack: 2000 })), { maxRuns: 1, actionSeconds: 30 });
+      const gold = `${ADD_CHIPS}.strong`;
+
+      // Quigs puts everything in with kings and Stu calls with aces: a king is to come
+      table.deal({ button: 0, holes: { 0: 'Kh Kd', 1: 'As Ad' }, board: 'Kc 7c 2d 9s 3h' });
+      table.play((view, name) => (name === 'Pam' ? { type: 'fold' } : allIn(view)), (view) => view.seats[1]!.stack === 0 && view.hand!.toAct === null);
+
+      const page = await table.open('Stu', 'smallPhone');
+      const winner = await table.open('Quigs', 'smallPhone');
+
+      await page.waitForSelector('.controls .waiting:has-text("Running it out")');
+      assert.equal(await text(page, '.seat.me .stack'), '0');
+      assert.notEqual(table.view('Stu').hand!.stage, 'done', 'the hand is over already: the state no longer shows what it is here for');
+      assert.equal(await page.locator(ADD_CHIPS).count(), 1);
+      assert.equal(await page.locator(gold).count(), 0, 'Add chips stands out for a player who is all in and may win');
+      await shot(page, 'add-chips-all-in-smallPhone');
+
+      // The board runs out and the chips are gone: now it is the one thing to do
+      table.play(() => null, (view) => view.hand!.stage === 'done');
+      await page.waitForSelector(gold);
+      await shot(page, 'add-chips-out-of-chips-smallPhone');
+
+      table.play(() => null, (view) => view.hand === null);
+      await table.heardBy(page);
+      await page.waitForSelector(gold);
+
+      await table.heardBy(winner);
+      await winner.waitForSelector(ADD_CHIPS);
+      assert.equal(await winner.locator(gold).count(), 0, 'Add chips stands out for a player with chips');
     },
   ],
   ...ACCESSIBILITY_CHECKS,

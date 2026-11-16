@@ -951,6 +951,7 @@ export class App {
             send: (command) => this.send(command),
             showCards: (hand, places) => this.showCards(hand, places),
             openRebuy: () => this.openDialog({ kind: 'rebuy' }),
+            openAsked: () => this.openDialog({ kind: 'chipsAsked' }),
             openStanding: () => this.openDialog({ kind: 'straddles' }),
             replay: (hand) => this.replayHand(hand),
             sizing: screen.sizing,

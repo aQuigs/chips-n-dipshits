@@ -1203,4 +1203,33 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
       sweep.done(2);
     },
   ],
+  [
+    'Add chips and the chips asked for open from the keyboard with the keyboard in them and a name, break no rule in any theme, and close on Escape with the keyboard back on what opened them',
+    async (rig) => {
+      const table = threeHanded(rig);
+      const page = await listening(table, 'Pam');
+      const sweep = new Sweep();
+
+      const opensAndCloses = async (opener: string, what: string, shows: string) => {
+        await page.focus(`.controls [data-action="${opener}"]`);
+        await page.keyboard.press('Enter');
+        await page.waitForSelector(`.dialog ${shows}`);
+        assert.equal(await focusIn(page, '.dialog'), true, `${what} opened with the keyboard left behind it`);
+        assert.equal(await page.getAttribute('.overlay [role$="dialog"]', 'aria-label'), 'Add chips');
+        await sweep.over(page, what);
+
+        await page.keyboard.press('Escape');
+        await page.waitForSelector('.overlay .dialog', { state: 'detached' });
+        assert.equal(await focused(page), opener, `after ${what} the keyboard is not back on what opened it`);
+      };
+
+      await opensAndCloses('rebuy', 'Add chips', '#rebuy-amount');
+
+      table.act('Pam', { type: 'requestRebuy', amount: 500 });
+      await page.waitForSelector('.controls [data-action="chips-asked"]');
+      await sweep.over(page, 'the bar with chips asked for');
+      await opensAndCloses('chips-asked', 'the chips asked for', '[data-action="cancel-request"]');
+      sweep.done(3);
+    },
+  ],
 ];

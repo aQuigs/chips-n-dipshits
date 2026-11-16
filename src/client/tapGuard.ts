@@ -63,6 +63,9 @@ const share = (a: Box, b: Box): boolean => Math.min(a.right, b.right) - Math.max
 
 const inPlace = (a: Box, b: Box): boolean => [a.left - b.left, a.top - b.top, a.right - b.right, a.bottom - b.bottom].every((apart) => Math.abs(apart) <= SHARED_PX);
 
+/** Whether `spot` lies where a different control lay in one of `drawings`. */
+const tookAPlaceIn = <C>(drawings: readonly Drawing<C>[], spot: Spot<C>): boolean => drawings.some((drawing) => drawing.spots.some((was) => !same(was, spot) && share(was.box, spot.box)));
+
 /** The drawings a finger may still be on its way to at `at`. */
 export const stillAimedAt = <C>(drawings: readonly Drawing<C>[], at: number): Drawing<C>[] => drawings.filter((drawing) => at - drawing.left < TAPS_SETTLE_MS);
 
@@ -102,9 +105,19 @@ export function holds<C>(drawings: readonly Drawing<C>[], now: readonly Spot<C>[
       return kept ? [{ spot, until: kept.until }] : [];
     }
 
-    const tookAnothersPlace = aimedAt.some((drawing) => drawing.spots.some((was) => !same(was, spot) && share(was.box, spot.box)));
     const cameUpForGood = spot.forGood && before.length === 0;
 
-    return tookAnothersPlace || cameUpForGood ? [{ spot, until: null }] : [];
+    return tookAPlaceIn(aimedAt, spot) || cameUpForGood ? [{ spot, until: null }] : [];
   });
+}
+
+/**
+ * The controls among `now` that take no tap yet after a change the player made themselves at `at`, a
+ * dialog they opened or closed. It is no surprise to them, so what it brought up is live at once: all
+ * but what came up where they tapped, which is where the second tap of two lands. `tapped` is that
+ * place as a drawing of one spot, left at the tap: the control, or for a tap on none, as on the backdrop
+ * that closes a dialog, the part of the page under the finger.
+ */
+export function holdsUnderTap<C>(tapped: Drawing<C>, now: readonly Spot<C>[], at: number): Hold<C>[] {
+  return now.filter((spot) => tookAPlaceIn(stillAimedAt([tapped], at), spot)).map((spot) => ({ spot, until: null }));
 }

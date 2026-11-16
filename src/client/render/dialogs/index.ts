@@ -1,6 +1,7 @@
 import type { TableView } from '../../../engine/view.ts';
 import { autoShowDialog } from './autoShow.ts';
 import { callBombPot, callOffBombPot } from './bombPot.ts';
+import { chipsAskedDialog } from './chipsAsked.ts';
 import { confirmDialog } from './confirm.ts';
 import type { DialogHandlers, DialogKind } from './dialog.ts';
 import { highHandDialog } from './highHand.ts';
@@ -55,6 +56,7 @@ const REGISTERED = [
   inviteDialog,
   sitDialog,
   rebuyDialog,
+  chipsAskedDialog,
   setStackDialog,
   transferDialog,
   confirmDialog,

@@ -2,6 +2,7 @@ import { formatAmount } from '../../../engine/amounts.ts';
 import type { SeatView, TableView } from '../../../engine/view.ts';
 import { h } from '../../ui.ts';
 import { roleOf } from '../../../engine/hosts.ts';
+import { requestText } from '../../spoken.ts';
 import { badgeMarks } from '../badges.ts';
 import { hostAlone, hostOrCohost, roleMark } from '../roles.ts';
 import { frame, rowActions } from './dialog.ts';
@@ -12,7 +13,7 @@ function players(view: TableView, handlers: DialogHandlers): HTMLElement {
     h(
       'li',
       null,
-      h('span', null, h('b', null, request.name), request.kind === 'seat' ? ` wants seat ${request.seat + 1} with ${formatAmount(request.amount, view.config)}` : ` wants to add ${formatAmount(request.amount, view.config)}`),
+      h('span', null, h('b', null, request.name), ` ${requestText(request, view.config)}`),
       rowActions(
         { id: request.playerId, name: request.name },
         h('button.btn.small.primary', { type: 'button', 'data-action': 'approve', onclick: () => void handlers.send({ type: 'approve', playerId: request.playerId }) }, 'Approve'),

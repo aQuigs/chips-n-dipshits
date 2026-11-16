@@ -8,6 +8,7 @@ import { timesText } from '../../engine/runVote.ts';
 import { straddlesAllowed } from '../../engine/straddles.ts';
 import type { Command, PassedOver } from '../../engine/types.ts';
 import type { HandView, SeatView, TableView } from '../../engine/view.ts';
+import { askedSays, chipsAsked, outOfChips, roomToAdd } from '../buyIns.ts';
 import { lastOnRecord } from '../handRecords.ts';
 import { HOTKEYS } from '../hotkeys.ts';
 import { choiceOn } from '../pendingChoice.ts';
@@ -27,6 +28,8 @@ export interface ControlHandlers {
   /** Shows the table the player's cards at `places` of that hand, 0 on their left. Resolves as `send` does. */
   showCards(hand: number, places: number[]): Promise<unknown>;
   openRebuy(): void;
+  /** Opens what the player has asked the host for in chips, where they can take it back. */
+  openAsked(): void;
   /** Opens the player's standing choices: the straddles and the chop the table does for them. */
   openStanding(): void;
   /** Plays hand number `hand` back over the table, from the history. Resolves once it is up, or once the viewer has been told why not. */
@@ -498,8 +501,6 @@ function ownNote(owed: string | null, hand: HandView | null, view: TableView): O
 
 function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandlers, waiting: Waiting | null): HTMLElement {
   const hand = view.hand;
-  const myRequest = view.requests.find((request) => request.playerId === view.you.id);
-  const room = view.config.maxBuyIn - seat.stack - seat.pendingAdd;
   // With the night over no hand is coming to settle anything in; the seat still says who is waiting
   const settling = nightOver(view) ? { note: null, buttons: [] } : settlingOf(view, seat, handlers);
   const own = ownNote(settling.note, hand, view);
@@ -551,13 +552,12 @@ function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandle
     extras.push(h('button.chip-btn', { type: 'button', class: standing.straddling.length > 0 ? 'strong' : '', 'data-action': 'straddles', onclick: handlers.openStanding }, fitted(standingSays(standing))));
   }
 
-  if (myRequest?.kind === 'rebuy') {
-    const full = `Rebuy of ${formatAmount(myRequest.amount, view.config)} waiting for the host · Cancel`;
+  const asked = chipsAsked(view);
 
-    // In brief without the amount, which can be as long as the rest of it
-    extras.push(commandButton('button.chip-btn', 'cancel-request', fitted({ full, brief: 'Rebuy waiting · Cancel' }), () => handlers.send({ type: 'cancelRequest' })));
-  } else if (room > 0) {
-    extras.push(h('button.chip-btn', { type: 'button', class: seat.stack === 0 ? 'strong' : '', 'data-action': 'rebuy', onclick: handlers.openRebuy }, 'Add chips'));
+  if (asked) {
+    extras.push(h('button.chip-btn.asked', { type: 'button', 'data-action': 'chips-asked', onclick: handlers.openAsked }, fitted(askedSays(asked, view.config))));
+  } else if (roomToAdd(view) > 0) {
+    extras.push(h('button.chip-btn', { type: 'button', class: outOfChips(view) ? 'strong' : '', 'data-action': 'rebuy', onclick: handlers.openRebuy }, 'Add chips'));
   }
 
   return h('div.controls.seated', null, main, line, h(`div.extras.${FIT_ROW}`, null, extras));

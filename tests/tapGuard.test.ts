@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { holds, shownAt, stillHeld, TAPS_SETTLE_MS } from '../src/client/tapGuard.ts';
+import { holds, holdsUnderTap, shownAt, stillHeld, TAPS_SETTLE_MS } from '../src/client/tapGuard.ts';
 import type { Box, Drawing, Hold, Spot } from '../src/client/tapGuard.ts';
 
 const box = (left: number, top: number, width = 100, height = 40): Box => ({ left, top, right: left + width, bottom: top + height });
@@ -123,4 +123,30 @@ test('a hold already on the clock keeps its time when the page is next free, and
     [raise.control, 5200 + TAPS_SETTLE_MS],
   ]);
   assert.deepEqual(held(stillHeld(both, 5000 + TAPS_SETTLE_MS)), [[raise.control, null]]);
+});
+
+// A phone's bar as a player taps Add chips: the dialog that tap opens lays its button to send across the foot of the screen
+const ADD_CHIPS = spot('add chips', box(213, 550, 80, 37));
+const SEND = spot('send', box(17, 579, 326, 43));
+const tappedAt = (left: number): Drawing<string> => ({ left, spots: [ADD_CHIPS] });
+
+test('what a tap of the player’s own brings up where the tapped control lay takes no tap for the settle time, and the rest of it is live at once', () => {
+  const amount = spot('amount', box(17, 452, 264, 44));
+  const close = spot('close', box(303, 358, 40, 40));
+  const cameUp = holdsUnderTap(tappedAt(1000), [amount, close, SEND], 1002);
+
+  assert.deepEqual(held(cameUp), [[SEND.control, null]]);
+  assert.deepEqual(held(shownAt(cameUp, 1040)), [[SEND.control, 1040 + TAPS_SETTLE_MS]]);
+});
+
+test('the control that was tapped is the same control where it is drawn again, and is held from nobody', () => {
+  const again = spot('add chips', box(213, 550, 80, 37));
+
+  assert.deepEqual(holdsUnderTap(tappedAt(1000), [again, ADD_CHIPS], 1002), []);
+});
+
+test('a change that comes once no finger is on its way to the tapped control any more holds nothing', () => {
+  // A dialog that opens on the table's answer, a second or two after the tap that asked for it
+  assert.deepEqual(holdsUnderTap(tappedAt(1000), [SEND], 1000 + TAPS_SETTLE_MS), []);
+  assert.deepEqual(held(holdsUnderTap(tappedAt(1000), [SEND], 999 + TAPS_SETTLE_MS)), [[SEND.control, null]]);
 });

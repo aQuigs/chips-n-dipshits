@@ -22,7 +22,7 @@ import type { Finding } from './covered.ts';
 import { answeredTo, opsSent, replayDrawn } from './pageSpies.ts';
 import { boxes, Gate, overlap, SCREENS, setStageHeight, STALL_MS, WIDE_ASPECT } from './rig.ts';
 import type { Rig, RigTable, ScreenName } from './rig.ts';
-import { cameUp, tapsLive, tellingOf, watched, watchTheBar } from './underTheFinger.ts';
+import { cameUp, namedByTheWatch, tapsLive, tellingOf, watched, watchTheBar } from './underTheFinger.ts';
 import type { Held } from './underTheFinger.ts';
 
 const VIEWER = 'Quigs';
@@ -128,14 +128,14 @@ function waitingWithEveryNote(rig: Rig, seats: number, config: Partial<TableConf
 /**
  * The bar at its fullest once a hand is over: at the table of `waitingWithEveryNote` the viewer takes the
  * pot with no call, so their cards are theirs to show beside every note, and the row under them is as
- * full as it gets: a rebuy of the longest amount asked for, and every choice behind its button switched on.
+ * full as it gets: chips asked for, the longest amount, and every choice behind its button switched on.
  */
 function shownWithEveryNote(rig: Rig, seats: number): RigTable {
   const table = waitingWithEveryNote(rig, seats, { allowChop: true, maxBuyIn: 2 * LONGEST_WRITTEN_OUT });
 
   table.act(VIEWER, { type: 'setStraddle', kind: 'button straddle', on: true });
   table.act(VIEWER, { type: 'setAlwaysChop', on: true });
-  // A rebuy of the host's own, or a co-host's, waits for nobody: the viewer hands the table on, and asks as a player does
+  // Chips the host adds, or a co-host, wait for nobody: the viewer hands the table on, and asks as a player does
   table.act(VIEWER, { type: 'transferHost', playerId: table.auth(WIDEST).id });
   table.act(WIDEST, { type: 'setCohost', playerId: table.auth(VIEWER).id, on: false });
   table.act(VIEWER, { type: 'requestRebuy', amount: LONGEST_WRITTEN_OUT });
@@ -264,7 +264,7 @@ const TABLE_STATES = {
     build: waitingWithEveryNote,
   },
   everyNoteAndShow: {
-    shows: 'the bar of a player whose hand is over, with their cards to show, the hands to come and a straddle passed over, each at its longest, over a row with a rebuy asked for and every choice behind its button on',
+    shows: 'the bar of a player whose hand is over, with their cards to show, the hands to come and a straddle passed over, each at its longest, over a row with chips asked for and every choice behind its button on',
     seats: [6, 9],
     build: shownWithEveryNote,
   },
@@ -666,6 +666,10 @@ const REPLAY_AT_ITS_END = `(() => {
   return step !== undefined && step === steps;
 })()`;
 
+// Under the table: the button that opens Add chips, and what stands in its place while chips asked for wait for the host
+const ADD_CHIPS = '.controls [data-action="rebuy"]';
+const CHIPS_ASKED = '.controls [data-action="chips-asked"]';
+
 export const openTheMenu = async (page: Page) => {
   await page.locator('[data-action="menu"]').click();
   await page.waitForSelector('.menu .menu-item');
@@ -880,6 +884,23 @@ const SCREEN_STATES: ScreenState[] = [
 
       await openTheMenu(player);
       await look(player, 'a player’s menu');
+    },
+  },
+  {
+    shows: 'Add chips with the most a table of dollars and cents has room for, and the chips asked for',
+    async walk(rig, screen, look) {
+      // The viewer hosts nothing here, so what they ask for waits for the host
+      const table = rig.table(players(2, STACKS), CENTS);
+      const page = await table.open(VIEWER, screen);
+
+      await page.locator(ADD_CHIPS).click();
+      await page.locator('.dialog [data-action="rebuy-most"]').click();
+      await look(page, 'Add chips');
+
+      await page.locator('.dialog [data-action="confirm-rebuy"]').click();
+      await page.locator(CHIPS_ASKED).click();
+      await page.waitForSelector('.dialog [data-action="cancel-request"]');
+      await look(page, 'the chips asked for');
     },
   },
 ];
@@ -1893,6 +1914,122 @@ const secondTapFindsNothingNew = OWN_TAPS.map((own): Check => [
   },
 ]);
 
+/** A dialog the player opens or closes with a tap, which brings a different control up where the tapped one lay. */
+interface OwnDialog {
+  when: string;
+  build(rig: Rig): RigTable;
+  /** What the player has open before the tap. */
+  open?(page: Page): Promise<void>;
+  /** The control tapped, or the dialog's backdrop. */
+  tap: string;
+  /** For a backdrop, as wide as the screen: the control behind it that the finger is over. */
+  over?: string;
+  /** On the page once the tap has done its work. */
+  then: string;
+  /** The `data-action` of what comes up under the tap, which a second tap must not press. */
+  under: string;
+}
+
+function askedForChips(rig: Rig): RigTable {
+  const table = betweenHands(rig);
+
+  table.act(VIEWER, { type: 'requestRebuy', amount: 1000 });
+
+  return table;
+}
+
+const OWN_DIALOGS: OwnDialog[] = [
+  {
+    when: 'Add chips, whose dialog lays the button that asks the host under the tap',
+    build: (rig) => betweenHands(rig),
+    tap: ADD_CHIPS,
+    then: '.dialog #rebuy-amount',
+    under: 'confirm-rebuy',
+  },
+  {
+    when: 'the chips asked for, whose dialog lays the button that takes the request back under the tap',
+    build: askedForChips,
+    tap: CHIPS_ASKED,
+    then: '.dialog [data-action="cancel-request"]',
+    under: 'cancel-request',
+  },
+  {
+    when: 'Cancel on the question before standing up, which uncovers the switch to sit out',
+    build: (rig) => betweenHands(rig),
+    open: async (page) => {
+      await openFromMenu(page, 'stand');
+      await page.waitForSelector('.dialog [data-action="confirm"]');
+    },
+    tap: '.dialog .buttons button:not([data-action])',
+    then: `${ADD_CHIPS}:visible`,
+    under: 'sit-out',
+  },
+  {
+    when: 'the backdrop of Add chips tapped over Invite, which closes the dialog and uncovers the button',
+    build: (rig) => betweenHands(rig),
+    open: async (page) => {
+      await page.locator(ADD_CHIPS).click();
+      await page.waitForSelector('.dialog #rebuy-amount');
+    },
+    tap: '.overlay',
+    over: '[data-action="invite"]',
+    then: `${ADD_CHIPS}:visible`,
+    under: 'invite',
+  },
+];
+
+// The standing phones a dialog is a sheet on, from the foot of the screen up over the bar: what it lays under a tap on the bar is its own buttons
+const SHEET_PHONES: Size[] = [SMALL_STANDING, { name: '390 standing', ...SCREENS.tallPhone }];
+
+/**
+ * A dialog a player opens or closes is no surprise to them, and what it brings up or uncovers is live at
+ * once: all but what comes up under the tap that did it, where the second tap of two lands
+ * (`holdsUnderTap` in src/client/tapGuard.ts). The watch taps each control the page holds back the moment
+ * it does, which is that second tap, and nothing may come of it.
+ */
+const secondTapPressesNothingOfADialog = OWN_DIALOGS.map((own): Check => [
+  `the second tap of two presses nothing that the first one’s dialog brought up or uncovered: ${own.when}, on a 360 and a 390 phone`,
+  async (rig) => {
+    for (const size of SHEET_PHONES) {
+      const table = own.build(rig);
+      const page = await table.open(VIEWER, 'smallPhone');
+
+      await page.setViewportSize(size);
+      await page.waitForSelector(`${ADD_CHIPS}, ${CHIPS_ASKED}`);
+      await settled(page);
+      await own.open?.(page);
+      await page.waitForSelector(own.tap);
+      await tapsLive(page);
+
+      const sent = opsSent(page);
+      const asked = table.view(VIEWER).requests;
+      const sittingOut = table.view(VIEWER).seats[0]!.sittingOut;
+      // A backdrop is over the whole page, and the finger over one control of it: only that one is under the tap
+      const behind = own.over ? await namedByTheWatch(page, own.over) : null;
+      const tapped = await namedByTheWatch(page, own.tap);
+      const [finger] = own.over ? await boxes(page, own.over) : [];
+
+      await watchTheBar(page);
+      await page.locator(own.tap).tap(finger && { position: { x: (finger.left + finger.right) / 2, y: (finger.top + finger.bottom) / 2 } });
+      await page.waitForSelector(own.then);
+
+      const { found, held } = await watched(page);
+      const underTheTap = found.filter((one) => one.aimedAt === tapped && (behind === null || one.cameUp === behind));
+      const waited = held.filter((one) => one.is?.includes(`data-action=${own.under}`));
+
+      assert.ok(underTheTap.length > 0, `${size.name}: nothing came up where the tapped control lay: the tap no longer shows what it is here for`);
+      assert.deepEqual(underTheTap.flatMap(tellingOf), [], `${size.name}: a second tap lands on what the first one brought up`);
+      assert.ok(waited.length > 0, `${size.name}: ${own.under} was not held back: ${JSON.stringify(held.map((one) => one.is ?? one.what))}`);
+      assert.deepEqual(letGoEarly(waited), [], `${size.name}: ${own.under} was let go before its time`);
+      assert.ok(await page.locator(own.then).isVisible(), `${size.name}: the second tap undid what the first one did`);
+      assert.deepEqual(sent.filter((op) => op === 'act'), [], `${size.name}: the table was sent something`);
+      assert.deepEqual(table.view(VIEWER).requests, asked, `${size.name}: what the viewer has asked the host for changed`);
+      assert.equal(table.view(VIEWER).seats[0]!.sittingOut, sittingOut, `${size.name}: the viewer was sat out, or back in`);
+      await page.close();
+    }
+  },
+]);
+
 /** A tap of the player's own whose answer brings up a button that commits for good. */
 interface CommitsAfter {
   what: string;
@@ -2339,6 +2476,17 @@ function owingTheBigBlind(rig: Rig): RigTable {
   return table;
 }
 
+/** The viewer put everything in against the widest name's aces and lost it: the result is up, and they have no chips. */
+function outOfChips(rig: Rig): RigTable {
+  const table = betweenHands(rig, { maxRuns: 1 });
+
+  table.deal({ button: 0, holes: { ...holesFor(TABLE_OF_SIX), 0: '7d 2h', 1: 'As Ah' }, board: 'Ad 5c 9c Jd 3d' });
+  table.play((view, name) => (name === VIEWER || name === WIDEST ? allInPicking(1)(view) : { type: 'fold' }), (view) => view.hand!.stage === 'done');
+  assert.equal(table.view(VIEWER).seats[0]!.stack, 0, 'the viewer has chips left: the state no longer shows what it is here for');
+
+  return table;
+}
+
 /** A bar of the viewer's: what is on it, and what its row of switches says in full, whatever of that a narrow screen cuts to its brief form. */
 interface BarState {
   name: string;
@@ -2367,9 +2515,9 @@ const BAR_STATES: BarState[] = [
     row: ['Sit out next hand', 'Straddle: off', 'Add chips'],
   },
   {
-    name: 'the cards to show under every note, a rebuy asked for and every choice behind its button on',
+    name: 'the cards to show under every note, chips asked for and every choice behind its button on',
     build: (rig) => shownWithEveryNote(rig, 9),
-    row: ['Sit out next hand', '2 straddles and chop: on', 'Rebuy of 99,999.99 waiting for the host · Cancel'],
+    row: ['Sit out next hand', '2 straddles and chop: on', 'Asked the host for 99,999.99 more'],
   },
   {
     name: 'sitting out',
@@ -2395,7 +2543,7 @@ const BAR_STATES: BarState[] = [
     row: ['Sit out next hand', 'Straddle: off', 'Add chips'],
   },
   {
-    name: 'a rebuy asked for at a table of every kind of straddle',
+    name: 'chips asked for at a table of every kind of straddle',
     build(rig) {
       const table = betweenHands(rig, { allowDoubleStraddle: true, allowButtonStraddle: true, allowMississippiStraddle: true });
 
@@ -2403,8 +2551,23 @@ const BAR_STATES: BarState[] = [
 
       return table;
     },
-    row: ['Sit out next hand', 'Straddles: off', 'Rebuy of 1,000 waiting for the host · Cancel'],
+    row: ['Sit out next hand', 'Straddles: off', 'Asked the host for 1,000 more chips'],
   },
+  {
+    name: 'chips asked for with the buttons of the viewer’s turn up',
+    build(rig) {
+      const table = betweenHands(rig, { actionSeconds: 30 });
+
+      table.act(VIEWER, { type: 'requestRebuy', amount: 1000 });
+      table.deal({ button: 0, holes: holesFor(TABLE_OF_SIX) });
+      table.play(others({ type: 'call' }), viewersTurn);
+
+      return table;
+    },
+    row: ['Sit out next hand', 'Straddle: off', 'Asked the host for 1,000 more chips'],
+    turn: true,
+  },
+  { name: 'out of chips with the hand lost, and asked to add some', build: outOfChips, row: ['Sit out next hand', 'Straddle: off', 'Add chips'] },
 ];
 
 const TEXT_SIZES = ['standard', 'large', 'largest'];
@@ -2589,5 +2752,5 @@ export function layoutSweep(picturesIn: string): Check[] {
     },
   ]);
 
-  return [...defects, replayFromTheBar(picturesIn), historyGainsTheHand, barKeepsTheTurnsHeight(picturesIn), barRowsKeepToOneLine(picturesIn), choicesKeepTheirPlaces, chatMakesWayForTheTurn(picturesIn), keyboardInTheBoxKeepsTheChat, lookSeesWhatATapPassesThrough, ...underTheFinger(), ...secondTapFindsNothingNew, commitsWaitFromWhenTheyAreDrawn, aRowThatMovesUpIsHeld, aHoldRunsFromWhenThePageIsFree, aHoldRunsOutOnTime, aPageInTheBackgroundLetsGo, onlyWhatCameUpOverAnotherIsHeld, marksFollowTheTableTurned, ...tables, ...screens];
+  return [...defects, replayFromTheBar(picturesIn), historyGainsTheHand, barKeepsTheTurnsHeight(picturesIn), barRowsKeepToOneLine(picturesIn), choicesKeepTheirPlaces, chatMakesWayForTheTurn(picturesIn), keyboardInTheBoxKeepsTheChat, lookSeesWhatATapPassesThrough, ...underTheFinger(), ...secondTapFindsNothingNew, ...secondTapPressesNothingOfADialog, commitsWaitFromWhenTheyAreDrawn, aRowThatMovesUpIsHeld, aHoldRunsFromWhenThePageIsFree, aHoldRunsOutOnTime, aPageInTheBackgroundLetsGo, onlyWhatCameUpOverAnotherIsHeld, marksFollowTheTableTurned, ...tables, ...screens];
 }

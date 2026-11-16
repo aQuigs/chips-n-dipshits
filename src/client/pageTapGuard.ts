@@ -1,4 +1,4 @@
-import { holds, shownAt, stillAimedAt, stillHeld } from './tapGuard.ts';
+import { holds, holdsUnderTap, shownAt, stillAimedAt, stillHeld } from './tapGuard.ts';
 import type { Box, Drawing, Hold, Spot } from './tapGuard.ts';
 import { controlKey } from './ui.ts';
 import type { Redrawn } from './ui.ts';
@@ -17,6 +17,9 @@ const BACKDROP = '.overlay';
 
 /** The sizes of a bet play nothing, only the button beside them does: one of them under a finger costs nobody a chip, so they are never held back. */
 const PLAYS_NOTHING = '.sizing *';
+
+/** How much of the page a finger is over when it taps no control: the backdrop that closes a dialog is as wide as the screen, and the finger over as much of it as the least a control here is made for one. */
+const FINGER_PX = 44;
 
 /** A tap on one of these cannot be taken back: a vote on how many times to run it counts, and a card shown has been seen. */
 const COMMITS_FOR_GOOD = '[data-action^="rit-"], [data-action="show-card"], [data-action="show"]';
@@ -99,6 +102,13 @@ function lying(): Spot<Element>[] {
   return [...controls, ...backdrops].filter((spot) => reached(spot.control, spot.box));
 }
 
+function underFinger({ clientX, clientY }: MouseEvent): Box {
+  return { left: clientX - FINGER_PX / 2, top: clientY - FINGER_PX / 2, right: clientX + FINGER_PX / 2, bottom: clientY + FINGER_PX / 2 };
+}
+
+/** Those of `spots` whose tap plays something, which are the ones a tap is ever kept from. */
+const playing = (spots: Spot<Element>[]): Spot<Element>[] => spots.filter((spot) => !spot.control.matches(PLAYS_NOTHING));
+
 /** Takes the mark off a control, and leaves it as it was drawn: no empty `class` for a control that had none. */
 function unmark(control: Element): void {
   control.classList.remove(SETTLING);
@@ -122,6 +132,21 @@ export class TapGuard implements Redrawn {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private whenFree: ReturnType<typeof setTimeout> | null = null;
   private playersOwn = false;
+  /** What the player last tapped, as it lay at the tap: where the second tap of two lands. */
+  private tapped: Drawing<Element> | null = null;
+
+  // Noted on its way down to what it taps, before anything the tap does has changed the page
+  private readonly noteTap = (event: MouseEvent): void => {
+    const target = event.target instanceof Element ? event.target : null;
+    const control = target?.closest(TAPPED);
+    const spot = control ? { control, is: marksOf(control), box: inSight(control, new Map()) } : target && { control: target, is: null, box: underFinger(event) };
+
+    this.tapped = spot && { left: performance.now(), spots: [{ ...spot, forGood: false }] };
+  };
+
+  constructor() {
+    document.addEventListener('click', this.noteTap, true);
+  }
 
   /** Guards against `part` changing shape with nothing drawn anew, as the bar does when the chat beside it opens, goes down for a turn or comes back, and when the screen is turned. */
   watchShape(part: HTMLElement): void {
@@ -144,8 +169,9 @@ export class TapGuard implements Redrawn {
 
   /**
    * Runs a redraw that is the player's own doing and no surprise to them, a dialog they open or close:
-   * nothing it brings up is held back. What they do in the bar is not such a redraw: a second tap on a
-   * move must not land on what the first one brought up.
+   * what it brings up or uncovers is live at once, but for what comes up under the tap that made it
+   * (`holdsUnderTap`). What they do in the bar is not such a redraw: a second tap on a move must not
+   * land on what the first one brought up.
    */
   byThePlayer(redraw: () => void): void {
     this.playersOwn = true;
@@ -155,6 +181,8 @@ export class TapGuard implements Redrawn {
     } finally {
       this.playersOwn = false;
     }
+
+    this.holdUnderTheTap();
   }
 
   /**
@@ -174,6 +202,7 @@ export class TapGuard implements Redrawn {
   }
 
   dispose(): void {
+    document.removeEventListener('click', this.noteTap, true);
     this.shapes.disconnect();
     clearTimeout(this.whenFree ?? undefined);
     clearTimeout(this.timer ?? undefined);
@@ -199,12 +228,7 @@ export class TapGuard implements Redrawn {
 
     this.last = lying();
     this.unmarkAll();
-    this.held = holds(
-      this.drawings,
-      this.last.filter((spot) => !spot.control.matches(PLAYS_NOTHING)),
-      at,
-      this.held,
-    );
+    this.held = holds(this.drawings, playing(this.last), at, this.held);
 
     for (const { spot } of this.held) {
       spot.control.classList.add(SETTLING);
@@ -216,6 +240,27 @@ export class TapGuard implements Redrawn {
       this.whenFree ??= setTimeout(() => this.shown(), 0);
     }
 
+    this.letGo(at);
+  }
+
+  /** Holds back what the player's own redraw brought up where they tapped, beside whatever is held already. */
+  private holdUnderTheTap(): void {
+    const at = performance.now();
+    const cameUp = this.tapped ? holdsUnderTap(this.tapped, playing(lying()), at) : [];
+
+    if (cameUp.length === 0) {
+      return;
+    }
+
+    const again = new Set(cameUp.map(({ spot }) => spot.control));
+
+    this.held = [...this.held.filter(({ spot }) => !again.has(spot.control)), ...cameUp];
+
+    for (const { spot } of cameUp) {
+      spot.control.classList.add(SETTLING);
+    }
+
+    this.whenFree ??= setTimeout(() => this.shown(), 0);
     this.letGo(at);
   }
 

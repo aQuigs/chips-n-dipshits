@@ -43,7 +43,7 @@ export const requestRebuy: Handler<'requestRebuy'> = {
       throw new GameError(`You already have the maximum buy-in of ${formatAmount(state.config.maxBuyIn, state.config)}`);
     }
 
-    const amount = validAmount(command.amount, 'Your rebuy', state.config, 1, room);
+    const amount = validAmount(command.amount, 'The chips you add', state.config, 1, room);
 
     submit(state, ctx, { playerId: member.id, kind: 'rebuy', seat: seatIndex, amount });
   },

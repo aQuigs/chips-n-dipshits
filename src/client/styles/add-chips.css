@@ -1,0 +1,18 @@
+/* ---- Adding chips: the amount with the most the table allows beside it, and a request that waits ---- */
+
+.amount-with-most {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.amount-with-most .chip-btn {
+  flex: none;
+  min-height: 44px;
+  color: var(--text);
+}
+
+/* Chips asked for and not yet had, drawn as a seat asked for is on the felt */
+.chip-btn.asked {
+  border-style: dashed;
+}

@@ -58,12 +58,15 @@ export interface Watched {
   liveAtOnce: string[];
 }
 
+// Run in the page on a control: what the watch names it by
+const NAMED = `(element) => element.matches(${JSON.stringify(BACKDROP)}) ? 'the backdrop of the dialog' : JSON.stringify((element.getAttribute('aria-label') || element.textContent || element.placeholder || element.id || element.tagName).trim().replace(/\\s+/g, ' ').slice(0, 30))`;
+
 // Run in the page. Notes where every control is, and from then on compares the page, each time anything on it is
 // drawn anew or the bar changes shape, with how things lay before, asking of each control that came up where
 // another had been what a tap there would reach. A control is told from another as the page tells them apart,
 // by its id and its data marks. Every control the page holds back is tapped the moment it is, where it lies
 const WATCH = `(({ tapped, backdrop, bar, playsNothing, settling, byName }) => {
-  const named = (element) => element.matches(backdrop) ? 'the backdrop of the dialog' : JSON.stringify((element.getAttribute('aria-label') || element.textContent || element.placeholder || element.id || element.tagName).trim().replace(/\\s+/g, ' ').slice(0, 30));
+  const named = ${NAMED};
   const reaches = (element, x, y) => element.contains(document.elementFromPoint(x, y));
   // A tap passes through a control that is held back to what it lies on, which is around it; under a dialog or a replay it reaches the cover instead
   const inSightThough = (element, x, y) => document.elementFromPoint(x, y)?.contains(element) ?? false;
@@ -250,6 +253,9 @@ export async function watched(page: Page): Promise<Watched> {
 
   return page.evaluate(`(({ found, held, liveAtOnce }) => ({ found, held, liveAtOnce }))(window.__underTheFinger)`) as Promise<Watched>;
 }
+
+/** What the watch names the control at `selector` by, in what it has seen: a check that looks for one control there asks for it by this. */
+export const namedByTheWatch = (page: Page, selector: string) => page.evaluate(`(${NAMED})(document.querySelector(${JSON.stringify(selector)}))`) as Promise<string>;
 
 /** Every control that has come up where a different one lay, since the watch began. */
 export const cameUp = async (page: Page): Promise<CameUp[]> => (await watched(page)).found;

@@ -289,15 +289,34 @@ test('only the host can use the host controls', () => {
   }
 });
 
-test('rebuys respect the maximum buy-in', () => {
-  const t = new TestTable({ stacks: [1000, 1000], config: { minBuyIn: 100, maxBuyIn: 1500 } });
+test('rebuys respect the maximum buy-in, whatever a page sends', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 1000], config: { minBuyIn: 100, maxBuyIn: 1500 } });
+  const refused = (player: number, amount: unknown, to: number) =>
+    assert.throws(() => t.cmd(player, { type: 'requestRebuy', amount: amount as number }), { message: `The chips you add must be a whole number from 1 to ${to}` }, String(amount));
 
-  assert.throws(() => t.cmd(1, { type: 'requestRebuy', amount: 501 }), /rebuy/);
+  for (const amount of [501, 1500, 0, -1, 0.5, '500', null, Number.NaN]) {
+    refused(1, amount, 500);
+  }
+
+  assert.equal(t.state.requests.length, 0, 'nothing refused is left for the host');
+
   t.cmd(1, { type: 'requestRebuy', amount: 500 });
   t.cmd(0, { type: 'approve', playerId: t.ids[1]! });
 
   assert.equal(t.state.seats[1]!.stack, 1500);
   assert.throws(() => t.cmd(1, { type: 'requestRebuy', amount: 1 }), /maximum buy-in/);
+
+  // Chips on their way count: approved during a hand they wait for its end, and leave that much less room
+  t.deal({ button: 0 });
+  t.cmd(2, { type: 'requestRebuy', amount: 200 });
+  t.cmd(0, { type: 'approve', playerId: t.ids[2]! });
+  assert.equal(t.state.seats[2]!.pendingAdd, 200);
+
+  const room = 1500 - t.state.seats[2]!.stack - 200;
+
+  refused(2, room + 1, room);
+  t.cmd(2, { type: 'requestRebuy', amount: room });
+  assert.deepEqual(t.state.requests.map((request) => [request.kind, request.amount]), [['rebuy', room]], 'and the most there is room for is taken');
 });
 
 test('a request that stopped fitting is cut down or dropped, never left for the host to fail on', () => {
@@ -751,7 +770,7 @@ test('a table created to play dollars and cents starts at stakes that suit it, a
   assert.throws(() => t.cmd(watcher, { type: 'requestSeat', seat: 5, buyIn: 1999 }), { message: 'Your buy-in must be an amount to the cent from 20.00 to 100.00' });
   assert.throws(() => t.cmd(watcher, { type: 'requestSeat', seat: 5, buyIn: 20.5 }), { message: 'Your buy-in must be an amount to the cent from 20.00 to 100.00' });
   assert.throws(() => t.cmd(0, { type: 'requestRebuy', amount: 1 }), { message: 'You already have the maximum buy-in of 100.00' });
-  assert.throws(() => t.cmd(1, { type: 'requestRebuy', amount: 8001 }), { message: 'Your rebuy must be an amount to the cent from 0.01 to 80.00' });
+  assert.throws(() => t.cmd(1, { type: 'requestRebuy', amount: 8001 }), { message: 'The chips you add must be an amount to the cent from 0.01 to 80.00' });
   assert.throws(() => t.cmd(0, { type: 'setStack', playerId: t.ids[1]!, stack: -1 }), { message: 'The stack must be an amount to the cent from 0.00 to 10,000,000.00' });
 
   t.cmd(1, { type: 'requestRebuy', amount: 2550 });

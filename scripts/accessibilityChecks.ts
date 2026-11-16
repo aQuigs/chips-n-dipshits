@@ -34,7 +34,7 @@ function threeHanded(rig: Rig, config: Partial<TableConfig> = {}): RigTable {
 const listening = (table: RigTable, name: string, screen: ScreenName = 'desktop', init = '', options?: PageOptions): Promise<Page> => table.open(name, screen, `${SPOKEN};${init}`, options);
 
 /** Presses Tab until the keyboard is on what `selector` matches, and fails if it never gets there. */
-async function tabTo(page: Page, selector: string, key = 'Tab'): Promise<void> {
+export async function tabTo(page: Page, selector: string, key = 'Tab'): Promise<void> {
   for (let presses = 0; presses < 60; presses++) {
     if (await page.evaluate(`document.activeElement?.matches(${JSON.stringify(selector)}) ?? false`)) {
       return;
@@ -86,7 +86,7 @@ const DEAL = ['log: The game is on', 'log: Hand #1 · blinds 5/10 · Quigs has t
 const SHOWDOWN = ['log: Pam shows king of diamonds, king of clubs (Pair of kings)', 'log: Quigs shows ace of spades, ace of hearts (Pair of aces)', 'log: Quigs wins 170 with pair of aces'];
 
 /** What the rule engine found over the screens of one check, gathered so that a failure names all of them at once. */
-class Sweep {
+export class Sweep {
   private readonly found: string[] = [];
   private screens = 0;
 

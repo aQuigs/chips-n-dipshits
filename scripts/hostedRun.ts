@@ -275,6 +275,10 @@ try {
     await host.click('.menu [data-action="players"]');
     await host.click('li:has-text("Lurker") button:has-text("Remove")');
     await host.click('[data-action="confirm"]');
+
+    // The answer gives way to the list of players again, which then has one fewer
+    await host.waitForSelector('.dialog li:has-text("Lurker")', { state: 'detached' });
+    await host.click('.dialog [data-action="close"]');
     await host.waitForSelector('.dialog', { state: 'detached' });
 
     // The page that was open is told by the server, which is the one thing that may take a seat out of the address

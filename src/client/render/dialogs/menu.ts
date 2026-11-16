@@ -51,6 +51,7 @@ export const standUp: MenuAction = {
       body: 'You leave your seat and your chips are cashed out in the ledger. If you are in a hand, it is folded.',
       action: 'Stand up',
       command: { type: 'standUp' },
+      danger: true,
     }),
 };
 

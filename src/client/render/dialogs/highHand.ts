@@ -42,7 +42,7 @@ function payHighHand(view: TableView, handlers: DialogHandlers): HTMLElement {
       : null,
     h('p', null, `Everyone else seated pays ${formatAmount(config.highHandBonus, config)}, or what they have if that is less: ${total} in all${due.playerIds.length > 1 ? ', shared' : ''}.`),
     h('p.note', null, 'Once it is paid, the next high hand starts from nothing. The high hand of the night stays in Tonight.'),
-    h('div.buttons', null, h('button.btn', { type: 'button', onclick: handlers.close }, 'Cancel'), h('button.btn.primary', { type: 'button', 'data-action': 'pay-high-hand', onclick: pay }, `Pay ${total}`)),
+    h('div.buttons', null, h('button.btn', { type: 'button', onclick: handlers.close }, 'Cancel'), h('button.btn.danger', { type: 'button', 'data-action': 'pay-high-hand', onclick: pay }, `Pay ${total}`)),
   );
 }
 

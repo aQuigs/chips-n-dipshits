@@ -290,6 +290,21 @@ export function opsSent(page: Page): string[] {
   return ops;
 }
 
+/** The kind of every command a page sends the table from now on, in order. */
+export function commandsSent(page: Page): string[] {
+  const sent: string[] = [];
+
+  page.on('request', (request) => {
+    const type = request.method() === 'POST' ? (JSON.parse(request.postData() ?? '{}') as { command?: { type?: string } }).command?.type : undefined;
+
+    if (type) {
+      sent.push(type);
+    }
+  });
+
+  return sent;
+}
+
 export function movesSent(page: Page): string[] {
   const sent: string[] = [];
 

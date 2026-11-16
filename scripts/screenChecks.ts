@@ -39,6 +39,7 @@ import { focused, focusIn, heard, SPOKEN, spoken } from './a11y.ts';
 import { ACCESSIBILITY_CHECKS } from './accessibilityChecks.ts';
 import { runChecks } from './checkRunner.ts';
 import { layoutSweep } from './layoutSweep.ts';
+import { confirmChecks } from './confirmChecks.ts';
 import { menuChecks } from './menuChecks.ts';
 import { preferencesChecks } from './preferencesChecks.ts';
 import { tapsLive } from './underTheFinger.ts';
@@ -3298,8 +3299,7 @@ const CHECKS: Check[] = [
         assert.equal(await text(page, '.dialog h2'), 'Make Marge Simpson-Jr a co-host?');
         await press('[data-action="confirm"]');
 
-        await press('[data-action="menu"]');
-        await press('.menu [data-action="players"]');
+        // The answer gives way to the list again, with no trip through the menu
         await page.waitForSelector(`${row('Marge Simpson-Jr')} .cohost`);
         assert.deepEqual(table.view('Quigs').cohostIds, [table.auth('Marge Simpson-Jr').id]);
         assert.equal(await page.locator('.seat[data-seat="1"] .plate .cohost').count(), 1, 'the seat does not show the co-host mark');
@@ -13646,6 +13646,7 @@ const CHECKS: Check[] = [
   ...ACCESSIBILITY_CHECKS,
   ...menuChecks(OUT),
   ...preferencesChecks(OUT),
+  ...confirmChecks(OUT),
 ];
 
 await mkdir(OUT, { recursive: true });

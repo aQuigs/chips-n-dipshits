@@ -59,6 +59,7 @@ function players(view: TableView, handlers: DialogHandlers): HTMLElement {
             body: 'They take over the table, and you stay on as a co-host until they say otherwise.',
             action: 'Hand over',
             command: { type: 'transferHost', playerId },
+            danger: true,
           }),
       },
       'Make host',
@@ -76,7 +77,7 @@ function players(view: TableView, handlers: DialogHandlers): HTMLElement {
           {
             type: 'button',
             'data-action': 'remove',
-            onclick: () => handlers.open({ kind: 'confirm', title: `Remove ${name}?`, body, action: 'Remove', command: { type: 'kick', playerId } }),
+            onclick: () => handlers.open({ kind: 'confirm', title: `Remove ${name}?`, body, action: 'Remove', command: { type: 'kick', playerId }, danger: true }),
           },
           'Remove',
         );
@@ -171,6 +172,8 @@ export const playersDialog: DialogKind<'players'> = {
     who: hostOrCohost,
     state: (view) => (view.requests.length > 0 ? `${view.requests.length} waiting for you` : null),
   },
+  // A host works down the list: a co-host named, then a player removed, with the list still there between the two
+  comesBack: true,
   // Stacks move with every bet. Redrawn that often, a button here would be gone before a tap on it landed,
   // so during a hand the list keeps the stacks it was drawn with
   shows: (view) => [

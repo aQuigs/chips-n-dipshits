@@ -1,3 +1,4 @@
+import { capitalized } from '../../../engine/handNames.ts';
 import type { Command } from '../../../engine/types.ts';
 import { LIMITS } from '../../../engine/validate.ts';
 import type { TableView } from '../../../engine/view.ts';
@@ -6,6 +7,16 @@ import { lastHandsText, nightOver } from '../night.ts';
 import { hostOrCohost } from '../roles.ts';
 import { frame } from './dialog.ts';
 import type { DialogHandlers, DialogKind } from './dialog.ts';
+
+/**
+ * What ending the night does that its button does not say, each only when there is something for it to
+ * do: said before the yes, so that nobody learns it from the chat afterwards.
+ */
+function endingAlso(view: TableView): string {
+  const also = ['refused' in view.tonight.highHand.due ? '' : 'the high hand is paid', view.requests.length > 0 ? 'requests still waiting are dropped' : ''].filter(Boolean).join(', and ');
+
+  return also === '' ? '' : ` ${capitalized(also)}.`;
+}
 
 /**
  * How many hands are left tonight, picked with one tap, or called off; and ending the night outright,
@@ -42,9 +53,12 @@ function lastHands(view: TableView, handlers: DialogHandlers): HTMLElement {
                 handlers.open({
                   kind: 'confirm',
                   title: 'End the night?',
-                  body: 'No more hands are dealt. Chips, the ledger and cashing out still work, and play can start again from the menu.',
+                  body: `No more hands are dealt.${endingAlso(view)} Chips, the ledger and cashing out still work, and play can start again from the menu.`,
                   action: 'End the night',
                   command: { type: 'endNight' },
+                  danger: true,
+                  // The night's numbers open by themselves once it is over, and this dialog has nothing left to offer
+                  toTable: true,
                 }),
             },
             'End the night now',
@@ -56,6 +70,8 @@ function lastHands(view: TableView, handlers: DialogHandlers): HTMLElement {
 export const lastHandsDialog: DialogKind<'lastHands'> = {
   kind: 'lastHands',
   menu: { group: 'run', label: 'Last hands', who: (view) => hostOrCohost(view) && !nightOver(view), state: lastHandsText },
+  // Whoever backs out of ending the night still has the count of hands to set
+  comesBack: true,
   // The hand on the table is what the count is from, so a new one is a new dialog
   shows: (view) => [view.hand !== null, view.handCount, view.handsLeft],
   draw: lastHands,

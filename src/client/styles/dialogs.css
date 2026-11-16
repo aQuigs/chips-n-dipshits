@@ -45,6 +45,12 @@
   border-bottom: 1px solid var(--line);
 }
 
+/* A question names a player, and the widest name is one word wider than a phone: unbroken, it pushes the answer off the screen */
+.dialog header h2 {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .dialog-body,
 .dialog-body form,
 .dialog-body section {

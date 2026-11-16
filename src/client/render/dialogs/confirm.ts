@@ -9,28 +9,41 @@ interface Question {
   body: string;
   action: string;
   command: Command;
+  /**
+   * Yes takes a seat, chips or the table from someone, and no one tap gives it back: its button is drawn
+   * as the one to stop at, not as the one every other dialog has under the thumb.
+   */
+  danger?: boolean;
+  /** What yes does shows on the table by itself, so yes leaves for the table and not for the dialog the question was opened from. */
+  toTable?: boolean;
 }
 
-function confirm(dialog: Question, handlers: DialogHandlers): HTMLElement {
+function confirm(question: Question, handlers: DialogHandlers): HTMLElement {
   return frame(
-    dialog.title,
+    question.title,
     handlers,
-    h('p', null, dialog.body),
+    h('p', null, question.body),
     h(
       'div.buttons',
       null,
       h('button.btn', { type: 'button', onclick: handlers.close }, 'Cancel'),
       h(
-        'button.btn.primary',
+        'button.btn',
         {
           type: 'button',
+          class: question.danger ? 'danger' : 'primary',
           'data-action': 'confirm',
           onclick: () => {
-            void handlers.send(dialog.command);
-            handlers.close();
+            void handlers.send(question.command);
+
+            if (question.toTable) {
+              handlers.toTable();
+            } else {
+              handlers.close();
+            }
           },
         },
-        dialog.action,
+        question.action,
       ),
     ),
   );

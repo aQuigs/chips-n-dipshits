@@ -13,6 +13,7 @@ import { lastOnRecord } from './handRecords.ts';
 import { HotkeyPresser } from './hotkeyPresser.ts';
 import { playerFor, RememberedPlayer } from './knownPlayers.ts';
 import type { Answer } from './knownPlayers.ts';
+import { KeyboardPlace } from './keyboardPlace.ts';
 import { Modal } from './modal.ts';
 import { browserOf } from './pageErrors.ts';
 import type { PageFailure } from './pageErrors.ts';
@@ -37,7 +38,7 @@ import type { Abilities, Ability, AppPreferences } from './prefs.ts';
 import { controlsEl, controlsSignature, lockTurn, sizingMemory } from './render/controls.ts';
 import type { Sizing } from './render/controls.ts';
 import { frame } from './render/dialogs/dialog.ts';
-import { dialogAllowed, dialogEl, dialogShows } from './render/dialogs/index.ts';
+import { dialogAllowed, dialogComesBack, dialogEl, dialogShows } from './render/dialogs/index.ts';
 import type { Dialog, DialogHandlers } from './render/dialogs/index.ts';
 import { createFeed } from './render/feed.ts';
 import type { Feed } from './render/feed.ts';
@@ -73,6 +74,15 @@ const NAME_KEY = 'cnd.name';
 const seatKey = (tableId: string) => `cnd.seat.${tableId}`;
 
 const FONTS_LINK_ID = 'theme-fonts';
+
+/** A dialog as its viewer left it for one they opened from it, which is how they find it when they are brought back. */
+interface DialogLeft {
+  dialog: Dialog;
+  /** How far down they had scrolled. */
+  scrolled: number;
+  /** The control they pressed to open the other, which has the keyboard when they are back. */
+  keyboard: KeyboardPlace | null;
+}
 
 /** The parts of the table screen that are built once and then filled in as views arrive. */
 interface TableScreen {
@@ -162,6 +172,18 @@ export class App {
 
   /** The opening that the dialog on screen was drawn for. */
   private dialogDrawn = 0;
+
+  /** The dialogs the one on screen was opened from, each of which has its viewer back once that one is closed or answered (`comesBack`); the nearest is last. */
+  private dialogsBehind: DialogLeft[] = [];
+
+  /** What was last pressed in a dialog: the control a dialog opened from another was opened with. */
+  private pressedInDialog: Element | null = null;
+
+  /**
+   * The control the page put the keyboard on as it brought the viewer back, which is one that opens
+   * something. For as long as the keyboard stays there, it goes where that control does (`KeyboardPlace`).
+   */
+  private keyboardPut: HTMLElement | null = null;
 
   /** A dialog the page means to open by itself, waiting for the viewer to be free for it. */
   private offered: { dialog: Dialog; still(view: TableView): boolean } | null = null;
@@ -284,7 +306,7 @@ export class App {
       if (this.closeStandings) {
         this.closeStandings();
       } else if (this.dialog) {
-        this.closeDialog();
+        this.leaveDialog();
       } else if (this.screen?.picker.isOpen) {
         this.screen.picker.close();
       } else if (this.screen?.seatMoves.active) {
@@ -687,11 +709,29 @@ export class App {
       troubleSaid: null,
     };
 
-    screen.overlay.element.addEventListener('click', (event) => {
-      if (event.target === screen.overlay.element) {
-        this.closeDialog();
-      }
-    });
+    // Heard on its way down, before the press has drawn anything else over the control it was made on
+    screen.overlay.element.addEventListener(
+      'click',
+      (event) => {
+        this.pressedInDialog = event.target as Element;
+
+        if (event.target === screen.overlay.element) {
+          this.leaveDialog();
+        }
+      },
+      true,
+    );
+
+    // A key held down is one press. Enter held on an answer would go on to press what the keyboard is given back to, and ask again
+    screen.overlay.element.addEventListener(
+      'keydown',
+      (event) => {
+        if (event.repeat && event.key === 'Enter') {
+          event.preventDefault();
+        }
+      },
+      true,
+    );
 
     this.screen = screen;
     page.append(skip, screen.topbar.element, screen.banners.element, stage.element, above, screen.controls.element, feed.element, screen.overlay.element);
@@ -727,6 +767,9 @@ export class App {
     this.screen?.replay.close();
     this.screen = null;
     this.dialog = null;
+    this.dialogsBehind = [];
+    this.pressedInDialog = null;
+    this.keyboardPut = null;
     this.offered = null;
     this.announcer.forget();
   }
@@ -1164,26 +1207,57 @@ export class App {
 
   // ---- Dialogs ----
 
-  /** `byItself` is for a dialog the game opens or closes, not the player: what that brings up under a finger takes no tap for a moment (`TapGuard`). */
-  private openDialog(dialog: Dialog, byItself = false): void {
+  /**
+   * `byItself` is for a dialog the game opens or closes, not the player: what that brings up under a finger takes no tap for a moment (`TapGuard`).
+   * `from` is the dialog it is opened from, which has the viewer back afterwards when it says so (`comesBack`).
+   */
+  private openDialog(dialog: Dialog, byItself = false, from: Dialog | null = null): void {
+    this.dialogsBehind = from !== null && from === this.dialog && dialogComesBack(from) ? [...this.dialogsBehind, this.dialogLeft(from)] : [];
     this.dialog = dialog;
     this.dialogOpenedItself = byItself;
     this.dialogOpens += 1;
+    this.keyboardPut = null;
     this.drawDialogAs(byItself);
   }
 
+  /** To the table, whatever the dialog on screen was opened from. */
   private closeDialog(byItself = false): void {
     this.dialog = null;
+    this.dialogsBehind = [];
+    this.keyboardPut = null;
     this.drawDialogAs(byItself);
   }
 
-  private drawDialogAs(byItself: boolean): void {
+  /** The viewer closes or answers the dialog on screen: back to the dialog it was opened from, when that one has them back, and else to the table. */
+  private leaveDialog(): void {
+    const back = this.dialogsBehind.pop();
+
+    if (!back) {
+      this.closeDialog();
+
+      return;
+    }
+
+    this.dialog = back.dialog;
+    this.dialogOpenedItself = false;
+    this.dialogOpens += 1;
+    this.drawDialogAs(false, back);
+  }
+
+  /** The dialog on screen, as its viewer leaves it for one they open from it. */
+  private dialogLeft(dialog: Dialog): DialogLeft {
+    const overlay = this.screen?.overlay.element;
+
+    return { dialog, scrolled: overlay?.querySelector('.dialog-body')?.scrollTop ?? 0, keyboard: overlay ? KeyboardPlace.of(this.pressedInDialog, overlay) : null };
+  }
+
+  private drawDialogAs(byItself: boolean, back: DialogLeft | null = null): void {
     const taps = this.screen?.taps;
 
     if (byItself || !taps) {
-      this.drawDialog();
+      this.drawDialog(back);
     } else {
-      taps.byThePlayer(() => this.drawDialog());
+      taps.byThePlayer(() => this.drawDialog(back));
     }
   }
 
@@ -1243,7 +1317,8 @@ export class App {
     }
   }
 
-  private drawDialog(): void {
+  /** `back` is how the viewer left the dialog, when this draws one they are brought back to. */
+  private drawDialog(back: DialogLeft | null = null): void {
     const screen = this.screen;
     if (!screen) {
       return;
@@ -1252,6 +1327,7 @@ export class App {
     const view = this.shownView();
     if (this.dialog && view && !dialogAllowed(this.dialog, view)) {
       this.dialog = null;
+      this.dialogsBehind = [];
     }
 
     const dialog = this.dialog;
@@ -1279,13 +1355,14 @@ export class App {
     }
 
     // Opening a dialog always draws it; after that only a change in what it shows does
-    const handlers = this.dialogHandlers();
+    const handlers = this.dialogHandlers(dialog);
     const body = () => screen.overlay.element.querySelector('.dialog-body');
-    const scrolled = this.dialogDrawn === this.dialogOpens ? (body()?.scrollTop ?? 0) : 0;
+    const keyboard = back ? back.keyboard : this.keyboardPut === document.activeElement ? KeyboardPlace.of(this.keyboardPut, screen.overlay.element) : null;
+    const scrolled = back ? back.scrolled : this.dialogDrawn === this.dialogOpens ? (body()?.scrollTop ?? 0) : 0;
 
-    // Drawn again for what changed at the table, a dialog stays where its reader had scrolled to. Put back before the
-    // tap guard looks at the dialog: it is the rows the reader has in sight that a finger may be on its way to
-    screen.overlay.draw(
+    // Drawn again for what changed at the table, or come back to, a dialog stays where its reader had scrolled to. Put back
+    // before the tap guard looks at the dialog: it is the rows the reader has in sight that a finger may be on its way to
+    const drew = screen.overlay.draw(
       [this.dialogOpens, dialogShows(dialog, view, handlers)],
       () => {
         screen.overlay.element.hidden = false;
@@ -1300,16 +1377,26 @@ export class App {
     );
 
     this.dialogDrawn = this.dialogOpens;
+
+    // Come back to, the dialog has the keyboard on the control it was left by. And drawn again under a keyboard the page
+    // put there, it has the keyboard on the same control still (`Slot`), or with that one gone, on the next row's
+    if (drew && (back || keyboard)) {
+      this.keyboardPut = keyboard?.find(screen.overlay.element) ?? null;
+      this.keyboardPut?.focus({ preventScroll: true });
+    }
+
     screen.modal.update(true);
   }
 
-  private dialogHandlers(): DialogHandlers {
+  /** What `dialog`, the one being drawn, is handed to do its work with. */
+  private dialogHandlers(dialog: Dialog): DialogHandlers {
     const { session } = this.table!;
 
     return {
       send: (command) => this.send(command),
-      open: (dialog) => this.openDialog(dialog),
-      close: () => this.closeDialog(),
+      open: (next) => this.openDialog(next, false, dialog),
+      close: () => this.leaveDialog(),
+      toTable: () => this.closeDialog(),
       byItself: (change) => this.screen!.taps.byItself(change),
       copy: (text) => this.copy(text),
       loadHistory: () => this.loadHistory(),

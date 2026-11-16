@@ -12,7 +12,7 @@ function transfer(view: TableView, handlers: DialogHandlers): HTMLElement {
     const form = event.target as HTMLFormElement;
     const amount = amountOf(form, 'transfer-amount', view.config);
 
-    submit(event, handlers, { type: 'transferChips', from: inputOf(form, 'transfer-from').value, to: inputOf(form, 'transfer-to').value, amount }, () => handlers.open({ kind: 'players' }));
+    submit(event, handlers, { type: 'transferChips', from: inputOf(form, 'transfer-from').value, to: inputOf(form, 'transfer-to').value, amount }, handlers.close);
   };
 
   return frame(

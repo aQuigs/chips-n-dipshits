@@ -877,6 +877,26 @@ const SCREEN_STATES: ScreenState[] = [
     },
   },
   {
+    shows: 'a question whose answer takes something, asked about the widest name and about the longest',
+    async walk(rig, screen, look) {
+      const table = rig.table(players(9, EVEN));
+      const host = await table.open(WIDEST, screen);
+      const rowOf = (name: string) => `.dialog li:has(b:text-is("${name}"))`;
+
+      await openFromMenu(host, 'players');
+
+      for (const [name, action, asks] of [[WIDEST, 'remove', `Remove ${WIDEST}?`], [NAMES[2]!, 'make-host', `Make ${NAMES[2]!} the host?`]] as const) {
+        await host.locator(`${rowOf(name)} [data-action="${action}"]`).click();
+        await host.waitForSelector(`.dialog[aria-label=${JSON.stringify(asks)}] .btn.danger`);
+        await look(host, `the question “${asks}”`);
+
+        await host.locator('.dialog .buttons button:not([data-action])').click();
+        await host.waitForSelector('.dialog[aria-label="Players"]');
+        await tapsLive(host);
+      }
+    },
+  },
+  {
     shows: 'the menu with every line that says how things stand saying it at its longest, for the host during a hand and between hands, and for a player',
     async walk(rig, screen, look) {
       // The widest name hosts and holds the high hand, at a table of cents where the bonus on it and a bomb pot are the longest amounts written out
@@ -1755,7 +1775,7 @@ const letGoBetween = (held: Held[]): { hold: Held; live: number }[] =>
     return live > CLOCK_ROUNDS_MS && live < TAPS_SETTLE_MS ? [{ hold, live }] : [];
   });
 
-const letGoEarly = (held: Held[]): string[] => [
+export const letGoEarly = (held: Held[]): string[] => [
   ...ranOut(held)
     .filter((one) => one.sinceFirst !== null && one.sinceFirst < TAPS_SETTLE_MS - CLOCK_ROUNDS_MS)
     .map((one) => `  ${one.what} was let go ${Math.round(one.sinceFirst ?? 0)} ms after it first came up`),
@@ -1957,6 +1977,8 @@ interface OwnDialog {
   then: string;
   /** The `data-action` of what comes up under the tap, which a second tap must not press. */
   under: string;
+  /** The one screen it is tapped on, when that is not each standing phone a dialog is a sheet on. */
+  phone?: Size;
 }
 
 function askedForChips(rig: Rig): RigTable {
@@ -1966,6 +1988,26 @@ function askedForChips(rig: Rig): RigTable {
 
   return table;
 }
+
+/** The viewer made a co-host, who may end the night. */
+function cohosting(rig: Rig): RigTable {
+  const table = betweenHands(rig);
+
+  table.act(WIDEST, { type: 'setCohost', playerId: table.auth(VIEWER).id, on: true });
+
+  return table;
+}
+
+/** The viewer handed the table, which only its host hands on. */
+function hosting(rig: Rig): RigTable {
+  const table = betweenHands(rig);
+
+  table.act(WIDEST, { type: 'transferHost', playerId: table.auth(VIEWER).id });
+
+  return table;
+}
+
+const MAKE_STU_HOST = '.dialog [data-action="make-host"][aria-label$=", Stu"]';
 
 const OWN_DIALOGS: OwnDialog[] = [
   {
@@ -2005,6 +2047,30 @@ const OWN_DIALOGS: OwnDialog[] = [
     then: `${ADD_CHIPS}:visible`,
     under: 'invite',
   },
+  {
+    when: 'End the night now, whose question lays the button that ends the night under the tap',
+    build: cohosting,
+    open: async (page) => {
+      await openFromMenu(page, 'lastHands');
+      await page.waitForSelector('.dialog [data-action="end-night"]');
+    },
+    tap: '.dialog [data-action="end-night"]',
+    then: '.dialog [data-action="confirm"]',
+    under: 'confirm',
+  },
+  {
+    // Lying down a dialog stands in the middle of the screen, and a question in the middle of the list it is asked from
+    when: 'Make host, whose question lays the button that hands the table over under the tap, on a 360 phone lying down',
+    build: hosting,
+    phone: LYING,
+    open: async (page) => {
+      await openFromMenu(page, 'players');
+      await page.locator(MAKE_STU_HOST).scrollIntoViewIfNeeded();
+    },
+    tap: MAKE_STU_HOST,
+    then: '.dialog [data-action="confirm"]',
+    under: 'confirm',
+  },
 ];
 
 // The standing phones a dialog is a sheet on, from the foot of the screen up over the bar: what it lays under a tap on the bar is its own buttons
@@ -2017,9 +2083,9 @@ const SHEET_PHONES: Size[] = [SMALL_STANDING, { name: '390 standing', ...SCREENS
  * it does, which is that second tap, and nothing may come of it.
  */
 const secondTapPressesNothingOfADialog = OWN_DIALOGS.map((own): Check => [
-  `the second tap of two presses nothing that the first one’s dialog brought up or uncovered: ${own.when}, on a 360 and a 390 phone`,
+  `the second tap of two presses nothing that the first one’s dialog brought up or uncovered: ${own.when}${own.phone ? '' : ', on a 360 and a 390 phone'}`,
   async (rig) => {
-    for (const size of SHEET_PHONES) {
+    for (const size of own.phone ? [own.phone] : SHEET_PHONES) {
       const table = own.build(rig);
       const page = await table.open(VIEWER, 'smallPhone');
 

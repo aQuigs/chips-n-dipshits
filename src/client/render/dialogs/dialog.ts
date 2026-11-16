@@ -14,6 +14,9 @@ export interface DialogHandlers {
   /** Resolves to whether the table took the command. */
   send(command: Command): Promise<SendOutcome>;
   open(dialog: Dialog): void;
+  /** Leaves for the table whatever the dialog was opened from: for an answer that puts something else on the screen by itself. */
+  toTable(): void;
+  /** Leaves the dialog: for the one it was opened from when that one has its viewer back (`comesBack`), else for the table. */
   close(): void;
   /** Makes a change to the open dialog that the game and not the viewer brings about, as on an answer from the table: what comes up under a finger takes no tap for a moment (`TapGuard`). */
   byItself(change: () => void): void;
@@ -84,6 +87,12 @@ export interface DialogKind<K extends string = string, P = unknown> {
    * one. Left out, it is whoever its menu entry is for, or anyone.
    */
   who?(view: TableView): boolean;
+  /**
+   * Whether the viewer is brought back here from whatever this dialog opens: closed or answered, that
+   * gives way to this dialog again as they left it, not to the table. A list someone works down says so.
+   * Left out, what it opens closes to the table.
+   */
+  comesBack?: boolean;
   /**
    * What its content depends on. A dialog showing live table data is redrawn when this changes; one
    * that leaves it out holds a form someone may be filling in, and is drawn once.

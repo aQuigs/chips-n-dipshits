@@ -85,6 +85,11 @@ export function dialogAllowed(dialog: Dialog, view: TableView): boolean {
   return (kind.who ?? kind.menu?.who)?.(view) ?? true;
 }
 
+/** Whether the viewer is brought back to the dialog from what it opens (`DialogKind.comesBack`). */
+export function dialogComesBack(dialog: Dialog): boolean {
+  return BY_KIND.get(dialog.kind)!.comesBack ?? false;
+}
+
 export function dialogEl(dialog: Dialog, view: TableView, handlers: DialogHandlers): HTMLElement {
   return BY_KIND.get(dialog.kind)!.draw(view, handlers, dialog);
 }

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { barLine, spokenToViewer } from '../src/client/chatBar.ts';
+import { barLine, spokenToViewer, unseenOf } from '../src/client/chatBar.ts';
 import type { FeedEntry } from '../src/engine/types.ts';
 
 let seq = 0;
@@ -46,4 +46,22 @@ test('what the bar counts and holds is chat from someone else: not the dealer’
   assert.equal(spokenToViewer(says('marge', 'hi'), 'danny'), true);
   assert.equal(spokenToViewer(says('danny', 'hi'), 'danny'), false);
   assert.equal(spokenToViewer(dealer('Quigs calls 20'), 'danny'), false);
+});
+
+test('the lines counted are the ones people said since the last the viewer had in sight, among those they are shown', () => {
+  const before = says('marge', 'anyone there?');
+  const lines = [before, dealer('Quigs calls 20'), says('marge', 'pizza is here'), says('danny', 'on my way'), dealer('Flop: Ah 7c 2d'), says('stu', 'save me a slice')];
+
+  assert.equal(unseenOf(lines, before.seq, 'danny'), 2);
+  assert.equal(unseenOf(lines, 0, 'danny'), 3, 'nothing seen yet');
+  assert.equal(unseenOf(lines, lines.at(-1)!.seq, 'danny'), 0, 'all of it seen');
+  assert.equal(
+    unseenOf(
+      lines.filter((line) => line.by !== 'marge'),
+      before.seq,
+      'danny',
+    ),
+    1,
+    'someone muted since is no longer counted',
+  );
 });

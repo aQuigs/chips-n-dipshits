@@ -1,6 +1,6 @@
 import type { FeedEntry } from '../../engine/types.ts';
 import type { TableView } from '../../engine/view.ts';
-import { barLine, SPOKEN_HOLDS_MS, spokenToViewer } from '../chatBar.ts';
+import { barLine, SPOKEN_HOLDS_MS, spokenToViewer, unseenOf } from '../chatBar.ts';
 import { chatLineShown } from '../senders.ts';
 import { LABELS } from '../spoken.ts';
 import { cardText, h, marksCards, readableText } from '../ui.ts';
@@ -82,7 +82,8 @@ export function createFeed(onChat: (text: string) => void, look: () => FeedLook,
   let lastSeq = 0;
   let opened = false;
   let you = '';
-  let unseen = 0;
+  // The number of the newest line the viewer has had in sight: every line the page opened with, and then every line had when the list was last in sight
+  let seen = 0;
   // The line a person said that keeps the bar for now, by its number, and the timer that gives the bar back
   let holding: number | null = null;
   let released: ReturnType<typeof setTimeout> | undefined;
@@ -145,16 +146,13 @@ export function createFeed(onChat: (text: string) => void, look: () => FeedLook,
     return line.element;
   };
 
+  /** The bar's line and its count, from the lines the viewer is shown now: someone muted since takes their lines out of both. */
   const showLatest = (current: FeedLook) => {
-    const line = barLine(
-      had.filter((entry) => isShown(entry, current)),
-      holding,
-    );
+    const shown = had.filter((entry) => isShown(entry, current));
+    const line = barLine(shown, holding);
+    const unseen = unseenOf(shown, seen, you);
 
     latest.replaceChildren(...(line ? latestText(line, current) : []));
-  };
-
-  const showUnseen = () => {
     counted.textContent = unseen > MOST_COUNTED ? `${MOST_COUNTED}+` : String(unseen);
     unread.hidden = unseen === 0;
   };
@@ -170,11 +168,11 @@ export function createFeed(onChat: (text: string) => void, look: () => FeedLook,
   };
 
   // The list comes into sight when the chat is opened, and when it comes back up after a turn that took its room: at its newest line, as it opens, since out of sight it followed nothing
-  new IntersectionObserver((seen) => {
-    if (seen.some((one) => one.isIntersecting)) {
+  new IntersectionObserver((inSight) => {
+    if (inSight.some((one) => one.isIntersecting)) {
       named.hidden = true;
-      unseen = 0;
-      showUnseen();
+      seen = lastSeq;
+      showLatest(look());
       list.scrollTop = list.scrollHeight;
     }
   }).observe(list);
@@ -219,13 +217,10 @@ export function createFeed(onChat: (text: string) => void, look: () => FeedLook,
       // What people said just now, to the viewer and where they are shown it
       const spoken = arrived ? fresh.filter((entry) => spokenToViewer(entry, you) && isShown(entry, current)) : [];
 
-      if (list.clientHeight === 0) {
-        if (spoken.some((entry) => namesViewer(entry, you))) {
-          named.hidden = false;
-        }
-
-        unseen += spoken.length;
-        showUnseen();
+      if (!arrived || list.clientHeight > 0) {
+        seen = lastSeq;
+      } else if (spoken.some((entry) => namesViewer(entry, you))) {
+        named.hidden = false;
       }
 
       if (spoken.length > 0) {

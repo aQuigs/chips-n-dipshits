@@ -22,16 +22,17 @@ export function betStops(least: number, most: number, stakes: Pick<TableConfig, 
   // The whole steps that lie between the two ends, and are neither
   const between = Math.max(0, Math.ceil(most / step) - 1 - below);
   const last = most > least ? between + 1 : 0;
+  const amountAt = (stop: number): number => (stop <= 0 ? least : stop >= last ? most : (below + stop) * step);
+  const off = (stop: number, amount: number): number => Math.abs(amountAt(stop) - amount);
 
   return {
     last,
-    amountAt: (stop) => (stop <= 0 ? least : stop >= last ? most : (below + stop) * step),
+    amountAt,
     stopOf(amount) {
-      if (amount <= least) {
-        return 0;
-      }
+      // The whole step nearest the amount, and then whichever of it and the stops at its sides is nearest: an end is no whole step
+      const near = Math.min(Math.max(Math.round(amount / step) - below, 0), last);
 
-      return amount >= most ? last : Math.min(Math.max(Math.round(amount / step) - below, 0), last);
+      return [near - 1, near, near + 1].filter((stop) => stop >= 0 && stop <= last).reduce((best, stop) => (off(stop, amount) < off(best, amount) ? stop : best));
     },
   };
 }

@@ -6,6 +6,9 @@ export const SPOKEN_HOLDS_MS = 4000;
 /** A line of chat from someone else at the table, which is what the bar counts and holds: the viewer knows what they said themselves. */
 export const spokenToViewer = (entry: FeedEntry, you: string): boolean => entry.kind === 'chat' && entry.by !== you;
 
+/** How many of `lines`, the ones the viewer is shown, people have said since the line numbered `seen`, the last the viewer had in sight. */
+export const unseenOf = (lines: readonly FeedEntry[], seen: number, you: string): number => lines.filter((line) => line.seq > seen && spokenToViewer(line, you)).length;
+
 /**
  * The line the chat's bar shows of `lines`, the ones the viewer is shown, oldest first: the newest,
  * unless a person's line still holds the bar (`holding`, its number) and nobody has spoken since.

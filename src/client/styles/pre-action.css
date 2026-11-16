@@ -166,27 +166,31 @@
 
 /*
  * The choice that is set says so by more than its fill, which is one color among five to an eye that
- * tells few apart and nothing at all where the system draws the colors: a check mark on its corner,
- * clear of the words, which have no width to give it.
+ * tells few apart: a check mark ahead of it. The words have no width to give it, and at the largest
+ * text they reach the button's corners, so the mark has none of the button's own room: it lies on the
+ * gap before the button, and reaches into the padding at the gap's two sides and no further.
  */
 .ahead-btn[aria-pressed='true'] {
   position: relative;
 }
 
 .ahead-btn[aria-pressed='true']::after {
+  --mark: 14px;
+
   content: '✓';
   position: absolute;
-  top: -6px;
-  right: 2px;
+  top: calc(50% - var(--mark) / 2);
+  /* Centered on the gap, from inside the button's border */
+  left: calc(-1px - var(--ahead-gap) / 2 - var(--mark) / 2);
   display: grid;
   place-items: center;
-  width: 16px;
-  height: 16px;
+  width: var(--mark);
+  height: var(--mark);
   border: 1px solid currentcolor;
   border-radius: 50%;
   background: var(--bg-raised);
   color: var(--accent);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
   line-height: 1;
 }

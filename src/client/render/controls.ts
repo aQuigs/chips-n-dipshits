@@ -151,7 +151,7 @@ function turnPanel(table: Denominated & Pick<TableConfig, 'smallBlind' | 'bigBli
 
   let raiseTo = minRaiseTo;
 
-  // The slider and the size buttons work in the table's smallest unit, so whatever they pick is an amount that can be bet
+  // The slider's stops and the size buttons are whole units of the table, so whatever they pick is an amount that can be bet
   const choose = (value: number, from?: HTMLInputElement): void => {
     raiseTo = clamp(Math.round(value) || minRaiseTo, minRaiseTo, maxRaiseTo);
 

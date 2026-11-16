@@ -49,6 +49,40 @@ const CHOICES_MARKED = `[...document.querySelectorAll('${CHOICES}')].map((choice
 
 const NO_MARK = 'none';
 
+/**
+ * Where the mark of the choice that is set lies, and what it lies over: every run of words in the
+ * waiting bar that any part of it covers, by the whole line the words are set in.
+ */
+const MARK_OVER = `(() => {
+  const set = document.querySelector('${CHOICES}[aria-pressed="true"]');
+  const mark = getComputedStyle(set, '::after');
+  const pill = set.getBoundingClientRect();
+  const left = pill.left + set.clientLeft + parseFloat(mark.left);
+  const top = pill.top + set.clientTop + parseFloat(mark.top);
+  const box = { left, top, right: left + parseFloat(mark.width), bottom: top + parseFloat(mark.height) };
+  const words = document.createTreeWalker(document.querySelector('.controls .waiting'), NodeFilter.SHOW_TEXT);
+  const covered = [];
+
+  for (let node = words.nextNode(); node; node = words.nextNode()) {
+    const range = document.createRange();
+
+    range.selectNodeContents(node);
+
+    if ([...range.getClientRects()].some((line) => line.width > 1 && line.left < box.right && line.right > box.left && line.top < box.bottom && line.bottom > box.top)) {
+      covered.push(node.textContent);
+    }
+  }
+
+  return { box, covered, says: mark.content, onScreen: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight };
+})()`;
+
+interface Mark {
+  box: { left: number; top: number; right: number; bottom: number };
+  covered: string[];
+  says: string;
+  onScreen: boolean;
+}
+
 async function textSize(page: Page, size: string): Promise<void> {
   await page.evaluate(`document.querySelector('#app').setAttribute('data-text-size', ${JSON.stringify(size)})`);
   await page.evaluate(NEXT_FRAME);
@@ -56,12 +90,15 @@ async function textSize(page: Page, size: string): Promise<void> {
 }
 
 const choicesSayWhatTheyAreFor = (picturesIn: string): Check => [
-  'under a phone’s table standing the moves to choose ahead have a line over them that says they are for the viewer’s turn, whole and clear of them at every size of text, the one that is set carries a check mark and no other does, the line goes with the choices an open chat takes, and the table is where it is on the viewer’s turn',
+  'under a phone’s table standing the moves to choose ahead have a line over them that says they are for the viewer’s turn, whole and clear of them at every size of text; whichever of the five is set carries a check mark that lies over no word of the bar, and no other does; the line goes with the choices an open chat takes, and the table is where it is on the viewer’s turn',
   async (rig) => {
     const table = waitingForTheHost(rig);
     const page = await table.open(VIEWER, 'smallPhone');
+    // The big blind may check, which the small blind may not: between them every one of the five is on offer
+    const blind = await table.open(FRIEND, 'smallPhone');
 
     await page.waitForSelector(CHOICES);
+    await blind.waitForSelector(CHOICES);
 
     const marked = () => page.evaluate(CHOICES_MARKED) as Promise<{ set: boolean; mark: string }[]>;
     const fits = async (where: string) => {
@@ -86,6 +123,30 @@ const choicesSayWhatTheyAreFor = (picturesIn: string): Check => [
     assert.deepEqual(await marked(), Array.from({ length: 5 }, () => ({ set: false, mark: NO_MARK })), 'a choice is marked with none set');
 
     const [waitingTable] = await boxes(page, '.stage');
+
+    // Each of the five set in turn, by whoever is offered it: the words are nearest the mark at the largest text
+    for (const [on, kind] of [
+      [page, 'fold'],
+      [blind, 'checkFold'],
+      [blind, 'check'],
+      [page, 'call'],
+      [page, 'callAny'],
+    ] as const) {
+      await on.click(`${CHOICES}.ahead-${kind}`);
+      await on.waitForSelector(`${CHOICES}.ahead-${kind}[aria-pressed="true"]`);
+
+      for (const size of TEXT_SIZES) {
+        await textSize(on, size);
+
+        const mark = (await on.evaluate(MARK_OVER)) as Mark;
+
+        assert.equal(mark.says, '"✓"', `${kind} set, ${size} text`);
+        assert.deepEqual(mark.covered, [], `${kind} set, ${size} text: its mark lies over words, at ${JSON.stringify(mark.box)}`);
+        assert.ok(mark.onScreen, `${kind} set, ${size} text: its mark runs off the screen, at ${JSON.stringify(mark.box)}`);
+      }
+
+      await textSize(on, TEXT_SIZES[0]!);
+    }
 
     // Calling is on offer to the small blind, and is the fourth of the five
     await page.click(`${CHOICES}.ahead-call`);

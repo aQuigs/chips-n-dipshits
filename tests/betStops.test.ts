@@ -58,6 +58,9 @@ test('an amount from the box stands at the stop nearest it, and each stop at its
 
   assert.equal(stops.stopOf(371), 2, '371 is nearest 380');
   assert.equal(stops.stopOf(369), 1, '369 is nearest 360');
+  assert.equal(stops.stopOf(350), 0, '350 is nearer the least raise of 345 than 360');
+  assert.equal(stops.stopOf(1006), stops.last, '1,006 is nearer all in at 1,007 than 1,000');
+  assert.equal(stops.stopOf(1002), stops.last - 1, '1,002 is nearer 1,000');
   assert.equal(stops.stopOf(100), 0, 'less than the least raise');
   assert.equal(stops.stopOf(5000), stops.last, 'more than all in');
 });

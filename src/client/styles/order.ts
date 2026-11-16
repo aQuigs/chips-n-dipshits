@@ -57,6 +57,7 @@ export const STYLESHEETS = [
   'pre-action.css',
   'sections.css',
   'add-chips.css',
+  'own-clock.css',
   'accessibility.css',
   'forced-colors.css',
 ];

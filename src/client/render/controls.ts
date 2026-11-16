@@ -8,6 +8,7 @@ import { timesText } from '../../engine/runVote.ts';
 import { straddlesAllowed } from '../../engine/straddles.ts';
 import type { Command, PassedOver } from '../../engine/types.ts';
 import type { HandView, SeatView, TableView } from '../../engine/view.ts';
+import { ownDeadline } from '../actionClock.ts';
 import { askedSays, chipsAsked, outOfChips, roomToAdd } from '../buyIns.ts';
 import { lastOnRecord } from '../handRecords.ts';
 import { HOTKEYS } from '../hotkeys.ts';
@@ -117,10 +118,23 @@ function nameMove(button: HTMLElement, move: string, amount: number, table: Deno
 }
 
 /**
- * The buttons for the player on the clock. Keeps the chosen raise size itself, so it survives until
- * the turn changes. Every move names the decision it answers, so it can't be played on a later one.
+ * The viewer's own clock, to stand by the buttons of the decision it runs on: the seconds at their
+ * seat are the smallest figures on a phone, and nowhere near the thumb. The page's tick writes the
+ * figure, as it does a seat's (`data-countdown`), so a second going by draws nothing here again; it is
+ * never said as it changes, only read by whoever goes to it. Null where no clock runs for them.
  */
-function turnPanel(table: Denominated, hand: HandView, stack: number, handlers: ControlHandlers): HTMLElement {
+function ownClockEl(view: TableView): HTMLElement | null {
+  const deadline = ownDeadline(view);
+
+  return deadline === null ? null : h('div.own-clock', null, h('span.unseen', null, `${LABELS.clock}: `), h('span', { 'data-countdown': deadline, 'data-as': 'clock' }));
+}
+
+/**
+ * The buttons for the player on the clock, with that clock when one runs. Keeps the chosen raise size
+ * itself, so it survives until the turn changes. Every move names the decision it answers, so it can't
+ * be played on a later one.
+ */
+function turnPanel(table: Denominated, hand: HandView, stack: number, handlers: ControlHandlers, clock: HTMLElement | null): HTMLElement {
   const options = hand.options!;
   const { minRaiseTo, maxRaiseTo, callAmount, callCost } = options;
   const opening = hand.currentBet === 0;
@@ -238,7 +252,8 @@ function turnPanel(table: Denominated, hand: HandView, stack: number, handlers: 
   return h(
     'div.turn',
     null,
-    options.canRaise ? h('div.sizing', null, h('div.presets', { role: 'group', 'aria-label': LABELS.sizes }, presetButtons), h('div.amount', null, slider, amount)) : null,
+    // The clock is read after the bet's sizes and before the moves. Where it stands is the stylesheet's (own-clock.css): on the line that has room for it, or first in the row of the moves
+    options.canRaise ? h('div.sizing', null, h('div.presets', { role: 'group', 'aria-label': LABELS.sizes }, presetButtons), clock, h('div.amount', null, slider, amount)) : clock,
     h(
       'div.buttons',
       null,
@@ -253,7 +268,7 @@ function turnPanel(table: Denominated, hand: HandView, stack: number, handlers: 
 const smallBlindName = (view: TableView, hand: HandView) => view.seats[hand.sbSeat]?.name ?? 'The small blind';
 
 /** The big blind's question when the small blind offers to chop: an answer is a move, like any on the clock. */
-function chopQuestion(view: TableView, hand: HandView, handlers: ControlHandlers): HTMLElement {
+function chopQuestion(view: TableView, hand: HandView, handlers: ControlHandlers, clock: HTMLElement | null): HTMLElement {
   const answer = (agree: boolean) => () => void handlers.send({ type: 'answerChop', agree, turn: hand.turn });
 
   return h(
@@ -263,6 +278,8 @@ function chopQuestion(view: TableView, hand: HandView, handlers: ControlHandlers
     h(
       'div.buttons',
       null,
+      // Beside the two answers, which have the width to spare: on the question's own lines it would cost the question one
+      clock,
       h('button.btn.call', { type: 'button', 'data-action': 'chop-no', onclick: answer(false) }, 'Play on'),
       h('button.btn.chop', { type: 'button', 'data-action': 'chop-yes', onclick: answer(true) }, 'Chop'),
     ),
@@ -515,9 +532,9 @@ function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandle
     // answered, whatever they were: this comes first, so the buttons of a kind of move added later go the same way
     main = waitingEl(waitingText(view, hand), view, own);
   } else if (hand?.options) {
-    main = answering(hand, turnPanel(view.config, hand, seat.stack, handlers));
+    main = answering(hand, turnPanel(view.config, hand, seat.stack, handlers, ownClockEl(view)));
   } else if (hand?.canAnswerChop) {
-    main = answering(hand, chopQuestion(view, hand, handlers));
+    main = answering(hand, chopQuestion(view, hand, handlers, ownClockEl(view)));
   } else if (hand?.canVote) {
     main = answering(hand, runsQuestion(hand, handlers));
   } else {
@@ -700,5 +717,7 @@ export function controlsSignature(view: TableView): string {
     view.requests.filter((request) => request.playerId === view.you.id),
     [straddlesAllowed(view.config).map((kind) => kind.what), view.config.allowChop, view.config.maxBuyIn, view.config.smallBlind, view.config.bigBlind],
     nextHandNote(view),
+    // Its seconds are the tick's to write. When it ends is drawn, and changes within a turn only when the host changes the clock
+    ownDeadline(view),
   ]);
 }

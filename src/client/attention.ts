@@ -48,6 +48,18 @@ export class Attention implements Abilities {
     }
   }
 
+  /**
+   * Says a call again to a player who has not answered it, by the buzz alone: what else it brought
+   * still stands, and a second chime would be a second turn.
+   */
+  remind(call: Call): void {
+    const way = this.ways.buzz;
+
+    if (this.prefs.get('buzz') && way.ability() === 'yes') {
+      this.each(() => way.call(call));
+    }
+  }
+
   /** Every way hears it, so what was showing goes away even if the player switched the way off since. */
   end(call: Call): void {
     for (const [, way] of this.entries()) {

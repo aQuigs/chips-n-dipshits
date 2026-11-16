@@ -348,7 +348,7 @@ function seatEl(view: TableView, seat: SeatView, slot: number, shape: Shape, clo
     // what the hand won: that its player is all in, away or leaving is back on it once the hand is over
     took > 0 ? h('div.status.won', null, `+${shortAmount(took, view.config)}`) : (chance?.element ?? (status ? h('div.status', { 'data-status': status }, status) : null)),
     // The seconds left, for everyone: the bar under the name alone is easy to miss until the time is gone
-    timer ? h('div.status.clock', { 'data-countdown': hand!.deadline }, '') : null,
+    timer ? h('div.status.clock', { 'data-countdown': hand!.deadline, 'data-as': 'clock' }, '') : null,
     // In the plate, in short: a line under the seat would run onto the next one down the side of a phone's table
     seat.moveTo !== null ? h('div.move-note', { title: moveNote(seat.moveTo), 'aria-label': moveNote(seat.moveTo) }, `→ Seat ${seat.moveTo + 1}`) : null,
     timer,

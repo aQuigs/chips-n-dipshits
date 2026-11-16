@@ -278,6 +278,35 @@ test('a way that throws does not keep the others from being asked', () => {
   assert.equal(ways.tabTitle.calls.length, 1);
 });
 
+test('a call said again is a buzz and nothing else, under the buzz’s own switch and only where the device can', () => {
+  const prefs = new Preferences(PREFERENCES, mapMemory());
+  const ways = recordingWays();
+  const attention = new Attention(prefs, ways);
+  const call: Call = { why: 'turn', table: { id: 'T', name: 'T' } };
+  const asked = () => KEYS.filter((key) => ways[key].calls.length > 0);
+
+  attention.remind(call);
+  assert.deepEqual(asked(), ['buzz']);
+  assert.deepEqual(ways.buzz.calls, [call]);
+
+  ways.buzz.can = 'no';
+  attention.remind(call);
+  assert.equal(ways.buzz.calls.length, 1, 'a device that cannot buzz was asked to');
+
+  ways.buzz.can = 'yes';
+  prefs.set('buzz', false);
+  attention.remind(call);
+  assert.equal(ways.buzz.calls.length, 1, 'the buzz is switched off');
+
+  // Every other way switched off leaves the buzz its own switch
+  prefs.set('buzz', true);
+  for (const key of ['sound', 'flash', 'notify', 'tabTitle'] as const) {
+    prefs.set(key, false);
+  }
+  attention.remind(call);
+  assert.equal(ways.buzz.calls.length, 2);
+});
+
 /** The browser as the real ways see it, every part a stand-in that writes down what it was asked. */
 class Browser {
   hidden = false;

@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 
 import type { Page } from 'playwright';
 
+import { clockText } from '../src/client/actionClock.ts';
 import { BUZZ_PATTERN } from '../src/client/attentionWays.ts';
 import { MOST_SWEAT_MS } from '../src/client/celebrations.ts';
 import { CONFETTI_PIECES } from '../src/client/confetti.ts';
@@ -32,7 +33,7 @@ import { PUT_AWAY_AFTER_MS, PUT_AWAY_MESSAGE } from '../src/server/putAway.ts';
 import { contrast } from '../tests/colorVision.ts';
 import { boxes, Gate, overlap, Rig, RigTable, saidInFull, SCREENS, setStageHeight, squeezed, textBoxes, unfolded, WIDE_ASPECT } from './rig.ts';
 import type { Box, RigDeal, RigPlayer, ScreenName } from './rig.ts';
-import { answeredAfter, answeredTo, complaints, flightsSince, LISTEN, MOTION, movesSent, NOTICES, opsSent, ownComplaints, replayDrawn, soundOf, SPOTS, TITLES, toastTold, toasts, toldOf } from './pageSpies.ts';
+import { answeredAfter, answeredTo, BUZZ, complaints, flightsSince, LISTEN, MOTION, movesSent, NOTICES, opsSent, ownComplaints, replayDrawn, soundOf, SPOTS, TITLES, toastTold, toasts, toldOf } from './pageSpies.ts';
 import type { Flight, Spots } from './pageSpies.ts';
 import { STAND_IN_HOST } from './standInHost.ts';
 import { focused, focusIn, heard, SPOKEN, spoken } from './a11y.ts';
@@ -41,6 +42,7 @@ import { runChecks } from './checkRunner.ts';
 import { layoutSweep } from './layoutSweep.ts';
 import { confirmChecks } from './confirmChecks.ts';
 import { menuChecks } from './menuChecks.ts';
+import { ownClockChecks } from './ownClockChecks.ts';
 import { preferencesChecks } from './preferencesChecks.ts';
 import { namedByTheWatch, tapsLive, tellingOf, watched, watchTheBar } from './underTheFinger.ts';
 
@@ -542,18 +544,6 @@ const SIGHT = `(() => {
     hidden = out;
     document.dispatchEvent(new Event('visibilitychange'));
   };
-})()`;
-
-// Run in the page: every buzz asked for, and whether the page had been touched by then
-const BUZZ = `(() => {
-  window.buzzes = [];
-  Object.defineProperty(Navigator.prototype, 'vibrate', {
-    value: (pattern) => {
-      window.buzzes.push({ pattern, touched: navigator.userActivation.hasBeenActive });
-      return true;
-    },
-    configurable: true,
-  });
 })()`;
 
 const middle = (box: Box) => ({ x: (box.left + box.right) / 2, y: (box.top + box.bottom) / 2 });
@@ -2563,10 +2553,12 @@ const CHECKS: Check[] = [
       table.deal({ button: 0 });
 
       const page = await table.open('Stu', 'phone');
-      await page.waitForFunction(`Number(document.querySelector('.seat.acting .status.clock')?.textContent) > 0`);
+      await page.waitForFunction(`/^\\d:\\d\\d$/.test(document.querySelector('.seat.acting .status.clock')?.textContent ?? '')`);
 
-      const seconds = Number(await text(page, '.seat.acting .status.clock'));
-      assert.ok(seconds >= 20 && seconds <= 33, `the clock shows ${seconds}`);
+      // Written as a clock, minutes first
+      const shown = await text(page, '.seat.acting .status.clock');
+      const [minutes, seconds] = shown.split(':').map(Number) as [number, number];
+      assert.ok(minutes === 0 && seconds >= 20 && seconds <= 33, `the clock shows ${shown}`);
       await shot(page, 'clock-phone');
     },
   ],
@@ -13076,7 +13068,7 @@ const CHECKS: Check[] = [
 
       const page = await table.open('Quigs', 'phone');
       const pageTime = () => page.evaluate('Date.now()') as Promise<number>;
-      const counted = (seconds: number) => page.waitForFunction(`document.querySelector('.seat.acting [data-countdown]')?.textContent === '${seconds}'`);
+      const counted = (seconds: number) => page.waitForFunction(`document.querySelector('.seat.acting [data-countdown]')?.textContent === '${clockText(seconds)}'`);
 
       // What the turn's clock starts at: the seconds the table gives, and whatever the deal adds to them
       const whole = Math.ceil((table.view('Quigs').hand!.deadline! - rig.now()) / 1000);
@@ -13086,7 +13078,7 @@ const CHECKS: Check[] = [
       // Longer than a second of the countdown and several of its ticks: a clock that ran would show it
       await page.waitForTimeout(2500);
       assert.equal(await pageTime(), rig.now(), 'the page’s clock ran while the rig’s stood still');
-      assert.equal(await text(page, '.seat.acting [data-countdown]'), String(whole), 'the countdown ran while the rig’s clock stood still');
+      assert.equal(await text(page, '.seat.acting [data-countdown]'), clockText(whole), 'the countdown ran while the rig’s clock stood still');
 
       // Time passes and nothing else happens, so the server has nothing to tell
       rig.advance(10_000);
@@ -13844,6 +13836,7 @@ const CHECKS: Check[] = [
   ...menuChecks(OUT),
   ...preferencesChecks(OUT),
   ...confirmChecks(OUT),
+  ...ownClockChecks(OUT),
 ];
 
 await mkdir(OUT, { recursive: true });

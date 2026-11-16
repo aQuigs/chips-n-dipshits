@@ -54,6 +54,7 @@ import { createThemePicker } from './render/themePicker.ts';
 import { voiceLinkEl } from './render/voiceLink.ts';
 import type { Listed } from './render/whoField.ts';
 import type { Shape } from './render/table.ts';
+import { clockText, ownDeadline, runningOut } from './actionClock.ts';
 import { Arrivals } from './arrivals.ts';
 import { Attention } from './attention.ts';
 import { pageWays } from './pageAttention.ts';
@@ -1057,6 +1058,8 @@ export class App {
     if (redrawn) {
       this.hotkeys.shown();
       this.keyboardOffTheChat(screen);
+      // The clock a turn's buttons came with reads nothing until the tick has written it
+      this.tickCountdowns();
     }
 
     // Freshly built buttons are free; a move still on its way keeps them locked
@@ -1222,12 +1225,21 @@ export class App {
       return;
     }
 
-    for (const element of this.root.querySelectorAll<HTMLElement>('[data-countdown]')) {
-      element.textContent = String(secondsUntil(Number(element.dataset.countdown), this.clock.offset));
-    }
-
     const screen = this.screen;
     const view = this.shownView();
+
+    for (const element of this.root.querySelectorAll<HTMLElement>('[data-countdown]')) {
+      const seconds = secondsUntil(Number(element.dataset.countdown), this.clock.offset);
+      const text = element.dataset.as === 'clock' ? clockText(seconds) : String(seconds);
+
+      // Written only when it changes: whoever is reading the figure with a screen reader is not cut off four times a second
+      if (element.textContent !== text) {
+        element.textContent = text;
+      }
+    }
+
+    // On the app itself, as the turn's flash is: the seat and the bar both show it, and neither is drawn again for it
+    this.root.toggleAttribute('data-running-out', view !== null && runningOut(view, this.clock.now()));
 
     // The wait before the next reaction ends by the clock, with no view to draw it
     if (screen?.picker.isOpen && view) {
@@ -1242,6 +1254,11 @@ export class App {
     const left = view && this.timeWarning.due(view, this.clock.now());
     if (left) {
       this.announcer.alert(timeSaid(left));
+
+      // A pick of how many times to run it has no clock at the seat, and nothing is lost when it runs out
+      if (ownDeadline(view) !== null) {
+        this.attention.remind({ why: 'turn', table: { id: view.id, name: view.config.name } });
+      }
     }
   }
 

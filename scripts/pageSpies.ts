@@ -236,6 +236,18 @@ export const NOTICES = (permission: Permission, answer = permission) => `(() => 
   };
 })()`;
 
+// Run in the page: every buzz asked for, and whether the page had been touched by then
+export const BUZZ = `(() => {
+  window.buzzes = [];
+  Object.defineProperty(Navigator.prototype, 'vibrate', {
+    value: (pattern) => {
+      window.buzzes.push({ pattern, touched: navigator.userActivation.hasBeenActive });
+      return true;
+    },
+    configurable: true,
+  });
+})()`;
+
 // Run in the page: every title the page gives its tab
 export const TITLES = `(() => {
   window.titles = [];

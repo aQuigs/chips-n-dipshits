@@ -3,6 +3,7 @@ import { test } from 'node:test';
 
 import { amountSaid, boardSaid, cardSaid, dealtSaid, hasCards, inWords, lineSaid, menuLabel, offersSaid, openSeatSaid, potSaid, resultSaid, seatSaid, seatsLabel, sizedSaid, turnSaid, voteSaid, warnAt } from '../src/client/spoken.ts';
 import type { SeatShown } from '../src/client/spoken.ts';
+import { clockText, ownDeadline, runningOut } from '../src/client/actionClock.ts';
 import { Motion } from '../src/client/motion.ts';
 import type { MotionPlayer } from '../src/client/motion.ts';
 import { PREFERENCES, Preferences } from '../src/client/prefs.ts';
@@ -273,4 +274,45 @@ test('the clock is called once a turn, at ten seconds on a long clock and five o
 
   // A page that reaches the turn with three seconds left says nothing: the figure would be stale before it was heard
   assert.equal(new TimeWarning().due(view, deadline - 3_000), null);
+});
+
+test('a clock is written minutes first, in figures nobody takes for a hand', () => {
+  assert.deepEqual([302, 60, 59, 32, 10, 9, 0].map(clockText), ['5:02', '1:00', '0:59', '0:32', '0:10', '0:09', '0:00']);
+});
+
+test('the viewer’s own clock is the one they are on for their move at a table that has one, and it is running out from the second they are warned at', () => {
+  const t = threeHanded({ actionSeconds: 30 });
+  const view = t.view(0);
+  const deadline = view.hand!.deadline!;
+  const outWith = (of: TableView, left: number[]) => left.map((ms) => runningOut(of, of.hand!.deadline! - ms));
+
+  assert.equal(ownDeadline(view), deadline);
+  assert.equal(ownDeadline(t.view(1)), null, 'someone else’s clock is not the viewer’s');
+  assert.equal(ownDeadline(threeHanded().view(0)), null, 'a table with no clock');
+
+  assert.deepEqual(outWith(view, [30_000, 10_001, 10_000, 9_000, 1, -500]), [false, false, true, true, true, true]);
+  assert.equal(runningOut(t.view(1), deadline - 5_000), false, 'someone else’s clock is running out');
+
+  // A short clock leaves it later, and one too short to act on a warning has no such second
+  assert.deepEqual(outWith(threeHanded({ actionSeconds: 12 }).view(0), [5_001, 5_000]), [false, true]);
+  assert.deepEqual(outWith(threeHanded({ actionSeconds: 9 }).view(0), [9_000, 1_000]), [false, false]);
+
+  t.call(0);
+  assert.equal(ownDeadline(t.view(0)), null, 'the move made, the clock is the next player’s');
+  assert.equal(ownDeadline(t.view(1)), t.view(1).hand!.deadline);
+});
+
+test('a pick of how many times to run it is on no clock of the viewer’s own, though the table gives it a time', () => {
+  const t = new TestTable({ stacks: [1000, 1000], config: { smallBlind: 5, bigBlind: 10, maxRuns: 3, actionSeconds: 30 } });
+
+  t.cmd(0, { type: 'start' });
+  t.deal({ button: 0, holes: { 0: ACES, 1: KINGS } });
+  t.raise(t.toAct!, 1000);
+  t.call(t.toAct!);
+
+  const view = t.view(0);
+
+  assert.ok(view.hand!.canVote && view.hand!.deadline !== null, 'the vote is not open: the table no longer shows what this is here for');
+  assert.equal(ownDeadline(view), null);
+  assert.equal(runningOut(view, view.hand!.deadline! - 1_000), false);
 });

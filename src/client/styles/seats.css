@@ -137,10 +137,6 @@
   white-space: nowrap;
 }
 
-.plate .status.clock::after {
-  content: 's';
-}
-
 .plate .status.clock:empty {
   display: none;
 }

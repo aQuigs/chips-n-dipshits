@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { addMember, createTable, DEFAULT_CONFIG, ledgerOf, setIdentity, STATE_SCHEMA, viewFor } from '../src/engine/index.ts';
-import type { Ctx } from '../src/engine/index.ts';
+import { addMember, applyCommand, ASKED_KEPT, ASKED_KEPT_EACH, createTable, DEFAULT_CONFIG, ledgerOf, LIMITS, presetName, refusalNames, refusesName, seenOf, setIdentity, STATE_SCHEMA, SUBJECTS, viewFor } from '../src/engine/index.ts';
+import type { Command, Ctx, RequestSeen } from '../src/engine/index.ts';
+import { NameOnList } from '../src/server/playerStore.ts';
 import { restoreState } from '../src/server/store.ts';
-import { ledgerEntries, seededRng, sevenDeuceBounty, TestTable } from './helpers.ts';
-import { assertChipsConserved, assertViewsKeepSecrets } from './invariants.ts';
+import { ledgerEntries, refusalOf, seededRng, sevenDeuceBounty, testKey, TestTable } from './helpers.ts';
+import { assertChipsConserved, assertInvariants, assertViewsKeepSecrets } from './invariants.ts';
 
 function freshCtx(): Ctx {
   return { now: 5000, rng: seededRng(7), effects: [] };
@@ -46,6 +47,78 @@ test('names are unique at a table and cannot look like a spreadsheet formula', (
   assert.throws(() => addMember(state, 42, ctx), /missing/);
 
   assert.equal(addMember(state, "Big Al's 2nd", ctx).name, "Big Al's 2nd");
+});
+
+test('a refusal of a name is told from any other, for the form the name was typed in', () => {
+  const ctx = freshCtx();
+  const { state } = createTable('ABC123', 'Quigs', {}, ctx);
+
+  const refusal = (name: unknown): string => refusalOf(() => addMember(state, name, ctx));
+
+  addMember(state, 'TOM', ctx);
+
+  // Taken, like a formula, empty, too long, no text, two alphabets, and reading like someone here
+  for (const name of ['quigs', '=SUM(A1)', '', 'x'.repeat(17), 42, '\u0410lice', '\u0422\u041E\u041C']) {
+    const told = refusal(name);
+
+    assert.ok(refusesName(told), told);
+  }
+
+  assert.ok(refusesName(new NameOnList('Big Al').message), 'a name the list of players has');
+
+  while (state.members.length < LIMITS.members) {
+    addMember(state, `Guest ${state.members.length}`, ctx);
+  }
+
+  const full = refusal('Late');
+
+  assert.match(full, /table is full/);
+  assert.equal(refusesName(full), false, 'no room is not about the name');
+  assert.equal(refusesName('That player is no longer on the list. Pick again'), false, 'nor is a pick the list no longer has');
+  assert.equal(refusesName('The table is busy, try again'), false);
+});
+
+test('whatever a form sends for an amount or for the name of a preset, a refusal about it begins with the name the form knows its box by', () => {
+  // No number, not whole, under or over what any table holds: what a page other than this game's might send, and each as JSON carries it
+  const NOT_AMOUNTS = [-5, 1.5, 'lots', '100', null, undefined, Number.NaN, LIMITS.chips + 1];
+
+  for (const unit of ['chips', 'cents'] as const) {
+    const t = new TestTable({ stacks: [1000, 1000, 1000], config: { unit, minBuyIn: 100, maxBuyIn: 5000 } });
+    const [host, stu, pam] = t.ids as [string, string, string];
+    const watching = addMember(t.state, 'Marge', t.ctx()).id;
+
+    const refusal = (as: string, command: object): string => refusalOf(() => applyCommand(t.state, t.ctx(), as, command as Command));
+
+    // Each form's amount, with the amounts only that form is refused: under and over a buy-in, more than a seat has room for or holds
+    const forms: [subject: string, outOfRange: number[], ask: (amount: unknown) => string][] = [
+      [SUBJECTS.buyIn, [0, 99, 5001], (buyIn) => refusal(watching, { type: 'requestSeat', seat: 5, buyIn })],
+      [SUBJECTS.chipsAdded, [0, 4001], (amount) => refusal(stu, { type: 'requestRebuy', amount })],
+      [SUBJECTS.stack, [], (stack) => refusal(host, { type: 'setStack', playerId: stu, stack })],
+      [SUBJECTS.transferred, [0, 1001], (amount) => refusal(host, { type: 'transferChips', from: stu, to: pam, amount })],
+    ];
+
+    for (const [subject, outOfRange, ask] of forms) {
+      for (const amount of [...NOT_AMOUNTS, ...outOfRange]) {
+        const told = ask(amount);
+
+        assert.ok(refusalNames(told, subject), `${unit}, ${String(amount)}: "${told}" does not begin with "${subject}"`);
+      }
+    }
+
+    // And a refusal that is about no box begins with none of them
+    t.deal({ button: 0 });
+
+    for (const [subject, , ask] of forms.slice(2)) {
+      const told = ask(500);
+
+      assert.match(told, /current hand/);
+      assert.equal(refusalNames(told, subject), false, told);
+    }
+  }
+
+  for (const name of ['', '   ', 'x'.repeat(LIMITS.presetNameLength + 1), 42, null, undefined]) {
+    assert.throws(() => presetName(name), (error: Error) => refusalNames(error.message, SUBJECTS.presetName), String(name));
+  }
 });
 
 test('a name that reads like one already at the table is refused', () => {
@@ -94,7 +167,7 @@ test('a member carries which known player they said they are, or nobody, and eve
   assert.deepEqual([host.identity, bob.identity, guest.identity], ['QQQQQQQQQQ', 'BBBBBBBBBB', null]);
 
   const view = viewFor(state, guest.id, ctx.now);
-  assert.deepEqual(view.you, { id: guest.id, name: 'Guest', role: 'member', seat: null, identity: null });
+  assert.deepEqual(view.you, { id: guest.id, name: 'Guest', role: 'member', seat: null, identity: null, asked: [] });
   assert.deepEqual(view.members, [
     { id: host.id, name: 'Quigs', identity: 'QQQQQQQQQQ' },
     { id: bob.id, name: 'Bob', identity: 'BBBBBBBBBB' },
@@ -289,15 +362,34 @@ test('only the host can use the host controls', () => {
   }
 });
 
-test('rebuys respect the maximum buy-in', () => {
-  const t = new TestTable({ stacks: [1000, 1000], config: { minBuyIn: 100, maxBuyIn: 1500 } });
+test('rebuys respect the maximum buy-in, whatever a page sends', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 1000], config: { minBuyIn: 100, maxBuyIn: 1500 } });
+  const refused = (player: number, amount: unknown, to: number) =>
+    assert.throws(() => t.cmd(player, { type: 'requestRebuy', amount: amount as number }), { message: `The chips you add must be a whole number from 1 to ${to}` }, String(amount));
 
-  assert.throws(() => t.cmd(1, { type: 'requestRebuy', amount: 501 }), /rebuy/);
+  for (const amount of [501, 1500, 0, -1, 0.5, '500', null, Number.NaN]) {
+    refused(1, amount, 500);
+  }
+
+  assert.equal(t.state.requests.length, 0, 'nothing refused is left for the host');
+
   t.cmd(1, { type: 'requestRebuy', amount: 500 });
   t.cmd(0, { type: 'approve', playerId: t.ids[1]! });
 
   assert.equal(t.state.seats[1]!.stack, 1500);
   assert.throws(() => t.cmd(1, { type: 'requestRebuy', amount: 1 }), /maximum buy-in/);
+
+  // Chips on their way count: approved during a hand they wait for its end, and leave that much less room
+  t.deal({ button: 0 });
+  t.cmd(2, { type: 'requestRebuy', amount: 200 });
+  t.cmd(0, { type: 'approve', playerId: t.ids[2]! });
+  assert.equal(t.state.seats[2]!.pendingAdd, 200);
+
+  const room = 1500 - t.state.seats[2]!.stack - 200;
+
+  refused(2, room + 1, room);
+  t.cmd(2, { type: 'requestRebuy', amount: room });
+  assert.deepEqual(t.state.requests.map((request) => [request.kind, request.amount]), [['rebuy', room]], 'and the most there is room for is taken');
 });
 
 test('a request that stopped fitting is cut down or dropped, never left for the host to fail on', () => {
@@ -608,6 +700,167 @@ test('a co-host is told they have the host\'s powers and sees every request; a p
   assertViewsKeepSecrets(t.state, t.now);
 });
 
+test('a command asked again under its key is taken both times and done once: chips move once, and the ledger hears of them once', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 1000], names: ['Host', 'Dana', 'Sam'] });
+  const move: Command = { type: 'transferChips', from: t.ids[1]!, to: t.ids[2]!, amount: 300 };
+
+  t.cmd(0, move, testKey(1));
+  const once = JSON.stringify(t.state);
+  const booked = t.effects.length;
+
+  t.cmd(0, move, testKey(1));
+  assert.equal(JSON.stringify(t.state), once, 'the table is as the first asking left it');
+  assert.equal(t.effects.length, booked, 'the second asking went to the ledger');
+  assert.deepEqual(t.stacks(), [1000, 700, 1300]);
+
+  // The host's own chips are bought the moment they are asked for, with nobody to approve them
+  const add: Command = { type: 'requestRebuy', amount: 250 };
+  t.cmd(0, add, testKey(2));
+  t.cmd(0, add, testKey(2));
+  assert.deepEqual(t.stacks(), [1250, 700, 1300]);
+  assert.equal(t.state.members[0]!.buyIn, 1250);
+
+  // The same words under another key, or under none as before commands had keys, are another command
+  t.cmd(0, move, testKey(3));
+  t.cmd(0, move);
+  assert.deepEqual(t.stacks(), [1250, 100, 1900]);
+  assertInvariants(t.state, t.now);
+});
+
+test('a key is its sender\'s: the same one from another member is that member\'s own command, and each is told their own keys and nobody else\'s', () => {
+  const t = new TestTable({ stacks: [1000, 1000, 1000] });
+  const move: Command = { type: 'transferChips', from: t.ids[2]!, to: t.ids[0]!, amount: 100 };
+  t.cmd(0, { type: 'setCohost', playerId: t.ids[1]!, on: true });
+
+  t.cmd(0, move, testKey(1));
+  t.cmd(1, move, testKey(1));
+  assert.deepEqual(t.stacks(), [1200, 1000, 800], 'the co-host\'s command was taken for the host\'s');
+
+  t.cmd(1, move, testKey(1));
+  t.cmd(1, move, testKey(2));
+  assert.deepEqual(t.stacks(), [1300, 1000, 700]);
+
+  assert.deepEqual([0, 1, 2].map((player) => t.view(player).you.asked), [[testKey(1)], [testKey(1), testKey(2)], []]);
+  assertViewsKeepSecrets(t.state, t.now);
+});
+
+test('the table remembers the latest keys and no more, and only so many of one member: a member\'s next pushes out their own oldest and nobody else\'s, and the table\'s next its oldest of all', () => {
+  const t = new TestTable({ stacks: [100_000, 1000, 1000, 1000, 1000] });
+  const give: Command = { type: 'transferChips', from: t.ids[0]!, to: t.ids[1]!, amount: 1 };
+  const given = () => t.state.seats[1]!.stack - 1000;
+  const keysOf = (player: number) => t.view(player).you.asked;
+
+  // Anything a member sends under a key is remembered for them: here, sitting out and back in
+  const others = (player: number, from: number) => {
+    for (let n = 0; n < ASKED_KEPT_EACH; n++) {
+      t.cmd(player, { type: n % 2 === 0 ? 'sitOut' : 'sitIn' }, testKey(from + n));
+    }
+  };
+
+  for (let n = 1; n <= ASKED_KEPT_EACH; n++) {
+    t.cmd(0, give, testKey(n));
+  }
+
+  others(1, 100);
+  t.cmd(0, give, testKey(1));
+  assert.equal(given(), ASKED_KEPT_EACH, 'another member\'s keys pushed out the host\'s');
+
+  t.cmd(0, give, testKey(ASKED_KEPT_EACH + 1));
+  assert.deepEqual(keysOf(0), Array.from({ length: ASKED_KEPT_EACH }, (_, index) => testKey(index + 2)));
+  assert.equal(keysOf(1).length, ASKED_KEPT_EACH, 'the host\'s key pushed out another member\'s');
+
+  t.cmd(0, give, testKey(1));
+  assert.equal(given(), ASKED_KEPT_EACH + 2, 'a key the table has forgotten was still taken for done');
+
+  // With as many remembered as the table keeps, the next from anyone pushes out the oldest of all
+  others(2, 200);
+  others(3, 300);
+  assert.equal(t.state.asked.length, ASKED_KEPT);
+  const oldest = t.state.asked[0]!;
+
+  t.cmd(4, { type: 'sitOut' }, testKey(400));
+  assert.equal(t.state.asked.length, ASKED_KEPT);
+  assert.ok(!t.state.asked.some((asked) => asked.key === oldest.key && asked.by === oldest.by));
+  assert.deepEqual(keysOf(4), [testKey(400)]);
+  assertInvariants(t.state, t.now);
+});
+
+test('a command the table refuses is not remembered: asked again under its key it is weighed anew', () => {
+  const t = new TestTable({ stacks: [1000, 100, 1000] });
+  const move: Command = { type: 'transferChips', from: t.ids[1]!, to: t.ids[2]!, amount: 500 };
+  const before = JSON.stringify(t.state);
+
+  assert.throws(() => t.cmd(0, move, testKey(1)), { name: 'GameError', message: 'The amount must be a whole number from 1 to 100' });
+  assert.equal(JSON.stringify(t.state), before);
+
+  t.cmd(0, { type: 'setStack', playerId: t.ids[1]!, stack: 600 });
+  t.cmd(0, move, testKey(1));
+  t.cmd(0, move, testKey(1));
+  assert.deepEqual(t.stacks(), [1000, 100, 1500]);
+});
+
+test('an answer to a request is for the one the host\'s page showed: one the player has changed since is neither granted nor turned down unseen', () => {
+  const t = new TestTable({ stacks: [1000, 300], config: { minBuyIn: 100, maxBuyIn: 5000 } });
+  const playerId = t.ids[1]!;
+  const shown = () => seenOf(t.view(0).requests[0]!);
+
+  t.cmd(1, { type: 'requestRebuy', amount: 200 });
+  const saw = shown();
+  t.cmd(1, { type: 'requestRebuy', amount: 4000 });
+  const before = JSON.stringify(t.state);
+
+  for (const type of ['approve', 'deny'] as const) {
+    assert.throws(() => t.cmd(0, { type, playerId, saw }, testKey(1)), { name: 'GameError', message: 'That request has changed' }, type);
+    assert.equal(JSON.stringify(t.state), before, type);
+  }
+
+  // What is sent as seen and is nothing a page shows fits no request
+  for (const nothing of [null, 'rebuy', { kind: 'rebuy' }, []]) {
+    assert.throws(() => t.cmd(0, { type: 'approve', playerId, saw: nothing as unknown as RequestSeen }), { message: 'That request has changed' });
+  }
+
+  t.cmd(0, { type: 'approve', playerId, saw: shown() }, testKey(1));
+  assert.equal(t.state.seats[1]!.stack, 4300);
+
+  // An answer that says nothing of what it saw, as a page from before answers did, is for whatever waits
+  t.cmd(1, { type: 'requestRebuy', amount: 100 });
+  t.cmd(0, { type: 'approve', playerId });
+  assert.equal(t.state.seats[1]!.stack, 4400);
+  assert.throws(() => t.cmd(0, { type: 'approve', playerId, saw }), { message: 'That request is gone' });
+
+  // Chips asked for go with their player to another seat, and are the same request there
+  t.cmd(1, { type: 'requestRebuy', amount: 100 });
+  const sawBeforeTheMove = shown();
+  t.cmd(0, { type: 'moveSeat', playerId, seat: 6 });
+  t.cmd(0, { type: 'approve', playerId, saw: sawBeforeTheMove });
+  assert.equal(t.state.seats[6]!.stack, 4500);
+
+  // A seat asked for again somewhere else is another request too
+  t.ids.push(addMember(t.state, 'Ann', t.ctx()).id);
+  t.cmd(2, { type: 'requestSeat', seat: 4, buyIn: 500 });
+  const sawSeat = shown();
+  t.cmd(2, { type: 'requestSeat', seat: 5, buyIn: 500 });
+  assert.throws(() => t.cmd(0, { type: 'approve', playerId: t.ids[2]!, saw: sawSeat }), { message: 'That request has changed' });
+  assert.equal(t.state.seats[4], null);
+});
+
+test('Approve asked again under its key grants the request once, and leaves waiting one the player has made in the same words since', () => {
+  const t = new TestTable({ stacks: [1000, 300], config: { minBuyIn: 100, maxBuyIn: 5000 } });
+  const approve: Command = { type: 'approve', playerId: t.ids[1]!, saw: { kind: 'rebuy', seat: 1, amount: 200 } };
+
+  t.cmd(1, { type: 'requestRebuy', amount: 200 });
+  t.cmd(0, approve, testKey(1));
+  t.cmd(1, { type: 'requestRebuy', amount: 200 });
+  t.cmd(0, approve, testKey(1));
+
+  assert.equal(t.state.seats[1]!.stack, 500, 'the second request was granted by the answer to the first');
+  assert.deepEqual(t.state.requests, [{ playerId: t.ids[1], kind: 'rebuy', seat: 1, amount: 200 }]);
+
+  // Pressed again on purpose, once the page has drawn the new request, it is a new answer under a new key
+  t.cmd(0, approve, testKey(2));
+  assert.equal(t.state.seats[1]!.stack, 700);
+});
+
 test('chat lands in the feed, which keeps only the latest entries', () => {
   const t = new TestTable({ stacks: [1000, 1000] });
 
@@ -751,7 +1004,7 @@ test('a table created to play dollars and cents starts at stakes that suit it, a
   assert.throws(() => t.cmd(watcher, { type: 'requestSeat', seat: 5, buyIn: 1999 }), { message: 'Your buy-in must be an amount to the cent from 20.00 to 100.00' });
   assert.throws(() => t.cmd(watcher, { type: 'requestSeat', seat: 5, buyIn: 20.5 }), { message: 'Your buy-in must be an amount to the cent from 20.00 to 100.00' });
   assert.throws(() => t.cmd(0, { type: 'requestRebuy', amount: 1 }), { message: 'You already have the maximum buy-in of 100.00' });
-  assert.throws(() => t.cmd(1, { type: 'requestRebuy', amount: 8001 }), { message: 'Your rebuy must be an amount to the cent from 0.01 to 80.00' });
+  assert.throws(() => t.cmd(1, { type: 'requestRebuy', amount: 8001 }), { message: 'The chips you add must be an amount to the cent from 0.01 to 80.00' });
   assert.throws(() => t.cmd(0, { type: 'setStack', playerId: t.ids[1]!, stack: -1 }), { message: 'The stack must be an amount to the cent from 0.00 to 10,000,000.00' });
 
   t.cmd(1, { type: 'requestRebuy', amount: 2550 });

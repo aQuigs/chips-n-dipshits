@@ -2,9 +2,9 @@ import { formatAmount } from '../../../engine/amounts.ts';
 import { midSentence } from '../../../engine/handNames.ts';
 import type { TableView } from '../../../engine/view.ts';
 import { namesOf } from '../../tonightText.ts';
-import { h, holdWhile } from '../../ui.ts';
+import { h, heldTogether, sendingButton, sends } from '../../ui.ts';
 import { hostOrCohost } from '../roles.ts';
-import { frame } from './dialog.ts';
+import { frame, sendAndLeave } from './dialog.ts';
 import type { DialogHandlers, DialogKind } from './dialog.ts';
 
 /**
@@ -22,16 +22,8 @@ function payHighHand(view: TableView, handlers: DialogHandlers): HTMLElement {
 
   const total = formatAmount(due.total, config);
   const holderGone = next !== null && !next.playerIds.some((id) => due.playerIds.includes(id));
-  const pay = (event: Event) => {
-    const button = event.currentTarget as HTMLButtonElement;
-
-    holdWhile(button, async () => {
-      // The hand and the collectors shown here go with it, so a payout that has changed since is refused, and the dialog stays to show what is due now
-      if ((await handlers.send({ type: 'payHighHand', hand: due.hand, to: due.playerIds })) !== 'refused' && button.isConnected) {
-        handlers.close();
-      }
-    });
-  };
+  // The hand and the collectors shown here go with it, so a payout that has changed since is refused, and the dialog stays to show what is due now
+  const pay = sendingButton('button.btn.danger', { 'data-action': 'pay-high-hand' }, sends(`Pay ${total}`, 'Paying…'), sendAndLeave(handlers, { type: 'payHighHand', hand: due.hand, to: due.playerIds }));
 
   return frame(
     'Pay the high hand?',
@@ -42,16 +34,17 @@ function payHighHand(view: TableView, handlers: DialogHandlers): HTMLElement {
       : null,
     h('p', null, `Everyone else seated pays ${formatAmount(config.highHandBonus, config)}, or what they have if that is less: ${total} in all${due.playerIds.length > 1 ? ', shared' : ''}.`),
     h('p.note', null, 'Once it is paid, the next high hand starts from nothing. The high hand of the night stays in Tonight.'),
-    h('div.buttons', null, h('button.btn', { type: 'button', onclick: handlers.close }, 'Cancel'), h('button.btn.primary', { type: 'button', 'data-action': 'pay-high-hand', onclick: pay }, `Pay ${total}`)),
+    h('div.buttons', null, heldTogether(h('button.btn', { type: 'button', onclick: handlers.close }, 'Cancel'), pay)),
   );
 }
 
 export const highHandDialog: DialogKind<'highHand'> = {
   kind: 'highHand',
   menu: {
+    group: 'run',
     label: 'Pay the high hand',
     who: (view) => hostOrCohost(view) && view.config.highHandBonus > 0 && view.tonight.highHand.next !== null,
-    note: (view) => {
+    state: (view) => {
       const { due } = view.tonight.highHand;
 
       if (view.hand) {

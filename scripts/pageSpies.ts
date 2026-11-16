@@ -20,6 +20,8 @@ export interface Toast {
   box: Box;
   /** Whether it had less room than its words need. */
   squeezed: boolean;
+  /** The edge down its side that marks word of something gone wrong, how wide and in which color, or null for news. */
+  edge: { width: number; color: string } | null;
 }
 
 /**
@@ -99,9 +101,11 @@ export const RIG_PAGE = (now: number) => `(() => {
     for (const { target, addedNodes } of changes) {
       if (target instanceof Element && target.classList.contains('toast') && addedNodes.length > 0) {
         const { left, top, right, bottom } = target.getBoundingClientRect();
+        const side = getComputedStyle(target, '::before');
+        const edge = side.content === 'none' ? null : { width: parseFloat(side.width), color: side.backgroundColor };
 
         // The words this change put there: told two in one go, the toast itself has only the second's by now
-        rig.toasts.push({ text: [...addedNodes].map((node) => node.textContent).join(''), box: { left, top, right, bottom }, squeezed: target.scrollWidth > target.clientWidth + 1 });
+        rig.toasts.push({ text: [...addedNodes].map((node) => node.textContent).join(''), box: { left, top, right, bottom }, squeezed: target.scrollWidth > target.clientWidth + 1, edge });
       }
     }
   }).observe(document, { subtree: true, childList: true });
@@ -118,6 +122,57 @@ export async function toastTold(page: Page, words = '', after = 0): Promise<Toas
   const told = await page.waitForFunction(`window.rig.toasts.slice(${after}).find((toast) => toast.text.includes(${JSON.stringify(words)}))`);
 
   return (await told.jsonValue()) as Toast;
+}
+
+/** What a form says in its own line of why it was turned down (`refusalLine`). */
+export interface Refusal {
+  text: string;
+  /** Where the line lies. */
+  box: Box;
+  /** Whether it had less room than its words need. */
+  squeezed: boolean;
+  /** The ids of the boxes marked as what it is about, each read out with it. */
+  marked: string[];
+}
+
+/**
+ * Resolves with what a form's line says once it says a refusal with `words` in it, waiting for it if need
+ * be, and for what it moved to take taps again: until then a control held back is passed over by whatever
+ * asks what lies at a point. The line is then all on the screen with nothing over it, every box marked with
+ * it is in sight too, and the page has not told the same in a toast: a reason said twice is read twice.
+ */
+export async function refusalTold(page: Page, words = ''): Promise<Refusal> {
+  const told = await page.waitForFunction(`(() => {
+    const line = [...document.querySelectorAll('.refusal:not(.stale)')].find((line) => line.textContent.includes(${JSON.stringify(words)}));
+
+    if (!line || document.querySelector('.taps-settling')) {
+      return null;
+    }
+
+    const inSight = (element) => {
+      const { left, top, right, bottom } = element.getBoundingClientRect();
+      const uppermost = document.elementFromPoint((left + right) / 2, (top + bottom) / 2);
+
+      return left >= 0 && top >= 0 && right <= innerWidth && bottom <= innerHeight && (uppermost === element || element.contains(uppermost));
+    };
+    const marked = [...document.querySelectorAll('[aria-invalid="true"]')].filter((box) => (box.getAttribute('aria-describedby') ?? '').split(' ').includes(line.id));
+    const { left, top, right, bottom } = line.getBoundingClientRect();
+
+    return {
+      text: line.textContent,
+      box: { left, top, right, bottom },
+      squeezed: line.scrollWidth > line.clientWidth + 1,
+      marked: marked.map((box) => box.id),
+      outOfSight: [line, ...marked].filter((element) => !inSight(element)).map((element) => element.id),
+      toasted: window.rig.toasts.some((toast) => toast.text === line.textContent),
+    };
+  })()`);
+  const { outOfSight, toasted, ...refusal } = (await told.jsonValue()) as Refusal & { outOfSight: string[]; toasted: boolean };
+
+  assert.deepEqual(outOfSight, [], `the refusal "${refusal.text}" or a box marked with it is off the screen or under something`);
+  assert.equal(toasted, false, `the refusal "${refusal.text}" is in its form's line and in a toast as well`);
+
+  return refusal;
 }
 
 // Run in the page: writes down each sound it plays, since a check cannot listen. A sound starts with its
@@ -236,6 +291,18 @@ export const NOTICES = (permission: Permission, answer = permission) => `(() => 
   };
 })()`;
 
+// Run in the page: every buzz asked for, and whether the page had been touched by then
+export const BUZZ = `(() => {
+  window.buzzes = [];
+  Object.defineProperty(Navigator.prototype, 'vibrate', {
+    value: (pattern) => {
+      window.buzzes.push({ pattern, touched: navigator.userActivation.hasBeenActive });
+      return true;
+    },
+    configurable: true,
+  });
+})()`;
+
 // Run in the page: every title the page gives its tab
 export const TITLES = `(() => {
   window.titles = [];
@@ -290,6 +357,36 @@ export function opsSent(page: Page): string[] {
   return ops;
 }
 
+/** The kind of every command a page sends the table from now on, in order. */
+export function commandsSent(page: Page): string[] {
+  const sent: string[] = [];
+
+  page.on('request', (request) => {
+    const type = request.method() === 'POST' ? (JSON.parse(request.postData() ?? '{}') as { command?: { type?: string } }).command?.type : undefined;
+
+    if (type) {
+      sent.push(type);
+    }
+  });
+
+  return sent;
+}
+
+/** The key each command a page sends the table goes under from now on, in order: undefined for one sent without. */
+export function keysSent(page: Page): (string | undefined)[] {
+  const sent: (string | undefined)[] = [];
+
+  page.on('request', (request) => {
+    const body = request.method() === 'POST' ? (JSON.parse(request.postData() ?? '{}') as { command?: object; key?: string }) : {};
+
+    if (body.command) {
+      sent.push(body.key);
+    }
+  });
+
+  return sent;
+}
+
 export function movesSent(page: Page): string[] {
   const sent: string[] = [];
 
@@ -331,6 +428,28 @@ export async function answeredTo(page: Page, type: Command['type'], make: () => 
 
   return answer;
 }
+
+/** What a button shows, and whether it is held for an answer: switched off and marked as busy (`holdWhile` in src/client/ui.ts). */
+export interface ButtonNow {
+  says: string;
+  held: boolean;
+}
+
+/**
+ * A button as it is now. One that sends something has two things to say in the same place (`sends` in
+ * src/client/ui.ts), and its text is always the first: what it says here is read off which of the two is
+ * painted, so a held button whose words did not change is seen as that.
+ */
+export const buttonNow = (page: Page, selector: string): Promise<ButtonNow> =>
+  page.locator(selector).evaluate((button) => {
+    const styleOf = (part: unknown, pseudo?: string) => button.ownerDocument.defaultView.getComputedStyle(part, pseudo);
+    const painted = [...button.querySelectorAll('.sends > *')].filter((part) => styleOf(part).visibility === 'visible');
+
+    return {
+      says: painted.length > 0 ? painted.map((part) => part.textContent || styleOf(part, '::before').content.replace(/^"|"$/g, '')).join(' and ') : button.innerText.trim(),
+      held: button.disabled && button.getAttribute('aria-busy') === 'true',
+    };
+  });
 
 /** The replay's table at rest: drawn, with the chances of hands face up worked out for the cards on it. */
 export const replayDrawn = (page: Page) => page.waitForSelector('.replay:not([hidden]) .replay-stage:not([data-chances-pending]) .table');

@@ -1,0 +1,84 @@
+/* ---- Sections of a form, each under a heading that folds it away under one line saying what it holds ---- */
+
+.sections,
+.dialog-body .sections > form {
+  display: grid;
+  gap: 0;
+}
+
+.fold-section {
+  border-bottom: 1px solid var(--line);
+}
+
+.fold-section > summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 2px 12px;
+  min-height: 44px;
+  padding: 12px 0;
+  cursor: pointer;
+  list-style: none;
+}
+
+.fold-section > summary::-webkit-details-marker {
+  display: none;
+}
+
+.fold-section .fold {
+  grid-row: 1 / span 2;
+  grid-column: 2;
+}
+
+.fold-section .holds {
+  grid-column: 1;
+  overflow-wrap: anywhere;
+  text-wrap: pretty;
+}
+
+/* Unfolded, the fields say it themselves */
+.fold-section[open] > summary .holds,
+.fold-section .holds:empty {
+  display: none;
+}
+
+.fold-body {
+  display: grid;
+  gap: 14px;
+  padding-bottom: 18px;
+}
+
+/* The first section starts at the top of what holds them, and the last needs no rule under it */
+.sections > :first-child > summary,
+.sections > form > :first-child > summary {
+  padding-top: 0;
+}
+
+.sections > .fold-section:last-child {
+  border-bottom: 0;
+}
+
+.sections > .fold-section:last-child > .fold-body {
+  padding-bottom: 0;
+}
+
+/* Settings under a heading of their own inside a section, as the kinds of straddle are */
+.among {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.among legend {
+  margin-bottom: 4px;
+  padding: 0;
+}
+
+/*
+ * A dialog of sections keeps its full height whatever is folded: a heading must stay under the finger
+ * that folds it, and a dialog that grew and shrank from its middle or its foot would move every one.
+ */
+.dialog:has(.sections) {
+  height: 88cqb;
+}

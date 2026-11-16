@@ -33,6 +33,11 @@
   pointer-events: none !important;
 }
 
+/* A label hands its tap to the control it names, held back or not, so the whole of it waits with that control */
+label:has(.taps-settling) {
+  pointer-events: none;
+}
+
 /* A dialog's backdrop that takes no tap yet: the dialog on it is judged by its own controls */
 .overlay.taps-settling > * {
   pointer-events: auto;

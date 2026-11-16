@@ -1,6 +1,7 @@
 import type { TableView } from '../../../engine/view.ts';
 import { autoShowDialog } from './autoShow.ts';
 import { callBombPot, callOffBombPot } from './bombPot.ts';
+import { chipsAskedDialog } from './chipsAsked.ts';
 import { confirmDialog } from './confirm.ts';
 import type { DialogHandlers, DialogKind } from './dialog.ts';
 import { highHandDialog } from './highHand.ts';
@@ -9,17 +10,16 @@ import { inviteDialog } from './invite.ts';
 import { ledgerDialog } from './ledger.ts';
 import { lastHandsDialog } from './lastHands.ts';
 import { muteDialog } from './mute.ts';
+import { otherDeviceDialog } from './otherDevice.ts';
 import { keepPlaying, menuDialog, pauseGame, standUp, startGame, toLobby } from './menu.ts';
 import { playersDialog } from './players.ts';
 import { preferencesDialog } from './preferences.ts';
 import { rebuyDialog } from './rebuy.ts';
 import { setStackDialog } from './setStack.ts';
 import { settingsDialog } from './settings.ts';
-import { shuffleSeats } from './shuffle.ts';
 import { sitDialog } from './sit.ts';
 import { standingsDialog } from './standings.ts';
 import { straddlesDialog } from './straddles.ts';
-import { themeDialog } from './theme.ts';
 import { tonightDialog } from './tonight.ts';
 import { transferDialog } from './transfer.ts';
 import { whoDialog } from './who.ts';
@@ -28,34 +28,35 @@ export type { DialogHandlers } from './dialog.ts';
 
 /**
  * Every dialog, and the things the menu does without one. A new dialog is a file in this folder and a
- * line here. Where it stands in this list is where its entry stands in the menu; one that has no
- * entry can stand anywhere. One to a line: .gitattributes joins the lines two branches add to this file.
+ * line here. Its entry says which part of the menu it stands in, and where it stands in this list is
+ * where it stands in that part; one that has no entry can stand anywhere. One to a line:
+ * .gitattributes joins the lines two branches add to this file.
  */
 const REGISTERED = [
-  inviteDialog,
-  ledgerDialog,
-  tonightDialog,
-  standingsDialog,
-  historyDialog,
+  pauseGame,
+  startGame,
+  keepPlaying,
   playersDialog,
-  shuffleSeats,
   callBombPot,
   callOffBombPot,
   lastHandsDialog,
   highHandDialog,
   settingsDialog,
-  pauseGame,
-  startGame,
-  keepPlaying,
-  whoDialog,
-  themeDialog,
-  preferencesDialog,
-  muteDialog,
+  ledgerDialog,
+  tonightDialog,
+  historyDialog,
+  standingsDialog,
   autoShowDialog,
+  muteDialog,
+  preferencesDialog,
+  whoDialog,
+  otherDeviceDialog,
   standUp,
   toLobby,
+  inviteDialog,
   sitDialog,
   rebuyDialog,
+  chipsAskedDialog,
   setStackDialog,
   transferDialog,
   confirmDialog,
@@ -82,6 +83,11 @@ export function dialogAllowed(dialog: Dialog, view: TableView): boolean {
   const kind = BY_KIND.get(dialog.kind)!;
 
   return (kind.who ?? kind.menu?.who)?.(view) ?? true;
+}
+
+/** Whether the viewer is brought back to the dialog from what it opens (`DialogKind.comesBack`). */
+export function dialogComesBack(dialog: Dialog): boolean {
+  return BY_KIND.get(dialog.kind)!.comesBack ?? false;
 }
 
 export function dialogEl(dialog: Dialog, view: TableView, handlers: DialogHandlers): HTMLElement {

@@ -11,13 +11,14 @@ import { actorName, dropCohost, requireMayRemove } from '../hosts.ts';
 import { callLastHands, endNight, nightIsOver, onLastHand, restartNight } from '../night.ts';
 import { movePlayer, shuffleEveryone } from '../reseating.ts';
 import { grant, isDealtIn, leaveSeat, turnAway } from '../seating.ts';
-import { addFeed, memberNamed, recordLedger, seatedMember, seatIndexOf } from '../seats.ts';
+import { addFeed, memberNamed, recordLedger, seatedMember, seatIndexOf, turnedDownWords } from '../seats.ts';
 import { dropStraddlesNotAllowed, STRADDLES, straddlesAllowed } from '../straddles.ts';
+import { SUBJECTS } from '../subjects.ts';
 import { transfer } from '../transfers.ts';
 import { GameError, SEAT_COUNT } from '../types.ts';
-import type { TableConfig } from '../types.ts';
+import type { RequestSeen, SeatRequest, TableConfig, TableState } from '../types.ts';
 import { idList, wholeNumber, yesOrNo } from '../validate.ts';
-import type { Handler } from './handler.ts';
+import type { CommandOf, Handler } from './handler.ts';
 
 /** Refused once the night is over, so that a Resume pressed on a page that had not yet heard does not start it again. */
 export const start: Handler<'start'> = {
@@ -41,10 +42,29 @@ export const pause: Handler<'pause'> = {
   },
 };
 
+/** Whether a request is the one a page showed. A request for chips goes with its player from seat to seat, and is the same request in any of them. */
+const isAsShown = (request: SeatRequest, saw: RequestSeen | null): boolean => saw?.kind === request.kind && saw.amount === request.amount && (request.kind === 'rebuy' || saw.seat === request.seat);
+
+/**
+ * The request a host's answer is for, or none. An answer says what its page showed of the request
+ * (`saw`), and one the player has put another in place of since is refused: nothing is granted or turned
+ * down unseen, and the host's page draws the request that waits now. An answer that says nothing of what
+ * it saw, as a page from before answers did, is for whatever waits.
+ */
+function requestAnswered(state: TableState, { playerId, saw }: CommandOf<'approve' | 'deny'>): SeatRequest | undefined {
+  const request = state.requests.find((r) => r.playerId === playerId);
+
+  if (request && saw !== undefined && !isAsShown(request, saw)) {
+    throw new GameError('That request has changed');
+  }
+
+  return request;
+}
+
 export const approve: Handler<'approve'> = {
   by: 'host or cohost',
   run: ({ state, ctx, command }) => {
-    const request = state.requests.find((r) => r.playerId === command.playerId);
+    const request = requestAnswered(state, command);
     if (!request) {
       throw new GameError('That request is gone');
     }
@@ -58,11 +78,13 @@ export const deny: Handler<'deny'> = {
   run: ({ state, ctx, member, command }) => {
     const who = actorName(state, member);
 
+    const request = requestAnswered(state, command);
+
     turnAway(
       state,
       ctx,
-      (r) => r.playerId === command.playerId,
-      (name, r) => (r.kind === 'seat' ? `${who} turned down ${name}'s request for a seat` : `${who} turned down ${name}'s request for chips`),
+      (r) => r === request,
+      (name, r) => `${who}${turnedDownWords(name, r.kind)}`,
     );
   },
 };
@@ -96,7 +118,7 @@ export const setStack: Handler<'setStack'> = {
       throw new GameError(`${target.name} is in the current hand, so wait until it is over`);
     }
 
-    const stack = validAmount(command.stack, 'The stack', state.config, 0);
+    const stack = validAmount(command.stack, SUBJECTS.stack, state.config, 0);
     const change = stack - seat.stack;
     if (change !== 0) {
       seat.stack = stack;

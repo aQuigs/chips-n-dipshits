@@ -64,7 +64,8 @@ export type ApiRequest =
       /** How long the host may hold the request open waiting for something new. */
       holdMs?: number;
     }
-  | { op: 'act'; tableId: string; auth: Auth; command: Command }
+  /** Under `key`, a command asked again is done once, and answered with the table as it stands (`src/engine/once.ts`). */
+  | { op: 'act'; tableId: string; auth: Auth; command: Command; key?: string }
   | { op: 'history'; tableId: string; auth: Auth }
   | { op: 'presets' }
   /** Presets belong to the group, but only a host or co-host of a table may save one, from that table. */

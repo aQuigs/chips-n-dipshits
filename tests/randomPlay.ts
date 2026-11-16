@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import { addMember, AUTO_SHOWS, CONFIG_KEYS, fullyShown, LIMITS, mayOfferChop, MOST_RUNS, nextDeadline, owes, PRE_ACTIONS, rabbitToHunt, REACTIONS, SEAT_COUNT, seededRng, straddlesAllowed, STREETS, viewFor } from '../src/engine/index.ts';
 import type { Command, GameError, Rng } from '../src/engine/index.ts';
+import { testKey } from './helpers.ts';
 import type { TestTable } from './helpers.ts';
 import { randomConfig } from './randomConfig.ts';
 
@@ -24,8 +25,28 @@ function allowRefusal(action: () => void): void {
   }
 }
 
+// One command in this many goes under a key and, once taken, is asked again under it. Comparing the whole table each time is what takes the time
+const KEYED_EVERY = 16;
+let attempts = 0;
+
+/** Sends a command the rules may refuse. One asked again under its key must leave the table exactly as it was. */
 function attempt(t: TestTable, player: number, command: Command): void {
-  allowRefusal(() => t.cmd(player, command));
+  attempts += 1;
+
+  const key = attempts % KEYED_EVERY === 0 ? testKey(attempts) : undefined;
+  let taken = false;
+
+  allowRefusal(() => {
+    t.cmd(player, command, key);
+    taken = true;
+  });
+
+  if (taken && key !== undefined) {
+    const once = JSON.stringify(t.state);
+
+    t.cmd(player, command, key);
+    assert.equal(JSON.stringify(t.state), once, `${command.type} asked again under its key changed the table`);
+  }
 }
 
 /** The index into the test table's player list for whoever sits in a seat. */

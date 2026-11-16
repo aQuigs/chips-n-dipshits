@@ -16,7 +16,7 @@ import type { PlayerStanding, UnitStandings } from '../../server/api.ts';
 import type { PlayedNight } from '../../server/resultStore.ts';
 import { asOfText, firstUnit, MONEY, nightDate, nightSummary, potsWonText, ranked, SORTS, summaryOf } from '../standings.ts';
 import type { SortId } from '../standings.ts';
-import { h, readableText, youMark } from '../ui.ts';
+import { foldMark, h, readableText, youMark } from '../ui.ts';
 import { badgeList, badgeMarks } from './badges.ts';
 
 export interface StandingsHandlers {
@@ -101,7 +101,7 @@ function playerLine(player: PlayerStanding, unit: Unit, handlers: StandingsHandl
       place,
       h('span.who', null, player.name, player.id === handlers.you ? youMark() : null),
       h('b', { class: `net ${netClass(player.net)}` }, signedAmount(player.net, { unit })),
-      h('span.fold', { 'aria-hidden': 'true' }, '▾'),
+      foldMark(),
       h('small.counts', null, summaryOf(player)),
       badgeMarks(badges),
     ),

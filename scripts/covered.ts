@@ -29,7 +29,11 @@ export const ALLOWED_ON_TOP: OnTop[] = [
   { what: 'a hand played back, which is modal', is: '.replay' },
   { what: 'word that the page is out of date, which is modal', is: '.outdated' },
   { what: 'a chip, a card or a thrown thing in flight, gone when it lands', is: '.stand-in' },
-  { what: 'a toast, over the top bar and nothing of the game', is: '.toast', over: '.topbar *, .brand *' },
+  // Beside the table the chat's column is narrower than a phone, and words that take more than the bar there grow down onto the oldest line in sight
+  { what: 'a toast at a table, over the chat’s bar and the chat’s lines under it, and nothing of the game or of the top bar', is: '.feed-bar > .toast', over: '.feed-bar *, .feed .entries *' },
+  { what: 'a toast away from a table, over the top of the screen', is: '.cnd > .toast', over: '.brand *' },
+  { what: 'a toast while a dialog or a replay is in front of the table, over the top bar they have shut off', is: '.app:has(> .overlay:not([hidden]), + .replay:not([hidden])) .toast', over: '.topbar *' },
+  { what: 'a form’s reason while a box it is about is marked, kept in sight at the foot of that form and of no other', is: '.refusal.pointing', over: 'form *', sameAs: 'form' },
   { what: 'a seat’s plate, over the foot of the cards behind it, never their rank or more than half their suit', is: '.plate', over: '.hole .pip', sameAs: '.seat', upTo: 0.5 },
   { what: 'a reaction or a landed throw, over another player’s cards and name, never the board or the pot', is: '.seat-reaction:not(.own)', over: '.seat:not(.me) .hole *, .seat:not(.me) .plate .name *' },
   { what: 'a reaction or a landed throw on the viewer’s own seat, over their own name, stack and status, never their cards', is: '.seat-reaction.own', over: '.seat.me .plate *' },
@@ -53,17 +57,17 @@ export const MAY_BE_CUT: MayBeCut[] = [
   { is: '.tag .name .detail', whole: 'title', orLeftOut: true },
   { is: '.sidepots', whole: 'title' },
   { is: '.waiting.choosing .waiting-for', whole: 'title' },
-  { is: '.waiting.choosing .named', whole: 'title' },
+  { is: '.waiting.set-close .named', whole: 'title' },
 ];
 
 // The least of a name that may be left to read when it is cut short, in its own font size; a shorter one shows whole
 const LEAST_OF_A_NAME_EM = 3;
 
 /** The parts of the screen that scroll: what is scrolled out of sight in one is not missing. */
-export const SCROLLS = '.entries, .dialog-body, .scroll-x, .react-panel, .replay-line, .replay-log, .who-list, #mention-list, .lobby, .extras, .controls-slot';
+export const SCROLLS = '.entries, .dialog-body, .scroll-x, .react-panel, .replay-line, .replay-log, .who-list, #mention-list, .lobby, .controls-slot';
 
 /** The few of them that are a line swiped along. The rest scroll down, and what is past the side of one of those is cut off, not scrolled away. */
-export const SWIPED = '.scroll-x, .extras, #mention-list';
+export const SWIPED = '.scroll-x, #mention-list';
 
 /** What is missing even so when it has to be scrolled to: the moves of a turn, with the clock running on them. */
 export const ALWAYS_IN_SIGHT = '.turn .buttons button, .turn .buttons button *';

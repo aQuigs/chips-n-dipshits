@@ -2,33 +2,32 @@ import { formatAmount, validAmount } from './amounts.ts';
 import type { Denominated } from './amounts.ts';
 import { bountiesText, handListedTwice, SEVEN_DEUCE, validBounties } from './bounties.ts';
 import type { Bounty, BountyLimits } from './bounties.ts';
+import { capitalized } from './handNames.ts';
 import { STRADDLES } from './straddles.ts';
 import type { StraddleKind } from './straddles.ts';
+import { refusalNames } from './subjects.ts';
 import { GameError } from './types.ts';
 import type { TableConfig } from './types.ts';
 import { LIMITS, text, webAddress, wholeNumber, yesOrNo } from './validate.ts';
 
-/** The sections of the settings form, in the order they show. `house` is what the house allows at the table. */
-export const CONFIG_GROUPS = ['table', 'stakes', 'clock', 'extras', 'house'] as const;
-
-export type ConfigGroup = (typeof CONFIG_GROUPS)[number];
-
 interface SpecBase {
-  /** What the form calls it. */
+  /** What the form calls it, under the heading of its section (`configSections.ts`), which it never says again. */
   label: string;
-  /** How a refusal names it: "The small blind must be a whole number…". */
+  /** How a refusal names it, and anything else that names it away from the form: "The small blind must be a whole number…". */
   subject: string;
   /** A line under the field. */
   hint?: string;
-  group: ConfigGroup;
-  /** Narrow enough to share a row with the next such field of its group. */
+  /** A heading it shares with its neighbors in the form that have the same, over the lot of them. */
+  among?: string;
+  /** Narrow enough to share a row with the next such field. */
   half?: boolean;
+  /** Left out, always. A setting that means nothing as the others stand is kept off the form until it does. */
+  applies?(config: TableConfig): boolean;
   /**
-   * Asked for when a table is created as well; the rest are only in the table settings. `'only'` is
-   * for what can't change once there is a table: it is chosen then, shown closed in the table settings
-   * from then on, and a change to it is refused.
+   * For what can't change once there is a table: it is chosen when the table is created, told in words
+   * in the table settings from then on, and a change to it is refused.
    */
-  atCreate?: boolean | 'only';
+  atCreate?: 'only';
   /** A change leaves the hand in play as it is, which finishes on the value it was dealt under. */
   nextHand?: boolean;
   /** Belongs to one table, so a preset doesn't keep it. Presets can be read by anyone with the game's address. */
@@ -63,8 +62,7 @@ export interface NumberSpec extends SpecBase {
   max?: number;
 }
 
-/** A switch has only its label to say what it does; the form gives it no line underneath. */
-export interface ToggleSpec extends Omit<SpecBase, 'hint'> {
+export interface ToggleSpec extends SpecBase {
   kind: 'toggle';
   default: boolean;
 }
@@ -76,6 +74,8 @@ export interface ChoiceSpec<V extends string | number = string | number> extends
   options: {
     value: V;
     label: string;
+    /** How the table settings say it was picked, for a choice made for good when the table was created. */
+    chosen?: string;
     /** Where other settings start on a new table that picks this, in place of their defaults. */
     suggests?: Partial<TableConfig>;
   }[];
@@ -98,7 +98,7 @@ export type ConfigKey = keyof TableConfig;
 function straddleSwitch(setting: StraddleKind['setting']): ToggleSpec {
   const kind = STRADDLES.find((entry) => entry.setting === setting)!;
 
-  return { kind: 'toggle', label: kind.label, subject: kind.subject, default: kind.byDefault, group: 'house', nextHand: true };
+  return { kind: 'toggle', label: capitalized(kind.short), subject: kind.subject, among: 'Straddles allowed', half: true, default: kind.byDefault, nextHand: true };
 }
 
 /** The kind of spec a setting of a given type takes; a string or a number that is one of a few fixed values is a choice. */
@@ -122,7 +122,7 @@ type SpecFor<V> = [V] extends [Bounty[]]
  * in this list.
  *
  * The order is the order they are checked in, which decides the complaint a host gets when several
- * things are wrong at once. The form goes by `group` first, and by this order within a group.
+ * things are wrong at once. Where each stands in the form is its section's to say (`CONFIG_SECTIONS`).
  */
 export const CONFIG_SPECS: { [K in ConfigKey]-?: SpecFor<TableConfig[K]> } = {
   unit: {
@@ -132,14 +132,13 @@ export const CONFIG_SPECS: { [K in ConfigKey]-?: SpecFor<TableConfig[K]> } = {
     hint: "Can't be changed once the table is created",
     default: 'chips',
     options: [
-      { value: 'chips', label: 'Whole chips' },
-      { value: 'cents', label: 'Dollars and cents', suggests: { smallBlind: 25, bigBlind: 50, minBuyIn: 2000, maxBuyIn: 10_000, bombPotAmount: 250 } },
+      { value: 'chips', label: 'Whole chips', chosen: 'This table plays whole chips' },
+      { value: 'cents', label: 'Dollars and cents', chosen: 'This table plays dollars and cents', suggests: { smallBlind: 25, bigBlind: 50, minBuyIn: 2000, maxBuyIn: 10_000, bombPotAmount: 250 } },
     ],
-    group: 'stakes',
     atCreate: 'only',
   },
-  smallBlind: { kind: 'chips', label: 'Small blind', subject: 'The small blind', default: 10, min: 1, group: 'stakes', half: true, atCreate: true, nextHand: true },
-  bigBlind: { kind: 'chips', label: 'Big blind', subject: 'The big blind', default: 20, min: 1, group: 'stakes', half: true, atCreate: true, nextHand: true },
+  smallBlind: { kind: 'chips', label: 'Small blind', subject: 'The small blind', default: 10, min: 1, half: true, nextHand: true },
+  bigBlind: { kind: 'chips', label: 'Big blind', subject: 'The big blind', default: 20, min: 1, half: true, nextHand: true },
   ante: {
     kind: 'chips',
     label: 'Ante',
@@ -147,8 +146,6 @@ export const CONFIG_SPECS: { [K in ConfigKey]-?: SpecFor<TableConfig[K]> } = {
     hint: 'Goes into the pot before any betting. 0 for no ante',
     default: 0,
     min: 0,
-    group: 'stakes',
-    atCreate: true,
     nextHand: true,
   },
   anteFrom: {
@@ -160,12 +157,11 @@ export const CONFIG_SPECS: { [K in ConfigKey]-?: SpecFor<TableConfig[K]> } = {
       { value: 'everyone', label: 'Everyone dealt in' },
       { value: 'bigBlind', label: 'The big blind, once for the table' },
     ],
-    group: 'stakes',
-    atCreate: true,
+    applies: (config) => config.ante > 0,
     nextHand: true,
   },
-  minBuyIn: { kind: 'chips', label: 'Minimum buy-in', subject: 'The minimum buy-in', default: 400, min: 1, group: 'stakes', half: true, atCreate: true },
-  maxBuyIn: { kind: 'chips', label: 'Maximum buy-in', subject: 'The maximum buy-in', default: 2000, min: 1, group: 'stakes', half: true, atCreate: true },
+  minBuyIn: { kind: 'chips', label: 'Minimum buy-in', subject: 'The minimum buy-in', default: 400, min: 1, half: true },
+  maxBuyIn: { kind: 'chips', label: 'Maximum buy-in', subject: 'The maximum buy-in', default: 2000, min: 1, half: true },
   actionSeconds: {
     kind: 'seconds',
     label: 'Seconds to act',
@@ -174,16 +170,13 @@ export const CONFIG_SPECS: { [K in ConfigKey]-?: SpecFor<TableConfig[K]> } = {
     default: 30,
     min: 0,
     max: LIMITS.maxActionSeconds,
-    group: 'clock',
   },
   name: {
     kind: 'text',
-    label: 'Table name',
+    label: 'Name',
     subject: 'The table name',
     default: "Chips n' Dipshits",
     maxLength: LIMITS.tableNameLength,
-    group: 'table',
-    atCreate: true,
   },
   voiceLink: {
     kind: 'link',
@@ -193,8 +186,6 @@ export const CONFIG_SPECS: { [K in ConfigKey]-?: SpecFor<TableConfig[K]> } = {
     default: '',
     maxLength: LIMITS.linkLength,
     placeholder: 'https://meet.google.com/…',
-    group: 'table',
-    atCreate: true,
     inPresets: false,
   },
   allowStraddle: straddleSwitch('allowStraddle'),
@@ -203,19 +194,24 @@ export const CONFIG_SPECS: { [K in ConfigKey]-?: SpecFor<TableConfig[K]> } = {
   allowMississippiStraddle: straddleSwitch('allowMississippiStraddle'),
   maxRuns: {
     kind: 'choice',
-    label: 'When everyone is all in, run the rest',
+    label: 'Run it more than once',
     subject: 'Running it more than once',
-    hint: 'Each player still in picks how many times, and the fewest picked wins',
+    hint: 'When everyone is all in, each player still in picks how many times, and the fewest picked wins',
     default: 3,
     options: [
-      { value: 1, label: 'Once only' },
+      { value: 1, label: 'Never' },
       { value: 2, label: 'Up to twice' },
       { value: 3, label: 'Up to three times' },
     ],
-    group: 'house',
     nextHand: true,
   },
-  allowChop: { kind: 'toggle', label: 'Let the blinds chop when it folds to them', subject: 'Chopping the blinds', default: false, group: 'house' },
+  allowChop: {
+    kind: 'toggle',
+    label: 'Chopping the blinds',
+    subject: 'Chopping the blinds',
+    hint: 'When it folds to the blinds, they can agree to take their blinds back',
+    default: false,
+  },
   missedBlinds: {
     kind: 'choice',
     label: 'Missed blinds',
@@ -226,8 +222,6 @@ export const CONFIG_SPECS: { [K in ConfigKey]-?: SpecFor<TableConfig[K]> } = {
       { value: 'owed', label: 'Owed' },
       { value: 'forgiven', label: 'Forgiven' },
     ],
-    group: 'house',
-    atCreate: true,
     nextHand: true,
   },
   bounties: {
@@ -238,8 +232,6 @@ export const CONFIG_SPECS: { [K in ConfigKey]-?: SpecFor<TableConfig[K]> } = {
     default: [],
     min: 1,
     most: LIMITS.bounties,
-    group: 'extras',
-    atCreate: true,
     nextHand: true,
   },
   highHandBonus: {
@@ -249,34 +241,29 @@ export const CONFIG_SPECS: { [K in ConfigKey]-?: SpecFor<TableConfig[K]> } = {
     hint: 'Paid by everyone else seated to whoever shows the best hand of the night, when the night ends. 0 for the honor alone',
     default: 0,
     min: 0,
-    group: 'extras',
   },
   bombPotAmount: {
     kind: 'chips',
-    label: 'Bomb pot',
+    label: 'Each player puts in',
     subject: 'The bomb pot',
-    hint: 'What everyone puts in for a bomb pot: no blinds, and the hand starts on the flop',
+    hint: 'No blinds, and the hand starts on the flop',
     default: 100,
     min: 1,
-    group: 'extras',
-    atCreate: true,
     nextHand: true,
   },
   bombPotEvery: {
     kind: 'count',
-    label: 'A bomb pot every so many hands',
+    label: 'Automatically every … hands',
     subject: 'The number of hands per bomb pot',
     hint: '0 for only when the host calls one from the menu',
     default: 0,
     min: 0,
     max: LIMITS.handsPerBombPot,
-    group: 'extras',
-    atCreate: true,
     nextHand: true,
   },
   bombPotBoards: {
     kind: 'choice',
-    label: 'A bomb pot is played on',
+    label: 'Boards',
     subject: 'The boards of a bomb pot',
     hint: 'With two, each board wins half of every pot',
     default: 'one',
@@ -284,17 +271,28 @@ export const CONFIG_SPECS: { [K in ConfigKey]-?: SpecFor<TableConfig[K]> } = {
       { value: 'one', label: 'One board' },
       { value: 'two', label: 'Two boards' },
     ],
-    group: 'extras',
-    atCreate: true,
     nextHand: true,
   },
-  rabbitHunting: { kind: 'toggle', label: 'Rabbit hunting: after a hand ends early, a player can see the cards that would have come', subject: 'Rabbit hunting', default: false, group: 'house' },
+  rabbitHunting: {
+    kind: 'toggle',
+    label: 'Rabbit hunting',
+    subject: 'Rabbit hunting',
+    hint: 'After a hand ends early, a player can see the cards that would have come',
+    default: false,
+  },
 };
 
 export const CONFIG_KEYS = Object.keys(CONFIG_SPECS) as ConfigKey[];
 
 export function fixedAtCreation(key: ConfigKey): boolean {
   return CONFIG_SPECS[key].atCreate === 'only';
+}
+
+/** A setting as a sentence names it away from the form, where its label would lean on a heading that is not there: "the small blind". */
+export function settingName(key: ConfigKey): string {
+  const { subject } = CONFIG_SPECS[key];
+
+  return subject[0]!.toLowerCase() + subject.slice(1);
 }
 
 export interface ConfigRule {
@@ -457,6 +455,17 @@ export function validatedConfig(input: unknown, current: TableConfig): TableConf
   }
 
   return config as unknown as TableConfig;
+}
+
+/**
+ * The settings a refusal of `validatedConfig` is about, for the form they were sent from to point at. A rule
+ * between settings is known by what it says of the settings `asked` for, and any other refusal by the setting
+ * it begins with. None where it names none here, as with one bounty of several.
+ */
+export function settingsRefused(refusal: string, asked: TableConfig): ConfigKey[] {
+  const broken = CONFIG_RULES.find(({ complaint }) => complaint(asked) === refusal);
+
+  return broken ? broken.keys : CONFIG_KEYS.filter((key) => refusalNames(refusal, CONFIG_SPECS[key].subject));
 }
 
 /**

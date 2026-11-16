@@ -11,8 +11,8 @@ import type { HandView, Holding, SeatView, TableView } from '../../engine/view.t
 import type { BoardCard, Place } from '../motion.ts';
 import { boardSaid, hintSaid, LABELS, openSeatSaid, potSaid, seatSaid, seatsLabel } from '../spoken.ts';
 import type { ShownChances } from '../tableChances.ts';
-import { cardEl, h } from '../ui.ts';
-import { nightOver } from './night.ts';
+import { cardEl, h, sendingButton, sends } from '../ui.ts';
+import { enoughSeated, nightOver, startingText, startText } from './night.ts';
 import { highHandMark } from './highHand.ts';
 import { MUTED_MARK } from '../mutes.ts';
 import { hostOrCohost, roleMark } from './roles.ts';
@@ -91,8 +91,11 @@ const ACTION_LABELS: Record<string, string> = {
 export interface TableHandlers {
   /** Left out where no seat can be taken: a table that shows a hand being played back. */
   onSit?(seat: number): void;
-  onStart(): void;
-  onPlayOn(): void;
+  /** Resolves once the table has answered, as `onPlayOn` does: their buttons are held until then. */
+  onStart(): Promise<unknown>;
+  /** Opens the invitation to the table. */
+  onInvite(): void;
+  onPlayOn(): Promise<unknown>;
   /** Asks to see the cards hand number `hand` would have dealt (rabbit hunting). */
   onHunt(hand: number): void;
   /** While the host picks a new seat for a player: who, and where a pick goes. */
@@ -348,7 +351,7 @@ function seatEl(view: TableView, seat: SeatView, slot: number, shape: Shape, clo
     // what the hand won: that its player is all in, away or leaving is back on it once the hand is over
     took > 0 ? h('div.status.won', null, `+${shortAmount(took, view.config)}`) : (chance?.element ?? (status ? h('div.status', { 'data-status': status }, status) : null)),
     // The seconds left, for everyone: the bar under the name alone is easy to miss until the time is gone
-    timer ? h('div.status.clock', { 'data-countdown': hand!.deadline }, '') : null,
+    timer ? h('div.status.clock', { 'data-countdown': hand!.deadline, 'data-as': 'clock' }, '') : null,
     // In the plate, in short: a line under the seat would run onto the next one down the side of a phone's table
     seat.moveTo !== null ? h('div.move-note', { title: moveNote(seat.moveTo), 'aria-label': moveNote(seat.moveTo) }, `→ Seat ${seat.moveTo + 1}`) : null,
     timer,
@@ -591,6 +594,19 @@ function resultLineEl({ boards, says }: ResultLine): HTMLElement {
   return h('div', null, boards ? h('span.of-boards', { 'data-marks': boards.marks }, h('span.words', null, boards.words)) : null, says);
 }
 
+/**
+ * The gold button on the felt of whoever runs a game that is stopped with no hand on the table, which is
+ * the next thing for them to do: to invite until the game has the two players it takes, then to start.
+ * Null when the felt has neither.
+ */
+export function nextStep(view: TableView): 'invite' | 'start' | null {
+  if (view.hand || nightOver(view) || view.nextHandAt !== null || view.running || !hostOrCohost(view)) {
+    return null;
+  }
+
+  return enoughSeated(view) ? 'start' : 'invite';
+}
+
 function messageEl(view: TableView, handlers: TableHandlers): HTMLElement | null {
   const hand = view.hand;
 
@@ -611,26 +627,30 @@ function messageEl(view: TableView, handlers: TableHandlers): HTMLElement | null
       'div.message.night-over',
       null,
       h('div', null, 'The night is over'),
-      hostOrCohost(view) ? h('button.btn.primary', { type: 'button', 'data-action': 'play-on', onclick: handlers.onPlayOn }, 'Keep playing') : null,
+      hostOrCohost(view) ? sendingButton('button.btn.primary', { 'data-action': 'play-on' }, sends('Keep playing', 'Playing on…'), handlers.onPlayOn) : null,
     );
   }
-
-  const seated = view.seats.filter((seat) => seat !== null).length;
 
   if (view.nextHandAt !== null) {
     return h('div.message', null, h('div', null, 'Next hand in ', h('span', { 'data-countdown': view.nextHandAt }, '…')));
   }
 
-  if (!view.running) {
-    if (hostOrCohost(view)) {
-      return h(
-        'div.message',
-        null,
-        h('div', null, seated < 2 ? 'Share the invite link, then start once two players are seated.' : 'Everyone ready?'),
-        h('button.btn.primary', { type: 'button', 'data-action': 'start', onclick: handlers.onStart }, view.handCount === 0 ? 'Start the game' : 'Resume the game'),
-      );
-    }
+  const step = nextStep(view);
 
+  if (step === 'start') {
+    return h('div.message', null, h('div', null, 'Everyone ready?'), sendingButton('button.btn.primary', { 'data-action': 'start' }, sends(startText(view), startingText(view)), handlers.onStart));
+  }
+
+  if (step === 'invite') {
+    return h(
+      'div.message',
+      null,
+      h('div', null, 'Share the invite link. The game can start once two players are seated.'),
+      h('button.btn.primary', { type: 'button', 'data-action': 'invite-players', onclick: handlers.onInvite }, 'Invite players'),
+    );
+  }
+
+  if (!view.running) {
     return h('div.message', null, view.handCount === 0 ? 'Waiting for the host to start the game' : 'The game is paused');
   }
 

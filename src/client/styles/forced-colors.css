@@ -58,6 +58,11 @@
     background: Highlight;
   }
 
+  /* That the viewer's clock is running out was a fill, by their moves and at their seat */
+  [data-running-out] :is(.own-clock, .seat.me .status.clock) {
+    outline: 2px solid Highlight;
+  }
+
   /* A bet's chip was two gradients, which go with every other background: drawn again in the device's own inks */
   .bet .chip {
     forced-color-adjust: none;

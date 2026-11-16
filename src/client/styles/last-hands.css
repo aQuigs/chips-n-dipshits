@@ -16,8 +16,9 @@
   width: 100%;
 }
 
-.hand-counts .chip-btn[aria-pressed='true'],
-.this-hand .chip-btn[aria-pressed='true'] {
+/* A number has no room to say that it was pressed and is being sent: it shows as the one picked from the press on, in place of the one picked before */
+.hand-counts .chip-btn[aria-busy='true'],
+.dialog:not(:has(.hand-counts [aria-busy='true'])) :is(.hand-counts, .this-hand) .chip-btn[aria-pressed='true'] {
   border-color: var(--accent);
   background: var(--accent);
   color: var(--accent-ink);

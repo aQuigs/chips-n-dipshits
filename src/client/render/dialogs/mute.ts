@@ -38,12 +38,13 @@ function mute(view: TableView, handlers: DialogHandlers): HTMLElement {
 export const muteDialog: DialogKind<'mute'> = {
   kind: 'mute',
   menu: {
+    group: 'you',
     label: 'Mute players',
     who: everyone,
-    note: (view, { mutes }) => {
+    state: (view, { mutes }) => {
       const muted = others(view).filter((member) => mutes.has(member.id)).length;
 
-      return muted > 0 ? `${muted} muted on this screen` : 'Hide someone’s chat and reactions';
+      return muted > 0 ? `${muted} muted` : null;
     },
   },
   shows: (view, { mutes }) => [others(view), mutes.ids()],

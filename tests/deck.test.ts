@@ -86,10 +86,11 @@ test('every back has a look of its own, and the cards are drawn from the choice'
   }
 });
 
-test('a choice drawn as samples is shown on the page, where the stylesheet can draw each sample', () => {
+test('a choice is shown on the page, where the stylesheet can draw each of its tiles as the option it stands for', () => {
   for (const [key, pref] of Object.entries(PREFERENCES) as [string, Pref][]) {
-    if (pref.kind === 'choice' && pref.preview) {
-      assert.equal(pref.css, 'attribute', `${key} has samples the stylesheet cannot tell apart`);
+    // The theme is shown by the app itself, on the element a theme is set on, which may be the whole page
+    if (pref.kind === 'choice' && key !== 'theme') {
+      assert.equal(pref.css, 'attribute', `${key} has tiles the stylesheet cannot tell apart`);
     }
   }
 });

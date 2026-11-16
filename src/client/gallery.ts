@@ -19,7 +19,7 @@ interface Size {
 const LAPTOP: Size = { width: 1180, height: 740 };
 const PHONE: Size = { width: 390, height: 780 };
 
-// What the invite dialog shows; the demo table has no address of its own
+// What the dialogs that hold a link show; the demo table has no address of its own
 const SAMPLE_ADDRESS = 'https://script.google.com/macros/s/your-deployment/exec';
 
 function sessionMemory(): Memory {
@@ -103,7 +103,7 @@ function start(root: HTMLElement): void {
     }
   }
 
-  // The theme can also be changed from the menu inside either screen; whichever way, both screens and the picker follow
+  // The theme can also be changed in the Preferences of either screen; whichever way, both screens and the picker follow
   new MutationObserver(() => choose(preview.dataset.theme ?? DEFAULT_THEME)).observe(preview, { attributes: true, attributeFilter: ['data-theme'] });
 
   root.append(picker.element, preview);

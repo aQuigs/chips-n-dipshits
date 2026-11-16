@@ -6,6 +6,7 @@ import { addReaction } from '../reactions.ts';
 import { leaveSeat, submit } from '../seating.ts';
 import { seatIndexOf } from '../seats.ts';
 import { chooseStraddle, isStraddle, straddleKind } from '../straddles.ts';
+import { SUBJECTS } from '../subjects.ts';
 import { GameError, SEAT_COUNT } from '../types.ts';
 import { wholeNumber, yesOrNo } from '../validate.ts';
 import type { Handler } from './handler.ts';
@@ -24,7 +25,7 @@ export const requestSeat: Handler<'requestSeat'> = {
     }
 
     const { minBuyIn, maxBuyIn } = state.config;
-    const amount = validAmount(command.buyIn, 'Your buy-in', state.config, minBuyIn, maxBuyIn);
+    const amount = validAmount(command.buyIn, SUBJECTS.buyIn, state.config, minBuyIn, maxBuyIn);
 
     submit(state, ctx, { playerId: member.id, kind: 'seat', seat, amount });
   },
@@ -43,7 +44,7 @@ export const requestRebuy: Handler<'requestRebuy'> = {
       throw new GameError(`You already have the maximum buy-in of ${formatAmount(state.config.maxBuyIn, state.config)}`);
     }
 
-    const amount = validAmount(command.amount, 'Your rebuy', state.config, 1, room);
+    const amount = validAmount(command.amount, SUBJECTS.chipsAdded, state.config, 1, room);
 
     submit(state, ctx, { playerId: member.id, kind: 'rebuy', seat: seatIndex, amount });
   },

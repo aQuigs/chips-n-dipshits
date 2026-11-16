@@ -1,7 +1,8 @@
-import type { Command, Reaction } from '../engine/types.ts';
+import type { Command, Reaction, RequestKind } from '../engine/types.ts';
 import type { TableView } from '../engine/view.ts';
 import type { Choice, TurnLock } from './connection.ts';
 import type { BoardCard, TableMotion } from './motion.ts';
+import { RequestNews } from './ownNews.ts';
 import { PendingChoice } from './pendingChoice.ts';
 import { PendingMove } from './pendingMove.ts';
 import { Suspense } from './suspense.ts';
@@ -38,6 +39,7 @@ const nameOf = (view: TableView): string => view.seats[view.you.seat!]?.lastActi
  */
 export class ShownTable {
   private readonly news = new TableNews();
+  private readonly requests = new RequestNews();
   private readonly suspense: Suspense;
   private readonly pending = new PendingMove();
   private readonly choice = new PendingChoice();
@@ -100,6 +102,11 @@ export class ShownTable {
     return this.pending.unconfirmed(this.waited()) ? 'unconfirmed' : null;
   }
 
+  /** The kind of request of the viewer's that was turned down, while the bar under the table still says so; null otherwise. */
+  get turnedDown(): RequestKind | null {
+    return this.requests.turnedDown;
+  }
+
   /** A view the connection has taken up. */
   take(view: TableView, wentBack: boolean): void {
     const before = this.latest;
@@ -107,7 +114,7 @@ export class ShownTable {
     this.latest = view;
 
     // Worked out before the table is drawn: what is held back, or laid over the view, decides what is drawn
-    const change = this.choice.see(this.pending.see(this.suspense.see(this.news.change(before, view, this.now(), wentBack))));
+    const change = this.choice.see(this.pending.see(this.suspense.see(this.requests.see(this.news.change(before, view, this.now(), wentBack)))));
 
     this.show(change);
   }

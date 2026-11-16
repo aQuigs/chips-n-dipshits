@@ -6,6 +6,7 @@
 import { formatAmount, validAmount } from './amounts.ts';
 import { isDealtIn } from './seating.ts';
 import { addFeed, recordMove, seatedMember } from './seats.ts';
+import { SUBJECTS } from './subjects.ts';
 import { GameError } from './types.ts';
 import type { Ctx, TableState } from './types.ts';
 
@@ -43,7 +44,7 @@ export function transfer(state: TableState, ctx: Ctx, actor: string, fromId: str
     throw new GameError(`${from.member.name} has no chips to give`);
   }
 
-  const chips = validAmount(amount, 'The amount', state.config, 1, from.seat.stack);
+  const chips = validAmount(amount, SUBJECTS.transferred, state.config, 1, from.seat.stack);
 
   from.seat.stack -= chips;
   to.seat.stack += chips;

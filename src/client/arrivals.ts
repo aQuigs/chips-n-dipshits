@@ -1,15 +1,10 @@
 import { listedLike } from '../engine/names.ts';
+import { KEY_LENGTH, keyFrom } from '../engine/once.ts';
 import type { ApiRequest, ApiResponse } from '../server/api.ts';
+import { leftInDoubt } from './connection.ts';
 
 /** A join or a new table as a form asks for it, before it has a key. */
 export type Arrival = Omit<Extract<ApiRequest, { op: 'create' }>, 'key'> | Omit<Extract<ApiRequest, { op: 'join' }>, 'key'>;
-
-// One symbol to a byte, six bits of it: 22 make 132 bits, as hard to guess as a member's token
-const KEY_LENGTH = 22;
-const SYMBOLS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
-
-/** No answer, or one that says to try again: the server may have let the arrival in before something went wrong. */
-const unanswered = (response: ApiResponse | null): boolean => !response || (!response.ok && (response.code === 'busy' || response.code === 'internal'));
 
 /** Where an arrival is for, whoever arrives: the table joined, or the new table as it is to be set up. */
 const placeOf = (arrival: Arrival): string => JSON.stringify({ ...arrival, who: null, name: null });
@@ -70,7 +65,7 @@ export class Arrivals {
     if (earlier && mayBeBy(earlier, arrival)) {
       const response = await this.asked(earlier);
 
-      if (response?.ok || unanswered(response)) {
+      if (response?.ok || leftInDoubt(response)) {
         return response;
       }
     }
@@ -82,13 +77,13 @@ export class Arrivals {
     const place = placeOf(arrival);
     const words = JSON.stringify(arrival);
     const before = this.held.get(place);
-    const { key } = before?.words === words ? before : { key: [...this.random(KEY_LENGTH)].map((byte) => SYMBOLS[byte & 63]).join('') };
+    const { key } = before?.words === words ? before : { key: keyFrom(this.random(KEY_LENGTH)) };
 
     this.held.set(place, { arrival, words, key });
     const response = await this.send({ ...arrival, key });
 
     // The key is given up for the arrival it answers, and not for one asked there in other words since
-    if (!unanswered(response) && this.held.get(place)?.key === key) {
+    if (!leftInDoubt(response) && this.held.get(place)?.key === key) {
       this.held.delete(place);
     }
 

@@ -34,7 +34,7 @@ function threeHanded(rig: Rig, config: Partial<TableConfig> = {}): RigTable {
 const listening = (table: RigTable, name: string, screen: ScreenName = 'desktop', init = '', options?: PageOptions): Promise<Page> => table.open(name, screen, `${SPOKEN};${init}`, options);
 
 /** Presses Tab until the keyboard is on what `selector` matches, and fails if it never gets there. */
-async function tabTo(page: Page, selector: string, key = 'Tab'): Promise<void> {
+export async function tabTo(page: Page, selector: string, key = 'Tab'): Promise<void> {
   for (let presses = 0; presses < 60; presses++) {
     if (await page.evaluate(`document.activeElement?.matches(${JSON.stringify(selector)}) ?? false`)) {
       return;
@@ -86,7 +86,7 @@ const DEAL = ['log: The game is on', 'log: Hand #1 · blinds 5/10 · Quigs has t
 const SHOWDOWN = ['log: Pam shows king of diamonds, king of clubs (Pair of kings)', 'log: Quigs shows ace of spades, ace of hearts (Pair of aces)', 'log: Quigs wins 170 with pair of aces'];
 
 /** What the rule engine found over the screens of one check, gathered so that a failure names all of them at once. */
-class Sweep {
+export class Sweep {
   private readonly found: string[] = [];
   private screens = 0;
 
@@ -535,7 +535,7 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
     },
   ],
   [
-    'every dialog of the menu opens from the keyboard with the keyboard in it and a name, breaks no rule in any theme, closes on Escape and gives the keyboard back to the menu button',
+    'every dialog of the menu, and the one the top bar’s Invite opens, opens from the keyboard with the keyboard in it and a name, breaks no rule in any theme, closes on Escape and, at a table where nothing else has changed meanwhile, gives the keyboard back to the button it was opened from',
     async (rig) => {
       const table = threeHanded(rig);
       const page = await listening(table, 'Quigs');
@@ -546,22 +546,10 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
       await playToShowdown(table, page);
       await heard(page, 'log: You have 1,090 chips.');
 
-      await page.focus('[data-action="menu"]');
-      await page.keyboard.press('Enter');
-      await page.waitForSelector('.menu');
-      assert.equal(await inDialog(), true, 'the menu opened with the keyboard left behind it');
-      assert.equal(await dialogName(), 'Friday Night');
-      await sweep.over(page, 'the menu');
-
-      const entries = (await page.evaluate(`[...document.querySelectorAll('.menu-item')].map((item) => item.dataset.action)`)) as string[];
       const opened: string[] = [];
 
-      // Leaving for the lobby is the one entry that takes the page off the table
-      for (const entry of entries.filter((action) => action !== 'lobby')) {
-        await tabTo(page, `.menu-item[data-action="${entry}"]`);
-        await page.keyboard.press('Enter');
-        await page.waitForFunction(`document.querySelector('.menu') === null`);
-
+      // Whatever a button has opened by now is looked at and shut with Escape, which hands the keyboard back to that button
+      const lookedAtFrom = async (button: string, entry: string) => {
         // An entry that does something outright, as pausing the game, opens nothing
         if ((await page.locator('.overlay .dialog').count()) > 0) {
           const name = await dialogName();
@@ -575,12 +563,36 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
           await page.waitForSelector('.overlay .dialog', { state: 'detached' });
         }
 
-        assert.equal(await focused(page), 'menu', `after ${entry} the keyboard is not back on the menu button`);
+        assert.equal(await focused(page), button, `after ${entry} the keyboard is not back on the button that opened it`);
+      };
+
+      // The top bar's own button, on every screen, which is why the menu has no line for it
+      await page.focus('.topbar [data-action="invite"]');
+      await page.keyboard.press('Enter');
+      await page.waitForSelector('.dialog #table-link');
+      await lookedAtFrom('invite', 'Invite');
+
+      await page.focus('[data-action="menu"]');
+      await page.keyboard.press('Enter');
+      await page.waitForSelector('.menu');
+      assert.equal(await inDialog(), true, 'the menu opened with the keyboard left behind it');
+      assert.equal(await dialogName(), 'Friday Night');
+      await sweep.over(page, 'the menu');
+
+      const entries = (await page.evaluate(`[...document.querySelectorAll('.menu-item')].map((item) => item.dataset.action)`)) as string[];
+
+      // Leaving for the lobby is the one entry that takes the page off the table
+      for (const entry of entries.filter((action) => action !== 'lobby')) {
+        await tabTo(page, `.menu-item[data-action="${entry}"]`);
+        await page.keyboard.press('Enter');
+        await page.waitForFunction(`document.querySelector('.menu') === null`);
+        await lookedAtFrom('menu', entry);
+
         await page.keyboard.press('Enter');
         await page.waitForSelector('.menu');
       }
 
-      assert.deepEqual(opened, ['Invite players', 'Ledger', 'Tonight', 'Standings', 'Hand history', 'Players', 'Shuffle the seats?', 'Last hands', 'Table settings', 'Who you are', 'Theme', 'Preferences', 'Mute players', 'Show or muck', 'Stand up?']);
+      assert.deepEqual(opened, ['Invite players', 'Players', 'Last hands', 'Table settings', 'Ledger', 'Tonight', 'Hand history', 'Standings', 'Show or muck', 'Mute players', 'Preferences', 'Who you are', 'Play on another device', 'Stand up?']);
       sweep.done(opened.length + 1);
     },
   ],
@@ -950,7 +962,7 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
     },
   ],
   [
-    'the screens before a table break no rule of the rule engine in any theme, each has one main heading and says its language: the lobby, joining, the standings, a table that is gone',
+    'the screens before a table break no rule of the rule engine in any theme, each has one main heading and says its language: the lobby, its form for a new table folded and with every section unfolded from the keyboard, joining, the standings, a table that is gone, and the lobby as someone finds it who left a table, the way back to it the first thing the keyboard comes to',
     async (rig) => {
       const sweep = new Sweep();
       const table = threeHanded(rig);
@@ -966,6 +978,40 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
 
         assert.deepEqual(await structure(lobby), { language: 'en', headings: 1, mains: 1 }, `the lobby, ${screen}`);
         await sweep.over(lobby, `the lobby, ${screen}`);
+
+        // A table's code is asked for in a strip with a heading and a name for its box, and the keyboard comes to it before the form for a new table
+        assert.equal(await tree(lobby, '.lobby .join-strip'), ['- heading "Join a table" [level=2]', '- textbox "Table code"', '- button "Find table"'].join('\n'), `the strip for a table’s code, ${screen}`);
+        await tabTo(lobby, '#table-code');
+        await lobby.keyboard.press('Tab');
+        await lobby.keyboard.press('Tab');
+        assert.equal(await focused(lobby), '#host-name', `the keyboard does not go from a table’s code to the form for a new table, ${screen}`);
+
+        // The form for a new table: a folded section is a group under its heading and the line of what it holds, with Create table right after the last
+        assert.match(
+          await tree(lobby, '.lobby form:has([data-action="create-table"])'),
+          new RegExp(
+            [
+              '- group:\\n\\s+- heading "Table" \\[level=3\\]\\n\\s+- text: Name\\n[^]*',
+              '- group:\\n\\s+- heading "Stakes" \\[level=3\\]\\n\\s+- radiogroup "Play with":[^]*',
+              '- group:\\n\\s+- heading "Bomb pots" \\[level=3\\]\\n\\s+- text: 100 each · only when called · one board\\n',
+              '- group:\\n\\s+- heading "Bounties and high hand" \\[level=3\\]\\n\\s+- text: None\\n',
+              '- group:\\n\\s+- heading "House rules" \\[level=3\\]\\n\\s+- text: 30 s clock · Straddle under the gun · run it up to 3 times · missed blinds owed\\n',
+              '- button "Create table"',
+            ].join(''),
+          ),
+          `the form for a new table, ${screen}`,
+        );
+
+        for (const section of ['bombPots', 'sideMoney', 'house']) {
+          await tabTo(lobby, `summary[data-section="${section}"]`);
+          await lobby.keyboard.press('Enter');
+          await lobby.waitForSelector(`.fold-section[data-section="${section}"][open]`);
+          assert.equal(await focusIn(lobby, `summary[data-section="${section}"]`), true, `unfolding ${section} took the keyboard off its heading, ${screen}`);
+        }
+
+        await lobby.keyboard.press('Tab');
+        assert.equal(await focused(lobby), '#new-table-action-seconds', 'Tab from a heading just unfolded does not go into its section');
+        await sweep.over(lobby, `the lobby with every section of its form open, ${screen}`);
 
         await lobby.click('[data-action="standings"]');
         await lobby.waitForSelector('.dialog[aria-label="Standings"]');
@@ -996,7 +1042,21 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
         'the parts of the table screen a screen reader can jump between',
       );
 
-      sweep.done(8);
+      // Left for the first screen from the menu, by keyboard: the way back is a button by the table's name, and the first thing Tab comes to
+      await tabTo(seated, '[data-action="menu"]');
+      await seated.keyboard.press('Enter');
+      await tabTo(seated, '.menu [data-action="lobby"]');
+      await seated.keyboard.press('Enter');
+      await seated.waitForSelector('[data-action="back-to-table"]');
+      assert.deepEqual(await structure(seated), { language: 'en', headings: 1, mains: 1 }, 'the lobby with a way back');
+      assert.equal((await tree(seated, 'main.lobby')).split('\n').map((line) => line.trim()).find((line) => /^- (button|textbox|link)/.test(line)), '- button "Back to Friday Night"', 'the first control of the first screen');
+      await sweep.over(seated, 'the lobby with a way back to a table');
+      await seated.keyboard.press('Tab');
+      assert.equal(await focused(seated), 'back-to-table', 'the keyboard does not come to the way back first');
+      await seated.keyboard.press('Enter');
+      await seated.waitForSelector('.seat.me');
+
+      sweep.done(11);
     },
   ],
   [
@@ -1026,8 +1086,6 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
       type Measured = { dialog: number; bar: number; title: number; own: number; pot: number; others: number; sizing: number[]; moves: number; extraRows: number; movesInSight: boolean; offTheSide: number };
       // What a move's words may add to the height of their row by taking a second line
       const SECOND_LINE = 8;
-      // The rows the switches under the moves take at 360 wide as drawn, which the table already makes room for
-      const EXTRA_ROWS = 2;
       // Sizes as the browser reports them, which is to a fraction of a pixel no eye can tell
       const sized = (found: number[], expected: number[], where: string) =>
         assert.ok(
@@ -1068,12 +1126,12 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
           }
 
           // Under the table the bar takes its height from the table's, so it keeps its rows whatever the font: no row of the
-          // bet's sizes wraps, the moves grow by a second line at most, and the switches under them take no more rows than
-          // the table has room for. Beside the table, on a phone on its side, its height costs the table nothing
+          // bet's sizes wraps, the moves grow by a second line at most, and the switches under them stay on their one line.
+          // Beside the table, on a phone on its side, its height costs the table nothing
           if (screen === 'smallPhone') {
             assert.deepEqual(found.sizing, drawn.sizing, `${where}: a row of the bet’s sizes is taller than it was drawn`);
             assert.ok(found.moves - drawn.moves <= SECOND_LINE, `${where}: the moves’ row grew by ${found.moves - drawn.moves}px`);
-            assert.ok(found.extraRows <= Math.max(drawn.extraRows, EXTRA_ROWS), `${where}: the switches under the moves take ${found.extraRows} rows`);
+            assert.equal(found.extraRows, 1, `${where}: the switches under the moves take ${found.extraRows} rows`);
           }
         }
       }
@@ -1085,11 +1143,15 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
       await page.keyboard.press('Enter');
       await tabTo(page, '.menu-item[data-action="preferences"]');
       await page.keyboard.press('Enter');
-      await tabTo(page, 'select[data-pref="textSize"]');
-      assert.match(await tree(page, '.dialog'), /heading "Text" \[level=3\]\n\s+- text: Text size\n\s+- combobox "Text size [^"]*":\n\s+- option "Standard" \[selected\]\n\s+- option "Large"\n\s+- option "Largest"/);
-      await page.selectOption('select[data-pref="textSize"]', 'largest');
+      await tabTo(page, '#pref-textSize input:checked');
+      assert.match(await tree(page, '.dialog'), /heading "Look" \[level=3\]\n(?:.*\n)*?\s+- radiogroup "Text size":\n\s+- text: Text size [^\n]*\n\s+- radio "Standard" \[checked\]\n\s+- text: Standard\n\s+- radio "Large"\n\s+- text: Large\n\s+- radio "Largest"\n/);
+
+      // One of a few is picked as radio buttons are, with the arrows: each step is made at once
+      await page.keyboard.press('ArrowRight');
+      await page.waitForSelector('#app[data-text-size="large"]');
+      await page.keyboard.press('ArrowRight');
       await page.waitForSelector('#app[data-text-size="largest"]');
-      assert.equal(await focused(page), '#pref-textSize', 'the choice was made and the keyboard is no longer on it');
+      assert.equal(await page.evaluate(`document.activeElement.matches('#pref-textSize input[value="largest"]:checked')`), true, `the choice was made and the keyboard is no longer on it, but on ${await focused(page)}`);
       assert.equal(await page.evaluate(`localStorage.getItem('cnd.textSize')`), 'largest');
     },
   ],
@@ -1128,6 +1190,94 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
       }
 
       assert.deepEqual(near, [], 'the viewer’s bet is on their cards, or touches them');
+    },
+  ],
+  [
+    'the table settings from the keyboard: every section is a group under a heading, folded ones under the line of what they hold, Enter on a heading unfolds it with the keyboard still there and Tab goes on into it, every section open breaks no rule in any theme, and Enter in a field saves',
+    async (rig) => {
+      const table = threeHanded(rig);
+      const page = await listening(table, 'Quigs');
+      const sweep = new Sweep();
+      const heading = (section: string) => `summary[data-section="${section}"]`;
+
+      await page.focus('[data-action="menu"]');
+      await page.keyboard.press('Enter');
+      await tabTo(page, '.menu-item[data-action="settings"]');
+      await page.keyboard.press('Enter');
+      await page.waitForSelector(`${heading('presets')} .holds:not(:empty)`);
+
+      assert.match(
+        await tree(page, '.dialog'),
+        new RegExp(
+          [
+            '- group:\\n\\s+- heading "Stakes" \\[level=3\\]\\n\\s+- text: Small blind\\n[^]*',
+            '- group:\\n\\s+- heading "Bomb pots" \\[level=3\\]\\n\\s+- text: 100 each · only when called · one board\\n\\s+',
+            '- group:\\n\\s+- heading "Bounties and high hand" \\[level=3\\]\\n\\s+- text: None\\n\\s+',
+            '- group:\\n\\s+- heading "House rules" \\[level=3\\]\\n\\s+- text: No clock · Straddle under the gun · run it up to 3 times · missed blinds owed\\n\\s+',
+            '- group:\\n\\s+- heading "Table" \\[level=3\\]\\n\\s+- text: Friday Night · no voice link\\n\\s+',
+            '- group:\\n\\s+- heading "Presets" \\[level=3\\]\\n\\s+- text: None saved\\n\\s+',
+            '- button "Save"',
+          ].join(''),
+        ),
+      );
+      await sweep.over(page, 'the table settings as they open');
+
+      // The straddles are one question with four answers, and a switch is told apart from the line that explains it
+      await tabTo(page, heading('house'));
+      await page.keyboard.press('Enter');
+      await page.waitForSelector('.fold-section[data-section="house"][open]');
+      assert.equal(await focusIn(page, heading('house')), true, 'unfolding a section took the keyboard off its heading');
+      await page.keyboard.press('Tab');
+      assert.equal(await focused(page), '#table-action-seconds', 'Tab from a heading just unfolded does not go into its section');
+      assert.match(await tree(page, '.fold-section[data-section="house"]'), /- group "Straddles allowed":\n\s+- text: Straddles allowed\n\s+- checkbox "Under the gun" \[checked\]\n[^]*- checkbox "Chopping the blinds"\n/);
+      assert.equal(await page.getAttribute('#table-allow-chop', 'aria-describedby'), 'table-allow-chop-hint');
+
+      for (const section of ['bombPots', 'sideMoney', 'table', 'presets']) {
+        await tabTo(page, heading(section));
+        await page.keyboard.press('Enter');
+        await page.waitForSelector(`.fold-section[data-section="${section}"][open]`);
+        assert.equal(await focusIn(page, heading(section)), true, `unfolding ${section} took the keyboard off its heading`);
+      }
+
+      await sweep.over(page, 'the table settings with every section open');
+
+      // Save lies outside the form it sends, in the foot of the dialog: Enter in a field must find it all the same
+      await page.fill('#table-big-blind', '40');
+      await page.focus('#table-big-blind');
+      await page.keyboard.press('Enter');
+      await page.waitForSelector('.overlay .dialog', { state: 'detached' });
+      assert.equal(table.view('Quigs').config.bigBlind, 40);
+      assert.equal(await focused(page), 'menu', 'saving from the keyboard did not give it back to the menu button');
+      sweep.done(2);
+    },
+  ],
+  [
+    'Add chips and the chips asked for open from the keyboard with the keyboard in them and a name, break no rule in any theme, and close on Escape with the keyboard back on what opened them',
+    async (rig) => {
+      const table = threeHanded(rig);
+      const page = await listening(table, 'Pam');
+      const sweep = new Sweep();
+
+      const opensAndCloses = async (opener: string, what: string, shows: string) => {
+        await page.focus(`.controls [data-action="${opener}"]`);
+        await page.keyboard.press('Enter');
+        await page.waitForSelector(`.dialog ${shows}`);
+        assert.equal(await focusIn(page, '.dialog'), true, `${what} opened with the keyboard left behind it`);
+        assert.equal(await page.getAttribute('.overlay [role$="dialog"]', 'aria-label'), 'Add chips');
+        await sweep.over(page, what);
+
+        await page.keyboard.press('Escape');
+        await page.waitForSelector('.overlay .dialog', { state: 'detached' });
+        assert.equal(await focused(page), opener, `after ${what} the keyboard is not back on what opened it`);
+      };
+
+      await opensAndCloses('rebuy', 'Add chips', '#rebuy-amount');
+
+      table.act('Pam', { type: 'requestRebuy', amount: 500 });
+      await page.waitForSelector('.controls [data-action="chips-asked"]');
+      await sweep.over(page, 'the bar with chips asked for');
+      await opensAndCloses('chips-asked', 'the chips asked for', '[data-action="cancel-request"]');
+      sweep.done(3);
     },
   ],
 ];

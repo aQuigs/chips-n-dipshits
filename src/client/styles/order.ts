@@ -16,6 +16,7 @@ export const STYLESHEETS = [
   'sideways.css',
   'feed.css',
   'dialogs.css',
+  'menu.css',
   'ledger.css',
   'invite.css',
   'history.css',
@@ -54,6 +55,10 @@ export const STYLESHEETS = [
   'replay.css',
   'standings.css',
   'pre-action.css',
+  'sections.css',
+  'add-chips.css',
+  'own-clock.css',
+  'refusal.css',
   'accessibility.css',
   'forced-colors.css',
 ];

@@ -31,9 +31,29 @@
   color: var(--muted);
 }
 
+/*
+ * The way back to a table, by its name, which may be long: its words wrap where a button's never do.
+ * The button is not a row of the page itself: a row is as tall as the least its part may be, which
+ * for a button is one line, when the page is longer than the screen.
+ */
+.way-back {
+  display: grid;
+  gap: 6px;
+  width: min(100%, 360px);
+  text-align: center;
+}
+
+.way-back .btn {
+  padding-block: 10px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  text-wrap: balance;
+  white-space: normal;
+}
+
 .panels {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 16px;
   width: min(100%, 760px);
   align-items: start;
@@ -52,11 +72,137 @@
   background: var(--panel);
 }
 
+/* The door for whoever has a table's code, slim: its box and its button on one row */
+.join-strip {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px 10px;
+  padding-block: 14px;
+}
+
+/* The sections of the form for a new table after the two it opens on, as one stack */
+.start-table .rest {
+  display: grid;
+  align-content: start;
+}
+
+.start-table .rest > .fold-section:last-child {
+  border-bottom: 0;
+}
+
+.start-table .rest > .fold-section:last-child > .fold-body {
+  padding-bottom: 0;
+}
+
+@container app (min-width: 648px) {
+  .join-strip {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 240px) auto;
+  }
+
+  /*
+   * With room for two columns: who and what to start from side by side, the two sections the form
+   * opens on under them, then the rest. Whatever is taller than its neighbors lengthens the row of
+   * the sections, so the table's name stays right under the host's.
+   */
+  .start-table {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: auto auto 1fr;
+    column-gap: 28px;
+  }
+
+  /* Its sections are laid out by the form itself */
+  .start-table > .sections {
+    display: contents;
+  }
+
+  .start-table > :is(h2, .btn, .note) {
+    grid-column: 1 / -1;
+  }
+
+  /* Not stretched to the height of what is beside it: its box would grow with the row */
+  .start-table > .who-ask {
+    grid-area: 2 / 1;
+    align-self: start;
+  }
+
+  .start-table > .preset-pick {
+    grid-area: 2 / 2;
+  }
+
+  .start-table .sections > :nth-child(1) {
+    grid-area: 3 / 1;
+  }
+
+  .start-table .sections > :nth-child(2) {
+    grid-area: 3 / 2;
+  }
+
+  /* With no preset to start from, the stakes take that room too */
+  .start-table:has(> .preset-pick[hidden]) .sections > :nth-child(2) {
+    grid-row: 2 / span 2;
+  }
+
+  .start-table .rest {
+    grid-area: 4 / 1 / auto / -1;
+  }
+
+  .start-table .sections > .fold-section > summary {
+    padding-top: 0;
+  }
+
+  .start-table > .btn {
+    justify-self: center;
+    width: min(100%, 360px);
+  }
+
+  .start-table > .note {
+    text-align: center;
+  }
+}
+
+/* With room for three, the rest stands beside the two, and Create table is on the first screen of a desktop */
+@container app (min-width: 1000px) {
+  .panels:not(.single) {
+    width: min(100%, 1040px);
+  }
+
+  .start-table {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .start-table .rest {
+    grid-area: 2 / 3 / span 2;
+  }
+
+  .start-table .rest > :first-child > summary {
+    padding-top: 0;
+  }
+
+  .start-table .sections > .fold-section {
+    border-bottom: 0;
+  }
+
+  .start-table .sections > .fold-section > .fold-body {
+    padding-bottom: 0;
+  }
+}
+
 .card-panel h2,
 .dialog h2 {
   font: var(--display-weight) calc(20px * var(--display-scale) * var(--text-scale)) / 1.2 var(--font-display);
   letter-spacing: var(--display-spacing);
   text-transform: var(--display-case);
+}
+
+/* With no room beside its row, the heading of the strip is the label over it */
+@container app (max-width: 647.98px) {
+  .join-strip h2 {
+    grid-column: 1 / -1;
+    color: var(--muted);
+    font: 600 calc(13px * var(--text-scale)) / 1.4 var(--font-ui);
+    letter-spacing: normal;
+    text-transform: none;
+  }
 }
 
 .about {

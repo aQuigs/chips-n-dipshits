@@ -5,6 +5,7 @@
  */
 import assert from 'node:assert/strict';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { availableParallelism } from 'node:os';
 import { format, inspect } from 'node:util';
 
 import { runPool } from './pool.ts';
@@ -25,19 +26,25 @@ export interface CheckRun {
 }
 
 /*
- * Chosen by timing 65 checks on a ten-core laptop: 193 s on one worker, 101 on two, 71 on three, 54 on
- * four, 46 on five, 41 on six, 37 on eight. Four use two and a half cores between them, which leaves
- * room for two other suites on that machine, and for CI, which has four cores: beside two other runs of
- * the checks, eight workers were no faster than four and slowed the six-player game twice as much.
+ * A check keeps about one core busy between its pages, so a machine runs a few more than half as many
+ * at once as it has cores, and the rest are left to whatever else it is doing: a second suite beside
+ * this one, the other tests, the desktop. Timed once each on a ten-core laptop with two cores busy
+ * elsewhere, all 354 checks with the two other browser tests beside them: 381 s at four at a time, the
+ * whole machine a quarter idle, and 343 s at six, a seventh idle, with another checkout's unit tests
+ * beside those for a minute. A check took a third longer at six, and none failed either way. More than
+ * six were not timed on a quiet machine. CI has four cores, which four checks fill, and keeps its four.
  */
-const DEFAULT_WORKERS = 4;
+const FEWEST_WORKERS = 4;
+const fittingWorkers = () => Math.max(FEWEST_WORKERS, Math.floor(availableParallelism() / 2) + 1);
 
 // A stalled run spends nearly all its time waiting, on about one core between twelve workers
 const STALLED_WORKERS = 12;
 
-// Six times what the slowest check takes, and short enough that one stuck check is told well inside the timeout of the test that runs them all.
+// For a check that hangs, not one on a busy machine. The slowest take half a minute alone, but with two runs of them all side
+// by side on a laptop doing other work besides, one that takes 19 s alone took 90, and was cut off by the limit of then. This is
+// twice that. With the grace after it, it is shorter than the silence a run of them all is stopped for (tests/e2e.test.ts).
 // A stalled run waits out its stall after every step: the check with the most steps has about 150
-const LIMIT_MS = 90_000 + 150 * STALL_MS;
+const LIMIT_MS = 180_000 + 150 * STALL_MS;
 
 // Enough to look at the pages of a check that was stopped and close them
 const GRACE_MS = 20_000;
@@ -46,10 +53,10 @@ const GRACE_MS = 20_000;
 const CLOSED_UNDER_IT = 'Target page, context or browser has been closed';
 const SLOWEST_SHOWN = 5;
 
-/** How many checks run at once: CHECK_WORKERS when it is set. */
+/** How many checks run at once: CHECK_WORKERS when it is set, and otherwise what the machine has cores for. */
 function workerCount(): number {
   const asked = process.env.CHECK_WORKERS;
-  const count = asked === undefined ? (STALL_MS > 0 ? STALLED_WORKERS : DEFAULT_WORKERS) : Number(asked);
+  const count = asked === undefined ? (STALL_MS > 0 ? STALLED_WORKERS : fittingWorkers()) : Number(asked);
   assert.ok(Number.isInteger(count) && count >= 1, `CHECK_WORKERS is how many checks run at once, a whole number from 1 up, not "${asked}"`);
 
   return count;

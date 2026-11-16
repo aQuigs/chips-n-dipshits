@@ -1,4 +1,4 @@
-import { editableAmount, formatAmount, hasDecimals, parseAmount, shortAmount } from '../../engine/amounts.ts';
+import { formatAmount, hasDecimals, parseAmount, shortAmount } from '../../engine/amounts.ts';
 import type { Denominated } from '../../engine/amounts.ts';
 import type { BettingAction } from '../../engine/betting.ts';
 import { bombPotName } from '../../engine/bombPots.ts';
@@ -6,16 +6,26 @@ import { capitalized, cardWords } from '../../engine/handNames.ts';
 import { preActionFor } from '../../engine/preAction.ts';
 import { timesText } from '../../engine/runVote.ts';
 import { straddlesAllowed } from '../../engine/straddles.ts';
-import type { Command, PassedOver } from '../../engine/types.ts';
+import type { Command, PassedOver, RequestKind, TableConfig } from '../../engine/types.ts';
+import { LIMITS } from '../../engine/validate.ts';
 import type { HandView, SeatView, TableView } from '../../engine/view.ts';
+import { ownDeadline } from '../actionClock.ts';
+import { betStops } from '../betStops.ts';
+import { askedSays, chipsAsked, outOfChips, roomToAdd } from '../buyIns.ts';
 import { lastOnRecord } from '../handRecords.ts';
 import { HOTKEYS } from '../hotkeys.ts';
+import { timedOutText, turnedDownText } from '../ownNews.ts';
 import { choiceOn } from '../pendingChoice.ts';
 import { AHEAD_ORDER, aheadLabel } from '../preActions.ts';
+import { FIT_ROW, fitted } from '../rowFit.ts';
+import { settlement } from '../settle.ts';
 import { showOffer } from '../showing.ts';
 import type { Waiting } from '../shownTable.ts';
 import { amountSaid, LABELS, NOT_ON_OFFER, sizedSaid } from '../spoken.ts';
-import { cardEl, h, holdWhile } from '../ui.ts';
+import { standingOf, standingSays } from '../standing.ts';
+import { cardEl, h, holdWhile, sendingButton } from '../ui.ts';
+import type { Child } from '../ui.ts';
+import { bareWhileTyped, putAmount } from './forms.ts';
 import { lastHandsText, nightOver, onLastHand } from './night.ts';
 
 export interface ControlHandlers {
@@ -24,8 +34,14 @@ export interface ControlHandlers {
   /** Shows the table the player's cards at `places` of that hand, 0 on their left. Resolves as `send` does. */
   showCards(hand: number, places: number[]): Promise<unknown>;
   openRebuy(): void;
-  /** Opens the player's own choice of straddles, at a table that allows more than one kind. */
-  openStraddles(): void;
+  /** Opens what the player has asked the host for in chips, where they can take it back. */
+  openAsked(): void;
+  /** Opens the player's standing choices: the straddles and the chop the table does for them. */
+  openStanding(): void;
+  /** Opens the Ledger, where who pays whom is. */
+  openLedger(): void;
+  /** Opens Tonight: the night's numbers, and its recap once it is over. */
+  openTonight(): void;
   /** Plays hand number `hand` back over the table, from the history. Resolves once it is up, or once the viewer has been told why not. */
   replay(hand: number): Promise<unknown>;
   sizing: Sizing;
@@ -35,7 +51,9 @@ export interface ControlHandlers {
 
 /**
  * The bet a player is sizing, kept apart from the buttons, so that a panel drawn again for the same
- * decision still has it: after a move the server refused, the buttons come back as they were left.
+ * decision still has it. The bar is drawn again within one decision by the player's own Sit out next
+ * hand, by chips they ask for and the host's answer, by a clock or blinds the host changes and by a
+ * pause, and after a move the server refused: each time the buttons come back as they were left.
  */
 export interface Sizing {
   /** What stood in the amount box for the decision numbered `turn`; null when nothing was kept for it. */
@@ -72,14 +90,6 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-/** A button for something other than a move in the hand. It waits for its own answer before it can be pressed again. */
-function commandButton(spec: `button.${string}`, action: string, label: string, send: () => Promise<unknown>): HTMLButtonElement {
-  const button = h(spec, { type: 'button', 'data-action': action }, label);
-  button.addEventListener('click', () => holdWhile(button, send));
-
-  return button;
-}
-
 /** What a move button says: the move and its amount as two pieces, so a narrow button breaks between them instead of cutting the amount off. */
 function moveLabel(move: string, amount: number, table: Denominated): (HTMLElement | string)[] {
   // The space is for whoever reads the button as text; laid out, the two pieces are spaced by the button
@@ -111,10 +121,23 @@ function nameMove(button: HTMLElement, move: string, amount: number, table: Deno
 }
 
 /**
- * The buttons for the player on the clock. Keeps the chosen raise size itself, so it survives until
- * the turn changes. Every move names the decision it answers, so it can't be played on a later one.
+ * The viewer's own clock, to stand by the buttons of the decision it runs on: the seconds at their
+ * seat are the smallest figures on a phone, and nowhere near the thumb. The page's tick writes the
+ * figure, as it does a seat's (`data-countdown`), so a second going by draws nothing here again; it is
+ * never said as it changes, only read by whoever goes to it. Null where no clock runs for them.
  */
-function turnPanel(table: Denominated, hand: HandView, stack: number, handlers: ControlHandlers): HTMLElement {
+function ownClockEl(view: TableView): HTMLElement | null {
+  const deadline = ownDeadline(view);
+
+  return deadline === null ? null : h('div.own-clock', null, h('span.unseen', null, `${LABELS.clock}: `), h('span', { 'data-countdown': deadline, 'data-as': 'clock' }));
+}
+
+/**
+ * The buttons for the player on the clock, with that clock when one runs. Keeps the chosen raise size
+ * itself, so it survives until the turn changes. Every move names the decision it answers, so it can't
+ * be played on a later one.
+ */
+function turnPanel(table: Denominated & Pick<TableConfig, 'smallBlind' | 'bigBlind'>, hand: HandView, stack: number, handlers: ControlHandlers, clock: HTMLElement | null): HTMLElement {
   const options = hand.options!;
   const { minRaiseTo, maxRaiseTo, callAmount, callCost } = options;
   const opening = hand.currentBet === 0;
@@ -122,27 +145,30 @@ function turnPanel(table: Denominated, hand: HandView, stack: number, handlers: 
 
   const decision = decisionOf(hand);
   const raiseButton = h('button.btn.raise', { type: 'button', 'data-action': 'raise', 'data-hotkey': HOTKEYS.raise });
-  // A bet being sized outlasts the bar being drawn again for the same decision (`Slot`), as when the host approves chips mid-turn
-  const slider = h('input', { type: 'range', id: 'raise-slider', min: minRaiseTo, max: maxRaiseTo, step: 1, 'aria-label': 'Bet size', 'data-keep': decision });
+  const stops = betStops(minRaiseTo, maxRaiseTo, table);
+  // The keyboard goes to the bar drawn again for the same decision, and what was half typed in the box goes with it (`Slot`, `data-keep`).
+  // The bet itself is kept however it was sized (`keep`), and the slider follows the bet. What the slider stands at is never carried
+  // over: it is a stop, and stop 12 is another amount once the host has changed the blinds
+  const slider = h('input', { type: 'range', id: 'raise-slider', min: 0, max: stops.last, step: 1, 'aria-label': 'Bet size' });
   const amount = h('input', { type: 'text', id: 'raise-amount', inputmode: hasDecimals(table) ? 'decimal' : 'numeric', autocomplete: 'off', 'aria-label': 'Bet size', 'data-keep': decision });
 
   let raiseTo = minRaiseTo;
 
-  // The slider and the size buttons work in the table's smallest unit, so whatever they pick is an amount that can be bet
+  // The slider's stops and the size buttons are whole units of the table, so whatever they pick is an amount that can be bet
   const choose = (value: number, from?: HTMLInputElement): void => {
     raiseTo = clamp(Math.round(value) || minRaiseTo, minRaiseTo, maxRaiseTo);
 
     if (from !== slider) {
-      slider.value = String(raiseTo);
+      slider.value = String(stops.stopOf(raiseTo));
     }
 
     if (from !== amount) {
-      amount.value = editableAmount(raiseTo, table);
+      putAmount(amount, raiseTo, table);
     }
 
     amount.setCustomValidity('');
     amount.removeAttribute('aria-invalid');
-    // The slider counts in the table's smallest unit, which is not how an amount is said
+    // The slider counts its stops, which is not how an amount is said
     slider.setAttribute('aria-valuetext', amountSaid(raiseTo, table));
     raiseButton.removeAttribute('aria-disabled');
     nameMove(raiseButton, raiseMove(), raiseTo, table);
@@ -177,19 +203,28 @@ function turnPanel(table: Denominated, hand: HandView, stack: number, handlers: 
     }
   };
 
-  slider.addEventListener('input', () => choose(Number(slider.value), slider));
-  amount.addEventListener('input', readBox);
+  // What is in the box is kept whenever its player sizes the bet, not only as a move goes out: the bar drawn again
+  // for the same decision would else offer the smallest raise under a thumb on its way to the bet that was sized
+  const keep = (): void => handlers.sizing.keep(turn, amount.value);
+
+  slider.addEventListener('input', () => {
+    choose(stops.amountAt(Number(slider.value)), slider);
+    keep();
+  });
+  amount.addEventListener('input', () => {
+    readBox();
+    keep();
+  });
+  bareWhileTyped(amount, table);
   // Only the box is tidied. The box loses the keyboard as a press on Raise begins, and a button redrawn under that press never hears it
   amount.addEventListener('blur', () => {
     if (amount.validity.valid) {
-      amount.value = editableAmount(raiseTo, table);
+      amount.value = formatAmount(raiseTo, table);
+      keep();
     }
   });
-  // What is in the box is kept as a move goes out: should the move come off again, the panel drawn then has the bet as it was left
-  const play = (move: BettingAction | { type: 'offerChop' }): void => {
-    handlers.sizing.keep(turn, amount.value);
-    void handlers.send({ ...move, turn });
-  };
+
+  const play = (move: BettingAction | { type: 'offerChop' }): void => void handlers.send({ ...move, turn });
 
   raiseButton.addEventListener('click', () => {
     if (amount.reportValidity()) {
@@ -202,6 +237,7 @@ function turnPanel(table: Denominated, hand: HandView, stack: number, handlers: 
   // A size button changes the amount on the button beside it and says nothing itself, so what it set is said
   const size = (value: number): void => {
     choose(value);
+    keep();
     handlers.say(sizedSaid(raiseMove(), raiseTo, table));
   };
 
@@ -232,7 +268,8 @@ function turnPanel(table: Denominated, hand: HandView, stack: number, handlers: 
   return h(
     'div.turn',
     null,
-    options.canRaise ? h('div.sizing', null, h('div.presets', { role: 'group', 'aria-label': LABELS.sizes }, presetButtons), h('div.amount', null, slider, amount)) : null,
+    // The clock is read after the bet's sizes and before the moves. Where it stands is the stylesheet's (own-clock.css): on the line that has room for it, or first in the row of the moves
+    options.canRaise ? h('div.sizing', null, h('div.presets', { role: 'group', 'aria-label': LABELS.sizes }, presetButtons), clock, h('div.amount', { 'data-widest': formatAmount(LIMITS.chips, table) }, slider, amount)) : clock,
     h(
       'div.buttons',
       null,
@@ -247,7 +284,7 @@ function turnPanel(table: Denominated, hand: HandView, stack: number, handlers: 
 const smallBlindName = (view: TableView, hand: HandView) => view.seats[hand.sbSeat]?.name ?? 'The small blind';
 
 /** The big blind's question when the small blind offers to chop: an answer is a move, like any on the clock. */
-function chopQuestion(view: TableView, hand: HandView, handlers: ControlHandlers): HTMLElement {
+function chopQuestion(view: TableView, hand: HandView, handlers: ControlHandlers, clock: HTMLElement | null): HTMLElement {
   const answer = (agree: boolean) => () => void handlers.send({ type: 'answerChop', agree, turn: hand.turn });
 
   return h(
@@ -257,6 +294,8 @@ function chopQuestion(view: TableView, hand: HandView, handlers: ControlHandlers
     h(
       'div.buttons',
       null,
+      // Beside the two answers, which have the width to spare: on the question's own lines it would cost the question one
+      clock,
       h('button.btn.call', { type: 'button', 'data-action': 'chop-no', onclick: answer(false) }, 'Play on'),
       h('button.btn.chop', { type: 'button', 'data-action': 'chop-yes', onclick: answer(true) }, 'Chop'),
     ),
@@ -284,7 +323,7 @@ function runsQuestion(hand: HandView, handlers: ControlHandlers): HTMLElement {
   );
 }
 
-function toggle(label: string, on: boolean, action: string, onChange: (next: boolean) => Promise<unknown>): HTMLElement {
+function toggle(label: Child, on: boolean, action: string, onChange: (next: boolean) => Promise<unknown>): HTMLElement {
   const button = h('button.toggle', { type: 'button', role: 'switch', 'aria-checked': String(on), 'data-action': action }, h('i'), label);
   button.addEventListener('click', () => holdWhile(button, () => onChange(!on)));
 
@@ -364,9 +403,9 @@ function settlingOf(view: TableView, seat: SeatView, handlers: ControlHandlers):
   const amount = (seat.owesBigBlind ? view.config.bigBlind : 0) + (seat.owesSmallBlind ? view.config.smallBlind : 0);
   const owed = formatAmount(amount, view.config);
 
-  // Short, since they share a row of a phone with the switch for sitting out: the line above them says the rest
-  const post = (label: string) => commandButton('button.chip-btn', 'post-blinds', label, () => handlers.send({ type: 'comeIn', post: true }));
-  const wait = (spec: `button.${string}`) => commandButton(spec, 'wait-for-blind', 'Wait for big blind', () => handlers.send({ type: 'comeIn', post: false }));
+  // Short, since they share a line of a phone: the note above them says the rest
+  const post = (label: string) => sendingButton('button.chip-btn', { 'data-action': 'post-blinds' }, label, () => handlers.send({ type: 'comeIn', post: true }));
+  const wait = (spec: `button.${string}`) => sendingButton(spec, { 'data-action': 'wait-for-blind' }, 'Wait for big blind', () => handlers.send({ type: 'comeIn', post: false }));
 
   if (amount === 0) {
     return { note: null, buttons: [] };
@@ -416,11 +455,17 @@ function passedOverText(view: TableView, passed: PassedOver): (HTMLElement | str
   return ['No straddle this hand: ', ...reason()];
 }
 
-/** A line the bar has for the viewer alone, under what everyone is waiting for: about blinds they owe, or a straddle they did not get to post. */
+/**
+ * A line the bar has for the viewer alone. Under what everyone is waiting for: about blinds they owe, a
+ * request of theirs that was turned down, or a straddle they did not get to post. In its place, where
+ * it matters more to them than who the table waits for: that they ran out of time and are out.
+ */
 interface OwnNote {
-  about: 'owed' | 'straddle';
+  about: 'owed' | 'straddle' | 'timed-out' | 'turned-down';
   text: (HTMLElement | string)[];
 }
+
+const ownNoteEl = (own: OwnNote): HTMLElement => h(`div.own-note.${own.about}-note`, null, own.text);
 
 /** What tells the choices of a move ahead apart from the buttons of a turn, wherever one is looked for by its action. */
 export const AHEAD_ACTION = 'ahead-';
@@ -469,36 +514,54 @@ function aheadEl(view: TableView, hand: HandView, stack: number, handlers: Contr
   return h('div.ahead', { role: 'group', 'aria-label': 'Your move when the action reaches you' }, h('span.ahead-title', null, 'On your turn'), buttons);
 }
 
-function waitingEl(text: string, view: TableView, own: OwnNote | null = null, ahead: HTMLElement | null = null): HTMLElement {
+/**
+ * What the bar says while the viewer has no move to make: `first` is what everyone is waiting for, or
+ * a line for the viewer alone in its place. With `sharing`, a line of buttons under it (`spareLine`)
+ * comes out of the same height, and the notes are set closer for it (pre-action.css).
+ */
+function waitingEl(first: string | OwnNote, view: TableView, own: OwnNote | null = null, ahead: HTMLElement | null = null, sharing = false): HTMLElement {
   const note = nextHandNote(view);
+  // Beside the choices the bar keeps the height of a turn, and its first line is cut short before it takes a second: the whole of it is its title
+  const line = typeof first !== 'string' ? ownNoteEl(first) : ahead ? h('span.waiting-for', { title: first }, first) : first;
 
   return h(
     'div.waiting',
-    { class: ahead ? 'choosing' : '' },
+    { class: [ahead && 'choosing', (ahead || sharing) && 'set-close'].filter(Boolean).join(' ') },
     ahead,
-    // Beside the choices the bar keeps the height of a turn, and its first line is cut short before it takes a second: the whole of it is its title
-    ahead ? h('span.waiting-for', { title: text }, text) : text,
+    line,
     note.length > 0 ? h('div.next-hand', null, note.map((part) => h('span', null, part))) : null,
-    own ? h(`div.own-note.${own.about}-note`, null, own.text) : null,
+    own && ownNoteEl(own),
   );
 }
 
-/** The viewer's own line: a player in a hand owes nothing, so there is never more than one thing to say. */
-function ownNote(owed: string | null, hand: HandView | null, view: TableView): OwnNote | null {
+/**
+ * The viewer's own line under what everyone is waiting for, the one that matters most: what they owe
+ * explains the buttons under it, and a straddle passed over is news of this hand only.
+ */
+function ownNote(owed: string | null, hand: HandView | null, view: TableView, turnedDown: RequestKind | null): OwnNote | null {
   if (owed) {
     return { about: 'owed', text: [owed] };
+  }
+
+  if (turnedDown) {
+    return { about: 'turned-down', text: [turnedDownText(turnedDown)] };
   }
 
   return hand?.passedOver ? { about: 'straddle', text: passedOverText(view, hand.passedOver) } : null;
 }
 
-function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandlers, waiting: Waiting | null): HTMLElement {
+/** What the bar says first to a player the clock ran out on, until they are back: with the night over nothing is left to sit out of. */
+const timedOutNote = (view: TableView, seat: SeatView): OwnNote | null => (seat.away && !nightOver(view) ? { about: 'timed-out', text: [timedOutText(view, seat)] } : null);
+
+function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandlers, waiting: Waiting | null, turnedDown: RequestKind | null): HTMLElement {
   const hand = view.hand;
-  const myRequest = view.requests.find((request) => request.playerId === view.you.id);
-  const room = view.config.maxBuyIn - seat.stack - seat.pendingAdd;
   // With the night over no hand is coming to settle anything in; the seat still says who is waiting
   const settling = nightOver(view) ? { note: null, buttons: [] } : settlingOf(view, seat, handlers);
-  const own = ownNote(settling.note, hand, view);
+  const own = ownNote(settling.note, hand, view, turnedDown);
+  const showCards = showCardsEl(view, seat, handlers);
+  const replay = own ? null : replayEl(view, seat, handlers);
+  // Once the night is over the bar offers what is left to do: settle up, look the night over, see the last hand again
+  const line = nightOver(view) ? spareLine(...nightOverButtons(view, handlers), replay) : spareLine(replay, showCards, ...settling.buttons);
 
   let main: HTMLElement;
   if (waiting === 'sent') {
@@ -506,74 +569,72 @@ function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandle
     // answered, whatever they were: this comes first, so the buttons of a kind of move added later go the same way
     main = waitingEl(waitingText(view, hand), view, own);
   } else if (hand?.options) {
-    main = answering(hand, turnPanel(view.config, hand, seat.stack, handlers));
+    main = answering(hand, turnPanel(view.config, hand, seat.stack, handlers, ownClockEl(view)));
   } else if (hand?.canAnswerChop) {
-    main = answering(hand, chopQuestion(view, hand, handlers));
+    main = answering(hand, chopQuestion(view, hand, handlers, ownClockEl(view)));
   } else if (hand?.canVote) {
     main = answering(hand, runsQuestion(hand, handlers));
   } else {
-    const text = waiting === 'unconfirmed' ? `Waiting for the table to confirm your ${seat.lastAction ?? 'move'}…` : waitingText(view, hand);
+    const text = waiting === 'unconfirmed' ? `Waiting for the table to confirm your ${seat.lastAction ?? 'move'}…` : (timedOutNote(view, seat) ?? waitingText(view, hand));
 
-    main = waitingEl(text, view, own, hand && aheadEl(view, hand, seat.stack, handlers));
+    main = waitingEl(text, view, own, hand && aheadEl(view, hand, seat.stack, handlers), line !== null);
   }
-
-  const showCards = showCardsEl(view, seat, handlers);
 
   // On the way out, nothing else here would still take effect: the seat is gone when the hand is
   if (seat.leaving) {
-    return h('div.controls.seated', null, h('div.waiting', null, 'You leave your seat when this hand ends'), h('div.extras', null, showCards));
+    return h('div.controls.seated', null, h('div.waiting', null, 'You leave your seat when this hand ends'), spareLine(showCards));
   }
-
-  const replay = own ? null : replayEl(view, seat, handlers);
 
   // Sitting out, straddling and adding chips are all for hands that are not coming
   if (nightOver(view)) {
-    return h('div.controls.seated', null, main, replay);
+    return h('div.controls.seated', null, main, line);
   }
 
   const extras: HTMLElement[] = [];
 
-  // Coming back owing blinds is a choice between two ways of settling them, which takes the place of the one button
+  // Coming back owing blinds is a choice between two ways of settling them, on the line above, which takes the place of the one button
   if (!seat.sittingOut && !seat.away) {
-    extras.push(toggle('Sit out next hand', false, 'sit-out', () => handlers.send({ type: 'sitOut' })));
+    extras.push(toggle(fitted({ full: 'Sit out next hand', brief: 'Sit out' }), false, 'sit-out', () => handlers.send({ type: 'sitOut' })));
   } else if (settling.buttons.length === 0) {
-    extras.push(commandButton('button.chip-btn.strong', 'sit-in', "I'm back", () => handlers.send({ type: 'sitIn' })));
+    extras.push(sendingButton('button.chip-btn.strong', { 'data-action': 'sit-in' }, "I'm back", () => handlers.send({ type: 'sitIn' })));
   }
 
-  extras.push(...settling.buttons);
+  const standing = standingOf(view);
 
-  const straddles = straddlesAllowed(view.config);
-  const [only] = straddles;
-
-  // One kind is a switch, as it always was. Several would not fit under a phone's table, so they are chosen in a dialog
-  if (only && straddles.length === 1) {
-    // The kind every table starts with is the one players know as the straddle; any other alone has to say which it is
-    const name = only.byDefault ? 'Straddle' : only.label;
-
-    extras.push(toggle(name, seat.straddles.includes(only.what), 'straddle', (on) => handlers.send({ type: 'setStraddle', kind: only.what, on })));
-  } else if (only) {
-    const on = seat.straddles.length;
-
-    extras.push(h('button.chip-btn', { type: 'button', 'data-action': 'straddles', onclick: handlers.openStraddles }, `Straddles: ${on > 0 ? `${on} on` : 'off'}`));
+  // What a player sets once a night is a tap away, in a dialog. A straddle that is on stands out: it costs chips every round
+  if (standing) {
+    extras.push(h('button.chip-btn', { type: 'button', class: standing.straddling.length > 0 ? 'strong' : '', 'data-action': 'straddles', onclick: handlers.openStanding }, fitted(standingSays(standing))));
   }
 
-  if (view.config.allowChop) {
-    extras.push(toggle('Always chop', seat.alwaysChop, 'always-chop', (on) => handlers.send({ type: 'setAlwaysChop', on })));
+  const asked = chipsAsked(view);
+
+  if (asked) {
+    extras.push(h('button.chip-btn.asked', { type: 'button', 'data-action': 'chips-asked', onclick: handlers.openAsked }, fitted(askedSays(asked, view.config))));
+  } else if (roomToAdd(view) > 0) {
+    extras.push(h('button.chip-btn', { type: 'button', class: outOfChips(view) ? 'strong' : '', 'data-action': 'rebuy', onclick: handlers.openRebuy }, 'Add chips'));
   }
 
-  if (showCards) {
-    extras.push(showCards);
-  }
+  return h('div.controls.seated', null, main, line, h(`div.extras.${FIT_ROW}`, null, extras));
+}
 
-  if (myRequest?.kind === 'rebuy') {
-    extras.push(
-      commandButton('button.chip-btn', 'cancel-request', `Rebuy of ${formatAmount(myRequest.amount, view.config)} waiting for the host · Cancel`, () => handlers.send({ type: 'cancelRequest' })),
-    );
-  } else if (room > 0) {
-    extras.push(h('button.chip-btn', { type: 'button', class: seat.stack === 0 ? 'strong' : '', 'data-action': 'rebuy', onclick: handlers.openRebuy }, 'Add chips'));
-  }
+/**
+ * What a night that is over leaves to do, for anyone at the table: who pays whom, when anyone does,
+ * and the night's numbers. Each opens what the menu would, three taps sooner.
+ */
+function nightOverButtons(view: TableView, handlers: ControlHandlers): (HTMLElement | null)[] {
+  const open = (action: string, label: string, dialog: () => void): HTMLElement => h('button.chip-btn', { type: 'button', 'data-action': action, onclick: dialog }, label);
 
-  return h('div.controls.seated', null, main, replay, h('div.extras', null, extras));
+  return [settlement(view).length > 0 ? open('settle-up', 'Settle up', handlers.openLedger) : null, open('tonight', 'Tonight', handlers.openTonight)];
+}
+
+/**
+ * A line of buttons between what the bar says and its row of switches: the hand just played to see
+ * again and, once it is over, the player's cards to show, or the ways to settle the blinds a player
+ * owes. It comes out of the height the bar keeps for a turn (controls.css), the one room at the table
+ * nothing else is using while the player has no move to make, so the table gives up nothing for it.
+ */
+function spareLine(...buttons: (HTMLElement | null)[]): HTMLElement | null {
+  return buttons.some((button) => button !== null) ? h(`div.spare-line.${FIT_ROW}`, null, buttons) : null;
 }
 
 /**
@@ -597,10 +658,9 @@ function handToReplay(view: TableView, seat: SeatView): number | null {
 }
 
 /**
- * A button to see the last hand again. Its line comes out of the height the bar keeps for a turn
- * (controls.css), the one room at the table nothing else is using while the player has no move to
- * make, so the table gives up nothing for it. That holds while the bar says one thing: word of the
- * hands to come needs the height itself, as a line for the player alone does, and the button is left out.
+ * A button to see the last hand again, for the bar's spare line (`spareLine`). The line's height is
+ * spare while the bar says one thing: word of the hands to come needs it, as a line for the player
+ * alone does, and the button is left out.
  */
 function replayEl(view: TableView, seat: SeatView, handlers: ControlHandlers): HTMLElement | null {
   const number = handToReplay(view, seat);
@@ -609,7 +669,7 @@ function replayEl(view: TableView, seat: SeatView, handlers: ControlHandlers): H
     return null;
   }
 
-  const button = commandButton('button.chip-btn.replay-last', 'replay-last', `Replay hand #${number}`, () => handlers.replay(number));
+  const button = sendingButton('button.chip-btn.replay-last', { 'data-action': 'replay-last' }, fitted({ full: `Replay hand #${number}`, brief: 'Replay' }), () => handlers.replay(number));
 
   // The button for another hand is another button
   button.dataset.hand = String(number);
@@ -630,7 +690,7 @@ function showCardsEl(view: TableView, seat: SeatView, handlers: ControlHandlers)
   const show = (places: number[]) => () => handlers.showCards(offer.hand, places);
   const buttons = offer.places.map((place) => {
     const card = seat.cards![place]!;
-    const button = commandButton('button.chip-btn.show-card', 'show-card', '', show([place]));
+    const button = sendingButton('button.chip-btn.show-card', { 'data-action': 'show-card' }, '', show([place]));
 
     // Which hand's card, so the offer after the next hand is another button
     button.dataset.keep = String(offer.hand);
@@ -644,7 +704,7 @@ function showCardsEl(view: TableView, seat: SeatView, handlers: ControlHandlers)
   });
 
   if (offer.places.length > 1) {
-    const both = commandButton('button.chip-btn', 'show', 'Both', show(offer.places));
+    const both = sendingButton('button.chip-btn', { 'data-action': 'show' }, 'Both', show(offer.places));
 
     // Which hand's cards, as on the button for each
     both.dataset.keep = String(offer.hand);
@@ -660,12 +720,14 @@ function showCardsEl(view: TableView, seat: SeatView, handlers: ControlHandlers)
  * Everything the viewer can do right now, for the bar under the table. `waiting` says how a move of
  * theirs that is out with the server is to be taken (`ShownTable.waiting`): with no buttons for one
  * that is only sent, and with a line that says so for one the server has been slow to confirm.
+ * `turnedDown` is the kind of request of theirs that was turned down, while the bar still says so
+ * (`ShownTable.turnedDown`).
  */
-export function controlsEl(view: TableView, handlers: ControlHandlers, waiting: Waiting | null): HTMLElement {
+export function controlsEl(view: TableView, handlers: ControlHandlers, waiting: Waiting | null, turnedDown: RequestKind | null): HTMLElement {
   const seat = view.you.seat === null ? null : view.seats[view.you.seat];
 
   if (seat) {
-    return seatedControls(view, seat, handlers, waiting);
+    return seatedControls(view, seat, handlers, waiting, turnedDown);
   }
 
   const myRequest = view.requests.find((request) => request.playerId === view.you.id);
@@ -674,11 +736,20 @@ export function controlsEl(view: TableView, handlers: ControlHandlers, waiting: 
       'div.controls',
       null,
       waitingEl(`Asked the host for seat ${myRequest.seat + 1} with ${formatAmount(myRequest.amount, view.config)}`, view),
-      h('div.extras', null, commandButton('button.chip-btn', 'cancel-request', 'Cancel request', () => handlers.send({ type: 'cancelRequest' }))),
+      h(`div.extras.${FIT_ROW}`, null, sendingButton('button.chip-btn', { 'data-action': 'cancel-request' }, 'Cancel request', () => handlers.send({ type: 'cancelRequest' }))),
     );
   }
 
-  return h('div.controls', null, waitingEl(nightOver(view) ? 'The night is over' : 'You are watching. Pick an open seat to play.', view));
+  if (turnedDown && !nightOver(view)) {
+    return h('div.controls', null, waitingEl({ about: 'turned-down', text: [`${turnedDownText(turnedDown)}. Pick an open seat to ask again.`] }, view));
+  }
+
+  if (nightOver(view)) {
+    // Someone watching may have played tonight too, and has the same to settle
+    return h('div.controls', null, waitingEl('The night is over', view), spareLine(...nightOverButtons(view, handlers)));
+  }
+
+  return h('div.controls', null, waitingEl('You are watching. Pick an open seat to play.', view));
 }
 
 /**
@@ -697,12 +768,14 @@ export function controlsSignature(view: TableView): string {
   const hand = view.hand;
 
   return JSON.stringify([
-    seat && [seat.stack, seat.pendingAdd, seat.sittingOut, seat.away, seat.straddles, seat.alwaysChop, seat.leaving, seat.owesBigBlind, seat.owesSmallBlind, seat.comesIn, seat.shown],
+    seat && [seat.stack, seat.pendingAdd, seat.sittingOut, timedOutNote(view, seat), seat.straddles, seat.alwaysChop, seat.leaving, seat.owesBigBlind, seat.owesSmallBlind, seat.comesIn, seat.shown],
     hand && [hand.number, hand.stage, hand.street, hand.toAct, hand.turn, hand.currentBet, hand.pot, hand.options, hand.canOfferChop, hand.canAnswerChop, hand.canVote, hand.canShow, hand.passedOver],
     [hand?.ahead, view.preAction],
-    [view.running, view.nextHandAt !== null, view.handCount === 0, nightOver(view), hand?.stage === 'done' && onLastHand(view), seat && handToReplay(view, seat)],
+    [view.running, view.nextHandAt !== null, view.handCount === 0, nightOver(view), nightOver(view) && settlement(view).length > 0, hand?.stage === 'done' && onLastHand(view), seat && handToReplay(view, seat)],
     view.requests.filter((request) => request.playerId === view.you.id),
     [straddlesAllowed(view.config).map((kind) => kind.what), view.config.allowChop, view.config.maxBuyIn, view.config.smallBlind, view.config.bigBlind],
     nextHandNote(view),
+    // Its seconds are the tick's to write. When it ends is drawn, and changes within a turn only when the host changes the clock
+    ownDeadline(view),
   ]);
 }

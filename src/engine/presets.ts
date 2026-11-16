@@ -1,6 +1,8 @@
 /* A preset: a table's settings kept under a name, for the group to start the next table from. */
-import { CONFIG_KEYS, CONFIG_RULES, CONFIG_SPECS, DEFAULT_CONFIG, fieldsOf, newConfig, sameSetting, settingText, startingConfig, validSetting, withRetiredSettings } from './config.ts';
+import { CONFIG_KEYS, CONFIG_RULES, CONFIG_SPECS, DEFAULT_CONFIG, fieldsOf, newConfig, sameSetting, settingName, settingText, startingConfig, validSetting, withRetiredSettings } from './config.ts';
 import type { ConfigKey } from './config.ts';
+import { capitalized } from './handNames.ts';
+import { SUBJECTS } from './subjects.ts';
 import type { TableConfig } from './types.ts';
 import { LIMITS, text } from './validate.ts';
 
@@ -20,7 +22,7 @@ export interface PresetUse {
 export const PRESET_KEYS = CONFIG_KEYS.filter((key) => CONFIG_SPECS[key].inPresets !== false);
 
 export function presetName(value: unknown): string {
-  return text(value, 'The preset name', LIMITS.presetNameLength);
+  return text(value, SUBJECTS.presetName, LIMITS.presetNameLength);
 }
 
 export function sameName(a: string, b: string): boolean {
@@ -51,10 +53,10 @@ export function sharedPreset(preset: Preset): Preset {
 
 function backToUsual(keys: ConfigKey[], config: TableConfig): string {
   if (keys.length === 1) {
-    return `${CONFIG_SPECS[keys[0]!].label} is back to ${settingText(keys[0]!, config)}: the preset’s is no longer allowed.`;
+    return `${CONFIG_SPECS[keys[0]!].subject} went back to ${settingText(keys[0]!, config)}: the preset’s is no longer allowed.`;
   }
 
-  return `${keys.map((key) => CONFIG_SPECS[key].label).join(' and ')} are back to the usual: the preset’s no longer go together.`;
+  return `${capitalized(keys.map(settingName).join(' and '))} are back to the usual: the preset’s no longer go together.`;
 }
 
 /**

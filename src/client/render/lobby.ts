@@ -1,15 +1,16 @@
 import { bountiesText } from '../../engine/bounties.ts';
-import { CONFIG_SPECS, sameSetting, settingText, startingConfig } from '../../engine/config.ts';
-import type { ConfigKey } from '../../engine/config.ts';
+import { startingConfig } from '../../engine/config.ts';
 import { fromPreset, PRESET_KEYS } from '../../engine/presets.ts';
 import type { Preset } from '../../engine/presets.ts';
 import { stakesText } from '../../engine/stakes.ts';
 import type { KnownPlayer, TableConfig } from '../../engine/types.ts';
 import type { TableInfo } from '../../server/api.ts';
+import type { RefusalPlace } from '../connection.ts';
 import type { Answer } from '../knownPlayers.ts';
-import { h } from '../ui.ts';
+import { h, holdWhile, sends } from '../ui.ts';
 import { configForm } from './configForm.ts';
 import { inputOf } from './forms.ts';
+import { refusalLine } from './refusal.ts';
 import { whoField } from './whoField.ts';
 import type { WhoField } from './whoField.ts';
 
@@ -28,10 +29,21 @@ export interface AsksWho {
   offerPlayers: WhoField['offer'];
 }
 
+/** A table the visitor was at, which the page can still take them back to. */
+export interface TableLeft {
+  name: string;
+  back(): void;
+}
+
 export interface LobbyHandlers {
-  /** Resolves when the attempt is over, whichever way it went. */
-  create(as: Answer, config: Partial<TableConfig>): Promise<void>;
-  openTable(code: string): void;
+  /** Resolves when the attempt is over. If no table came of it the visitor has been told why. */
+  create(as: Answer, config: Partial<TableConfig>, refused: RefusalPlace): Promise<void>;
+  /** Makes a change to the screen that the game and not the visitor brings about, as on the server's answer: what comes up under a finger takes no tap for a moment (`TapGuard`). */
+  byItself(change: () => void): void;
+  /** Says a line to a screen reader alone, of a change the page itself shows the eye. */
+  say(message: string): void;
+  /** Goes to the table with that code. Resolves once the visitor is on their way, or has been told that no table has it. */
+  openTable(code: string, refused: RefusalPlace): Promise<void>;
   /** Shows the standings over this screen, which stays as it is underneath. */
   standings(): void;
 }
@@ -43,7 +55,9 @@ export interface LobbyScreen extends AsksWho {
 
 export interface JoinHandlers {
   /** Resolves when the attempt is over, whichever way it went. */
-  join(as: Answer): Promise<void>;
+  join(as: Answer, refused: RefusalPlace): Promise<void>;
+  /** As `LobbyHandlers.byItself`. */
+  byItself(change: () => void): void;
   toLobby(): void;
 }
 
@@ -60,101 +74,105 @@ function themeSection(themePicker: HTMLElement): HTMLElement {
   return h('section.theme-section', null, h('h2', null, 'Theme'), themePicker);
 }
 
-/**
- * Runs a form's action with its button showing that it is under way. The form itself stays as it is,
- * so nothing typed is lost if the attempt fails, and it can't be sent twice.
- */
-async function whilePending(button: HTMLButtonElement, label: string, action: () => Promise<void>): Promise<void> {
-  const idle = button.textContent;
-
-  button.disabled = true;
-  button.textContent = label;
-
-  try {
-    await action();
-  } finally {
-    button.disabled = false;
-    button.textContent = idle;
-  }
-}
-
-/** The front door: start a table, or go to one with its code. */
-export function lobbyEl(visitor: Visitor, themePicker: HTMLElement, handlers: LobbyHandlers): LobbyScreen {
+/** The front door: start a table, or go to one with its code. `left` is the table the visitor came here from, to which the way back comes first. */
+export function lobbyEl(visitor: Visitor, themePicker: HTMLElement, left: TableLeft | null, handlers: LobbyHandlers): LobbyScreen {
   const who = whoField('host-name', visitor.name, visitor.player);
-  const createButton = h('button.btn.primary', { type: 'submit', 'data-action': 'create-table' }, 'Create table');
+  const createButton = h('button.btn.primary', { type: 'submit', 'data-action': 'create-table' }, sends('Create table', 'Setting up…'));
+  const notCreated = refusalLine(createButton, handlers.byItself);
+  const findButton = h('button.btn', { type: 'submit', 'data-action': 'find-table' }, sends('Find table', 'Looking…'));
+  const notFound = refusalLine(findButton, handlers.byItself, true);
 
   // The table's name starts out with the apostrophe the page's own title has
   const usual: TableConfig = { ...startingConfig(), name: 'Chips n’ Dipshits' };
 
-  // A preset's settings that the form has no field for, which the table is created with all the same
-  let unseen: Partial<TableConfig> = {};
+  let preset: Preset | null = null;
   const presetPick = h('div.preset-pick', { hidden: true });
   const notes = h('div.preset-notes', { 'aria-live': 'polite' });
 
-  const alsoSet = (table: TableConfig): HTMLElement[] => {
-    const start = startingConfig(table);
-    const differ = (Object.keys(unseen) as ConfigKey[]).filter((key) => !sameSetting(table[key], start[key]));
+  // Open on what a new host can answer: what the table is and what it plays for. A preset has answered the stakes too.
+  // The rest waits folded under the line of what it holds, the table's name where a new host starts
+  const settings = configForm(usual, {
+    idPrefix: 'new-table-',
+    creating: true,
+    first: 'table',
+    open: (section) => section === 'table' || (section === 'stakes' && !preset),
+  });
 
-    return differ.length > 0 ? [h('p.note', null, `Also set, in the table settings: ${differ.map((key) => `${CONFIG_SPECS[key].label} ${settingText(key, table)}`).join(', ')}.`)] : [];
-  };
-
-  // An amount means something else once what the table plays with changes, so the preset's unseen ones start over too
-  const startedOver = (start: TableConfig): void => {
-    const amounts = (Object.keys(unseen) as ConfigKey[]).filter((key) => CONFIG_SPECS[key].kind === 'chips');
-
-    unseen = { ...unseen, ...Object.fromEntries(amounts.map((key) => [key, start[key]])) };
-    notes.replaceChildren(...alsoSet({ ...start, ...unseen }));
-  };
-
-  const settings = configForm(usual, 'new-table-', true, startedOver);
+  // The sections it opens on, and the folded rest as one stack: a wide screen stands them side by side
+  const opensOn = settings.sections.filter((section) => section.open);
+  const rest = settings.sections.filter((section) => !section.open);
 
   const pick = (chosen: Preset | null): void => {
-    const current = { ...usual, ...settings.read(create) };
-    const used = fromPreset(chosen ? chosen.settings : usual, current);
-    const changed = settings.fill(create, used.config);
+    const used = fromPreset(chosen ? chosen.settings : usual);
 
-    unseen = Object.fromEntries(PRESET_KEYS.filter((key) => !settings.shown.includes(key)).map((key) => [key, used.config[key]]));
+    preset = chosen;
 
-    notes.replaceChildren(
-      h('p.note', null, changed.length > 0 ? `Changed here: ${changed.map((key) => CONFIG_SPECS[key].label).join(', ')}.` : 'The form already held these settings.'),
-      ...alsoSet(used.config),
-      ...used.notes.map((note) => h('p.note.warn', null, note)),
-    );
+    // The stakes fold or unfold where the list of presets was just open, and Create table moves with them: a second press on a preset must not land on it
+    handlers.byItself(() => {
+      // Only what a preset keeps: the rest is still as the host has it
+      settings.fill(create, Object.fromEntries(PRESET_KEYS.map((key) => [key, used.config[key]])));
+      notes.replaceChildren(...used.notes.map((note) => h('p.note.warn', null, note)));
+    });
+
+    // The eye has the fields and the lines of the folded sections to go by
+    handlers.say(chosen ? `Filled in from ${chosen.name}.` : 'Back to the usual settings.');
   };
 
   const create: HTMLFormElement = h(
-    'form.card-panel',
+    'form.card-panel.start-table',
     {
       onsubmit: (event: Event) => {
         event.preventDefault();
-        void whilePending(createButton, 'Setting up…', () => handlers.create(who.answer(), { ...unseen, ...settings.read(create) }));
+
+        // The server's words name the host or something the host changed, which may be folded away by now
+        const refused = notCreated.trying((reason) => [...who.refusedAt(reason), ...settings.refusedAt(create, reason)]);
+
+        // The form itself stays as it is, so nothing typed is lost if the attempt fails, and it cannot be sent twice
+        holdWhile(createButton, () => handlers.create(who.answer(), settings.read(create), refused));
       },
     },
     h('h2', null, 'Start a table'),
     who.element,
     presetPick,
-    settings.rows,
-    h('p.note', null, 'You become the host. Clock, straddles and running it more than once are in the table settings.'),
+    h('div.sections', null, opensOn, h('div.rest', null, rest)),
     createButton,
+    h('p.note', null, 'You become the host. Everything but what the table plays with can be changed later in Table settings.'),
   );
 
+  // One row, ahead of the host's form: nobody with a table's code reads through that form to reach it
   const join = h(
-    'form.card-panel',
+    'form.card-panel.join-strip',
     {
       onsubmit: (event: Event) => {
         event.preventDefault();
-        handlers.openTable(inputOf(event.target as HTMLFormElement, 'table-code').value);
+
+        const code = inputOf(event.target as HTMLFormElement, 'table-code');
+
+        // Nothing but spaces is no code: the box is emptied, and the browser says of it what it says of any empty one
+        if (code.value.trim() === '') {
+          code.value = '';
+          code.reportValidity();
+          return;
+        }
+
+        const refused = notFound.trying(() => [code]);
+
+        holdWhile(findButton, () => handlers.openTable(code.value, refused));
       },
     },
     h('h2', null, 'Join a table'),
-    h(
-      'label.field',
-      { for: 'table-code' },
-      h('span', null, 'Table code'),
-      h('input', { type: 'text', id: 'table-code', name: 'table-code', maxlength: CODE_LENGTH, required: true, autocapitalize: 'characters', autocomplete: 'off', placeholder: 'e.g. K7QF2M' }),
-    ),
-    h('p.note', null, 'Got a link from the host? Opening it brings you straight to the table.'),
-    h('button.btn', { type: 'submit' }, 'Find table'),
+    h('input', {
+      type: 'text',
+      id: 'table-code',
+      name: 'table-code',
+      'aria-label': 'Table code',
+      maxlength: CODE_LENGTH,
+      required: true,
+      autocapitalize: 'characters',
+      autocomplete: 'off',
+      placeholder: 'Table code',
+    }),
+    findButton,
   );
 
   const standings = h(
@@ -164,8 +182,19 @@ export function lobbyEl(visitor: Visitor, themePicker: HTMLElement, handlers: Lo
     h('p.note', null, 'Who is up and who is down, over every night.'),
   );
 
+  // Ahead of everything else: whoever is here for a look, or by a slip of the thumb, has a seat waiting.
+  // The line under it says what the name is of: a table left with the game's own name reads like the page's title
+  const wayBack =
+    left &&
+    h(
+      'div.way-back',
+      null,
+      h('button.btn.primary', { type: 'button', 'data-action': 'back-to-table', onclick: left.back }, `Back to ${left.name}`),
+      h('p.note', null, 'The table you left.'),
+    );
+
   return {
-    element: h('main.lobby', null, brand(), standings, h('div.panels', null, create, join), themeSection(themePicker)),
+    element: h('main.lobby', null, brand(), wayBack, standings, h('div.panels', null, join, create), themeSection(themePicker)),
     offerPlayers: who.offer,
 
     offerPresets(presets) {
@@ -180,8 +209,11 @@ export function lobbyEl(visitor: Visitor, themePicker: HTMLElement, handlers: Lo
         presets.map((preset, index) => h('option', { value: String(index) }, preset.name)),
       );
 
-      presetPick.replaceChildren(h('label.field', { for: 'new-table-preset' }, h('span', null, 'Start from'), select), notes);
-      presetPick.hidden = false;
+      // The list comes when the server has answered, with the form up and maybe a finger on its way to a field it pushes down
+      handlers.byItself(() => {
+        presetPick.replaceChildren(h('label.field', { for: 'new-table-preset' }, h('span', null, 'Start from'), select), notes);
+        presetPick.hidden = false;
+      });
     },
   };
 }
@@ -190,14 +222,18 @@ export function lobbyEl(visitor: Visitor, themePicker: HTMLElement, handlers: Lo
 export function joinScreen(tableId: string, visitor: Visitor, themePicker: HTMLElement, handlers: JoinHandlers): JoinScreen {
   const who = whoField('join-name', visitor.name, visitor.player);
   const about = h('div.about', null, h('h2', null, `Table ${tableId}`), h('p.note', null, 'Looking for the table…'));
-  const joinButton = h('button.btn.primary', { type: 'submit', disabled: true, 'data-action': 'join-table' }, 'Join table');
+  const joinButton = h('button.btn.primary', { type: 'submit', disabled: true, 'data-action': 'join-table' }, sends('Join table', 'Joining…'));
+  const notJoined = refusalLine(joinButton, handlers.byItself);
 
   const form = h(
     'form.card-panel',
     {
       onsubmit: (event: Event) => {
         event.preventDefault();
-        void whilePending(joinButton, 'Joining…', () => handlers.join(who.answer()));
+
+        const refused = notJoined.trying(who.refusedAt);
+
+        holdWhile(joinButton, () => handlers.join(who.answer(), refused));
       },
     },
     about,

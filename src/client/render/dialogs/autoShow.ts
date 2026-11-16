@@ -36,9 +36,10 @@ function autoShow(view: TableView, handlers: DialogHandlers): HTMLElement {
 export const autoShowDialog: DialogKind<'autoShow'> = {
   kind: 'autoShow',
   menu: {
+    group: 'you',
     label: 'Show or muck',
     who: seated,
-    note: (view) => AUTO_SHOWS.map((when) => WORDS[when].short[view.autoShow.includes(when) ? 0 : 1]).join(' · '),
+    state: (view) => AUTO_SHOWS.map((when) => WORDS[when].short[view.autoShow.includes(when) ? 0 : 1]).join(' · '),
   },
   shows: (view) => view.autoShow,
   draw: autoShow,

@@ -6,7 +6,6 @@
 import { mkdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
-import { chromium } from 'playwright';
 import type { Browser, Page } from 'playwright';
 
 import { THEMES } from '../src/client/themes.ts';
@@ -19,6 +18,7 @@ import { PokerService } from '../src/server/service.ts';
 import { seededRng } from '../tests/helpers.ts';
 import { clientPage } from './bundle.ts';
 import { STILL } from './pageSpies.ts';
+import { launchBrowser, unfolded } from './rig.ts';
 
 const OUT = fileURLToPath(new URL('../screenshots/', import.meta.url));
 const DESKTOP = { width: 1280, height: 800 };
@@ -58,11 +58,10 @@ async function setTheme(page: Page, id: string): Promise<void> {
     return;
   }
 
-  await page.click('[data-action="menu"]');
-  await page.click('[data-action="theme"]');
+  await openFromMenu(page, 'preferences');
 
   const fonts = page.waitForResponse((response) => response.url().startsWith('https://fonts.googleapis.com/'), { timeout: 5000 }).catch(() => null);
-  await page.click(`.theme-option[data-theme="${id}"]`);
+  await page.click(`#pref-theme .tile[data-theme="${id}"]`);
   await fonts;
 
   await page.click('[data-action="close"]');
@@ -153,7 +152,7 @@ const html = await clientPage({});
  */
 const service = new PokerService({ store: new MemoryStore(), presets: new MemoryPresetStore(), players: new MemoryPlayerStore(seededRng(2)), clock: { now: () => Date.now() }, rng: seededRng(1) });
 const server = await startDevServer({ port: 0, page: async () => html, service });
-const browser = await chromium.launch();
+const browser = await launchBrowser();
 const players: Player[] = [];
 
 try {
@@ -212,7 +211,7 @@ try {
 
   // Each player's turn waits while their pictures are taken, which on a busy machine outlasts the usual clock and folds them
   await openFromMenu(host.page, 'settings');
-  await host.page.fill('#table-action-seconds', String(LIMITS.maxActionSeconds));
+  await host.page.fill(await unfolded(host.page, '#table-action-seconds'), String(LIMITS.maxActionSeconds));
   await host.page.click('[data-action="save-settings"]');
   await host.page.waitForSelector('.dialog', { state: 'detached' });
 
@@ -272,12 +271,12 @@ try {
   await shot(phone.page, '10-ledger-phone');
   await phone.page.click('[data-action="close"]');
   await phone.page.click('[data-action="menu"]');
-  await phone.page.click('.menu [data-action="theme"]');
-  await shot(phone.page, '10-theme-phone');
+  await phone.page.click('.menu [data-action="preferences"]');
+  await shot(phone.page, '10-preferences-phone');
   await phone.page.click('[data-action="close"]');
 
   // ---- Carrying on from another device by personal link ----
-  await host.page.click('[data-action="invite"]');
+  await openFromMenu(host.page, 'otherDevice');
   const memberLink = await host.page.inputValue('#member-link');
   await host.page.click('[data-action="close"]');
 

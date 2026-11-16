@@ -1,5 +1,6 @@
 import type { FeedEntry } from '../../engine/types.ts';
 import type { TableView } from '../../engine/view.ts';
+import { barLine, SPOKEN_HOLDS_MS, spokenToViewer, unseenOf } from '../chatBar.ts';
 import { chatLineShown } from '../senders.ts';
 import { LABELS } from '../spoken.ts';
 import { cardText, h, marksCards, readableText } from '../ui.ts';
@@ -29,7 +30,10 @@ export interface Feed {
   redraw(): void;
 }
 
-/** The newest line as the bar under the table says it: in words alone, a GIF the viewer sees as one named for what it is. */
+/** More unseen lines than this are counted as this many and more. */
+const MOST_COUNTED = 99;
+
+/** A line as the bar under the table says it: in words alone, a GIF the viewer sees as one named for what it is. */
 function latestText(entry: FeedEntry, current: FeedLook): (string | HTMLElement)[] {
   if (entry.kind !== 'chat') {
     return cardText(entry.text, current.deck);
@@ -41,19 +45,24 @@ function latestText(entry: FeedEntry, current: FeedLook): (string | HTMLElement)
 /**
  * The dealer's play-by-play and the table chat in one list. Built once and updated in place, so what
  * someone is typing and where they have scrolled to both survive new entries arriving. `beside` stands at
- * the end of its bar, which is there in every shape of the page. The bar shows the newest line in words
- * alone; a GIF shows only in the opened list, and only once its line is in sight there, so nothing is
- * fetched for a closed chat or a line scrolled past.
+ * the end of its bar, which is there in every shape of the page, and `over` lies over the bar while it
+ * has something to show (toast.css). The bar shows the newest line in words alone, and a person's line
+ * for a few seconds though the dealer has said more since (`barLine`); a GIF shows only in the opened
+ * list, and only once its line is in sight there, so nothing is fetched for a closed chat or a line
+ * scrolled past.
  */
-export function createFeed(onChat: (text: string) => void, look: () => FeedLook, beside: HTMLElement | null = null): Feed {
+export function createFeed(onChat: (text: string) => void, look: () => FeedLook, beside: HTMLElement | null = null, over: HTMLElement | null = null): Feed {
   // Not a live region: new lines are said by the page's announcer, once, whether or not this list is open.
   // It takes the keyboard so that it can be scrolled without a pointer
   const list = h('ol.entries', { role: 'list', 'aria-label': LABELS.lines, tabindex: 0 });
-  // The newest line is for the eye: said as it came, and not again as the name of the button it stands on
+  // The line on the bar is for the eye: said as it came, and not again as the name of the button it stands on
   const latest = h('span.latest', { 'aria-hidden': 'true' });
+  // How many lines people have said with the list out of sight, until the viewer has the list in sight again: the bar shows one line, and the dealer's soon take it
+  const counted = h('span.count');
+  const unread = h('span.unread', { hidden: true }, counted, h('span.unseen', null, ' unread. '));
   // Up from when a line names the viewer with the list out of sight, shut or down for their turn, until they have the list in sight again
   const named = h('span.named-you', { hidden: true }, h('span.unseen', null, 'A line names you. '), '@');
-  const toggle = h('button.feed-toggle', { type: 'button', 'aria-expanded': 'false', 'aria-controls': 'feed-body' }, h('span.label', null, 'Chat'), named, latest);
+  const toggle = h('button.feed-toggle', { type: 'button', 'aria-expanded': 'false', 'aria-controls': 'feed-body' }, h('span.label', null, 'Chat'), unread, named, latest);
   let members: TableView['members'] = [];
   const box = createChatBox(onChat, () =>
     members
@@ -62,7 +71,7 @@ export function createFeed(onChat: (text: string) => void, look: () => FeedLook,
       .sort((a, b) => a.localeCompare(b)),
   );
 
-  const element = h('aside.feed', { 'aria-label': LABELS.feed }, h('div.feed-bar', null, toggle, beside), h('div.feed-body', { id: 'feed-body' }, list, box.element));
+  const element = h('aside.feed', { 'aria-label': LABELS.feed }, h('div.feed-bar', null, toggle, beside, over), h('div.feed-body', { id: 'feed-body' }, list, box.element));
 
   toggle.addEventListener('click', () => {
     const open = element.classList.toggle('open');
@@ -73,6 +82,11 @@ export function createFeed(onChat: (text: string) => void, look: () => FeedLook,
   let lastSeq = 0;
   let opened = false;
   let you = '';
+  // The number of the newest line the viewer has had in sight: every line the page opened with, and then every line had when the list was last in sight
+  let seen = 0;
+  // The line a person said that keeps the bar for now, by its number, and the timer that gives the bar back
+  let holding: number | null = null;
+  let released: ReturnType<typeof setTimeout> | undefined;
   // Every line had, shown or not, so it can be drawn again for another look
   const had: FeedEntry[] = [];
   const gifs = new Map<Element, { address: string; from: string | null }>();
@@ -132,19 +146,33 @@ export function createFeed(onChat: (text: string) => void, look: () => FeedLook,
     return line.element;
   };
 
+  /** The bar's line and its count, from the lines the viewer is shown now: someone muted since takes their lines out of both. */
   const showLatest = (current: FeedLook) => {
-    let newest = had.length - 1;
-    while (newest >= 0 && !isShown(had[newest]!, current)) {
-      newest -= 1;
-    }
+    const shown = had.filter((entry) => isShown(entry, current));
+    const line = barLine(shown, holding);
+    const unseen = unseenOf(shown, seen, you);
 
-    latest.replaceChildren(...(newest >= 0 ? latestText(had[newest]!, current) : []));
+    latest.replaceChildren(...(line ? latestText(line, current) : []));
+    counted.textContent = unseen > MOST_COUNTED ? `${MOST_COUNTED}+` : String(unseen);
+    unread.hidden = unseen === 0;
+  };
+
+  /** Gives `line` the bar for a while. The time is the page's own, and its end draws the bar's line and nothing else. */
+  const hold = (line: FeedEntry) => {
+    holding = line.seq;
+    clearTimeout(released);
+    released = setTimeout(() => {
+      holding = null;
+      showLatest(look());
+    }, SPOKEN_HOLDS_MS);
   };
 
   // The list comes into sight when the chat is opened, and when it comes back up after a turn that took its room: at its newest line, as it opens, since out of sight it followed nothing
-  new IntersectionObserver((seen) => {
-    if (seen.some((one) => one.isIntersecting)) {
+  new IntersectionObserver((inSight) => {
+    if (inSight.some((one) => one.isIntersecting)) {
       named.hidden = true;
+      seen = lastSeq;
+      showLatest(look());
       list.scrollTop = list.scrollHeight;
     }
   }).observe(list);
@@ -186,8 +214,17 @@ export function createFeed(onChat: (text: string) => void, look: () => FeedLook,
 
       const current = look();
 
-      if (arrived && list.clientHeight === 0 && fresh.some((entry) => isShown(entry, current) && namesViewer(entry, you))) {
+      // What people said just now, to the viewer and where they are shown it
+      const spoken = arrived ? fresh.filter((entry) => spokenToViewer(entry, you) && isShown(entry, current)) : [];
+
+      if (!arrived || list.clientHeight > 0) {
+        seen = lastSeq;
+      } else if (spoken.some((entry) => namesViewer(entry, you))) {
         named.hidden = false;
+      }
+
+      if (spoken.length > 0) {
+        hold(spoken.at(-1)!);
       }
 
       keepFollowing(() => {

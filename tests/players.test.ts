@@ -89,7 +89,7 @@ test('someone new who makes a table or joins one goes on the list of players, an
   const again = joined(join(next.view.id, 'whatever the page had', known(onList!.id)));
 
   assert.equal(next.view.you.identity, bob.view.you.identity);
-  assert.deepEqual(again.view.you, { id: again.auth.id, name: 'Quigs', role: 'member', seat: null, identity: onList!.id });
+  assert.deepEqual(again.view.you, { id: again.auth.id, name: 'Quigs', role: 'member', seat: null, identity: onList!.id, asked: [] });
   assert.equal(listed().length, 2, 'picking a player adds nobody');
 });
 
@@ -117,7 +117,7 @@ test('a player the list does not have, as after their row was removed, gets in u
   const host = joined(create('Host'));
 
   const gone = joined(join(host.view.id, 'Bob', known('GONE234')));
-  assert.deepEqual(gone.view.you, { id: gone.auth.id, name: 'Bob', role: 'member', seat: null, identity: null });
+  assert.deepEqual(gone.view.you, { id: gone.auth.id, name: 'Bob', role: 'member', seat: null, identity: null, asked: [] });
 
   // The name was the list's and not theirs to change, so a table that has it makes room all the same
   assert.equal(joined(join(host.view.id, 'Bob', known('GONE234'))).view.you.name, 'Bob 2');
@@ -235,7 +235,7 @@ test('picking a player who is already at the table makes a second member of thei
 
   // The first Bob is where he was, with what he had
   const first = viewOf(poll(tableId, bob.auth));
-  assert.deepEqual(first.you, { id: bob.auth.id, name: 'Bob', role: 'member', seat: 1, identity: bob.view.you.identity });
+  assert.deepEqual(first.you, { id: bob.auth.id, name: 'Bob', role: 'member', seat: 1, identity: bob.view.you.identity, asked: [] });
   assert.deepEqual(first.seats[1]!.cards, bobsCards);
 });
 
@@ -595,7 +595,7 @@ test('a member whose player was taken off the list by hand, or renamed there, go
   const played = viewOf(act(tableId, mover.auth, { type: 'fold' }));
   assert.deepEqual(played.seats.slice(0, 2).map((seat) => seat!.name), ['Host', 'Bob']);
   assert.deepEqual(played.members.map((member) => member.name), ['Host', 'Bob', 'Cy']);
-  assert.deepEqual(viewOf(poll(tableId, bob.auth)).you, { id: bob.auth.id, name: 'Bob', role: 'member', seat: 1, identity: bobWas });
+  assert.deepEqual(viewOf(poll(tableId, bob.auth)).you, { id: bob.auth.id, name: 'Bob', role: 'member', seat: 1, identity: bobWas, asked: [] });
 
   // The renamed player is the list's name at the next table they come to, and the same player
   const next = joined(create('Host', known(host.view.you.identity!)));
@@ -618,7 +618,7 @@ test('a member can say who they are after joining, as someone on the list or som
   viewOf(act(tableId, host.auth, { type: 'approve', playerId: guest.auth.id }));
 
   const said = viewOf(identify(tableId, guest.auth, known(bob)));
-  assert.deepEqual(said.you, { id: guest.auth.id, name: 'Bobby', role: 'member', seat: 3, identity: bob });
+  assert.deepEqual(said.you, { id: guest.auth.id, name: 'Bobby', role: 'member', seat: 3, identity: bob, asked: [] });
   assert.equal(said.feed.at(-1)!.text, 'Bobby is Bob on the list of players');
   assert.equal(viewOf(poll(tableId, guest.auth)).you.identity, bob, 'the same token still opens the same seat');
   assert.equal(store.read(tableId)!.members[1]!.token, guest.auth.token);

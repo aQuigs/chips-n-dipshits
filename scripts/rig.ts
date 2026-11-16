@@ -13,6 +13,8 @@ import { CHOICES, FLEETING, MOVES } from '../src/client/connection.ts';
 import { GIF_HOSTS } from '../src/client/gifs.ts';
 import { startDevServer } from '../src/dev/server.ts';
 import type { Answering, DevServer } from '../src/dev/server.ts';
+import { HANDLERS } from '../src/engine/commands/index.ts';
+import { isHostLevel } from '../src/engine/hosts.ts';
 import { onTheClock } from '../src/engine/index.ts';
 import type { Command, Hand, TableConfig, TableState, TableView } from '../src/engine/index.ts';
 import type { ApiRequest, ApiResponse, Auth } from '../src/server/api.ts';
@@ -752,9 +754,13 @@ export class Rig {
     })()`);
   }
 
-  /** The front page, as someone who has not joined any table. */
-  async lobby(screen: ScreenName): Promise<Page> {
+  /** The front page, as someone who has not joined any table. `init` runs in the page before anything of its own. */
+  async lobby(screen: ScreenName, init?: string): Promise<Page> {
     const page = await this.page(screen, 'a visitor');
+
+    if (init) {
+      await page.addInitScript(init);
+    }
 
     await page.goto(this.url);
     await page.waitForSelector('#host-name');
@@ -854,6 +860,15 @@ export class Rig {
 }
 
 /**
+ * A browser for the checks' pages, with no audio device. Playwright's is muted but still plays through the
+ * machine's audio service, and a page's audio clock, which it places its sounds by, stands still whenever that
+ * service is slow to take them: on a laptop whose service was busy the clock got 2.3 to 3.5 s on in four
+ * and stood for up to 0.8 s at a time, and a page drops a sound that would wait 0.4 s behind others. With no
+ * device the browser keeps the clock by a timer of its own: 4.0 s on in four, and never 30 ms still.
+ */
+export const launchBrowser = (): Promise<Browser> => chromium.launch({ args: ['--disable-audio-output'] });
+
+/**
  * The browser of one worker, whose checks use it one after the other, each on a rig of its own. It is
  * launched when first asked for, and again when it has died, so a crash costs the check it happened
  * under and no other worker's.
@@ -864,7 +879,7 @@ export class RigBrowser {
   /** A new rig, which whoever asks closes when done with it; given `way`, a stalled one whose pages are slow that way. */
   async rig(way?: StallWay): Promise<Rig> {
     if (!this.browser?.isConnected()) {
-      this.browser = await chromium.launch();
+      this.browser = await launchBrowser();
     }
 
     return Rig.start(this.browser, way);
@@ -875,14 +890,21 @@ export class RigBrowser {
   }
 }
 
-/** Which of a page's requests a gate stands in the way of: the moves of a hand, the choices of a move ahead of a turn, the polls for news of the table, reactions, showing cards after a hand, or asking for the list of known players, the standings, or one player's nights. */
-export type Gated = 'moves' | 'choices' | 'polls' | 'reactions' | 'shows' | 'players' | 'standings' | 'nights';
+/**
+ * Which of a page's requests a gate stands in the way of: the moves of a hand, the choices of a move ahead of a turn, the polls for news of the table, reactions,
+ * showing cards after a hand, what whoever runs the table sends to run it (`hosting`), what a player asks of it, a seat, chips or to stand up (`asking`), or asking for the
+ * list of known players, the standings, or one player's nights.
+ */
+export type Gated = 'moves' | 'choices' | 'polls' | 'reactions' | 'shows' | 'hosting' | 'asking' | 'players' | 'presets' | 'standings' | 'nights' | 'creates';
 
 /** The requests a gate stops that are not commands, by what they ask for. */
-const GATED_OPS: Partial<Record<Gated, ApiRequest['op']>> = { polls: 'poll', players: 'players', standings: 'standings', nights: 'nights' };
+const GATED_OPS: Partial<Record<Gated, ApiRequest['op']>> = { polls: 'poll', players: 'players', presets: 'presets', standings: 'standings', nights: 'nights', creates: 'create' };
+
+// What only whoever runs the table may send, as the engine has it
+const HOSTING = new Set((Object.keys(HANDLERS) as Command['type'][]).filter((type) => isHostLevel(HANDLERS[type].by)));
 
 /** The commands a gate for each other kind of request stops. */
-const GATED_COMMANDS: Partial<Record<Gated, ReadonlySet<Command['type']>>> = { moves: MOVES, choices: CHOICES, reactions: FLEETING, shows: new Set(['showCards']) };
+const GATED_COMMANDS: Partial<Record<Gated, ReadonlySet<Command['type']>>> = { moves: MOVES, choices: CHOICES, reactions: FLEETING, shows: new Set(['showCards']), hosting: HOSTING, asking: new Set(['requestSeat', 'requestRebuy', 'cancelRequest', 'standUp']) };
 
 /** Where a closed gate stops things: on their way to the server, which then has heard nothing, or on the way back from it. */
 export type GateSide = 'requests' | 'answers';
@@ -1096,8 +1118,36 @@ export async function setStageHeight(page: Page, height: number): Promise<void> 
   assert.ok(resized && Math.abs(resized.bottom - resized.top - height) <= 1, `the table's part of the screen is ${resized && resized.bottom - resized.top} tall, not ${height}`);
 }
 
+/** Taps on a touch screen and clicks on the desktop, as the rig opens every screen but the desktop as a touch one. */
+export const pressOn = (page: Page, screen: ScreenName) => (selector: string) => (screen === 'desktop' ? page.click(selector) : page.tap(selector));
+
+/**
+ * A field of a form that puts its settings away in sections, with its section unfolded the way whoever
+ * means to use the field would unfold it: by a press on the section's heading. Resolves to the selector
+ * it was given, so a check goes straight on with the field: `page.fill(await unfolded(page, '#table-ante'), '5')`.
+ */
+export async function unfolded(page: Page, selector: string): Promise<string> {
+  await page.waitForSelector(selector, { state: 'attached' });
+
+  const heading = page.locator(`details.fold-section:not([open]):has(${selector}) > summary`);
+
+  if ((await heading.count()) > 0) {
+    await ((await page.evaluate('matchMedia("(pointer: coarse)").matches')) ? heading.tap() : heading.click());
+  }
+
+  return selector;
+}
+
 export function overlap(a: Box, b: Box): boolean {
   return a.left < b.right - 1 && b.left < a.right - 1 && a.top < b.bottom - 1 && b.top < a.bottom - 1;
+}
+
+/**
+ * What each element matching a selector says in full. On a row of the bar held to one line a label may
+ * be said in brief (src/client/rowFit.ts), and how much of it depends on the screen and the font.
+ */
+export function saidInFull(page: Page, selector: string): Promise<string[]> {
+  return page.evaluate(`[...document.querySelectorAll(${JSON.stringify(selector)})].map((one) => one.querySelector('.fitted')?.dataset.full ?? one.innerText)`) as Promise<string[]>;
 }
 
 /** The text of every element matching a selector that has less room than its text needs, so not all of it can be read. */

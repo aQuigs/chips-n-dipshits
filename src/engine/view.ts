@@ -14,6 +14,7 @@ import type { ComesIn } from './handPlan.ts';
 import { reaches, roleOf } from './hosts.ts';
 import type { Role } from './hosts.ts';
 import { handsLeft, nightIsOver, onLastHand } from './night.ts';
+import { askedBy } from './once.ts';
 import { buildPots } from './pots.ts';
 import type { Pot } from './pots.ts';
 import { facingOf } from './preAction.ts';
@@ -152,8 +153,11 @@ export interface TableView {
   nextHandAt: number | null;
   /** Hands dealt at this table so far. */
   handCount: number;
-  /** `role` says which of the host's powers the viewer has: whether a command needs them is its handler's `by`. */
-  you: { id: string; name: string; role: Role; seat: number | null; identity: string | null };
+  /**
+   * `role` says which of the host's powers the viewer has: whether a command needs them is its handler's `by`.
+   * `asked` is the keys of the viewer's own commands that the table remembers acting on (`once.ts`): theirs alone to see.
+   */
+  you: { id: string; name: string; role: Role; seat: number | null; identity: string | null; asked: string[] };
   /** When the viewer's seat shows cards without their asking: theirs alone to see, and empty without a seat. */
   autoShow: AutoShow[];
   /** The move the viewer chose ahead of their turn in the hand on the table, or null: theirs alone to see. */
@@ -279,7 +283,7 @@ export function viewFor(state: TableState, playerId: string, now: number): Table
     running: state.running,
     nextHandAt: state.nextHandAt,
     handCount: state.handCount,
-    you: { id: me.id, name: me.name, role, seat: mySeat >= 0 ? mySeat : null, identity: me.identity },
+    you: { id: me.id, name: me.name, role, seat: mySeat >= 0 ? mySeat : null, identity: me.identity, asked: askedBy(state, me.id) },
     autoShow: mySeat >= 0 ? state.seats[mySeat]!.autoShow : [],
     preAction: mine?.pre ?? null,
     seats,

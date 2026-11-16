@@ -1,9 +1,11 @@
 import type { Command, HandRecord } from '../../../engine/types.ts';
 import type { TableView } from '../../../engine/view.ts';
-import type { SendOutcome } from '../../connection.ts';
+import type { RefusalPlace, SendOutcome } from '../../connection.ts';
 import type { MuteList } from '../../mutes.ts';
 import type { Abilities, AppPreferences } from '../../prefs.ts';
 import type { PresetHandlers } from '../presets.ts';
+import { refusalLine } from '../refusal.ts';
+import type { Faults, RefusalLine } from '../refusal.ts';
 import type { StandingsHandlers } from '../standings.ts';
 import type { PlayerHandlers } from '../whoField.ts';
 import { h, holdWhile } from '../../ui.ts';
@@ -11,10 +13,27 @@ import type { Child } from '../../ui.ts';
 import type { Dialog } from './index.ts';
 
 export interface DialogHandlers {
-  /** Resolves to whether the table took the command. */
-  send(command: Command): Promise<SendOutcome>;
+  /** Resolves to whether the table took the command. Its words for turning it down go to `refused`, for a form that says them itself. */
+  send(command: Command, refused?: RefusalPlace): Promise<SendOutcome>;
   open(dialog: Dialog): void;
+  /** Leaves for the table whatever the dialog was opened from: for an answer that puts something else on the screen by itself. */
+  toTable(): void;
+  /** Leaves the dialog: for the one it was opened from when that one has its viewer back (`comesBack`), else for the table. */
   close(): void;
+  /**
+   * Leaves the dialog on the table's answer to what it asked, as `close` does, or as `toTable` does when
+   * `forTable`; and only while it is still the dialog on the screen. The answer comes a second or two after
+   * the tap that asked: what the dialog uncovers by then is no doing of its viewer's, whose finger may be on
+   * its way to the same place again, and takes no tap for a moment (`TapGuard`).
+   */
+  answered(forTable?: boolean): void;
+  /** Makes a change to the open dialog that the game and not the viewer brings about, as on an answer from the table: what comes up under a finger takes no tap for a moment (`TapGuard`). */
+  byItself(change: () => void): void;
+  /**
+   * Makes a change to the open dialog that its viewer asked for with a tap, as a row that unfolds: no surprise to them, so
+   * what it brings up is live at once, all but what comes up where they tapped, where the second tap of two lands (`TapGuard`).
+   */
+  byThePlayer(change: () => void): void;
   copy(text: string): Promise<boolean>;
   loadHistory(): Promise<HandRecord[]>;
   /** Plays a finished hand back, over the table and whatever is open on it. */
@@ -30,18 +49,36 @@ export interface DialogHandlers {
   mutes: MuteList;
   /** What this device can do of what the preferences switch on. */
   abilities: Abilities;
+  /**
+   * Runs a choice of the viewer's that resizes what the dialog shows, a text size: what it brings up
+   * where something else lay takes no tap for a moment (`TapGuard`), so a second tap is not on it.
+   */
+  resizing(change: () => void): void;
   toLobby(): void;
   /** Leaves the dialog for the table, where an open seat is picked for the player. */
   pickSeat(playerId: string): void;
 }
 
+/** The parts of the menu, each under its heading, in the order the menu shows them. */
+export const MENU_GROUPS = {
+  run: 'Run the game',
+  scores: 'Scores and history',
+  you: 'You',
+  leave: 'Leave',
+} as const;
+
 /** A dialog's line in the menu. */
 export interface MenuEntry {
-  label: string;
+  group: keyof typeof MENU_GROUPS;
+  /** What the line does, in the words for where the table stands when those differ. */
+  label: string | ((view: TableView) => string);
   /** Who gets to see it: `everyone`, `seated`, `hostOrCohost` or `hostAlone` (`roles.ts`), or a rule of its own. */
   who(view: TableView): boolean;
-  /** The small print under the label. */
-  note?(view: TableView, handlers: DialogHandlers): string;
+  /**
+   * How things stand behind the line, where the viewer needs that before opening it: who waits, what it
+   * is set to. Never what the label already says, so most lines have none, and null is none for now.
+   */
+  state?(view: TableView, handlers: DialogHandlers): string | null;
 }
 
 export const everyone = (): boolean => true;
@@ -65,6 +102,12 @@ export interface DialogKind<K extends string = string, P = unknown> {
    */
   who?(view: TableView): boolean;
   /**
+   * Whether the viewer is brought back here from whatever this dialog opens: closed or answered, that
+   * gives way to this dialog again as they left it, not to the table. A list someone works down says so.
+   * Left out, what it opens closes to the table.
+   */
+  comesBack?: boolean;
+  /**
    * What its content depends on. A dialog showing live table data is redrawn when this changes; one
    * that leaves it out holds a form someone may be filling in, and is drawn once.
    */
@@ -81,6 +124,16 @@ export function frame(title: string, handlers: Pick<DialogHandlers, 'close'>, ..
     h('header', { role: 'none' }, h('h2', null, title), h('button.icon', { type: 'button', 'aria-label': 'Close', 'data-action': 'close', onclick: handlers.close }, '✕')),
     h('div.dialog-body', null, body),
   );
+}
+
+/**
+ * Gives a dialog a foot that stays in sight under its body however far that is scrolled, for the one
+ * button that must always be in reach. A button there belongs to a form in the body by the form's id.
+ */
+export function footed(dialog: HTMLElement, ...foot: Child[]): HTMLElement {
+  dialog.append(h('div.dialog-foot', null, foot));
+
+  return dialog;
 }
 
 /**
@@ -101,6 +154,35 @@ export function rowActions(player: { id: string; name: string }, ...buttons: Chi
   }
 
   return actions;
+}
+
+/** A link for the viewer to copy: the box it stands in and what that is headed, and the words of the button that copies it. */
+export interface LinkToCopy {
+  /** Names the box on the page. */
+  id: string;
+  label: string;
+  link: string;
+  /** What the button says, which names the link it copies: two links are never behind two buttons that say the same. */
+  copies: string;
+  /** Whether copying it is what the dialog is for, and its button the gold one. */
+  main: boolean;
+  /** What the link gives away to whoever has it, for a link that is not for sending on. */
+  givesAway?: string;
+}
+
+/**
+ * A link in a box, all of it selected at a tap, with the button that copies it under it. What it gives
+ * away stands over the box, where it is read before the link is taken, and is said with the box and
+ * the button to whoever reaches them by the Tab key, which passes over a line of text.
+ */
+export function linkToCopy({ id, label, link, copies, main, givesAway }: LinkToCopy, handlers: DialogHandlers): HTMLElement {
+  const warning = givesAway ? h('p.keep-to-yourself', { id: `${id}-warning` }, givesAway) : null;
+  const box = h('input', { type: 'text', id, readonly: true, value: link, 'aria-describedby': warning?.id, onfocus: () => box.select() });
+  const button = h(main ? 'button.btn.primary' : 'button.btn', { type: 'button', 'data-copy': id, 'aria-describedby': warning?.id }, copies);
+
+  copyOnClick(button, box, () => link, handlers);
+
+  return h('div.copy', null, warning, h('label.field', { for: id }, h('span', null, label), box), button);
 }
 
 /**
@@ -131,19 +213,40 @@ export function copyOnClick(button: HTMLButtonElement, field: HTMLInputElement |
 }
 
 /**
- * Sends what a form asks for. A refusal leaves the form as it was typed, with the reason in a toast,
- * instead of costing the player their entries. With no answer the table may have taken it all the
- * same, so the form moves on rather than invite a second try: the host adding chips twice would get them twice.
+ * What a press in a dialog does that sends `command`: once the table has answered, the dialog is left
+ * (`answered`, for the table when `forTable`). A refusal leaves the dialog as it was, with the reason at
+ * `refused` for a form that says it itself, and in a toast otherwise. With no answer the table may have
+ * taken it all the same and is being asked what happened, so the dialog is left rather than invite a
+ * second try at what may be done already.
  */
-export function submit(event: Event, handlers: DialogHandlers, command: Command, then: () => void): void {
+export const sendAndLeave =
+  (handlers: DialogHandlers, command: Command, forTable = false, refused?: RefusalPlace) =>
+  async (): Promise<SendOutcome> => {
+    const outcome = await handlers.send(command, refused);
+
+    if (outcome !== 'refused') {
+      handlers.answered(forTable);
+    }
+
+    return outcome;
+  };
+
+// The line of each form's button, made the first time the button is pressed
+const lines = new WeakMap<HTMLButtonElement, RefusalLine>();
+
+/**
+ * Sends what a form asks for, its button held, and leaves the dialog on the answer (`sendAndLeave`). After
+ * a refusal the form is as it was typed, with the reason in a line just above its button until the next
+ * try (`refusalLine`); `at` finds the boxes a refusal is about, for a form that can tell.
+ */
+export function submit(event: Event, handlers: DialogHandlers, command: Command, at?: Faults): void {
   event.preventDefault();
 
-  const button = (event.target as HTMLFormElement).querySelector<HTMLButtonElement>('button[type="submit"]')!;
+  // Among the form's own controls, wherever they stand: its button may be in the dialog's foot
+  const controls = [...(event.target as HTMLFormElement).elements];
+  const button = controls.find((control): control is HTMLButtonElement => control instanceof HTMLButtonElement && control.type === 'submit')!;
+  const line = lines.get(button) ?? refusalLine(button, handlers.byItself);
 
-  holdWhile(button, async () => {
-    // If the dialog was closed while the answer was on its way, there is nothing left to move on from
-    if ((await handlers.send(command)) !== 'refused' && button.isConnected) {
-      then();
-    }
-  });
+  lines.set(button, line);
+  holdWhile(button, sendAndLeave(handlers, command, false, line.trying(at)));
 }

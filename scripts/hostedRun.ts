@@ -9,11 +9,11 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { fileURLToPath } from 'node:url';
 
-import { chromium } from 'playwright';
 import type { Browser, Page } from 'playwright';
 
 import { KEYS_SETTLE_MS } from '../src/client/hotkeys.ts';
 import { startDevServer } from '../src/dev/server.ts';
+import { isKey } from '../src/engine/index.ts';
 import type { TableState } from '../src/engine/index.ts';
 import { CacheArrivalKeys } from '../src/gas/cacheArrivalKeys.ts';
 import { ERRORS_TAB, SheetErrorLog } from '../src/gas/sheetErrorLog.ts';
@@ -32,8 +32,8 @@ import { FakeCache, FakeLock, FakeSpreadsheet } from '../tests/fakes.ts';
 import { seededRng } from '../tests/helpers.ts';
 import { clientPage } from './bundle.ts';
 import { playCheck } from './liveCheckSteps.ts';
-import { answeredAfter, complaints, moveIn, movesSent, NOTICES, opsSent, ownComplaints, STILL, TITLES, toldOf } from './pageSpies.ts';
-import { Gate } from './rig.ts';
+import { answeredAfter, complaints, keysSent, moveIn, movesSent, NOTICES, opsSent, ownComplaints, STILL, TITLES, toldOf } from './pageSpies.ts';
+import { Gate, launchBrowser } from './rig.ts';
 import { STAND_IN_HOST } from './standInHost.ts';
 
 const PICTURES = fileURLToPath(new URL('../screenshots/', import.meta.url));
@@ -97,6 +97,8 @@ const throwIn = (page: Page, message: string) =>
   }, message);
 
 const inAddress = (page: Page, name: string) => new URL(page.url()).searchParams.get(name);
+/** A form's own line saying why it was turned down, in words that have `words` in them (`refusalLine`). */
+const saidByItsForm = (words: string) => `.refusal:not(.stale):visible:has-text(${JSON.stringify(words)})`;
 const remembered = (page: Page, tableId: string) => page.evaluate(`localStorage.getItem('cnd.seat.${tableId}')`) as Promise<string | null>;
 /** A page's own seat, the chips in front of it, the pot and the board, as they are drawn, less the turn's clock, which never stands still. */
 const ownPart = (page: Page) =>
@@ -145,7 +147,7 @@ const html = await clientPage({});
 // refused is a failure of the page, and the server fails nowhere
 const errors = new MemoryErrorLog({ now: () => Date.now() });
 const server = await startDevServer({ port: 0, page: async () => html, errors });
-const browser = await chromium.launch();
+const browser = await launchBrowser();
 
 try {
   const host = await open(browser);
@@ -241,6 +243,33 @@ try {
     await page.context().close();
   }
 
+  console.log('A code typed in the lobby is looked up from the lobby: one no table has is said by its box with the rest of the screen as typed, and a table’s own leads to its screen, asked for once');
+  {
+    const page = await open(browser);
+    const asked = opsSent(page);
+
+    await page.goto(server.url);
+    await page.fill('#host-name', 'Half typed');
+    await page.fill('#new-table-big-blind', '50');
+    await page.fill('#table-code', 'nosuchtable1');
+    await page.click('[data-action="find-table"]');
+    await page.waitForSelector(saidByItsForm('There is no table with the code NOSUCHTABLE1.'));
+
+    assert.equal(await page.getAttribute('#table-code', 'aria-invalid'), 'true', 'the code is what was refused');
+    assert.deepEqual([await page.inputValue('#table-code'), await page.inputValue('#host-name'), await page.inputValue('#new-table-big-blind')], ['nosuchtable1', 'Half typed', '50'], 'a code no table has cost what was typed');
+    assert.equal(await page.locator('.toast:visible').count(), 0, 'the form says it, so a toast would say it twice');
+    assert.equal(inAddress(page, 'table'), null, 'the address names a table that is not there');
+
+    asked.length = 0;
+    await page.fill('#table-code', tableId);
+    await page.click('[data-action="find-table"]');
+    await page.waitForSelector('[data-action="join-table"]:not([disabled])');
+
+    assert.equal(inAddress(page, 'table'), tableId);
+    assert.deepEqual(asked.filter((op) => op === 'info'), ['info'], 'the table was asked for again by the screen the lobby led to');
+    await page.context().close();
+  }
+
   console.log("Saying no to someone else's link goes back to your own seat");
   {
     const page = await open(browser);
@@ -273,8 +302,13 @@ try {
 
     await host.click('[data-action="menu"]');
     await host.click('.menu [data-action="players"]');
+    await host.click('li:has-text("Lurker") [data-action="more"]');
     await host.click('li:has-text("Lurker") button:has-text("Remove")');
     await host.click('[data-action="confirm"]');
+
+    // The answer gives way to the list of players again, which then has one fewer
+    await host.waitForSelector('.dialog li:has-text("Lurker")', { state: 'detached' });
+    await host.click('.dialog [data-action="close"]');
     await host.waitForSelector('.dialog', { state: 'detached' });
 
     // The page that was open is told by the server, which is the one thing that may take a seat out of the address
@@ -327,15 +361,54 @@ try {
   {
     assert.match(await host.innerText('.controls .waiting'), /not started/);
 
-    await host.click('.message [data-action="start"]');
+    // Alone at the table the host is offered to invite, not to start. A start asked all the same, as a page from before this could, is taken
+    await host.waitForSelector('.message [data-action="invite-players"]');
+    assert.equal(await host.locator('.message [data-action="start"]').count(), 0);
+
+    const [id, token] = hostMember.split('.');
+    const started = await fetch(`${server.url}api`, { method: 'POST', body: JSON.stringify({ op: 'act', tableId, auth: { id, token }, command: { type: 'start' }, build: UNSTAMPED_BUILD }) });
+
+    assert.equal(((await started.json()) as { ok: boolean }).ok, true);
     await host.waitForSelector('.message:has-text("Waiting for at least two")');
     await host.waitForSelector('.controls .waiting:has-text("Waiting for at least two")');
 
     // Pausing a game that has dealt no hand puts both back to "not started"
     await host.click('[data-action="menu"]');
     await host.click('.menu [data-action="pause"]');
-    await host.waitForSelector('.message [data-action="start"]:has-text("Start the game")');
+    await host.waitForSelector('.message [data-action="invite-players"]');
     await host.waitForSelector('.controls .waiting:has-text("not started")');
+  }
+
+  console.log('The lobby reached from a table has the way back to it first, by the table’s name, and it leads to the same seat: with the address Google’s own, and with the frame’s storage refused too');
+  {
+    for (const storage of ['kept', 'refused'] as const) {
+      const page = await open(browser);
+
+      if (storage === 'refused') {
+        // A browser that gives another site's frame no storage at all: the page has only what it holds itself
+        await page.addInitScript(`Object.defineProperty(window, 'localStorage', { get() { throw new DOMException('The operation is insecure.', 'SecurityError'); } })`);
+      }
+
+      await page.goto(`${server.url}?table=${tableId}&me=${hostMember}`);
+      await page.click('[data-action="confirm-member"]');
+      await page.waitForSelector('.seat.me');
+
+      const tableName = await page.innerText('.topbar .title b');
+      const address = () => [inAddress(page, 'table'), inAddress(page, 'me')];
+
+      await page.click('[data-action="menu"]');
+      await page.click('.menu [data-action="lobby"]');
+      await page.waitForSelector('[data-action="create-table"]');
+      assert.equal(await page.innerText('[data-action="back-to-table"]'), `Back to ${tableName}`, `storage ${storage}`);
+      assert.equal(await page.evaluate(`document.querySelector('main.lobby :is(button, input, select, summary, a[href])').dataset.action`), 'back-to-table', `storage ${storage}: the way back is not first on the page`);
+      assert.deepEqual(address(), [tableId, hostMember], `storage ${storage}: the address keeps the table and the seat while the lobby is showing`);
+
+      await page.click('[data-action="back-to-table"]');
+      await page.waitForSelector('.seat.me');
+      assert.equal(await page.innerText('.seat.me .name > span:first-child'), 'Quigs', `storage ${storage}: the way back led to another seat`);
+      assert.deepEqual(address(), [tableId, hostMember], `storage ${storage}`);
+      await page.context().close();
+    }
   }
 
   const friend = await open(browser);
@@ -741,6 +814,13 @@ try {
     await folder.click('.turn [data-action="fold"]');
 
     const hunter = folder === dealer ? other : dealer;
+    await hunter.waitForSelector('.message [data-action="hunt"]');
+
+    // No poll gets through until the page has heard that its hunt got no answer: one that showed the hunt played
+    // sooner would leave the page nothing to offer, and it then rightly sends nothing more
+    const polls = await Gate.on(hunter, 'polls');
+    await polls.close('requests');
+
     let hunts = 0;
     await hunter.route('**/api', async (route) => {
       const body = JSON.parse(route.request().postData() ?? '{}') as { op?: string; command?: { type?: string } };
@@ -756,6 +836,7 @@ try {
 
     await hunter.click('.message [data-action="hunt"]');
     await hunter.waitForSelector('.board .card.hunted:nth-child(5)');
+    await polls.open();
     await folder.waitForSelector('.board .card.hunted:nth-child(5)');
 
     assert.equal(hunts, 2, 'the hunt with no answer was sent once more');
@@ -785,8 +866,13 @@ try {
     await folder.click('.turn [data-action="fold"]');
     const watcher = folder === dealer ? other : dealer;
 
-    // The first is played by the table, and its answer never reaches the page; the one sent again is let through
+    await folder.waitForSelector('.controls [data-action="show-card"][data-place="0"]');
+
+    // The first is played by the table, and its answer never reaches the page; the one sent again is let through.
+    // No poll gets through meanwhile, as with the hunt: one that showed the card would leave nothing to send again
+    const polls = await Gate.on(folder, 'polls');
     const shows = await Gate.on(folder, 'shows');
+    await polls.close('requests');
     await shows.close('answers');
     await folder.click('.controls [data-action="show-card"][data-place="0"]');
     await shows.holding();
@@ -795,6 +881,7 @@ try {
     await shows.open();
 
     await folder.waitForSelector('.seat.me .hole .card.seen');
+    await polls.open();
     await watcher.waitForSelector('.seat:not(.me) .hole .card[data-card] + .card.back');
 
     assert.equal(await folder.locator('.feed li:has-text("shows one card")').count(), 1, 'and the card came out once');
@@ -906,7 +993,7 @@ try {
 
     assert.equal(await lobby.innerText('.outdated p'), 'Reload to keep playing.', 'with no table yet, it promises no place at one');
     assert.equal(await lobby.locator('.stage').count(), 0, 'no table was made');
-    assert.equal(await lobby.locator('.toast:visible').count(), 0);
+    assert.equal(await lobby.locator('.toast:visible, .refusal:visible').count(), 0);
     assert.equal(await lobby.locator('.outdated [data-action="reload"]').getAttribute('href'), server.url);
 
     await lobby.click('.outdated [data-action="reload"]');
@@ -1140,7 +1227,8 @@ try {
       await guest.waitForSelector('[data-action="join-table"]:not([disabled])');
       await guest.fill('#join-name', 'Jo');
       await guest.click('[data-action="join-table"]');
-      await guest.waitForSelector('.toast:has-text("Could not join the table")');
+      await guest.waitForSelector(saidByItsForm('Could not join the table'));
+      assert.equal(await guest.locator('.toast:visible').count(), 0, 'the form says it, so a toast would say it twice');
       assert.deepEqual(tables.read(id)!.members.map((member) => member.name), ['Ivy', 'Jo'], 'the table did not let the guest in the first time, so the case shows nothing');
 
       const joins = () => bodies.filter((body) => body.includes('"op":"join"')).map((body) => (JSON.parse(body) as { key?: string }).key);
@@ -1172,6 +1260,87 @@ try {
 
       await owner.context().close();
       await guest.context().close();
+    } finally {
+      await own.close();
+    }
+  }
+
+  console.log('Chips sent twice with no answer, and sent again from a form filled in while the page knows nothing, go under one key and move once; the key is in neither the address nor what the browser remembers');
+  {
+    // A game of its own, whose tables can be looked into
+    const tables = new MemoryStore();
+    const game = new PokerService({ store: tables, presets: new MemoryPresetStore(), players: new MemoryPlayerStore(seededRng(29)), clock: { now: () => Date.now() }, rng: seededRng(28) });
+    const own = await startDevServer({ port: 0, page: async () => html, service: game });
+
+    try {
+      const giver = await open(browser);
+      const id = await createTable(giver, own.url, 'Edna');
+      await sit(giver, 0);
+
+      const getter = await open(browser);
+      await getter.goto(`${own.url}?table=${id}`);
+      await getter.fill('#join-name', 'Otto');
+      await getter.click('[data-action="join-table"]');
+      await sit(getter, 1);
+      await giver.click('.banner [data-action="approve"]');
+      await getter.waitForSelector('.seat.me');
+
+      const stacks = () => tables.read(id)!.seats.flatMap((seat) => (seat ? [seat.stack] : []));
+      const [had, has] = stacks();
+      const keys = keysSent(giver);
+      const sends = await Gate.on(giver, 'hosting');
+      const polls = await Gate.on(giver, 'polls');
+
+      const send = async () => {
+        await giver.click('[data-action="menu"]');
+        await giver.click('.menu [data-action="players"]');
+        await giver.click('.dialog [data-action="transfer"]');
+        await giver.selectOption('#transfer-from', { label: 'Edna' });
+        await giver.selectOption('#transfer-to', { label: 'Otto' });
+        await giver.fill('#transfer-amount', '300');
+        await giver.click('[data-action="confirm-transfer"]');
+      };
+      const formGone = async () => {
+        await giver.waitForSelector('.dialog [data-action="transfer"]');
+        await giver.click('[data-action="close"]');
+      };
+
+      // The first asking never reaches the table. The page looks, finds it has not, and asks again by itself
+      await sends.close('requests');
+      await send();
+      await sends.holding();
+      await sends.lose();
+      await giver.waitForSelector('.toast:has-text("Checking whether that went through")');
+      await sends.holding();
+      assert.equal(await giver.locator('[data-action="confirm-transfer"][aria-busy="true"]').count(), 1, 'the form let go of its button while the page was asking again');
+
+      // That one the table takes, and its answer is lost too. The table's news stops reaching the page first, or a poll would show it the chips
+      await polls.close('requests');
+      await sends.close('answers');
+      await sends.holding();
+      assert.deepEqual(stacks(), [had! - 300, has! + 300], 'the table did not take the second asking, so the case shows nothing');
+      await sends.lose();
+      await formGone();
+
+      // The page is told nothing of the chips, so whoever sent them fills the form in again
+      await send();
+      await sends.holding();
+      await sends.open();
+      await formGone();
+      await polls.open();
+      await getter.waitForSelector('.feed li:has-text("moved 300 from Edna to Otto")');
+
+      assert.deepEqual(stacks(), [had! - 300, has! + 300], 'filled in again, the form moved the chips a second time');
+      assert.equal(await getter.locator('.feed li:has-text("moved 300")').count(), 1);
+      assert.equal(keys.length, 3);
+      assert.ok(isKey(keys[0]), 'the transfer went without a key');
+      assert.equal(new Set(keys).size, 1, 'the same words went under more than one key while nothing was known of them');
+
+      const keptBy = await (giver.evaluate('JSON.stringify([location.href, { ...localStorage }, { ...sessionStorage }, document.cookie, document.documentElement.outerHTML])') as Promise<string>);
+      assert.ok(!keptBy.includes(keys[0]!), 'the key of a command is in the address, in what the browser remembers, or on the page');
+
+      await giver.context().close();
+      await getter.context().close();
     } finally {
       await own.close();
     }
@@ -1270,7 +1439,9 @@ try {
 
       // Someone new under a name the list has is told whose it is, stays on the form with everything as typed, and nothing is lost
       await guest.click('[data-action="join-table"]');
-      await guest.waitForSelector('.toast:has-text("Bob is already on the list of players")');
+      await guest.waitForSelector(saidByItsForm('Bob is already on the list of players'));
+      assert.equal(await guest.locator('.toast:visible').count(), 0, 'the form says it, so a toast would say it twice');
+      assert.equal(await guest.getAttribute('#join-name', 'aria-invalid'), 'true', 'the name is what was refused');
       assert.equal(await guest.inputValue('#join-name'), 'Bob');
       assert.deepEqual([await player(guest), await remembered(guest, first)], [{ id: idOf('Bob'), name: 'Bob' }, guestSeat]);
 
@@ -1283,7 +1454,7 @@ try {
       await guest.click('[data-action="menu"]');
       await guest.waitForSelector('.menu [data-action="who"]');
       assert.equal(await guest.locator('.menu [data-action="players"], .menu [data-action="settings"]').count(), 0, 'picking the host gave the guest the host’s menu');
-      assert.equal(await guest.innerText('.menu [data-action="who"] small'), 'On the list of players as Quigs');
+      assert.equal(await guest.innerText('.menu [data-action="who"] small'), 'Quigs');
       await guest.click('[data-action="close"]');
       assert.notEqual(inAddress(guest, 'me'), inAddress(host, 'me'));
       assert.equal(await remembered(guest, first), guestSeat, 'saying otherwise took the seat at the first table out of the browser');

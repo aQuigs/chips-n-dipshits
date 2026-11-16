@@ -170,14 +170,15 @@ async function play(place: CheckedPlace): Promise<void> {
 
     const name = `Live check ${Date.now()}`;
     const [id, token] = me.split('.');
-    const openSettings = async () => {
+    const openPresets = async () => {
       await host.app.locator('[data-action="menu"]').click();
       await host.app.locator('.menu [data-action="settings"]').click();
+      await host.app.locator('summary[data-section="presets"]').click();
     };
 
     try {
       await timed('save a preset', async () => {
-        await openSettings();
+        await openPresets();
         await host.app.locator('#preset-name').fill(name);
         await host.app.locator('[data-action="save-preset"]').click();
         await host.app.locator(`.preset-list .preset-name:text-is("${name}")`).waitFor();
@@ -189,7 +190,7 @@ async function play(place: CheckedPlace): Promise<void> {
       await lobby.page.context().close();
 
       await timed('delete the preset', async () => {
-        await openSettings();
+        await openPresets();
         await host.app.locator(`[aria-label="Delete ${name}"]`).click();
         await host.app.locator('[data-action="confirm-delete-preset"]').click();
         await host.app.locator('.preset-panel p.note[aria-live]', { hasText: `Deleted ${name}.` }).waitFor();

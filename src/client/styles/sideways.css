@@ -71,6 +71,23 @@
     padding-block: 4px;
   }
 
+  /* A dialog has little height to give here: what it says beside its button, not over it */
+  .dialog-foot {
+    grid-auto-flow: column;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: center;
+    padding-block: 8px;
+  }
+
+  /* Why a form was turned down is more than fits beside the button: it has the row over the two */
+  .dialog-foot > .refusal {
+    grid-area: 1 / 1 / auto / span 2;
+  }
+
+  .dialog-foot:has(> .refusal) > :not(.refusal) {
+    grid-row: 2;
+  }
+
   .controls-slot {
     border-top: 0;
     border-left: 1px solid var(--line);
@@ -80,6 +97,12 @@
   /* Beside the table, the bar's height no longer moves it, so nothing needs reserving */
   .controls {
     --turn-height: 0px;
+  }
+
+  /* Nor holding to one line: the bar is narrow here, and what does not fit a line goes onto the next */
+  .fit-row {
+    flex-wrap: wrap;
+    height: auto;
   }
 
   .turn .buttons {

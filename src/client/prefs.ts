@@ -2,13 +2,22 @@ import type { Card } from '../engine/cards.ts';
 import { HOTKEY_LIST } from './hotkeys.ts';
 import { DEFAULT_THEME, THEMES } from './themes.ts';
 
+/** The parts of the Preferences dialog, each under its heading, in the order the dialog shows them. */
+export const PREF_GROUPS = {
+  look: 'Look',
+  turn: 'Your turn and @mentions',
+  table: 'On the table',
+  chat: 'Chat',
+  keyboard: 'Keyboard',
+} as const;
+
 interface PrefBase<Kind extends string, Value> {
   kind: Kind;
   label: string;
-  /** The small print under the label. */
+  /** The small print under the label: a sentence anyone can read on a phone, with its period. */
   hint?: string;
-  /** The heading it goes under in the Preferences dialog. One without a group has a control of its own elsewhere, and the dialog passes it by. */
-  group?: string;
+  /** The part of the Preferences dialog it stands in, where it comes in the order of the registry. One without a part is set somewhere else, and the dialog passes it by. */
+  group?: keyof typeof PREF_GROUPS;
   default: Value;
   /**
    * Shows the choice on the app's own element, so a stylesheet can react to it with no script:
@@ -21,20 +30,20 @@ interface PrefBase<Kind extends string, Value> {
 }
 
 export interface OnOffPref extends PrefBase<'onOff', boolean> {
-  /** Drawn as a small switch beside the others of its group, its label alone saying what it does and its hint kept for a pointer resting on it. */
-  compact?: boolean;
   /** Said in place of the hint while the device will not have it switched on. Left out, it is the browser's settings that say no. */
   blocked?: string;
 }
 
 export interface ChoicePref extends PrefBase<'choice', string> {
+  /** Drawn as a tile each, so few enough to take in at a glance. */
   options: readonly { value: string; label: string }[];
   /**
-   * Cards to draw beside each option, face down where null, so a choice that changes how cards look
-   * is shown rather than named. Each sample carries its option the way `css: 'attribute'` shows it,
-   * so the stylesheet that draws the table draws the sample too.
+   * What each option's tile shows over its name: cards, face down where null, or "swatch" for the
+   * colors of a theme. A tile carries its option as `data-<key>`, the way the page carries the
+   * choice, so the stylesheet that draws the page draws the tile too: a theme's tile is in its own
+   * colors, a deck's cards in theirs, and a text size's name at its own size with no sample at all.
    */
-  preview?: readonly (Card | null)[];
+  preview?: readonly (Card | null)[] | 'swatch';
 }
 
 export interface RangePref extends PrefBase<'range', number> {
@@ -50,17 +59,44 @@ type ValueOf<P extends Pref> = P extends OnOffPref ? boolean : P extends RangePr
 
 /**
  * What each viewer may set for themselves, kept in their browser. An entry here is all a new
- * preference takes: the Preferences dialog draws its control from it, in this order.
+ * preference takes: the Preferences dialog draws its control from it, in the part its `group` names
+ * and in this order within the part.
  */
 export const PREFERENCES = {
-  // Chosen with the theme picker, on the front page and in the menu
-  theme: { kind: 'choice', label: 'Theme', options: THEMES.map((theme) => ({ value: theme.id, label: theme.name })), default: DEFAULT_THEME },
-  sound: { kind: 'onOff', label: 'Sound', hint: 'Chips, cards, and a chime when it is your turn', group: 'Sound', default: true },
-  volume: { kind: 'range', label: 'Volume', hint: 'Plays a sample as you set it', group: 'Sound', min: 0, max: 100, step: 10, default: 50 },
+  // Also chosen on the screens before the table, which have a picker of their own
+  theme: {
+    kind: 'choice',
+    label: 'Theme',
+    group: 'look',
+    options: THEMES.map((theme) => ({ value: theme.id, label: theme.name })),
+    default: DEFAULT_THEME,
+    preview: 'swatch',
+  },
+  // Each step is a pair of scales in styles/accessibility.css
+  textSize: {
+    kind: 'choice',
+    label: 'Text size',
+    hint: 'The figures on the table grow less, so that nine seats still fit.',
+    group: 'look',
+    options: [
+      { value: 'standard', label: 'Standard' },
+      { value: 'large', label: 'Large' },
+      { value: 'largest', label: 'Largest' },
+    ],
+    default: 'standard',
+    css: 'attribute',
+  },
+  // The ways of getting a player's attention (attentionWays.ts), the chime first, each left out where the device can't do it. Being named in the chat uses them too, but for the flash
+  sound: { kind: 'onOff', label: 'Sound', hint: 'Chips, cards and a chime on your turn.', group: 'turn', default: true },
+  volume: { kind: 'range', label: 'Volume', hint: 'Plays a sample as you set it.', group: 'turn', min: 0, max: 100, step: 10, default: 50 },
+  buzz: { kind: 'onOff', label: 'Buzz', hint: 'Two short buzzes from your phone.', group: 'turn', default: true },
+  flash: { kind: 'onOff', label: 'Flash', hint: 'The table lights up on your turn.', group: 'turn', default: true },
+  notify: { kind: 'onOff', label: 'Notification', hint: 'Shows while you are in another tab.', group: 'turn', default: true },
+  tabTitle: { kind: 'onOff', label: 'Tab title', hint: 'Blinks while you are in another tab.', group: 'turn', default: true },
   deck: {
     kind: 'choice',
     label: 'Deck',
-    group: 'Cards',
+    group: 'table',
     options: [
       { value: 'theme', label: 'Theme' },
       { value: 'two', label: 'Two colors' },
@@ -73,7 +109,7 @@ export const PREFERENCES = {
   cardBack: {
     kind: 'choice',
     label: 'Card back',
-    group: 'Cards',
+    group: 'table',
     options: [
       { value: 'theme', label: 'Theme' },
       { value: 'lattice', label: 'Lattice' },
@@ -88,8 +124,8 @@ export const PREFERENCES = {
   handHint: {
     kind: 'onOff',
     label: 'Hand hint',
-    hint: 'Names what your cards make and lifts the cards that make it',
-    group: 'Cards',
+    hint: 'Names your hand and lifts its cards.',
+    group: 'table',
     default: true,
     css: 'attribute',
   },
@@ -97,56 +133,36 @@ export const PREFERENCES = {
   motion: {
     kind: 'onOff',
     label: 'Animations',
-    hint: 'Cards are dealt around the table and chips slide to the pot',
-    blocked: 'Off while this device asks for less motion',
-    group: 'Cards',
+    hint: 'Cards are dealt and chips slide.',
+    blocked: 'Off while this device asks for less motion.',
+    group: 'table',
     default: true,
   },
   // A filter by sender (`sendersShown`): a player's own are always shown
   reactions: {
     kind: 'onOff',
     label: 'Others’ reactions',
-    hint: 'The emoji other players pop up over their seats and throw at each other',
-    group: 'Cards',
+    hint: 'Emoji other players pop up and throw.',
+    group: 'chat',
     default: true,
   },
-  // The ways of getting a player's attention (attentionWays.ts) beside the chime, each left out where the device can't do it. Being named in the chat uses them too, but for the flash
-  // After the cards, so they stay in sight when Preferences opens on a small phone
-  buzz: { kind: 'onOff', label: 'Buzz', hint: 'Two short buzzes on a phone', group: 'Your turn and @mentions', compact: true, default: true },
-  flash: { kind: 'onOff', label: 'Flash', hint: 'The table lights up for a moment when it is your turn', group: 'Your turn and @mentions', compact: true, default: true },
-  notify: { kind: 'onOff', label: 'Notification', hint: 'While the game is in another tab', group: 'Your turn and @mentions', compact: true, default: true },
-  tabTitle: { kind: 'onOff', label: 'Tab title', hint: 'The tab’s name flashes while you are in another tab', group: 'Your turn and @mentions', compact: true, default: true },
   // Off, a GIF stays a link, so nothing is fetched for it: for data on a phone, or for anyone who would rather
   gifs: {
     kind: 'onOff',
-    label: 'GIFs in the chat',
-    hint: 'A link to a GIF shows as the picture. Off, it stays a link',
-    group: 'Chat',
+    label: 'GIFs',
+    hint: 'A link to a GIF shows as its picture.',
+    group: 'chat',
     default: true,
   },
-  // Off on a phone whatever is chosen: there the keys do nothing and no key is shown
+  // Off on a phone whatever is chosen, and not in its Preferences: there the keys do nothing and no key is shown
   hotkeys: {
     kind: 'onOff',
     label: 'Keyboard shortcuts',
-    hint: 'On a computer, keys for your moves, shown on the buttons',
-    group: 'Keyboard',
+    hint: 'Keys for your moves, shown on the buttons.',
+    group: 'keyboard',
     default: true,
     css: 'attribute',
     glossary: HOTKEY_LIST,
-  },
-  // Last, so that nothing above it moves. Each step is a pair of scales in styles/accessibility.css
-  textSize: {
-    kind: 'choice',
-    label: 'Text size',
-    hint: 'The figures on the table grow less than the rest, so that nine seats still fit a small phone',
-    group: 'Text',
-    options: [
-      { value: 'standard', label: 'Standard' },
-      { value: 'large', label: 'Large' },
-      { value: 'largest', label: 'Largest' },
-    ],
-    default: 'standard',
-    css: 'attribute',
   },
 } satisfies Record<string, Pref>;
 

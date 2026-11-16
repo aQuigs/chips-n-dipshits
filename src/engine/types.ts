@@ -143,6 +143,17 @@ export interface SeatRequest {
   amount: number;
 }
 
+/** What a host's page showed of the request it answers (`saw`). */
+export type RequestSeen = Pick<SeatRequest, 'kind' | 'seat' | 'amount'>;
+
+export const seenOf = ({ kind, seat, amount }: RequestSeen): RequestSeen => ({ kind, seat, amount });
+
+/** A key the table has acted on a command under, and the member who sent it (`once.ts`). */
+export interface Asked {
+  key: string;
+  by: string;
+}
+
 export type Street = 'preflop' | 'flop' | 'turn' | 'river';
 
 export const STREETS: readonly Street[] = ['preflop', 'flop', 'turn', 'river'];
@@ -457,6 +468,8 @@ export interface TableState {
   feedSeq: number;
   /** The reactions made in the last few seconds, oldest first, and never more than `REACTIONS_LIVE`. Only `reactions.ts` changes it. */
   reactions: Reaction[];
+  /** The keys of the commands last acted on, oldest first, and never more than `ASKED_KEPT`. Only `once.ts` changes it. */
+  asked: Asked[];
 }
 
 /** Chips bought or cashed out, which money is paid for: what the settle-up counts. */
@@ -560,8 +573,8 @@ export type Command =
   | { type: 'react'; kind: string; to?: string }
   | { type: 'start' }
   | { type: 'pause' }
-  | { type: 'approve'; playerId: string }
-  | { type: 'deny'; playerId: string }
+  | { type: 'approve'; playerId: string; saw?: RequestSeen }
+  | { type: 'deny'; playerId: string; saw?: RequestSeen }
   | { type: 'kick'; playerId: string }
   | { type: 'setStack'; playerId: string; stack: number }
   | { type: 'moveSeat'; playerId: string; seat: number }

@@ -7,6 +7,9 @@ export interface ThemePicker {
   show(id: string): void;
 }
 
+/** A theme's felt, accent and card as three dots, in the colors of whatever theme it is drawn in. */
+export const themeSwatch = (): HTMLElement => h('span.swatch', null, h('i.felt-dot'), h('i.accent-dot'), h('i.card-dot'));
+
 /** One button per theme, each drawn in its own colors. `compact` leaves out the descriptions. */
 export function createThemePicker(current: string, onPick: (id: string) => void, compact = false): ThemePicker {
   const buttons = THEMES.map((theme) =>
@@ -20,7 +23,7 @@ export function createThemePicker(current: string, onPick: (id: string) => void,
           onPick(theme.id);
         },
       },
-      h('span.swatch', null, h('i.felt-dot'), h('i.accent-dot'), h('i.card-dot')),
+      themeSwatch(),
       h('span', null, h('b', null, theme.name), compact ? null : h('small', null, theme.blurb)),
     ),
   );

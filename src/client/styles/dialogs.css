@@ -22,7 +22,7 @@
 
 .dialog {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
   width: min(100%, 460px);
   max-height: 88cqb;
   border: 1px solid var(--line);
@@ -45,6 +45,12 @@
   border-bottom: 1px solid var(--line);
 }
 
+/* A question names a player, and the widest name is one word wider than a phone: unbroken, it pushes the answer off the screen */
+.dialog header h2 {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .dialog-body,
 .dialog-body form,
 .dialog-body section {
@@ -57,7 +63,16 @@
   overflow-y: auto;
 }
 
-.dialog h3 {
+/* What must stay in reach however far the body is scrolled */
+.dialog-foot {
+  display: grid;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--line);
+}
+
+.dialog h3,
+.fold-section h3 {
   color: var(--muted);
   font-size: calc(12px * var(--text-scale));
   font-weight: 700;
@@ -65,31 +80,16 @@
   text-transform: uppercase;
 }
 
-.menu {
-  display: grid;
-  gap: 6px;
-}
-
-.menu-item {
-  display: grid;
-  gap: 2px;
-  padding: 11px 14px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--panel-raised);
-  font-weight: 600;
-  text-align: left;
-}
-
-.menu-item small,
 .theme-option small {
   display: block;
   color: var(--muted);
   font-weight: 400;
 }
 
+/* One column that is never wider than the dialog: a name of one long word would otherwise widen every row past the screen's edge */
 .rows {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
   margin: 0;
   padding: 0;
@@ -106,8 +106,53 @@
   border-bottom: 1px solid var(--line);
 }
 
-.row-actions {
+.row-actions,
+.list-tools {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+/* What is done to a whole list, over it, with how that stands beside it */
+.list-tools {
+  align-items: center;
+}
+
+/* Who a row is about, in as many lines as the name needs: the widest name is one word wider than a small phone */
+.rows .who {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/*
+ * A player's row in Players: who it is, what is done to them every night, and under both what "More"
+ * unfolds. The buttons stand at the row's end, beside the name when there is room for both.
+ */
+
+.player-row .row-actions {
+  margin-left: auto;
+}
+
+.player-row .row-more {
+  flex-basis: 100%;
+  justify-content: flex-end;
+}
+
+/* On a phone a seated player's buttons never fit beside the name, seat and stack: every row has them under it, from the left */
+@container app (max-width: 599px) {
+  .player-row.seated .who {
+    flex-basis: 100%;
+  }
+
+  .player-row.seated .row-actions {
+    margin-left: 0;
+  }
+
+  .player-row.seated .row-more {
+    justify-content: flex-start;
+  }
+}
+
+.unknown-players {
+  overflow-wrap: anywhere;
 }

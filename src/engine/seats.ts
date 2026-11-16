@@ -1,7 +1,7 @@
 import { formatAmount } from './amounts.ts';
 import { countRebuy } from './tonight.ts';
 import { GameError, SEAT_COUNT } from './types.ts';
-import type { Ctx, FeedEntry, FeedKind, LedgerDetail, Member, MoneyKind, MovedKind, Seat, TableState } from './types.ts';
+import type { Ctx, FeedEntry, FeedKind, LedgerDetail, Member, MoneyKind, MovedKind, RequestKind, Seat, TableState } from './types.ts';
 
 export const FEED_LIMIT = 60;
 
@@ -83,6 +83,16 @@ export function addFeed(state: TableState, now: number, kind: FeedKind, from: st
     state.feed.splice(0, state.feed.length - FEED_LIMIT);
   }
 }
+
+/** What a request is for, as a line about one turned down names it, in the play-by-play and to the player who asked. */
+export const requestedWords = (kind: RequestKind): string => (kind === 'seat' ? 'a seat' : 'chips');
+
+/**
+ * How the play-by-play ends its line about a request the host or a co-host turned down, after the name
+ * of whoever did. A request leaves no other trace of that, so these words are also how the page of the
+ * player who asked knows it happened to them (`turnedDown` in src/client/ownNews.ts).
+ */
+export const turnedDownWords = (name: string, kind: RequestKind): string => ` turned down ${name}'s request for ${requestedWords(kind)}`;
 
 function book(state: TableState, ctx: Ctx, member: Member, detail: LedgerDetail): void {
   ctx.effects.push({

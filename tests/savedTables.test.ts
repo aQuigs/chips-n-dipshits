@@ -3,9 +3,9 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 import { countHand, handFacts, newTonight, owes, replayHand, setIdentity, STATE_SCHEMA, TIMING, upgradeRecord } from '../src/engine/index.ts';
-import type { HandRecord, TableState } from '../src/engine/index.ts';
+import type { Command, HandRecord, TableState } from '../src/engine/index.ts';
 import { restoreState } from '../src/server/store.ts';
-import { checkAround, handRecords, seededRng, TestTable } from './helpers.ts';
+import { checkAround, handRecords, seededRng, testKey, TestTable } from './helpers.ts';
 import { assertHandRecordsHold, assertInvariants } from './invariants.ts';
 import { randomStep } from './randomPlay.ts';
 
@@ -448,6 +448,27 @@ test('a table saved before reactions loads with none, and its players can react'
   t.cmd(t.ids.indexOf(seated.playerId), { type: 'react', kind: 'laugh' });
 
   assert.equal(t.view(0).reactions.length, 1);
+});
+
+test('a table saved before commands had keys loads with none remembered, and from then on does a command asked twice under one once', () => {
+  for (const file of FILES) {
+    assert.deepEqual(load(file).asked, [], file);
+  }
+
+  const t = TestTable.adopt(load(OLDEST[0]!));
+  t.cmd(0, { type: 'pause' });
+  t.foldOut();
+
+  const [from, to] = t.state.seats.flatMap((seat) => (seat && seat.stack > 0 ? [seat] : []));
+  const move: Command = { type: 'transferChips', from: from!.playerId, to: to!.playerId, amount: 1 };
+  const stack = from!.stack;
+
+  t.cmd(0, move, testKey(1));
+  t.cmd(0, move, testKey(1));
+
+  assert.equal(from!.stack, stack - 1);
+  assert.deepEqual(t.state.asked, [{ key: testKey(1), by: t.ids[0] }]);
+  assertInvariants(t.state, t.now);
 });
 
 test('every saved table loads with rabbit hunting off and nothing hunted', () => {

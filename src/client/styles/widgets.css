@@ -40,6 +40,46 @@
   color: var(--bad-ink);
 }
 
+/*
+ * The two things a button that sends has to say (`sends` in ui.ts), in one place. What it is doing may
+ * reach into the button's padding, 12 px at the least, so a button of one short word, as Deny, is hardly
+ * wider for it; in a button as wide as its column, longer words stay in the middle.
+ */
+.sends {
+  display: inline-grid;
+  grid-template-columns: minmax(0, auto);
+  max-width: 100%;
+}
+
+.sends > * {
+  grid-area: 1 / 1;
+}
+
+.btn .sends,
+.chip-btn .sends {
+  justify-items: center;
+}
+
+.sends > .doing {
+  visibility: hidden;
+}
+
+.sends > .doing::before {
+  content: attr(data-says);
+}
+
+.btn .sends > .doing {
+  margin-inline: -8px;
+}
+
+button[aria-busy='true'] .sends > :first-child {
+  visibility: hidden;
+}
+
+button[aria-busy='true'] .sends > .doing {
+  visibility: visible;
+}
+
 .icon {
   position: relative;
   display: grid;
@@ -125,7 +165,8 @@
   color: var(--muted);
 }
 
-.field input:where(:not([type='radio'])),
+.field input:where(:not([type='radio'], [type='checkbox'])),
+.join-strip input,
 .say input,
 .copy input,
 .who-filter {
@@ -142,6 +183,19 @@
 
 .field small {
   font-weight: 400;
+}
+
+.field select {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: calc(16px * var(--text-scale));
+  font-weight: 500;
 }
 
 .check {
@@ -164,7 +218,9 @@
   gap: 0 20px;
 }
 
-.choice .check {
+.choice .check,
+.switch .check,
+.among .check {
   color: var(--text);
   font-size: calc(15px * var(--text-scale));
   font-weight: 400;
@@ -184,4 +240,25 @@
 .note {
   color: var(--muted);
   font-size: calc(13px * var(--text-scale));
+}
+
+/* The mark on a line or a heading that unfolds, turned over while it is open */
+summary > .fold {
+  color: var(--muted);
+  font-size: calc(18px * var(--text-scale));
+  line-height: 1;
+}
+
+details[open] > summary > .fold,
+.row-actions > [aria-expanded='true']::after {
+  transform: rotate(180deg);
+}
+
+/* A row's button that unfolds more of the row carries the same mark after its word, drawn here so the word alone is its name */
+.row-actions > [aria-expanded]::after {
+  content: '▾';
+  display: inline-block;
+  margin-left: 6px;
+  color: var(--muted);
+  line-height: 1;
 }

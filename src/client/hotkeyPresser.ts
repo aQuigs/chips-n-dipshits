@@ -1,5 +1,5 @@
 import { focusOf, KEYBOARD_QUERY, keyAction } from './hotkeys.ts';
-import type { AppPreferences } from './prefs.ts';
+import type { Ability, AppPreferences } from './prefs.ts';
 
 /** What the keys need from the page they work in. */
 export interface KeyHost {
@@ -26,6 +26,11 @@ export class HotkeyPresser {
     this.host = host;
   }
 
+  /** Whether this device has the keyboard the keys are for. Without one the preference is not offered at all. */
+  ability(): Ability {
+    return this.keyboard.matches ? 'yes' : 'no';
+  }
+
   /** Call whenever the buttons under the table may be new to the player: drawn anew, or uncovered by a dialog or a hidden tab. */
   shown(): void {
     this.drawnAt = performance.now();
@@ -41,7 +46,7 @@ export class HotkeyPresser {
 
     const buttons = new Map([...controls.querySelectorAll<HTMLButtonElement>('.turn button[data-hotkey]:enabled')].map((button) => [button.dataset.hotkey!, button]));
     const action = keyAction(event, {
-      enabled: this.prefs.get('hotkeys') && this.keyboard.matches,
+      enabled: this.prefs.get('hotkeys') && this.ability() === 'yes',
       focus: focusOf(active as HTMLInputElement | null),
       dialogOpen: this.host.dialogOpen(),
       keys: buttons,

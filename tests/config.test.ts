@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { CONFIG_KEYS, CONFIG_SPECS, DEFAULT_CONFIG, newConfig, sameSetting, startingConfig, validatedConfig, validSetting } from '../src/engine/index.ts';
-import type { Bounty, ChoiceSpec, NumberSpec } from '../src/engine/index.ts';
-import { seededRng, sevenDeuceBounty, TestTable } from './helpers.ts';
+import { CONFIG_KEYS, CONFIG_SPECS, DEFAULT_CONFIG, fixedAtCreation, LIMITS, newConfig, sameSetting, settingsRefused, startingConfig, validatedConfig, validSetting } from '../src/engine/index.ts';
+import type { Bounty, ChoiceSpec, ConfigSpec, NumberSpec } from '../src/engine/index.ts';
+import { refusalOf, seededRng, sevenDeuceBounty, TestTable } from './helpers.ts';
 import { randomConfig, randomSetting } from './randomConfig.ts';
 
 test('the default settings are the registry\'s defaults, and the table accepts them', () => {
@@ -42,12 +42,71 @@ test('a refusal names the setting and says what it may be', () => {
   assert.throws(settings({ smallBlind: 0 }), { name: 'GameError', message: 'The small blind must be a whole number from 1 to 1,000,000,000' });
   assert.throws(settings({ actionSeconds: 301 }), { message: 'The action clock must be a whole number from 0 to 300' });
   assert.throws(settings({ actionSeconds: 4 }), { message: 'The action clock must be off or at least 5 seconds' });
-  assert.throws(settings({ maxRuns: 4 }), { message: 'Running it more than once must be one of: Once only, Up to twice, Up to three times' });
-  assert.throws(settings({ maxRuns: '2' }), { message: 'Running it more than once must be one of: Once only, Up to twice, Up to three times' }, 'a count chosen from a few is the number itself, not its text');
+  assert.throws(settings({ maxRuns: 4 }), { message: 'Running it more than once must be one of: Never, Up to twice, Up to three times' });
+  assert.throws(settings({ maxRuns: '2' }), { message: 'Running it more than once must be one of: Never, Up to twice, Up to three times' }, 'a count chosen from a few is the number itself, not its text');
   assert.throws(settings({ name: 'x'.repeat(41) }), { message: 'The table name must be 1 to 40 characters' });
   assert.throws(settings({ name: 7 }), { message: 'The table name is missing' });
   assert.throws(settings({ bigBlind: 5 }), { message: "The big blind can't be smaller than the small blind" });
   assert.throws(settings({ minBuyIn: 3000 }), { message: "The maximum buy-in can't be smaller than the minimum" });
+});
+
+test('a refusal is traced back to the settings it is about, and to none when it names none', () => {
+  const refusal = (config: object): string => refusalOf(() => validatedConfig(config, DEFAULT_CONFIG));
+
+  // Every setting by itself, refused for a value no setting takes
+  for (const key of CONFIG_KEYS) {
+    assert.deepEqual(settingsRefused(refusal({ [key]: null }), DEFAULT_CONFIG), [key], key);
+  }
+
+  // And every other way a value can be wrong for a setting of its kind
+  const wrong = (spec: ConfigSpec): unknown[] => {
+    switch (spec.kind) {
+      case 'text':
+        return ['', 'x'.repeat(spec.maxLength + 1), 42];
+      case 'link':
+        return ['meet.example/abc', 'http://meet.example/abc', `https://meet.example/${'x'.repeat(spec.maxLength)}`, 42];
+      case 'chips':
+        return [spec.min - 1, (spec.max ?? LIMITS.chips) + 1, 1.5, 'lots'];
+      case 'count':
+      case 'seconds':
+        return [spec.min - 1, ...(spec.max === undefined ? [] : [spec.max + 1]), 1.5, 'lots'];
+      case 'toggle':
+        return ['yes', 1];
+      case 'choice':
+        return ['none of them', 99.5];
+      case 'handAmounts':
+        return ['72'];
+    }
+  };
+
+  for (const key of CONFIG_KEYS) {
+    for (const value of wrong(CONFIG_SPECS[key])) {
+      const told = refusal({ [key]: value });
+
+      assert.deepEqual(settingsRefused(told, DEFAULT_CONFIG), [key], `${key} sent as ${JSON.stringify(value)}: "${told}"`);
+    }
+  }
+
+  // One chosen for good, sent as something else it could have been
+  for (const key of CONFIG_KEYS.filter(fixedAtCreation)) {
+    const other = (CONFIG_SPECS[key] as ChoiceSpec).options.find((option) => option.value !== DEFAULT_CONFIG[key])!.value;
+
+    assert.deepEqual(settingsRefused(refusal({ [key]: other }), DEFAULT_CONFIG), [key], key);
+  }
+
+  // A rule between settings names every setting it reads, whichever of them its words begin with
+  const between = (config: Partial<typeof DEFAULT_CONFIG>) => settingsRefused(refusal(config), { ...DEFAULT_CONFIG, ...config });
+
+  assert.deepEqual(between({ bigBlind: 5 }), ['smallBlind', 'bigBlind']);
+  assert.deepEqual(between({ smallBlind: 50 }), ['smallBlind', 'bigBlind']);
+  assert.deepEqual(between({ minBuyIn: 3000 }), ['minBuyIn', 'maxBuyIn']);
+  assert.deepEqual(between({ actionSeconds: 4 }), ['actionSeconds']);
+  assert.deepEqual(between({ bounties: [['72', 10], ['J4s', 20], ['72', 30]] as Bounty[] }), ['bounties']);
+
+  // Words that are no setting's: one bounty of several, and a refusal that is not about the settings at all
+  assert.deepEqual(between({ bounties: [['72', -5]] as Bounty[] }), []);
+  assert.deepEqual(settingsRefused('Stu is in the current hand, so wait until it is over', DEFAULT_CONFIG), []);
+  assert.deepEqual(settingsRefused('The table is busy, try again', DEFAULT_CONFIG), []);
 });
 
 test('when several things are wrong, the complaint is about the one that was always checked first', () => {
@@ -69,7 +128,7 @@ test('when several things are wrong, the complaint is about the one that was alw
   assert.equal(complaint({ minBuyIn: 500, maxBuyIn: 100, actionSeconds: 400 }), "The maximum buy-in can't be smaller than the minimum");
   assert.equal(complaint({ bigBlind: 5, maxRuns: 0 }), "The big blind can't be smaller than the small blind");
   assert.equal(complaint({ bounties: [['72', -1]], maxRuns: 'x', name: 7 }), 'The table name is missing');
-  assert.equal(complaint({ bounties: [['72', -1]], maxRuns: 'x' }), 'Running it more than once must be one of: Once only, Up to twice, Up to three times');
+  assert.equal(complaint({ bounties: [['72', -1]], maxRuns: 'x' }), 'Running it more than once must be one of: Never, Up to twice, Up to three times');
 });
 
 test('settings the host leaves out keep their value, and anything that is no setting is dropped', () => {
@@ -81,7 +140,7 @@ test('settings the host leaves out keep their value, and anything that is no set
 });
 
 test('a setting that is a count or one of several choices is checked like the rest', () => {
-  const count: NumberSpec = { kind: 'count', label: 'Seats', subject: 'The number of seats', default: 9, min: 2, max: 10, group: 'table' };
+  const count: NumberSpec = { kind: 'count', label: 'Seats', subject: 'The number of seats', default: 9, min: 2, max: 10 };
   const choice: ChoiceSpec<'one' | 'two'> = {
     kind: 'choice',
     label: 'Decks',
@@ -91,7 +150,6 @@ test('a setting that is a count or one of several choices is checked like the re
       { value: 'one', label: 'One' },
       { value: 'two', label: 'Two' },
     ],
-    group: 'table',
   };
 
   assert.equal(validSetting(count, 6, DEFAULT_CONFIG), 6);

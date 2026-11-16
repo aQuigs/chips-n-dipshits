@@ -1,6 +1,6 @@
 /* ---- Showing one card or both after a hand ---- */
 
-/* Kept together, so under a phone's table the group wraps below the other switches as one */
+/* Kept together, so beside a table lying down the group goes under the button to see the hand again as one */
 .show-cards {
   display: inline-flex;
   align-items: center;

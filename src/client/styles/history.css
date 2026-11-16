@@ -2,23 +2,39 @@
   border-bottom: 1px solid var(--line);
 }
 
+/* A hand's line: which hand, what was won at the far end, and the fold mark */
 .history summary {
   display: flex;
-  justify-content: space-between;
+  align-items: baseline;
   gap: 12px;
   padding: 10px 0;
   font-weight: 600;
   cursor: pointer;
+  list-style: none;
+}
+
+.history summary::-webkit-details-marker {
+  display: none;
+}
+
+/* Never broken in two to make room for a long list of winners */
+.history .hand-number {
+  white-space: nowrap;
 }
 
 .history summary small {
+  margin-left: auto;
   color: var(--muted);
   font-weight: 400;
+  overflow-wrap: anywhere;
+  text-align: right;
 }
 
+/* A hand's lines, set as the chat sets the same lines */
 .history pre {
   margin: 0 0 12px;
   color: var(--muted);
-  font: calc(12px * var(--text-scale))/1.5 ui-monospace, 'SF Mono', Menlo, monospace;
+  font: calc(13px * var(--text-scale)) / 1.5 var(--font-ui);
+  overflow-wrap: anywhere;
   white-space: pre-wrap;
 }

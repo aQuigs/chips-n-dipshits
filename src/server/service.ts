@@ -1,4 +1,4 @@
-import { addMember, applyCommand, createTable, GameError, listedLike, NewerTable, playerName, presetName, presetSettings, randomId, requireLevel, setIdentity, sharedPreset, tick, UNITS, viewFor } from '../engine/index.ts';
+import { addMember, applyCommand, createTable, GameError, isKey, listedLike, NewerTable, playerName, presetName, presetSettings, randomId, requireLevel, setIdentity, sharedPreset, tick, UNITS, viewFor } from '../engine/index.ts';
 import type { Arriving, Command, Ctx, KnownPlayer, Member, Preset, Rng, TableState, Unit } from '../engine/index.ts';
 import { HISTORY_LIMIT } from './api.ts';
 import type { ApiResponse, Auth, ErrorCode, Joined, UnitStandings, Who } from './api.ts';
@@ -89,6 +89,22 @@ function tableIdOf(request: Fields): string {
   }
 
   return id;
+}
+
+/**
+ * The key a command is asked under, or none. What is not a key as a page makes one is a bad request: a
+ * table saves the keys it has acted on, and nothing sent as one may grow its row.
+ */
+function keyOf(request: Fields): string | undefined {
+  if (request.key === undefined || request.key === null) {
+    return undefined;
+  }
+
+  if (!isKey(request.key)) {
+    throw new ApiFailure('invalid', 'Malformed request');
+  }
+
+  return request.key;
 }
 
 function authOf(request: Fields): Auth {
@@ -328,7 +344,7 @@ export class PokerService {
       case 'poll':
         return this.poll(tableIdOf(request), authOf(request), request.since);
       case 'act':
-        return this.act(tableIdOf(request), authOf(request), request.command as Command);
+        return this.act(tableIdOf(request), authOf(request), request.command as Command, keyOf(request));
       case 'history':
         return this.history(tableIdOf(request), authOf(request));
       case 'presets':
@@ -647,10 +663,10 @@ export class PokerService {
     });
   }
 
-  private act(tableId: string, auth: Auth, command: Command): ApiResponse {
+  private act(tableId: string, auth: Auth, command: Command, key?: string): ApiResponse {
     return this.mutate(tableId, (state, ctx) => {
       authenticate(state, auth);
-      applyCommand(state, ctx, auth.id, command);
+      applyCommand(state, ctx, auth.id, command, key);
 
       return { ok: true, kind: 'view', view: viewFor(state, auth.id, ctx.now) };
     });

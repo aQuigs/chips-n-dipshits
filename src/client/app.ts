@@ -1,18 +1,21 @@
 import { liveReactions, REACTION_TOO_SOON, reactionRefusal } from '../engine/reactions.ts';
 import { replaySteps } from '../engine/replay.ts';
 import { anteText, blindsText } from '../engine/stakes.ts';
+import { seenOf } from '../engine/types.ts';
 import type { Preset } from '../engine/presets.ts';
 import type { Command, HandRecord, TableConfig } from '../engine/types.ts';
 import type { TableView } from '../engine/view.ts';
-import type { ApiError, ApiRequest, ApiResponse, Auth } from '../server/api.ts';
+import type { ApiError, ApiRequest, ApiResponse, Auth, TableInfo } from '../server/api.ts';
 import { PageAnnouncer } from './announcer.ts';
 import { isRefusal, nextRetry, ServerClock, ServerLine, sleep, TableConnection } from './connection.ts';
-import type { SendOutcome, Session } from './connection.ts';
+import type { RefusalPlace, SendOutcome, Session } from './connection.ts';
 import { TableEffects } from './effects.ts';
 import { lastOnRecord } from './handRecords.ts';
 import { HotkeyPresser } from './hotkeyPresser.ts';
+import { headline } from './headline.ts';
 import { playerFor, RememberedPlayer } from './knownPlayers.ts';
 import type { Answer } from './knownPlayers.ts';
+import { KeyboardPlace } from './keyboardPlace.ts';
 import { Modal } from './modal.ts';
 import { browserOf } from './pageErrors.ts';
 import type { PageFailure } from './pageErrors.ts';
@@ -26,34 +29,36 @@ import { pagePace } from './pagePace.ts';
 import { TapGuard } from './pageTapGuard.ts';
 import { noReplayLine, pageTicker } from './replayPlayer.ts';
 import { ReplayScreen } from './replayScreen.ts';
+import { RowFit } from './rowFit.ts';
 import { neededBy } from './replayTurn.ts';
 import { ReactionMarks } from './reactionMarks.ts';
 import { ReactionPicker } from './render/reactionPicker.ts';
 import type { Platform } from './platform.ts';
 import { PREFERENCES, Preferences } from './prefs.ts';
 import { movePromptEl, SeatMoves } from './seatMoves.ts';
-import type { Abilities, AppPreferences } from './prefs.ts';
+import type { Abilities, Ability, AppPreferences } from './prefs.ts';
 import { controlsEl, controlsSignature, lockTurn, sizingMemory } from './render/controls.ts';
 import type { Sizing } from './render/controls.ts';
 import { frame } from './render/dialogs/dialog.ts';
-import { dialogAllowed, dialogEl, dialogShows } from './render/dialogs/index.ts';
+import { dialogAllowed, dialogComesBack, dialogEl, dialogShows } from './render/dialogs/index.ts';
 import type { Dialog, DialogHandlers } from './render/dialogs/index.ts';
 import { createFeed } from './render/feed.ts';
 import type { Feed } from './render/feed.ts';
 import { joinScreen, lobbyEl, noticeEl, putAwayEl, welcomeBackEl } from './render/lobby.ts';
-import type { AsksWho, LobbyScreen, Visitor } from './render/lobby.ts';
-import { nightOver } from './render/night.ts';
+import type { AsksWho, LobbyScreen, TableLeft, Visitor } from './render/lobby.ts';
 import { outdatedEl } from './render/outdated.ts';
 import { hostOrCohost } from './render/roles.ts';
 import { standingsEl } from './render/standings.ts';
 import type { StandingsHandlers } from './render/standings.ts';
-import { handDrawn, shapeFor, tableEl } from './render/table.ts';
+import { handDrawn, nextStep, shapeFor, tableEl } from './render/table.ts';
 import { createThemePicker } from './render/themePicker.ts';
 import { voiceLinkEl } from './render/voiceLink.ts';
 import type { Listed } from './render/whoField.ts';
 import type { Shape } from './render/table.ts';
+import { clockText, ownDeadline, runningOut } from './actionClock.ts';
 import { Arrivals } from './arrivals.ts';
 import { Attention } from './attention.ts';
+import { Once } from './once.ts';
 import { pageWays } from './pageAttention.ts';
 import { showStillOffered } from './showing.ts';
 import { ShownTable } from './shownTable.ts';
@@ -62,7 +67,7 @@ import { LABELS, menuLabel, replayOpenedSaid, requestText, timeSaid } from './sp
 import { fontsUrl, themeById } from './themes.ts';
 import { TimeWarning } from './timeWarning.ts';
 import { pageTouch } from './pageTouch.ts';
-import { h, holdWhile, secondsUntil, Slot } from './ui.ts';
+import { h, heldTogether, secondsUntil, sendingButton, Slot } from './ui.ts';
 import { pageSounds } from './webAudioSounds.ts';
 
 const COUNTDOWN_TICK_MS = 250;
@@ -73,6 +78,15 @@ const seatKey = (tableId: string) => `cnd.seat.${tableId}`;
 
 const FONTS_LINK_ID = 'theme-fonts';
 
+/** A dialog as its viewer left it for one they opened from it, which is how they find it when they are brought back. */
+interface DialogLeft {
+  dialog: Dialog;
+  /** How far down they had scrolled. */
+  scrolled: number;
+  /** The control they pressed to open the other, which has the keyboard when they are back. */
+  keyboard: KeyboardPlace | null;
+}
+
 /** The parts of the table screen that are built once and then filled in as views arrive. */
 interface TableScreen {
   topbar: Slot;
@@ -81,6 +95,8 @@ interface TableScreen {
   controls: Slot;
   /** Holds back a tap on a control of the bar that came up where another lay a moment before. */
   taps: TapGuard;
+  /** Keeps each row of the bar that is held to one line on its line. */
+  rows: RowFit;
   overlay: Slot;
   modal: Modal;
   feed: Feed;
@@ -103,6 +119,8 @@ interface TableScreen {
   resizeObserver: ResizeObserver;
   /** The trouble with the connection that a screen reader was last told of, which is told once and not with every redraw. */
   troubleSaid: 'unreachable' | 'struggling' | null;
+  /** The gold button the felt last had for whoever runs the game (`nextStep`), which tells the draw in which one becomes the other. */
+  nextStep: 'invite' | 'start' | null;
 }
 
 function parseMember(value: string | null | undefined): Auth | null {
@@ -139,6 +157,9 @@ export class App {
     (request) => this.request(request),
   );
 
+  /** The keys of the commands a table must do once. */
+  private readonly once = new Once((bytes) => crypto.getRandomValues(new Uint8Array(bytes)));
+
   /** Which of the players the game knows this browser was last used as. */
   private readonly me: RememberedPlayer;
 
@@ -146,9 +167,19 @@ export class App {
   private playersAsked = 0;
   private readonly hotkeys: HotkeyPresser;
 
+  /**
+   * The tap guard of the first screen. It is there from the start and not made with that screen: a tap is
+   * what brings the screen up, and only a guard that saw it can keep the second tap of two off what came up under it.
+   */
+  private readonly lobbyTaps = new TapGuard();
+
   /** The table this page is at, from sitting down at its screen until that screen is left. */
   private table: TableConnection | null = null;
   private screen: TableScreen | null = null;
+
+  /** The table this page was last at, by the name it had then: where the first screen's way back leads. */
+  private left: { tableId: string; name: string } | null = null;
+
   /** Takes the standings off a screen that has no table, while they are up over one. */
   private closeStandings: (() => void) | null = null;
   private dialog: Dialog | null = null;
@@ -159,6 +190,18 @@ export class App {
 
   /** The opening that the dialog on screen was drawn for. */
   private dialogDrawn = 0;
+
+  /** The dialogs the one on screen was opened from, each of which has its viewer back once that one is closed or answered (`comesBack`); the nearest is last. */
+  private dialogsBehind: DialogLeft[] = [];
+
+  /** What was last pressed in a dialog: the control a dialog opened from another was opened with. */
+  private pressedInDialog: Element | null = null;
+
+  /**
+   * The control the page put the keyboard on as it brought the viewer back, which is one that opens
+   * something. For as long as the keyboard stays there, it goes where that control does (`KeyboardPlace`).
+   */
+  private keyboardPut: HTMLElement | null = null;
 
   /** A dialog the page means to open by itself, waiting for the viewer to be free for it. */
   private offered: { dialog: Dialog; still(view: TableView): boolean } | null = null;
@@ -178,7 +221,7 @@ export class App {
    */
   private linked: Session | null = null;
 
-  /** Bumped whenever the screen is changed, to retire a wait for a linked member that began before. */
+  /** Bumped whenever the screen is changed, to retire a wait that began before: for a linked member, or for a new table. */
   private leaves = 0;
   private toastTimer = 0;
 
@@ -203,7 +246,10 @@ export class App {
     }
     this.sounds = new Sounds(pageSounds(), this.prefs, { inView: this.watching.inView });
     this.attention = new Attention(this.prefs, pageWays({ sounds: this.sounds, touch: pageTouch(), root, ownsTab: platform.ownsTab }));
-    this.abilities = { of: (key) => (key === 'motion' ? motionAbility(this.watching) : this.attention.of(key)), ask: (key) => this.attention.ask(key) };
+    // What the device says to a preference that is no way of getting attention
+    const own: Record<string, () => Ability> = { motion: () => motionAbility(this.watching), hotkeys: () => this.hotkeys.ability() };
+
+    this.abilities = { of: (key) => (Object.hasOwn(own, key) ? own[key]!() : this.attention.of(key)), ask: (key) => this.attention.ask(key) };
     this.server = new ServerLine(platform.transport, platform.build, () => this.showOutdated());
     this.hotkeys = new HotkeyPresser(this.prefs, { root, controls: () => this.screen?.controls.element ?? null, dialogOpen: () => this.tableCovered() });
 
@@ -278,7 +324,7 @@ export class App {
       if (this.closeStandings) {
         this.closeStandings();
       } else if (this.dialog) {
-        this.closeDialog();
+        this.leaveDialog();
       } else if (this.screen?.picker.isOpen) {
         this.screen.picker.close();
       } else if (this.screen?.seatMoves.active) {
@@ -317,19 +363,33 @@ export class App {
       this.pointAddress(null);
     }
 
-    const lobby = lobbyEl(this.visitor(), this.themePicker(), {
-      create: async (as, config) => {
-        if (!(await this.createTable(as, config))) {
+    const lobby = lobbyEl(this.visitor(), this.themePicker(), this.wayBack(), {
+      create: async (as, config, refused) => {
+        if (!(await this.createTable(as, config, refused))) {
           void this.offerPlayers(lobby);
         }
       },
-      openTable: (code) => this.openTable(code.trim().toUpperCase()),
+      byItself: (change) => this.lobbyTaps.byItself(change),
+      say: (message) => this.announcer.status(message),
+      openTable: (code, refused) => this.seekTable(code.trim().toUpperCase(), refused),
       standings: () => this.showStandings(),
     });
 
-    this.mount(lobby.element);
+    // Whoever tapped their way here, from the menu of a table or the screen for joining one, may tap twice
+    this.lobbyTaps.byThePlayer(() => this.mount(lobby.element));
     void this.offerPresets(lobby);
     void this.offerPlayers(lobby);
+  }
+
+  /**
+   * The way back to the table this page was last at, for as long as the browser remembers a seat there.
+   * That is what a reload goes by, however the page is served, and what the server's word that the seat
+   * or the table is gone takes away.
+   */
+  private wayBack(): TableLeft | null {
+    const left = this.left;
+
+    return left && this.rememberedSeat(left.tableId) ? { name: left.name, back: () => this.openTable(left.tableId) } : null;
   }
 
   /**
@@ -372,6 +432,34 @@ export class App {
   /** The compact theme picker for the screens before the table. */
   private themePicker(): HTMLElement {
     return createThemePicker(this.prefs.get('theme'), (id) => this.setTheme(id), true).element;
+  }
+
+  /**
+   * Goes to the table whose code was typed on the first screen. A code this browser has no seat for is
+   * looked up before that screen is left, so that a code no table has is said where it was typed, with
+   * whatever else is half filled in there as it was.
+   */
+  private async seekTable(tableId: string, refused: RefusalPlace): Promise<void> {
+    if (this.linked?.tableId === tableId || this.rememberedSeat(tableId)) {
+      this.openTable(tableId);
+      return;
+    }
+
+    const asked = this.leaves;
+    const response = await this.request({ op: 'info', tableId });
+
+    // The visitor may have gone elsewhere while the answer was on its way
+    if (asked !== this.leaves) {
+      return;
+    }
+
+    if (isRefusal(response) && !response.putAway) {
+      this.refuse(`There is no table with the code ${tableId}.`, refused);
+      return;
+    }
+
+    // Found, put away or not heard from: the screen for joining shows the first and sees to the rest
+    void this.showJoin(tableId, response?.ok && response.kind === 'info' ? response.table : null);
   }
 
   private openTable(tableId: string): void {
@@ -461,21 +549,28 @@ export class App {
     );
   }
 
-  private async showJoin(tableId: string): Promise<void> {
+  /** `found` is what the server has already said the table is, for whoever asked before coming here. */
+  private async showJoin(tableId: string, found: TableInfo | null = null): Promise<void> {
     this.leaveTableScreen();
     this.pointAddress(tableId);
 
     const screen = joinScreen(tableId, this.visitor(), this.themePicker(), {
-      join: async (as) => {
-        if (!(await this.joinTable(tableId, as))) {
+      join: async (as, refused) => {
+        if (!(await this.joinTable(tableId, as, refused))) {
           void this.offerPlayers(screen);
         }
       },
+      byItself: (change) => this.lobbyTaps.byItself(change),
       toLobby: () => this.showLobby(),
     });
 
     this.mount(screen.element);
     void this.offerPlayers(screen);
+
+    if (found) {
+      screen.showTable(found);
+      return;
+    }
 
     for (let retryIn = 0; ; ) {
       const response = await this.request({ op: 'info', tableId });
@@ -508,23 +603,36 @@ export class App {
     }
   }
 
-  /** Resolves to whether the table was made. */
-  private async createTable(as: Answer, config: Partial<TableConfig>): Promise<boolean> {
+  /** Resolves to whether a table was made. If not, the visitor has been told why. */
+  private async createTable(as: Answer, config: Partial<TableConfig>, refused: RefusalPlace): Promise<boolean> {
+    const asked = this.leaves;
     const response = await this.arrivals.ask({ op: 'create', ...as, config });
+
+    // Whoever left the form before the answer came, by the way back to a table or by a table's code, stays
+    // where they went: the new table keeps their seat, and nothing is said of a try they walked away from
+    const stayed = asked === this.leaves;
+
     if (response?.ok && response.kind === 'joined') {
       this.remember(response.view.id, response.auth);
-      this.enterTable({ tableId: response.view.id, auth: response.auth }, response.view);
-      this.openDialog({ kind: 'invite' });
-      this.noteWho(as, response.view);
+
+      if (stayed) {
+        this.enterTable({ tableId: response.view.id, auth: response.auth }, response.view);
+        this.openDialog({ kind: 'invite' });
+        this.noteWho(as, response.view);
+      }
+
       return true;
     }
 
-    this.fail(response && !response.ok ? response.error : 'Could not create the table. Check your connection and try again.');
+    if (stayed) {
+      this.refuse(response && !response.ok ? response.error : 'Could not create the table. Check your connection and try again.', refused);
+    }
+
     return false;
   }
 
   /** Resolves to whether the visitor is now somewhere other than the form they joined from. */
-  private async joinTable(tableId: string, as: Answer): Promise<boolean> {
+  private async joinTable(tableId: string, as: Answer, refused: RefusalPlace): Promise<boolean> {
     const response = await this.arrivals.ask({ op: 'join', tableId, ...as });
     if (response?.ok && response.kind === 'joined') {
       this.remember(tableId, response.auth);
@@ -538,7 +646,7 @@ export class App {
       return true;
     }
 
-    this.fail(response && !response.ok ? response.error : 'Could not join the table. Check your connection and try again.');
+    this.refuse(response && !response.ok ? response.error : 'Could not join the table. Check your connection and try again.', refused);
     return false;
   }
 
@@ -576,14 +684,20 @@ export class App {
     this.leaveTableScreen();
     this.pointAddress(session.tableId, session.auth);
 
-    const table = new TableConnection(this.server, session, this.clock, {
-      view: (shown, wentBack) => this.showView(shown, wentBack),
-      move: (lock, sent) => this.screen?.shown.moveIs(lock, sent),
-      chose: (sent) => this.screen?.shown.choiceIs(sent),
-      status: () => this.showStatus(),
-      refused: (error) => this.dropSession(error),
-      notice: (message) => this.fail(message),
-    });
+    const table = new TableConnection(
+      this.server,
+      session,
+      this.clock,
+      {
+        view: (shown, wentBack) => this.showView(shown, wentBack),
+        move: (lock, sent) => this.screen?.shown.moveIs(lock, sent),
+        chose: (sent) => this.screen?.shown.choiceIs(sent),
+        status: () => this.showStatus(),
+        refused: (error) => this.dropSession(error),
+        notice: (message) => this.fail(message),
+      },
+      this.once,
+    );
     this.table = table;
 
     const picker = new ReactionPicker({ react: (kind, to) => this.react(kind, to), refusal: (view) => this.reactionRefusal(view) });
@@ -603,6 +717,8 @@ export class App {
       (text) => void this.send({ type: 'chat', text }),
       () => ({ deck: this.prefs.get('deck'), pictures: this.prefs.get('gifs'), shown: sendersShown(this.prefs, mutes, table.session.auth.id, 'chat') }),
       picker.toggleElement,
+      // At a table word of something lies over the chat's bar, clear of the table and of the top bar. `mount` has it back when the table is left
+      this.toastEl,
     );
     const stage = new Slot(h('main.stage', { 'aria-label': LABELS.table, tabindex: -1 }));
     const bar = h('section.controls-slot', { 'aria-label': LABELS.bar, tabindex: -1 });
@@ -638,6 +754,7 @@ export class App {
       banners: new Slot(h('section.banners', { 'aria-label': LABELS.notices, tabindex: -1, hidden: true }), taps),
       stage,
       controls,
+      rows: new RowFit(bar, (fit) => taps.byItself(fit)),
       taps,
       overlay,
       modal: new Modal(overlay.element),
@@ -670,13 +787,32 @@ export class App {
       shape: 'wide',
       resizeObserver: new ResizeObserver(() => this.reshape()),
       troubleSaid: null,
+      nextStep: null,
     };
 
-    screen.overlay.element.addEventListener('click', (event) => {
-      if (event.target === screen.overlay.element) {
-        this.closeDialog();
-      }
-    });
+    // Heard on its way down, before the press has drawn anything else over the control it was made on
+    screen.overlay.element.addEventListener(
+      'click',
+      (event) => {
+        this.pressedInDialog = event.target as Element;
+
+        if (event.target === screen.overlay.element) {
+          this.leaveDialog();
+        }
+      },
+      true,
+    );
+
+    // A key held down is one press. Enter held on an answer would go on to press what the keyboard is given back to, and ask again
+    screen.overlay.element.addEventListener(
+      'keydown',
+      (event) => {
+        if (event.repeat && event.key === 'Enter') {
+          event.preventDefault();
+        }
+      },
+      true,
+    );
 
     this.screen = screen;
     page.append(skip, screen.topbar.element, screen.banners.element, stage.element, above, screen.controls.element, feed.element, screen.overlay.element);
@@ -695,6 +831,12 @@ export class App {
   }
 
   private leaveTableScreen(): void {
+    const view = this.shownView();
+
+    if (view) {
+      this.left = { tableId: view.id, name: view.config.name };
+    }
+
     this.leaves += 1;
     this.replayWanted = null;
     this.table?.close();
@@ -707,10 +849,14 @@ export class App {
     this.screen?.picker.dispose();
     this.screen?.seatMoves.dispose();
     this.screen?.taps.dispose();
+    this.screen?.rows.dispose();
     this.screen?.stopMutes();
     this.screen?.replay.close();
     this.screen = null;
     this.dialog = null;
+    this.dialogsBehind = [];
+    this.pressedInDialog = null;
+    this.keyboardPut = null;
     this.offered = null;
     this.announcer.forget();
   }
@@ -811,11 +957,11 @@ export class App {
     new Modal(notice).update(true);
   }
 
-  private async send(command: Command): Promise<SendOutcome> {
+  private async send(command: Command, refused?: RefusalPlace): Promise<SendOutcome> {
     this.sending += 1;
 
     try {
-      return (await this.table?.send(command)) ?? 'refused';
+      return (await this.table?.send(command, refused && this.heard(refused))) ?? 'refused';
     } finally {
       this.sending -= 1;
     }
@@ -919,6 +1065,8 @@ export class App {
       return;
     }
 
+    // Before the table, which takes a slow phone as long as the bar after it: a finger's time is counted to now, not to when the bar's turn comes
+    screen.taps.busy();
     this.drawTopbar(screen, view);
     this.drawBanners(screen, view);
     this.drawStage(screen, view);
@@ -932,27 +1080,38 @@ export class App {
 
   private drawControls(screen: TableScreen, view: TableView): void {
     const waiting = screen.shown.waiting;
+    const turnedDown = screen.shown.turnedDown;
     // A choice of a move ahead draws the bar again the moment it is pressed, and whoever pressed it with a key is still on it:
     // the slot finds that button again. It finds no other, so no key press lands on a button of the turn that came up in its place
-    const redrawn = screen.controls.draw([controlsSignature(view), waiting], () =>
-      controlsEl(
-        view,
-        {
-          send: (command) => this.send(command),
-          showCards: (hand, places) => this.showCards(hand, places),
-          openRebuy: () => this.openDialog({ kind: 'rebuy' }),
-          openStraddles: () => this.openDialog({ kind: 'straddles' }),
-          replay: (hand) => this.replayHand(hand),
-          sizing: screen.sizing,
-          say: (message) => this.announcer.status(message),
-        },
-        waiting,
-      ),
+    const redrawn = screen.controls.draw(
+      [controlsSignature(view), waiting, turnedDown],
+      () =>
+        controlsEl(
+          view,
+          {
+            send: (command) => this.send(command),
+            showCards: (hand, places) => this.showCards(hand, places),
+            openRebuy: () => this.openDialog({ kind: 'rebuy' }),
+            openAsked: () => this.openDialog({ kind: 'chipsAsked' }),
+            openStanding: () => this.openDialog({ kind: 'straddles' }),
+            openLedger: () => this.openDialog({ kind: 'ledger' }),
+            openTonight: () => this.openDialog({ kind: 'tonight' }),
+            replay: (hand) => this.replayHand(hand),
+            sizing: screen.sizing,
+            say: (message) => this.announcer.status(message),
+          },
+          waiting,
+          turnedDown,
+        ),
+      // Before the tap guard looks: a label that shortens moves the buttons beside it
+      () => screen.rows.drawn(),
     );
 
     if (redrawn) {
       this.hotkeys.shown();
       this.keyboardOffTheChat(screen);
+      // The clock a turn's buttons came with reads nothing until the tick has written it
+      this.tickCountdowns();
     }
 
     // Freshly built buttons are free; a move still on its way keeps them locked
@@ -992,16 +1151,7 @@ export class App {
 
   private drawTopbar(screen: TableScreen, view: TableView): void {
     const waiting = hostOrCohost(view) ? view.requests.length : 0;
-    let state = '';
-
-    if (view.hand) {
-      state = `Hand #${view.hand.number}`;
-    } else if (nightOver(view)) {
-      state = 'Night over';
-    } else if (!view.running) {
-      state = view.handCount === 0 ? 'Not started' : 'Paused';
-    }
-
+    const state = headline(view);
     const blinds = blindsText(view.config);
     const ante = anteText(view.config);
 
@@ -1009,8 +1159,14 @@ export class App {
       h('button.icon.menu-button', { type: 'button', 'aria-label': menuLabel(waiting), 'data-action': 'menu', onclick: () => this.openDialog({ kind: 'menu' }) }, '☰', waiting > 0 ? h('span.dot', null, String(waiting)) : null),
       // The ante takes the place of the word: a small phone has no room for both beside the hand's number.
       // It is a piece of its own, so where there is no room for it either it moves to the next line whole
-      h('div.title', null, h('b', { role: 'heading', 'aria-level': '1', title: view.config.name }, view.config.name), ante ? h('span', null, `${blinds} `, h('span.ante', null, `· ${ante}`)) : h('span', null, `${blinds} hold’em`)),
-      state ? h('span.pill', null, state) : null,
+      // The pill is laid out with the name and the stakes (layout.css), so that what it says never decides how many lines the stakes take
+      h(
+        'div.title',
+        null,
+        h('b', { role: 'heading', 'aria-level': '1', title: view.config.name }, view.config.name),
+        ante ? h('span', null, `${blinds} `, h('span.ante', null, `· ${ante}`)) : h('span', null, `${blinds} hold’em`),
+        h('span.pill', { class: state.news && 'news' }, state.says),
+      ),
       voiceLinkEl(view.config.voiceLink),
       h('button.btn.small', { type: 'button', 'data-action': 'invite', onclick: () => this.openDialog({ kind: 'invite' }) }, 'Invite'),
     ]);
@@ -1033,14 +1189,12 @@ export class App {
         const what = requestText(request, view.config);
         // Each says whose request it answers: several can be up at once, and a screen reader lands on a button without its line.
         // And each carries whose it is: the next row's buttons moving up into this one's place are other buttons, to the tap
-        // guard and to the keyboard alike
-        const approve = h('button.btn.small.primary', { type: 'button', 'data-action': 'approve', 'data-player': request.playerId, 'aria-label': `Approve ${request.name}` }, 'Approve');
-        const deny = h('button.btn.small', { type: 'button', 'data-action': 'deny', 'data-player': request.playerId, 'aria-label': `Deny ${request.name}` }, 'Deny');
+        // guard and to the keyboard alike. Held, a button here only dims: the room what it is doing would take is the request's
+        // own words', and on a small phone at the largest text the table's under them
+        const answer = (action: 'approve' | 'deny', spec: `button.${string}`, says: string) =>
+          sendingButton(spec, { 'data-action': action, 'data-player': request.playerId, 'aria-label': `${says} ${request.name}` }, says, () => this.send({ type: action, playerId: request.playerId, saw: seenOf(request) }));
 
-        approve.addEventListener('click', () => holdWhile(approve, () => this.send({ type: 'approve', playerId: request.playerId })));
-        deny.addEventListener('click', () => holdWhile(deny, () => this.send({ type: 'deny', playerId: request.playerId })));
-
-        return h('div.banner', null, h('span', null, h('b', null, request.name), ` ${what}`), approve, deny);
+        return h('div.banner', null, h('span', null, h('b', null, request.name), ` ${what}`), h('div.answers', null, heldTogether(answer('approve', 'button.btn.small.primary', 'Approve'), answer('deny', 'button.btn.small', 'Deny'))));
       }),
     ]);
 
@@ -1063,23 +1217,39 @@ export class App {
     const muted = screen.mutes.ids();
     const shows = [screen.shape, view.you, view.hostId, view.cohostIds, view.running, view.nextHandAt, view.nightEndedAt, view.config.actionSeconds, view.seats, handDrawn(view.hand), view.tonight.highHand.next, myRequest, picking, turning, chances, muted];
 
-    screen.stage.draw(shows, () => {
-      return tableEl(
-        view,
-        screen.shape,
-        this.clock.offset,
-        {
-          onSit: (seat) => this.openDialog({ kind: 'sit', seat }),
-          onStart: () => void this.send({ type: 'start' }),
-          onPlayOn: () => void this.send({ type: 'playOn' }),
-          onHunt: (hand) => void this.hunt(hand),
-          moving: screen.seatMoves.tableHandlers(),
-          muted: new Set(muted),
-        },
-        turning,
-        chances,
+    const draw = (): boolean =>
+      screen.stage.draw(shows, () =>
+        tableEl(
+          view,
+          screen.shape,
+          this.clock.offset,
+          {
+            onSit: (seat) => this.openDialog({ kind: 'sit', seat }),
+            onStart: () => this.send({ type: 'start' }),
+            onInvite: () => this.openDialog({ kind: 'invite' }),
+            onPlayOn: () => this.send({ type: 'playOn' }),
+            onHunt: (hand) => void this.hunt(hand),
+            moving: screen.seatMoves.tableHandlers(),
+            muted: new Set(muted),
+          },
+          turning,
+          chances,
+        ),
       );
-    });
+
+    // Invite players becomes Start the game by itself as the second player sits down, and a tap on its way to the one
+    // must not start the game: that one draw goes through the guard. No other draw of the table does, since the guard's
+    // mark on a control is no part of a table in play, and seats that move as the table takes its shape are under no finger
+    const step = nextStep(view);
+    const swapped = step !== null && screen.nextStep !== null && step !== screen.nextStep;
+
+    screen.nextStep = step;
+
+    if (swapped) {
+      screen.taps.byItself(draw);
+    } else {
+      draw();
+    }
 
     screen.seatMoves.redrawn();
 
@@ -1118,12 +1288,21 @@ export class App {
       return;
     }
 
-    for (const element of this.root.querySelectorAll<HTMLElement>('[data-countdown]')) {
-      element.textContent = String(secondsUntil(Number(element.dataset.countdown), this.clock.offset));
-    }
-
     const screen = this.screen;
     const view = this.shownView();
+
+    for (const element of this.root.querySelectorAll<HTMLElement>('[data-countdown]')) {
+      const seconds = secondsUntil(Number(element.dataset.countdown), this.clock.offset);
+      const text = element.dataset.as === 'clock' ? clockText(seconds) : String(seconds);
+
+      // Written only when it changes: whoever is reading the figure with a screen reader is not cut off four times a second
+      if (element.textContent !== text) {
+        element.textContent = text;
+      }
+    }
+
+    // On the app itself, as the turn's flash is: the seat and the bar both show it, and neither is drawn again for it
+    this.root.toggleAttribute('data-running-out', view !== null && runningOut(view, this.clock.now()));
 
     // The wait before the next reaction ends by the clock, with no view to draw it
     if (screen?.picker.isOpen && view) {
@@ -1138,31 +1317,70 @@ export class App {
     const left = view && this.timeWarning.due(view, this.clock.now());
     if (left) {
       this.announcer.alert(timeSaid(left));
+
+      // A pick of how many times to run it has no clock at the seat, and nothing is lost when it runs out
+      if (ownDeadline(view) !== null) {
+        this.attention.remind({ why: 'turn', table: { id: view.id, name: view.config.name } });
+      }
     }
   }
 
   // ---- Dialogs ----
 
-  /** `byItself` is for a dialog the game opens or closes, not the player: what that brings up under a finger takes no tap for a moment (`TapGuard`). */
-  private openDialog(dialog: Dialog, byItself = false): void {
+  /**
+   * `byItself` is for a dialog the game opens or closes, not the player: what that brings up under a finger takes no tap for a moment (`TapGuard`).
+   * `from` is the dialog it is opened from, which has the viewer back afterwards when it says so (`comesBack`).
+   */
+  private openDialog(dialog: Dialog, byItself = false, from: Dialog | null = null): void {
+    this.dialogsBehind = from !== null && from === this.dialog && dialogComesBack(from) ? [...this.dialogsBehind, this.dialogLeft(from)] : [];
     this.dialog = dialog;
     this.dialogOpenedItself = byItself;
     this.dialogOpens += 1;
+    this.keyboardPut = null;
     this.drawDialogAs(byItself);
   }
 
+  /** To the table, whatever the dialog on screen was opened from. */
   private closeDialog(byItself = false): void {
     this.dialog = null;
+    this.dialogsBehind = [];
+    this.keyboardPut = null;
     this.drawDialogAs(byItself);
   }
 
-  private drawDialogAs(byItself: boolean): void {
+  /**
+   * The dialog on screen is closed by its viewer, or `byItself` by the table's answer to what it asked: back to the
+   * dialog it was opened from, when that one has them back, and else to the table.
+   */
+  private leaveDialog(byItself = false): void {
+    const back = this.dialogsBehind.pop();
+
+    if (!back) {
+      this.closeDialog(byItself);
+
+      return;
+    }
+
+    this.dialog = back.dialog;
+    this.dialogOpenedItself = false;
+    this.dialogOpens += 1;
+    this.drawDialogAs(byItself, back);
+  }
+
+  /** The dialog on screen, as its viewer leaves it for one they open from it. */
+  private dialogLeft(dialog: Dialog): DialogLeft {
+    const overlay = this.screen?.overlay.element;
+
+    return { dialog, scrolled: overlay?.querySelector('.dialog-body')?.scrollTop ?? 0, keyboard: overlay ? KeyboardPlace.of(this.pressedInDialog, overlay) : null };
+  }
+
+  private drawDialogAs(byItself: boolean, back: DialogLeft | null = null): void {
     const taps = this.screen?.taps;
 
     if (byItself || !taps) {
-      this.drawDialog();
+      this.drawDialog(back);
     } else {
-      taps.byThePlayer(() => this.drawDialog());
+      taps.byThePlayer(() => this.drawDialog(back));
     }
   }
 
@@ -1222,7 +1440,8 @@ export class App {
     }
   }
 
-  private drawDialog(): void {
+  /** `back` is how the viewer left the dialog, when this draws one they are brought back to. */
+  private drawDialog(back: DialogLeft | null = null): void {
     const screen = this.screen;
     if (!screen) {
       return;
@@ -1231,6 +1450,7 @@ export class App {
     const view = this.shownView();
     if (this.dialog && view && !dialogAllowed(this.dialog, view)) {
       this.dialog = null;
+      this.dialogsBehind = [];
     }
 
     const dialog = this.dialog;
@@ -1258,13 +1478,14 @@ export class App {
     }
 
     // Opening a dialog always draws it; after that only a change in what it shows does
-    const handlers = this.dialogHandlers();
+    const handlers = this.dialogHandlers(dialog);
     const body = () => screen.overlay.element.querySelector('.dialog-body');
-    const scrolled = this.dialogDrawn === this.dialogOpens ? (body()?.scrollTop ?? 0) : 0;
+    const keyboard = back ? back.keyboard : this.keyboardPut === document.activeElement ? KeyboardPlace.of(this.keyboardPut, screen.overlay.element) : null;
+    const scrolled = back ? back.scrolled : this.dialogDrawn === this.dialogOpens ? (body()?.scrollTop ?? 0) : 0;
 
-    // Drawn again for what changed at the table, a dialog stays where its reader had scrolled to. Put back before the
-    // tap guard looks at the dialog: it is the rows the reader has in sight that a finger may be on its way to
-    screen.overlay.draw(
+    // Drawn again for what changed at the table, or come back to, a dialog stays where its reader had scrolled to. Put back
+    // before the tap guard looks at the dialog: it is the rows the reader has in sight that a finger may be on its way to
+    const drew = screen.overlay.draw(
       [this.dialogOpens, dialogShows(dialog, view, handlers)],
       () => {
         screen.overlay.element.hidden = false;
@@ -1279,28 +1500,52 @@ export class App {
     );
 
     this.dialogDrawn = this.dialogOpens;
+
+    // Come back to, the dialog has the keyboard on the control it was left by. And drawn again under a keyboard the page
+    // put there, it has the keyboard on the same control still (`Slot`), or with that one gone, on the next row's
+    if (drew && (back || keyboard)) {
+      this.keyboardPut = keyboard?.find(screen.overlay.element) ?? null;
+      this.keyboardPut?.focus({ preventScroll: true });
+    }
+
     screen.modal.update(true);
   }
 
-  private dialogHandlers(): DialogHandlers {
+  /** What `dialog`, the one being drawn, is handed to do its work with. */
+  private dialogHandlers(dialog: Dialog): DialogHandlers {
     const { session } = this.table!;
 
     return {
-      send: (command) => this.send(command),
-      open: (dialog) => this.openDialog(dialog),
-      close: () => this.closeDialog(),
+      send: (command, refused) => this.send(command, refused),
+      open: (next) => this.openDialog(next, false, dialog),
+      close: () => this.leaveDialog(),
+      toTable: () => this.closeDialog(),
+      answered: (forTable = false) => {
+        // Closed by its viewer while the answer was on its way, there is nothing left to leave
+        if (this.dialog !== dialog) {
+          return;
+        }
+
+        if (forTable) {
+          this.closeDialog(true);
+        } else {
+          this.leaveDialog(true);
+        }
+      },
+      byItself: (change) => this.screen!.taps.byItself(change),
+      byThePlayer: (change) => this.screen!.taps.byThePlayer(change),
       copy: (text) => this.copy(text),
       loadHistory: () => this.loadHistory(),
       replay: (record) => this.openReplay(record),
       presets: {
         list: () => this.listPresets(),
-        save: (name, settings, replace) => this.changePresets({ op: 'savePreset', tableId: session.tableId, auth: session.auth, name, settings, replace }),
+        save: (name, settings, replace, refused) => this.changePresets({ op: 'savePreset', tableId: session.tableId, auth: session.auth, name, settings, replace }, refused),
         remove: (name) => this.changePresets({ op: 'deletePreset', tableId: session.tableId, auth: session.auth, name }),
       },
       players: {
         list: () => this.listPlayers(),
         remembered: () => this.me.get(),
-        identify: (as) => this.identify(session, as),
+        identify: (as, refused) => this.identify(session, as, refused),
       },
       standings: (you) => this.standingsHandlers(you),
       tableLink: () => this.platform.links.tableLink(session.tableId),
@@ -1308,6 +1553,7 @@ export class App {
       prefs: this.prefs,
       mutes: this.screen!.mutes,
       abilities: this.abilities,
+      resizing: (change) => this.screen!.taps.byItself(change),
       toLobby: () => this.showLobby(true),
       pickSeat: (playerId) => {
         this.closeDialog();
@@ -1467,7 +1713,7 @@ export class App {
   }
 
   /** Tells the table which known player this member is. Resolves to whether it took that; if not, the player is told why. */
-  private async identify(session: Session, as: Answer): Promise<boolean> {
+  private async identify(session: Session, as: Answer, refused: RefusalPlace): Promise<boolean> {
     const response = await this.request({ op: 'identify', tableId: session.tableId, auth: session.auth, ...as });
 
     if (response?.ok && response.kind === 'view' && response.view.you.identity !== null) {
@@ -1479,13 +1725,13 @@ export class App {
     }
 
     // A refusal here says nothing about the player's seat, so it never takes them from the table
-    this.fail(response && !response.ok ? response.error : 'No answer from the server. Try again in a moment.');
+    this.refuse(response && !response.ok ? response.error : 'No answer from the server. Try again in a moment.', refused);
 
     return false;
   }
 
   /** The presets after a change, or null when it was refused or got no answer, which the player is told. */
-  private async changePresets(request: ApiRequest): Promise<Preset[] | null> {
+  private async changePresets(request: ApiRequest, refused?: RefusalPlace): Promise<Preset[] | null> {
     const response = await this.request(request);
 
     if (response?.ok && response.kind === 'presets') {
@@ -1493,7 +1739,7 @@ export class App {
     }
 
     // A refusal here says nothing about the player's seat, so it never takes them from the table
-    this.fail(response && !response.ok ? response.error : 'No answer from the server. Checking the presets…');
+    this.refuse(response && !response.ok ? response.error : 'No answer from the server. Checking the presets…', refused);
 
     return null;
   }
@@ -1515,14 +1761,35 @@ export class App {
     this.announcer.toast(message);
   }
 
-  /** Word that something did not go as asked: shown like any other, and said to a screen reader at once. */
+  /** Word that something did not go as asked: shown with the edge of bad news, so it is not taken for the other kind, and said to a screen reader at once. */
   private fail(message: string): void {
-    this.showToast(message);
+    this.showToast(message, true);
     this.announcer.alert(message);
   }
 
-  private showToast(message: string): void {
+  /** A form's place for a refusal, which also says the reason to a screen reader, once, as the form shows it. */
+  private heard(place: RefusalPlace): RefusalPlace {
+    return (reason) => {
+      const shown = place(reason);
+
+      if (shown) {
+        this.announcer.alert(reason);
+      }
+
+      return shown;
+    };
+  }
+
+  /** Tells why what a form asked for did not go: at the form while it is up to say so by its button, else as any other word that something went wrong. */
+  private refuse(message: string, place?: RefusalPlace): void {
+    if (!place || !this.heard(place)(message)) {
+      this.fail(message);
+    }
+  }
+
+  private showToast(message: string, failed = false): void {
     this.toastEl.textContent = message;
+    this.toastEl.classList.toggle('failed', failed);
     this.toastEl.hidden = false;
 
     clearTimeout(this.toastTimer);

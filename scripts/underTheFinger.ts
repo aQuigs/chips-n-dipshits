@@ -6,8 +6,8 @@
  */
 import type { Page } from 'playwright';
 
-/** Everything on a page that takes a tap. */
-const TAPPED = 'button, input, select, textarea, a[href], summary, [role="switch"], [role="button"]';
+/** Everything on a page that takes a tap, as the page has it (pageTapGuard.ts). */
+const TAPPED = 'button, input, select, textarea, a[href], summary, [role="switch"], [role="button"], label.tile';
 
 /** What lies behind a dialog and closes it when tapped. */
 const BACKDROP = '.overlay';
@@ -58,12 +58,15 @@ export interface Watched {
   liveAtOnce: string[];
 }
 
+// Run in the page on a control: what the watch names it by
+const NAMED = `(element) => element.matches(${JSON.stringify(BACKDROP)}) ? 'the backdrop of the dialog' : JSON.stringify((element.getAttribute('aria-label') || element.textContent || element.placeholder || element.id || element.tagName).trim().replace(/\\s+/g, ' ').slice(0, 30))`;
+
 // Run in the page. Notes where every control is, and from then on compares the page, each time anything on it is
-// drawn anew or the bar changes shape, with how things lay before, asking of each control that came up where
+// drawn anew, shown or hidden, or the bar changes shape, with how things lay before, asking of each control that came up where
 // another had been what a tap there would reach. A control is told from another as the page tells them apart,
 // by its id and its data marks. Every control the page holds back is tapped the moment it is, where it lies
 const WATCH = `(({ tapped, backdrop, bar, playsNothing, settling, byName }) => {
-  const named = (element) => element.matches(backdrop) ? 'the backdrop of the dialog' : JSON.stringify((element.getAttribute('aria-label') || element.textContent || element.placeholder || element.id || element.tagName).trim().replace(/\\s+/g, ' ').slice(0, 30));
+  const named = ${NAMED};
   const reaches = (element, x, y) => element.contains(document.elementFromPoint(x, y));
   // A tap passes through a control that is held back to what it lies on, which is around it; under a dialog or a replay it reaches the cover instead
   const inSightThough = (element, x, y) => document.elementFromPoint(x, y)?.contains(element) ?? false;
@@ -151,7 +154,16 @@ const WATCH = `(({ tapped, backdrop, bar, playsNothing, settling, byName }) => {
     watched.before = now;
   };
 
-  new MutationObserver(compare).observe(document.body, { childList: true, subtree: true });
+  // A part that unfolds in place is drawn already, and only stops being hidden. Only one that holds a control and is shown or
+  // hidden for real is looked at: the page hides a part of words, or one hidden already, with no thought for a tap, and may do it
+  // as a style lets other controls come up, which the page holds back when the bar changes shape and not a moment sooner
+  const showsOrHides = ({ type, target, oldValue }) => type === 'attributes' && (oldValue === null) === target.hidden && (target.matches(tapped) || target.querySelector(tapped) !== null);
+
+  new MutationObserver((changes) => {
+    if (changes.some((change) => change.type === 'childList' || showsOrHides(change))) {
+      compare();
+    }
+  }).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden'], attributeOldValue: true });
   new ResizeObserver(compare).observe(document.querySelector(bar));
 
   // Every control the page holds back, for how long, and a tap on each the moment it is held. A control drawn again
@@ -206,12 +218,13 @@ const WATCH = `(({ tapped, backdrop, bar, playsNothing, settling, byName }) => {
         holding.set(target, { what: named(target), is: marksOf(target), from, lasted: null, sinceFirst: null, sameLetGo: null });
         watched.held.push(holding.get(target));
 
-        for (const kind of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
-          reached?.dispatchEvent(new MouseEvent(kind, { bubbles: true, cancelable: true, composed: true, view: window, clientX: x, clientY: y }));
-        }
-
+        // A backdrop lies around its dialog: its own middle is the dialog, where a tap is on whichever line of it is there
         if (target.matches(backdrop)) {
           underTheBackdrop(target);
+        } else {
+          for (const kind of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+            reached?.dispatchEvent(new MouseEvent(kind, { bubbles: true, cancelable: true, composed: true, view: window, clientX: x, clientY: y }));
+          }
         }
       } else if (!held && holding.has(target)) {
         holding.get(target).lasted = performance.now() - holding.get(target).from;
@@ -249,6 +262,13 @@ export async function watched(page: Page): Promise<Watched> {
 
   return page.evaluate(`(({ found, held, liveAtOnce }) => ({ found, held, liveAtOnce }))(window.__underTheFinger)`) as Promise<Watched>;
 }
+
+/** What the watch names the control at `selector` by, in what it has seen: a check that looks for one control there asks for it by this. */
+export const namedByTheWatch = (page: Page, selector: string) => page.evaluate(`(${NAMED})(document.querySelector(${JSON.stringify(selector)}))`) as Promise<string>;
+
+/** What the watch names each control by that is on the page now and in no dialog: all that a dialog can have uncovered by going. */
+export const namedOutsideDialogs = (page: Page) =>
+  page.evaluate(`[...document.querySelectorAll(${JSON.stringify(TAPPED)})].filter((control) => !control.closest(${JSON.stringify(BACKDROP)})).map(${NAMED})`) as Promise<string[]>;
 
 /** Every control that has come up where a different one lay, since the watch began. */
 export const cameUp = async (page: Page): Promise<CameUp[]> => (await watched(page)).found;

@@ -47,8 +47,8 @@ test('the night as text names the table, how far the night is, who leads in what
       'High hand: P0, Pair of aces (A♠ A♥ J♣ 9♥ 7♦)',
       '',
       'P0 +30 · 1 hand · 1 pot won',
-      'P1 -10 · 1 hand · 0 pots won · 1 rebuy',
-      'P2 (left) -20 · 1 hand · 0 pots won',
+      'P1 −10 · 1 hand · 0 pots won · 1 rebuy',
+      'P2 (left) −20 · 1 hand · 0 pots won',
     ].join('\n'),
   );
   assert.equal(standingOf(t.view(0)), 'So far tonight, after 1 hand. The dipshit of the night is crowned when the night ends.');
@@ -76,8 +76,8 @@ test('at a table that plays dollars and cents every amount in the text is writte
       'High hand: P0, Pair of aces (A♠ A♥ J♣ 9♥ 7♦)',
       '',
       'P0 +0.30 · 1 hand · 1 pot won',
-      'P1 -0.10 · 1 hand · 0 pots won',
-      'P2 -0.20 · 1 hand · 0 pots won',
+      'P1 −0.10 · 1 hand · 0 pots won',
+      'P2 −0.20 · 1 hand · 0 pots won',
     ].join('\n'),
   );
 });
@@ -127,7 +127,7 @@ test('the night as text gives each player\'s badges after what they did, in the 
   const lines = tonightText(t.view(1)).split('\n');
 
   assert.ok(lines.includes('P0 +30 · 1 hand · 1 pot won · 🍀 Quads · 💀 Felted ×2'), lines.join('\n'));
-  assert.ok(lines.includes('P2 -20 · 1 hand · 0 pots won'), 'a player with no badges gets no more');
+  assert.ok(lines.includes('P2 −20 · 1 hand · 0 pots won'), 'a player with no badges gets no more');
 });
 
 test('the high hand says what its bonus comes to, or came to and to whom, and once paid the one shown since is named too', () => {

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { PREFERENCES, Preferences } from '../src/client/prefs.ts';
+import { PREF_GROUPS, PREFERENCES, Preferences } from '../src/client/prefs.ts';
 import type { Pref, PrefHost, PrefMemory } from '../src/client/prefs.ts';
 import { mapMemory } from './helpers.ts';
 
@@ -153,4 +153,53 @@ test('every preference starts out at a value it can hold', () => {
   for (const [key, pref] of Object.entries(PREFERENCES) as [keyof typeof PREFERENCES, Pref][]) {
     assert.equal(prefs.get(key), pref.default, `${key} cannot hold its own default`);
   }
+});
+
+// What a browser kept of each preference before the dialog was put in parts, none of it a default
+const KEPT_BEFORE = {
+  'cnd.theme': 'afterhours',
+  'cnd.textSize': 'largest',
+  'cnd.sound': 'off',
+  'cnd.volume': '30',
+  'cnd.buzz': 'off',
+  'cnd.flash': 'off',
+  'cnd.notify': 'off',
+  'cnd.tabTitle': 'off',
+  'cnd.deck': 'four',
+  'cnd.cardBack': 'gingham',
+  'cnd.handHint': 'off',
+  'cnd.motion': 'off',
+  'cnd.reactions': 'off',
+  'cnd.gifs': 'off',
+  'cnd.hotkeys': 'off',
+};
+
+test('a choice made before the dialog was put in parts is still the choice: every preference is kept under the name and in the words it was', () => {
+  const prefs = new Preferences(PREFERENCES, mapMemory(KEPT_BEFORE));
+  const words = (value: boolean | string | number) => (typeof value === 'boolean' ? (value ? 'on' : 'off') : String(value));
+  const keys = Object.keys(PREFERENCES) as (keyof typeof PREFERENCES)[];
+
+  assert.deepEqual(Object.fromEntries(keys.map((key) => [`cnd.${key}`, words(prefs.get(key))])), KEPT_BEFORE);
+
+  for (const key of keys) {
+    assert.notEqual(prefs.get(key), (PREFERENCES[key] as Pref).default, `${key} was kept at its default, which would not show it being read as one`);
+  }
+});
+
+test('every preference stands in a part of the dialog and no part is empty, and what is said under a name is a sentence', () => {
+  const prefs = Object.entries(PREFERENCES) as [string, Pref][];
+
+  for (const [key, pref] of prefs) {
+    assert.ok(pref.group && Object.hasOwn(PREF_GROUPS, pref.group), `${key} is in no part of the dialog`);
+
+    for (const said of [pref.hint, pref.kind === 'onOff' ? pref.blocked : undefined]) {
+      assert.match(said ?? 'None.', /^[A-Z].*\.$/, `${key} says "${said}" under its name`);
+    }
+
+    if (pref.kind === 'onOff') {
+      assert.ok(pref.hint, `${key} is a switch that says nothing of what it switches`);
+    }
+  }
+
+  assert.deepEqual(Object.keys(PREF_GROUPS).filter((group) => !prefs.some(([, pref]) => pref.group === group)), [], 'a part of the dialog has nothing in it');
 });

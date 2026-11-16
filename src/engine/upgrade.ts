@@ -131,7 +131,7 @@ interface SavedDefaults {
  * the config registry. Each entry is a function so that no two tables are handed the same list.
  */
 export const SAVED_DEFAULTS: SavedDefaults = {
-  table: () => ({ cohostIds: [], shuffleAfterHand: false, bombPotCalled: false, handsSinceBombPot: 0, lastHand: null, nightEndedAt: null, blinds: null, tonight: newTonight(), reactions: [] }),
+  table: () => ({ cohostIds: [], shuffleAfterHand: false, bombPotCalled: false, handsSinceBombPot: 0, lastHand: null, nightEndedAt: null, blinds: null, tonight: newTonight(), reactions: [], asked: [] }),
   member: () => ({ transferred: 0, identity: null }),
   seat: () => ({ moveTo: null, owesBigBlind: false, owesSmallBlind: false, postsOwed: false, alwaysChop: false, autoShow: [] }),
   hand: () => ({ events: [], bombPot: null, passedOver: [], chopOffered: false, hunted: null }),

@@ -14,6 +14,8 @@
   --chip-height: 34px;
 
   display: grid;
+  /* As wide as the bar and no wider, whatever is on a row: a row with more than fits is seen to have it (rowFit.ts) */
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--bar-gap);
   width: 100%;
   max-width: 880px;
@@ -52,16 +54,12 @@
   text-align: center;
 }
 
-/*
- * A player with no part in the hand can see the last one again, from a button on a line that comes out
- * of the height kept for a turn: the bar is as tall with it as without, so the table gives up nothing
- * for it. Under a phone's open chat no height is kept, and the button is left out (feed.css).
- */
-.controls > .replay-last {
-  justify-self: center;
+/* The bar's spare line of buttons (`spareLine` in render/controls.ts) comes out of the height kept for a turn: the bar is as tall with it as without */
+.spare-line {
+  justify-content: center;
 }
 
-.controls.seated:has(> .replay-last) > .waiting {
+.controls.seated:has(> .spare-line) > .waiting {
   min-height: calc(var(--turn-height) - var(--chip-height) - var(--bar-gap));
 }
 
@@ -94,11 +92,34 @@
   gap: 8px;
 }
 
-.presets,
-.extras {
+.presets {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+/* A row held to one line of one height, whatever is on it: rowFit.ts has the rule, and marks what gives way */
+.fit-row {
+  display: flex;
+  gap: 6px;
+  height: var(--chip-height);
+}
+
+.fit-row > * {
+  flex: none;
+  white-space: nowrap;
+}
+
+.fit-row > .breaks {
+  flex: 0 1 auto;
+  min-width: min-content;
+  line-height: 1.1;
+  text-wrap: balance;
+  white-space: normal;
+}
+
+.fit-row.standard-size {
+  --text-scale: 1;
 }
 
 .amount {
@@ -137,14 +158,36 @@
   }
 }
 
+/*
+ * The box is as wide as the largest stack a table allows, written as the box writes it at rest
+ * (`data-widest`). That amount stands unseen in the box's column, in the box's type and with its
+ * padding, and the box fills the column: a count of characters is too wide in one font or too narrow in
+ * the next, since a comma is as wide as the font makes it, and what is too wide comes off the slider.
+ */
+.amount::after {
+  content: attr(data-widest);
+  grid-area: 1 / 2;
+  min-width: 132px;
+  height: 0;
+  padding: 0 10px 0 9px;
+  visibility: hidden;
+  white-space: nowrap;
+}
+
 .amount input[type='text'] {
-  /* Wide enough for the largest stack a table allows, ten digits and the point of a table of cents, in whatever font the digits are set */
-  width: max(132px, 11ch + 18px);
+  grid-area: 1 / 2;
+  /* No width of its own for the column to make room for, and all of the column's */
+  width: 0;
+  min-width: 100%;
   min-height: 40px;
   padding: 0 8px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--bg);
+}
+
+.amount::after,
+.amount input[type='text'] {
   font-size: calc(16px * var(--text-scale));
   font-weight: 700;
   font-variant-numeric: tabular-nums;

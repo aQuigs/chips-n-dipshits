@@ -4,7 +4,7 @@ import { bombPotName } from '../../../engine/bombPots.ts';
 import type { HandRecord } from '../../../engine/index.ts';
 import { lastOnRecord } from '../../handRecords.ts';
 import { noReplayLine } from '../../replayPlayer.ts';
-import { h, readableLines } from '../../ui.ts';
+import { foldMark, h, readableLines } from '../../ui.ts';
 import { everyone, frame } from './dialog.ts';
 import type { DialogHandlers, DialogKind } from './dialog.ts';
 
@@ -32,7 +32,7 @@ function handEl(hand: HandRecord, table: Denominated, handlers: DialogHandlers):
     return withBounty > 0 ? [`${hand.players.find((p) => p.seat === win.seat)?.name ?? '?'} +${formatAmount(withBounty, table)}`] : [];
   });
 
-  const title = `Hand #${hand.number}${hand.bombPot ? ` · ${bombPotName(hand.bombPot)}` : ''}`;
+  const title = h('span', null, h('span.hand-number', null, `Hand #${hand.number}`), hand.bombPot ? ` · ${bombPotName(hand.bombPot)}` : null);
   const outcome = hand.result.chopped ? 'Blinds chopped' : winners.join(', ');
 
   const noReplay = noReplayLine(hand, table);
@@ -40,7 +40,7 @@ function handEl(hand: HandRecord, table: Denominated, handlers: DialogHandlers):
   const marks = { 'data-hand': hand.number };
   const replay = noReplay === null ? h('button.btn.small.replay-open', { type: 'button', 'data-action': 'replay', ...marks, 'aria-label': `Replay this hand, number ${hand.number}`, onclick: () => handlers.replay(hand) }, 'Replay this hand') : h('p.note.no-replay', null, noReplay);
 
-  return h('details', marks, h('summary', marks, title, h('small', null, outcome)), replay, h('pre', null, readableLines(hand.summary, handlers.prefs.get('deck'))));
+  return h('details', marks, h('summary', marks, title, h('small', null, outcome), foldMark()), replay, h('pre', null, readableLines(hand.summary, handlers.prefs.get('deck'))));
 }
 
 /** Puts `hands` in the list, newest first, keeping the element of every hand already in it and its reader's place. */
@@ -104,7 +104,7 @@ function history(table: Denominated, handlers: DialogHandlers, opening: object):
 
 export const historyDialog: DialogKind<'history'> = {
   kind: 'history',
-  menu: { label: 'Hand history', who: everyone },
+  menu: { group: 'scores', label: 'Hand history', who: everyone },
   // Hands are added to the record while the dialog is open, most of all the one whose result its reader came to look at
   shows: (view) => lastOnRecord(view),
   draw: (view, handlers, opening) => history(view.config, handlers, opening as object),

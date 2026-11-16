@@ -234,6 +234,7 @@ export const LABELS = {
   lines: 'Chat and play-by-play, oldest first',
   spoken: 'What is happening at the table',
   sizes: 'Bet sizes',
+  clock: 'Your time left',
 } as const;
 
 // ---- What is announced ----

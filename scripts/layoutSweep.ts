@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import type { Page } from 'playwright';
 
 import { TAPS_SETTLE_MS } from '../src/client/tapGuard.ts';
-import { BADGES, LIMITS, REACTION_LIFE_MS, REACTIONS_LIVE } from '../src/engine/index.ts';
+import { BADGES, DEFAULT_CONFIG, LIMITS, presetSettings, REACTION_LIFE_MS, REACTIONS_LIVE } from '../src/engine/index.ts';
 import type { Bounty, Card, Command, TableConfig, TableView } from '../src/engine/index.ts';
 import { HISTORY_LIMIT } from '../src/server/api.ts';
 
@@ -20,15 +20,18 @@ import type { Check } from './checkRunner.ts';
 import { SCROLLS, telling, unreadable } from './covered.ts';
 import type { Finding } from './covered.ts';
 import { answeredTo, opsSent, replayDrawn } from './pageSpies.ts';
+import { row } from './playersDialog.ts';
 import { boxes, Gate, overlap, SCREENS, setStageHeight, STALL_MS, WIDE_ASPECT } from './rig.ts';
-import type { Rig, RigTable, ScreenName } from './rig.ts';
-import { cameUp, tapsLive, tellingOf, watched, watchTheBar } from './underTheFinger.ts';
+import type { Gated, Rig, RigTable, ScreenName } from './rig.ts';
+import { cameUp, namedByTheWatch, namedOutsideDialogs, tapsLive, tellingOf, watched, watchTheBar } from './underTheFinger.ts';
 import type { Held } from './underTheFinger.ts';
 
 const VIEWER = 'Quigs';
 // The widest sixteen letters a name can be, which the sweep makes the host and the holder of the high hand, so the star and the trophy stand beside the name with the least room for them
 const WIDEST = 'WWWWWWWWWWWWWWWW';
 const NAMES = [VIEWER, WIDEST, 'Ünïcödé Ñandú Ø!', 'Marge Simpson-Jr', 'Stu', 'Big Al', 'Pocket Pam', 'iiiiiiiiiiiiiiii', 'Zed'];
+// As wide but for a letter, for someone at the table with no seat: two members cannot share a name
+const WIDE_WATCHER = 'WWWWWWWWWWWWWWWV';
 
 // A pair each, the viewer's the best, so every hand at a showdown has a name and no two cards are dealt twice
 const HOLES: Record<number, string> = { 0: 'As Ah', 1: 'Ks Kh', 2: 'Qs Qh', 3: 'Js Jh', 4: 'Ts Th', 5: '9s 9h', 6: '8s 8h', 7: '7s 7h', 8: '6s 6h' };
@@ -57,7 +60,7 @@ function players(seats: number, stacks: number[]) {
 
 const holesFor = (seats: number) => Object.fromEntries(Object.entries(HOLES).filter(([seat]) => Number(seat) < seats));
 
-const passive = (view: TableView): Command => ({ type: view.hand!.options!.canCheck ? 'check' : 'call' });
+export const passive = (view: TableView): Command => ({ type: view.hand!.options!.canCheck ? 'check' : 'call' });
 
 /** Everything in, and `runs` picked by whoever is asked how many times to run it. */
 const allInPicking =
@@ -85,9 +88,9 @@ function tableWithTrophy(rig: Rig, seats: number, stacks: number[], config: Part
 // Who misses a big blind in the state that shows blinds owed: the big blind of the hand after the first
 const OWES = NAMES[3]!;
 
-/** Plays the hand on the table out with `move` and clears it away, the game paused so that the next hand is the state's to deal. */
-function playOut(table: RigTable, move: (view: TableView) => Command): void {
-  table.act(WIDEST, { type: 'pause' });
+/** Plays the hand on the table out with `move` and clears it away, the game paused by its host so that the next hand is the state's to deal. */
+export function playOut(table: RigTable, move: (view: TableView) => Command, host = WIDEST): void {
+  table.act(host, { type: 'pause' });
   table.play(move, (view) => view.hand!.stage === 'done');
   table.play(() => null, (view) => view.hand === null);
 }
@@ -110,17 +113,36 @@ function waitingBehindTheLongestCall(rig: Rig, seats: number): RigTable {
  * the night's last hands are counted, and the next hand is a bomb pot on two boards. Every stack is the
  * longest a seat writes out in full, nine characters.
  */
-function waitingWithEveryNote(rig: Rig, seats: number): RigTable {
+function waitingWithEveryNote(rig: Rig, seats: number, config: Partial<TableConfig> = {}): RigTable {
   const button = seats - 3;
   const others = NAMES.filter((name) => name !== VIEWER && name !== WIDEST);
   const seated = Array.from({ length: seats }, (_seat, seat) => (seat === 0 ? VIEWER : seat === button ? WIDEST : others.shift()!));
-  const table = rig.table(seated.map((name, seat) => ({ name, stack: LONGEST_WRITTEN_OUT, seat })), { actionSeconds: 30, ...CENTS, allowStraddle: true, allowButtonStraddle: true, bombPotAmount: 999_999, bombPotBoards: 'two' });
+  const table = rig.table(seated.map((name, seat) => ({ name, stack: LONGEST_WRITTEN_OUT, seat })), { actionSeconds: 30, ...CENTS, allowStraddle: true, allowButtonStraddle: true, bombPotAmount: 999_999, bombPotBoards: 'two', ...config });
 
   table.act(VIEWER, { type: 'setStraddle', kind: 'straddle', on: true });
   table.act(WIDEST, { type: 'setStraddle', kind: 'button straddle', on: true });
   table.deal({ button, holes: holesFor(seats) });
   table.act(VIEWER, { type: 'setLastHands', hands: LIMITS.lastHands });
   table.act(VIEWER, { type: 'setBombPot', on: true });
+
+  return table;
+}
+
+/**
+ * The bar at its fullest once a hand is over: at the table of `waitingWithEveryNote` the viewer takes the
+ * pot with no call, so their cards are theirs to show beside every note, and the row under them is as
+ * full as it gets: chips asked for, the longest amount, and every choice behind its button switched on.
+ */
+function shownWithEveryNote(rig: Rig, seats: number): RigTable {
+  const table = waitingWithEveryNote(rig, seats, { allowChop: true, maxBuyIn: 2 * LONGEST_WRITTEN_OUT });
+
+  table.act(VIEWER, { type: 'setStraddle', kind: 'button straddle', on: true });
+  table.act(VIEWER, { type: 'setAlwaysChop', on: true });
+  // Chips the host adds, or a co-host, wait for nobody: the viewer hands the table on, and asks as a player does
+  table.act(VIEWER, { type: 'transferHost', playerId: table.auth(WIDEST).id });
+  table.act(WIDEST, { type: 'setCohost', playerId: table.auth(VIEWER).id, on: false });
+  table.act(VIEWER, { type: 'requestRebuy', amount: LONGEST_WRITTEN_OUT });
+  table.play((view, name) => (name === VIEWER ? { type: 'raise', to: view.hand!.options!.minRaiseTo } : { type: 'fold' }), (view) => view.hand!.stage === 'done');
 
   return table;
 }
@@ -138,9 +160,26 @@ interface TableState {
   /** How many seats are taken, each a table of its own. */
   seats: number[];
   build(rig: Rig, seats: number): RigTable;
-  /** What the viewer's own page does once it is open. */
-  onPage?(page: Page): Promise<void>;
+  /** What the viewer's own page does once it is open, or sees happen at the table. */
+  onPage?(page: Page, table: RigTable): Promise<void>;
   fleeting?: Fleeting;
+}
+
+/** The clock runs out on the viewer, with a check open to them: the hand goes on, played for them until they are back. */
+function clockRunsOutOnTheViewer(table: RigTable, rig: Rig, seats: number): void {
+  // The button so that the viewer is the big blind, who may check once everyone has called
+  table.deal({ button: seats - 2, holes: holesFor(seats) });
+  table.play((_view, name) => (name === VIEWER ? null : { type: 'call' }), (view) => view.hand!.toAct === 0);
+  rig.advance(table.view(VIEWER).hand!.deadline! - rig.now() + 1);
+  assert.equal(table.view(VIEWER).seats[0]!.away, true, 'the clock did not run out on the viewer');
+}
+
+/** The host turns down what the viewer asks for now, as their page looks on: a page knows of it only by having seen it happen. */
+async function turnedDownAsThePageLooksOn(page: Page, table: RigTable, asks: Command): Promise<void> {
+  table.act(VIEWER, asks);
+  await table.heardBy(page);
+  table.act(WIDEST, { type: 'deny', playerId: table.auth(VIEWER).id });
+  await page.waitForSelector('.controls .turned-down-note');
 }
 
 const REACTION_MARKS = `document.querySelectorAll('.seat-reaction:not([hidden])').length`;
@@ -244,6 +283,11 @@ const TABLE_STATES = {
     seats: [6, 9],
     build: waitingWithEveryNote,
   },
+  everyNoteAndShow: {
+    shows: 'the bar of a player whose hand is over, with their cards to show, the hands to come and a straddle passed over, each at its longest, over a row with chips asked for and every choice behind its button on',
+    seats: [6, 9],
+    build: shownWithEveryNote,
+  },
   runsChoice: {
     shows: 'the choice of how many times to run it, with a side pot a player and every hand’s chance',
     seats: SEAT_COUNTS,
@@ -332,6 +376,73 @@ const TABLE_STATES = {
     },
     fleeting: reactionsFlying,
   },
+  timedOut: {
+    shows: 'the bar of a player the clock ran out on, whose hand is played for them, with word that the chips they asked for were turned down',
+    seats: [9],
+    build(rig, seats) {
+      const table = tableWithTrophy(rig, seats, EVEN, { actionSeconds: 30 });
+
+      clockRunsOutOnTheViewer(table, rig, seats);
+
+      return table;
+    },
+    onPage: (page, table) => turnedDownAsThePageLooksOn(page, table, { type: 'requestRebuy', amount: LONGEST_WRITTEN_OUT }),
+  },
+  timedOutOwing: {
+    shows: 'the bar of a player the clock ran out on a hand ago, with the blind they have missed since to settle',
+    seats: [9],
+    build(rig, seats) {
+      const table = tableWithTrophy(rig, seats, EVEN, { actionSeconds: 30 });
+
+      clockRunsOutOnTheViewer(table, rig, seats);
+      playOut(table, folding);
+      // The small blind passes the viewer, who is dealt no cards
+      table.dealNext();
+      assert.equal(table.view(VIEWER).seats[0]!.owesSmallBlind, true, 'the viewer missed no blind');
+
+      return table;
+    },
+  },
+  seatTurnedDown: {
+    shows: 'the bar of someone watching whose request for the one open seat was turned down',
+    seats: [9],
+    build(rig, seats) {
+      const table = rig.table(players(seats, EVEN).filter((player) => player.name !== VIEWER));
+
+      table.join(VIEWER);
+      table.deal({ button: 1 });
+
+      return table;
+    },
+    onPage: (page, table) => turnedDownAsThePageLooksOn(page, table, { type: 'requestSeat', seat: 0, buyIn: LONGEST_WRITTEN_OUT }),
+  },
+  nightOver: {
+    shows: 'the bar of a player with the night over: who pays whom, the night to look over and the last hand to see again',
+    seats: [9],
+    build(rig, seats) {
+      const table = tableWithTrophy(rig, seats, EVEN);
+
+      table.act(WIDEST, { type: 'endNight' });
+
+      return table;
+    },
+  },
+  peopleSaid: {
+    shows: 'the chat’s bar counting what people said with the list out of the viewer’s sight, one line of it naming them',
+    seats: [9],
+    build(rig, seats) {
+      const table = tableWithTrophy(rig, seats, EVEN);
+
+      table.dealNext({ holes: holesFor(seats) });
+
+      return table;
+    },
+    async onPage(page, table) {
+      table.act(WIDEST, { type: 'chat', text: `@${VIEWER} pizza is here` });
+      table.act(WIDEST, { type: 'chat', text: 'and it will not keep warm for as long as this hand is taking you' });
+      await table.heardBy(page);
+    },
+  },
 } satisfies Record<string, TableState>;
 
 interface Size {
@@ -364,11 +475,18 @@ const SHORT_TABLE_PX = 350;
 // Word of something earned, long enough for two lines on a phone
 const TWO_LINE_TOAST = 'You earned 🃏 Rivered and 🔥 Heater, and 🏆 the high hand with a straight flush, queen high';
 
+// A page that told a toast of its own takes it down on a timer, and would take this one down with it in the middle of a look: it is held up until it is taken down here
 const toastUp = (up: boolean) => `(() => {
   const toast = document.querySelector('.toast');
 
+  window.toastHeldUp?.disconnect();
   toast.textContent = ${JSON.stringify(TWO_LINE_TOAST)};
   toast.hidden = ${!up};
+
+  if (${up}) {
+    window.toastHeldUp = new MutationObserver(() => (toast.hidden = false));
+    window.toastHeldUp.observe(toast, { attributes: true, attributeFilter: ['hidden'] });
+  }
 })()`;
 
 /** Puts the page as `how` says, runs `look`, and puts it back for the next look. A table held to a height is let go by the next change of screen. */
@@ -412,7 +530,7 @@ const SETTLED = `(() => {
   return table.classList.contains(room.height > 0 && room.width / room.height >= ${WIDE_ASPECT} ? 'wide' : 'tall');
 })()`;
 
-const NEXT_FRAME = 'new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(() => done())))';
+export const NEXT_FRAME = 'new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(() => done())))';
 
 /** Waits until the page has laid itself out for the room it now has. */
 async function settled(page: Page): Promise<void> {
@@ -574,7 +692,7 @@ async function sweepTable(sweep: Sweep, rig: Rig, table: RigTable, state: TableS
   const look = (page: Page, where: string) => sweep.look(page, `${seats} seats, ${where}`, () => unreadableOn(page, rig, table, state));
 
   const phone = await table.open(VIEWER, 'smallPhone');
-  await state.onPage?.(phone);
+  await state.onPage?.(phone, table);
 
   for (const size of PHONES) {
     await phone.setViewportSize(size);
@@ -587,7 +705,7 @@ async function sweepTable(sweep: Sweep, rig: Rig, table: RigTable, state: TableS
   await phone.close();
 
   const desktop = await table.open(VIEWER, 'desktop');
-  await state.onPage?.(desktop);
+  await state.onPage?.(desktop, table);
   await look(desktop, 'desktop');
 
   await desktop.evaluate(toastUp(true));
@@ -600,17 +718,45 @@ interface ScreenState {
   shows: string;
   /** What the game has to know before any page opens, set once for every screen looked at. */
   known?(rig: Rig): void;
+  /** A screen it is laid out on in a way of its own, looked at besides the two every state is. */
+  alsoOn?: keyof typeof SCREENS_SAID;
   /** A walk through it on one screen, stopping to look wherever it is full. */
   walk(rig: Rig, screen: ScreenName, look: (page: Page, where: string) => Promise<void>): Promise<void>;
 }
 
-const OTHER_SCREENS: ScreenName[] = ['smallPhone', 'desktop'];
+const OTHER_SCREENS = ['smallPhone', 'desktop'] as const;
+
+const SCREENS_SAID = { smallPhone: 'a 360 phone', desktop: 'desktop', phoneSideways: 'a phone lying down' } satisfies Partial<Record<ScreenName, string>>;
 
 // Forty names of every width, for everyone the game knows
 const FORTY = Array.from({ length: 40 }, (_player, nth) => [`${'W'.repeat(13)}${String(nth).padStart(3, '0')}`, `Ünïcödé Ñandú ${String(nth).padStart(2, '0')}`, `你好你好你好你好 ${nth}`, `Player ${nth}`][nth % 4]!);
 
 // One short of as many bounty hands as a table can have, so the last is added on the page
 const BOUNTIES: Bounty[] = [['72', 25], ['72s', 100], ['J4s', 50], ['AA', 200], ['T9o', 20], ['K2o', 10], ['QQ', 75]];
+
+// What makes the line each section of the table settings is folded under as long as it gets
+const LONGEST_LINES: Partial<TableConfig> = {
+  // In words, as the menu's own heading cannot break a name that has none
+  name: 'WWWWWWW WWWWWWW WWWWWWW WWWWWWW WWWWWWWW',
+  voiceLink: 'https://meet.example/abc',
+  ante: 25,
+  anteFrom: 'bigBlind',
+  maxBuyIn: 1_000_000_000,
+  allowStraddle: true,
+  allowDoubleStraddle: true,
+  allowButtonStraddle: true,
+  allowMississippiStraddle: true,
+  allowChop: true,
+  missedBlinds: 'forgiven',
+  rabbitHunting: true,
+  bombPotEvery: LIMITS.handsPerBombPot,
+  bombPotBoards: 'two',
+  bounties: BOUNTIES,
+  highHandBonus: 1_000_000,
+};
+
+// A preset's name at its longest, in words so the list it is picked from can break it
+const LONGEST_PRESET = 'Wednesday Wild WWWWWWW WWWWWWW';
 
 const GIF = 'https://media.giphy.com/media/abc123/giphy.gif';
 
@@ -621,25 +767,79 @@ const REPLAY_AT_ITS_END = `(() => {
   return step !== undefined && step === steps;
 })()`;
 
-const openFromMenu = async (page: Page, action: string) => {
+// Under the table: the button that opens Add chips, and what stands in its place while chips asked for wait for the host
+const ADD_CHIPS = '.controls [data-action="rebuy"]';
+const CHIPS_ASKED = '.controls [data-action="chips-asked"]';
+
+export const openTheMenu = async (page: Page) => {
   await page.locator('[data-action="menu"]').click();
+  await page.waitForSelector('.menu .menu-item');
+};
+
+const openFromMenu = async (page: Page, action: string) => {
+  await openTheMenu(page);
   await page.locator(`.menu [data-action="${action}"]`).click();
 };
 
+/** The menu's first line, when it is the one the page knows as `action` and says `words`. */
+export const menuStartsWith = (action: string, words: string) => `.menu > section:first-child .menu-item:first-child[data-action="${action}"]:has(span:text-is("${words}"))`;
+
 const SCREEN_STATES: ScreenState[] = [
   {
-    shows: 'the first screen asking who you are, with forty players known',
-    known: (rig) => FORTY.forEach((name, nth) => rig.players.add(name, rig.now() + nth)),
+    shows: 'the first screen asking who you are, with forty players known, then with a preset picked and the table folded by hand, every section of the form under its longest line, then with every section unfolded, then turned down for a name the list of players has, in the longest words a form is turned down with',
+    known(rig) {
+      FORTY.forEach((name, nth) => rig.players.add(name, rig.now() + nth));
+      // No table plays these, so the clock can be at its longest too
+      rig.presets.save({ name: LONGEST_PRESET, settings: presetSettings({ ...DEFAULT_CONFIG, ...CENTS, ...LONGEST_LINES, actionSeconds: LIMITS.maxActionSeconds }), savedAt: 0, savedBy: WIDEST }, false);
+    },
+    // Wide enough for two columns of the form for a new table and not for its three
+    alsoOn: 'phoneSideways',
     async walk(rig, screen, look) {
       const page = await rig.lobby(screen);
       await page.waitForSelector('.who-list .who-pill');
       await look(page, 'the first screen');
+
+      await page.selectOption('#new-table-preset', { label: LONGEST_PRESET });
+      await page.waitForSelector('.lobby .fold-section[data-section="stakes"]:not([open])');
+      await page.fill('#new-table-voice-link', LONGEST_LINES.voiceLink!);
+      await page.click('.lobby .fold-section[data-section="table"] > summary');
+      await page.waitForSelector('.lobby .fold-section[data-section="table"]:not([open])');
+      await look(page, 'the first screen, a preset picked and every section folded');
+
+      const folded = page.locator('.lobby .fold-section:not([open]) > summary');
+
+      while ((await folded.count()) > 0) {
+        await folded.first().click();
+      }
+
+      await page.evaluate(`document.querySelector('.lobby').scrollTop = 0`);
+      await look(page, 'the first screen, every section unfolded');
+
+      await page.locator('.start-table [data-action="someone-new"]').click();
+      await page.fill('#host-name', FORTY[0]!);
+      await page.locator('[data-action="create-table"]').click();
+      await page.waitForSelector('.start-table .refusal:not(.stale)');
+      await look(page, 'the first screen, a new table turned down');
     },
   },
   {
-    shows: 'the host’s menu, and the table settings with as many bounty hands as a table can have',
+    shows: 'the first screen as whoever left a table finds it, the way back first under the longest name a table can have',
+    alsoOn: 'phoneSideways',
     async walk(rig, screen, look) {
-      const table = rig.table(players(2, BIGGEST), { ...CENTS, bounties: BOUNTIES, allowStraddle: true, rabbitHunting: true });
+      const table = rig.table(players(2, BIGGEST), { name: LONGEST_LINES.name });
+      const page = await table.open(WIDEST, screen);
+
+      await openFromMenu(page, 'lobby');
+      await page.waitForSelector('[data-action="back-to-table"]');
+      await look(page, 'the first screen with a way back');
+    },
+  },
+  {
+    shows: 'the host’s menu, and the table settings folded under their longest lines, then with every section unfolded, as many bounty hands as a table can have and a change not saved, then turned down for their blinds',
+    async walk(rig, screen, look) {
+      const table = rig.table(players(2, BIGGEST), { ...CENTS, ...LONGEST_LINES });
+      // A hand in play, so the settings say when a change to the blinds applies
+      table.dealNext();
       const page = await table.open(WIDEST, screen);
 
       await page.locator('[data-action="menu"]').click();
@@ -647,9 +847,30 @@ const SCREEN_STATES: ScreenState[] = [
       await look(page, 'the menu');
 
       await page.locator('.menu [data-action="settings"]').click();
+      await page.waitForSelector('[data-action="save-settings"]');
+      await look(page, 'the table settings as they open');
+
+      const folded = page.locator('.fold-section:not([open]) > summary');
+
+      while ((await folded.count()) > 0) {
+        await folded.first().click();
+      }
+
       await page.locator('[data-action="add-bounty"]').click();
       await page.waitForSelector(`#table-bounties-hand-${BOUNTIES.length}`);
-      await look(page, 'the table settings');
+      await page.fill('#table-big-blind', '1.00');
+      await page.waitForSelector('.dialog-foot [data-says="next-hand"]:visible');
+      await page.waitForSelector('.preset-panel [data-says="table-unchanged"]:visible');
+      await page.evaluate(`document.querySelector('.dialog-body').scrollTop = 0`);
+      await look(page, 'the table settings, every section unfolded');
+
+      // The last bounty hand filled in, so it is the table and not the browser that turns the form down
+      await page.fill(`#table-bounties-hand-${BOUNTIES.length}`, 'KK');
+      await page.fill(`#table-bounties-amount-${BOUNTIES.length}`, '1.00');
+      await page.fill('#table-small-blind', '2.00');
+      await page.locator('[data-action="save-settings"]').click();
+      await page.waitForSelector('.dialog .refusal:not(.stale)');
+      await look(page, 'the table settings turned down');
     },
   },
   {
@@ -759,6 +980,203 @@ const SCREEN_STATES: ScreenState[] = [
       await look(page, 'the reaction picker');
     },
   },
+  {
+    shows: 'Invite players with the table’s link alone, and Play on another device with the viewer’s own link under what it gives away',
+    // Lying down a phone shows less of a dialog than the second of them is tall
+    alsoOn: 'phoneSideways',
+    async walk(rig, screen, look) {
+      const table = tableWithTrophy(rig, 3, EVEN);
+      const page = await table.open(VIEWER, screen);
+
+      await page.locator('.topbar [data-action="invite"]').click();
+      await page.waitForSelector('.dialog #table-link');
+      await look(page, 'Invite players');
+      await page.locator('.dialog [data-action="close"]').click();
+
+      await openFromMenu(page, 'otherDevice');
+      await page.waitForSelector('.dialog #member-link');
+      await look(page, 'Play on another device');
+    },
+  },
+  {
+    shows: 'Preferences, part by part, with every choice a device is offered',
+    async walk(rig, screen, look) {
+      const table = tableWithTrophy(rig, 3, EVEN);
+      const page = await table.open(VIEWER, screen);
+
+      await openFromMenu(page, 'preferences');
+      await page.waitForSelector('.prefs #pref-sound');
+
+      // Longer than the screen it is on: each part is brought into sight, since a look reads only the head and the foot of what scrolls
+      for (const part of await page.locator('.prefs > section').all()) {
+        await part.scrollIntoViewIfNeeded();
+        await look(page, `Preferences, ${await part.locator('h3').textContent()}`);
+      }
+    },
+  },
+  {
+    shows: 'the list of players hosted by the widest name, with another as wide watching and asking for a seat, its rows folded and then one unfolded in each part, the fullest of them a player’s who owes a blind; a question whose answer takes something, asked about the widest name and about the longest; and the list with a shuffle waiting for the hand to end',
+    async walk(rig, screen, look) {
+      // Between hands with a seat open, the viewer's row has every button a row can have: a stack to set, a move, blinds to forgive and "More"
+      const table = owingTheBigBlind(rig);
+
+      // Asking for a seat, the watcher has a row among those waiting for the host as well as among those watching
+      asksForASeat(table, WIDE_WATCHER, 7);
+
+      const host = await table.open(WIDEST, screen);
+      const rowOf = (name: string) => `.dialog li.player-row:has(b:text-is("${name}"))`;
+      const unfold = async (name: string) => {
+        await host.locator(`${rowOf(name)} [data-action="more"]`).click();
+        await host.locator(`${rowOf(name)} .row-more`).scrollIntoViewIfNeeded();
+        await tapsLive(host);
+      };
+
+      await openFromMenu(host, 'players');
+      await host.waitForSelector(`${rowOf(VIEWER)} [data-action="forgive-blinds"]`);
+      await look(host, 'Players, every row folded');
+
+      await unfold(VIEWER);
+      await look(host, 'Players, a seated player’s row unfolded');
+
+      // Who is watching, and who is not on the list of players, are under the rows of the seated: a look reads only the head and the foot of what scrolls
+      await unfold(WIDE_WATCHER);
+      await host.locator('.dialog .unknown-players').scrollIntoViewIfNeeded();
+      await look(host, 'Players, a watching player’s row unfolded');
+      await unfold(NAMES[2]!);
+
+      for (const [name, action, asks] of [[WIDE_WATCHER, 'remove', `Remove ${WIDE_WATCHER}?`], [NAMES[2]!, 'make-host', `Make ${NAMES[2]!} the host?`]] as const) {
+        await host.locator(`${rowOf(name)} [data-action="${action}"]`).click();
+        await host.waitForSelector(`.dialog[aria-label=${JSON.stringify(asks)}] .btn.danger`);
+        await look(host, `the question “${asks}”`);
+
+        await host.locator('.dialog .buttons button:not([data-action])').click();
+        await host.waitForSelector('.dialog[aria-label="Players"]');
+        await tapsLive(host);
+      }
+
+      table.dealNext();
+      table.act(WIDEST, { type: 'shuffleSeats' });
+      await host.locator('.dialog .shuffle-note').scrollIntoViewIfNeeded();
+      await look(host, 'Players, a shuffle waiting for the hand to end');
+    },
+  },
+  {
+    shows: 'buttons held for the table’s answer, each saying what it is doing: Resume on the felt, Approve on the banner of a request under the widest name, where a held button only dims, Approve in the list of players, the answer that hands the table over, a line of the menu, a number of Last hands, Save in the table settings, and for a player Add chips as it asks the host',
+    async walk(rig, screen, look) {
+      // The viewer hosts, between hands with the game paused
+      const table = hosting(rig);
+      const host = await table.open(VIEWER, screen);
+      const answers = await Gate.on(host, 'hosting');
+
+      // Nothing the walk presses reaches the table: every button stays as it is while its answer is on the way, which is what is looked at
+      const held = async (button: string) => {
+        await host.locator(button).click();
+        await host.waitForSelector(`${button}[aria-busy="true"]`);
+      };
+
+      await answers.close('requests');
+      await held('.stage [data-action="start"]');
+      await look(host, 'the felt, its button held');
+
+      // The widest name a watcher can have asks for a seat: one word, which takes the banner's row, the buttons going under it
+      asksForASeat(table, WIDE_WATCHER, 7);
+      await held('.banners [data-action="approve"]');
+      await look(host, 'the banner of a request, its button held');
+
+      await openFromMenu(host, 'players');
+      await held(`${row(WIDE_WATCHER)} [data-action="approve"]`);
+      await look(host, 'Players, Approve held');
+
+      // Of the answers that share a line with Cancel, the one with the most to say while it is held
+      await host.locator(`${row(NAMES[2]!)} [data-action="more"]`).click();
+      await host.locator(`${row(NAMES[2]!)} [data-action="make-host"]`).click();
+      await held('.dialog [data-action="confirm"]');
+      await look(host, 'a question, its answer held');
+
+      // Cancel is held with the answer, and the question is closed as any dialog is, for the list it was asked from
+      await host.locator('.dialog [data-action="close"]').click();
+      await host.waitForSelector('.dialog[aria-label="Players"]');
+      await host.locator('.dialog [data-action="close"]').click();
+      await openTheMenu(host);
+      await held('.menu [data-action="start"]');
+      await look(host, 'the menu, a line held');
+
+      await host.locator('.dialog [data-action="close"]').click();
+      await openFromMenu(host, 'lastHands');
+      await held(`.dialog [data-hands="${LIMITS.lastHands}"]`);
+      await look(host, 'Last hands, a number held');
+
+      await host.locator('.dialog [data-action="close"]').click();
+      await openFromMenu(host, 'settings');
+      await held('.dialog [data-action="save-settings"]');
+      await look(host, 'the table settings, Save held');
+
+      // What a player's own button says while it asks the host is the longest of them all
+      const player = await table.open(WIDEST, screen);
+      const asked = await Gate.on(player, 'asking');
+
+      await asked.close('requests');
+      await player.locator(ADD_CHIPS).click();
+      await player.locator('.dialog [data-action="confirm-rebuy"]').click();
+      await player.waitForSelector('.dialog [data-action="confirm-rebuy"][aria-busy="true"]');
+      await look(player, 'Add chips, asking the host');
+    },
+  },
+  {
+    shows: 'the menu with every line that says how things stand saying it at its longest, for the host during a hand and between hands, and for a player',
+    async walk(rig, screen, look) {
+      // The widest name hosts and holds the high hand, at a table of cents where the bonus on it and a bomb pot are the longest amounts written out
+      const table = tableWithTrophy(rig, 3, BIGGEST, { ...CENTS, highHandBonus: LONGEST_WRITTEN_OUT, bombPotAmount: LONGEST_WRITTEN_OUT, bombPotBoards: 'two' });
+
+      table.dealNext({ holes: holesFor(3) });
+      table.act(WIDEST, { type: 'pause' });
+      table.act(WIDEST, { type: 'setLastHands', hands: LIMITS.lastHands });
+      [FIRST_ASKING, NEXT_ASKING].forEach((name, nth) => asksForASeat(table, name, 6 + nth));
+
+      const host = await table.open(WIDEST, screen);
+
+      await openFromMenu(host, 'mute');
+      await host.locator('.dialog [data-action="mute"]').first().click();
+      await host.locator('.dialog [data-action="close"]').click();
+      await openTheMenu(host);
+      await host.waitForSelector(menuStartsWith('start', 'Call off the pause'));
+      assert.deepEqual(
+        await host.locator('.menu > section:first-child .menu-item small').allTextContents(),
+        ['2 waiting for you', '99,999.99 each, on two boards', `${LIMITS.lastHands} more hands after this one`, 'Between hands only', 'Blinds 0.25/0.50'],
+        'the host’s lines do not all say how things stand',
+      );
+      await look(host, 'the host’s menu during a hand');
+
+      // With the hand over the high hand can be paid, and its line says to whom and how much
+      table.play(folding, (view) => view.hand!.stage === 'done');
+      table.play(() => null, (view) => view.hand === null);
+      await host.waitForSelector(menuStartsWith('start', 'Resume the game'));
+      assert.equal(await host.locator('.menu [data-action="highHand"] small').textContent(), `${WIDEST}: 99,999.99 from everyone else`);
+      await look(host, 'the host’s menu between hands');
+
+      const player = await table.open(VIEWER, screen);
+
+      await openTheMenu(player);
+      await look(player, 'a player’s menu');
+    },
+  },
+  {
+    shows: 'Add chips with the most a table of dollars and cents has room for, and the chips asked for',
+    async walk(rig, screen, look) {
+      // The viewer hosts nothing here, so what they ask for waits for the host
+      const table = rig.table(players(2, STACKS), CENTS);
+      const page = await table.open(VIEWER, screen);
+
+      await page.locator(ADD_CHIPS).click();
+      await page.locator('.dialog [data-action="rebuy-most"]').click();
+      await look(page, 'Add chips');
+
+      await page.locator('.dialog [data-action="confirm-rebuy"]').click();
+      await page.locator(CHIPS_ASKED).click();
+      await page.waitForSelector('.dialog [data-action="cancel-request"]');
+      await look(page, 'the chips asked for');
+    },
+  },
 ];
 
 /**
@@ -804,7 +1222,7 @@ const KNOWN_DEFECTS: KnownDefect[] = [
     isIt: ({ kind, what }) => kind === 'cut off' && /\.plate > \.name/.test(what),
   },
   {
-    holds: 'a toast of two lines on a 360 phone is over the top bar and nothing of the table',
+    holds: 'a toast of two lines on a 360 phone is over the chat’s bar and nothing of the table, of the bar under it or of the top bar',
     state: TABLE_STATES.blinds,
     seats: 9,
     size: SMALL_STANDING,
@@ -831,17 +1249,20 @@ const KNOWN_DEFECTS: KnownDefect[] = [
 
 const REPLAY_LAST = '.controls [data-action="replay-last"]';
 
-// Run in the page: how much taller the table is with the bar's replay button taken out of the page, which is then put back.
+// The button under the table that says which of a player's straddles are on and opens the dialog to set them
+const STRADDLES = '.controls [data-action="straddles"]';
+
+// Run in the page: how much taller the table is with the line of the bar's replay button taken out of the page, which is then put back.
 // Measured on the one page as it stands: from one moment of a hand to the next the bar has other reasons to change
 const TABLE_GAINS_WITHOUT_THE_BUTTON = `(() => {
   const table = document.querySelector('.stage');
-  const button = document.querySelector('${REPLAY_LAST}');
-  const [bar, next] = [button.parentNode, button.nextSibling];
+  const line = document.querySelector('${REPLAY_LAST}').parentNode;
+  const [bar, next] = [line.parentNode, line.nextSibling];
   const withIt = table.getBoundingClientRect().height;
 
-  button.remove();
+  line.remove();
   const without = table.getBoundingClientRect().height;
-  bar.insertBefore(button, next);
+  bar.insertBefore(line, next);
 
   return without - withIt;
 })()`;
@@ -862,7 +1283,8 @@ const replayFromTheBar = (picturesIn: string): Check => [
     assert.equal(await page.locator(REPLAY_LAST).count(), 0, 'the bar offers a hand again to a player in the one on the table, where the buttons of their turn go');
 
     const asksFor = async (number: number, when: string) => {
-      await page.waitForSelector(`${REPLAY_LAST}:has-text("Replay hand #${number}")`);
+      // Its words in full, which it cuts to "Replay" where its line has not the room (rowFit.ts)
+      await page.waitForSelector(`${REPLAY_LAST}:has([data-full="Replay hand #${number}"])`);
       await settled(page);
       assert.equal(await page.evaluate(TABLE_GAINS_WITHOUT_THE_BUTTON), 0, `the table gave up height to the button, ${when}`);
       await page.screenshot({ path: `${picturesIn}defect-replay-from-the-bar-${pictureName(when)}.png` });
@@ -1393,6 +1815,17 @@ const ARRIVALS: Arrival[] = [
     forGood: 'Show ',
   },
   {
+    when: 'the viewer’s turn is on screen, their raise is made away from this page and everyone folds to it in the same view: the offer to show a card comes where the moves were',
+    build: (rig) => inTheBigBlind(rig, { rabbitHunting: true }, () => 60),
+    step(table) {
+      table.act(VIEWER, { type: 'raise', to: 200 });
+      everyoneFolds(table);
+    },
+    then: '.controls [data-action="show-card"]',
+    inOneView: true,
+    forGood: 'Show ',
+  },
+  {
     when: 'the viewer’s turn is on screen, their call is made away from this page (their other device, the clock, a choice made ahead) and a raise behind it comes in the same view: one decision gives way straight to the next',
     build: facingTheLongestCall,
     step: callAndIsRaised,
@@ -1509,6 +1942,43 @@ const ARRIVALS: Arrival[] = [
     then: '.message.result',
     staysPut: [WIDEST],
   },
+  {
+    when: 'the host pauses the game while a co-host has the menu open, and the line that pauses the game becomes the one that calls the pause off, where it lay',
+    build(rig) {
+      const table = viewerRunsTheTable(rig);
+
+      table.dealNext({ holes: holesFor(TABLE_OF_SIX) });
+
+      return table;
+    },
+    open: openTheMenu,
+    step: (table) => table.act(WIDEST, { type: 'pause' }),
+    then: menuStartsWith('start', 'Call off the pause'),
+  },
+  {
+    when: 'the first showdown of the night gives someone the high hand while a co-host has the menu open, and the line that pays it comes in over the lines under it',
+    build(rig) {
+      const table = rig.table(players(TABLE_OF_SIX, EVEN), { highHandBonus: 50 });
+
+      table.act(WIDEST, { type: 'setCohost', playerId: table.auth(VIEWER).id, on: true });
+      table.deal({ button: 0, holes: holesFor(TABLE_OF_SIX), board: ONE_BOARD });
+
+      return table;
+    },
+    open: openTheMenu,
+    step: (table) => table.play(passive, (view) => view.tonight.highHand.next !== null),
+    then: '.menu [data-action="highHand"]',
+  },
+  {
+    when: 'a player is removed from their seat while they have the menu open at its end, and its lines close up over Show or muck and Stand up, which go',
+    build: (rig) => tableWithTrophy(rig, TABLE_OF_SIX, EVEN),
+    async open(page) {
+      await openTheMenu(page);
+      await page.locator('.menu [data-action="lobby"]').scrollIntoViewIfNeeded();
+    },
+    step: (table) => table.act(WIDEST, { type: 'kick', playerId: table.auth(VIEWER).id }),
+    then: '.menu:not(:has([data-action="stand"]))',
+  },
 ];
 
 // A hold is timed from when the watch first sees its button held, which is before the page is free again and the
@@ -1530,7 +2000,7 @@ const letGoBetween = (held: Held[]): { hold: Held; live: number }[] =>
     return live > CLOCK_ROUNDS_MS && live < TAPS_SETTLE_MS ? [{ hold, live }] : [];
   });
 
-const letGoEarly = (held: Held[]): string[] => [
+export const letGoEarly = (held: Held[]): string[] => [
   ...ranOut(held)
     .filter((one) => one.sinceFirst !== null && one.sinceFirst < TAPS_SETTLE_MS - CLOCK_ROUNDS_MS)
     .map((one) => `  ${one.what} was let go ${Math.round(one.sinceFirst ?? 0)} ms after it first came up`),
@@ -1718,6 +2188,221 @@ const secondTapFindsNothingNew = OWN_TAPS.map((own): Check => [
   },
 ]);
 
+/** A dialog the player opens or closes with a tap, which brings a different control up where the tapped one lay. */
+interface OwnDialog {
+  when: string;
+  build(rig: Rig): RigTable;
+  /** What the player has open before the tap. */
+  open?(page: Page): Promise<void>;
+  /** The control tapped, or the dialog's backdrop. */
+  tap: string;
+  /** For a backdrop, as wide as the screen: the control behind it that the finger is over. */
+  over?: string;
+  /** On the page once the tap has done its work. */
+  then: string;
+  /** The `data-action` of what comes up under the tap, which a second tap must not press. */
+  under: string;
+  /** The one screen it is tapped on, when that is not each standing phone a dialog is a sheet on. */
+  phone?: Size;
+}
+
+function askedForChips(rig: Rig): RigTable {
+  const table = betweenHands(rig);
+
+  table.act(VIEWER, { type: 'requestRebuy', amount: 1000 });
+
+  return table;
+}
+
+/** The viewer made a co-host, who may end the night. */
+function cohosting(rig: Rig): RigTable {
+  const table = betweenHands(rig);
+
+  table.act(WIDEST, { type: 'setCohost', playerId: table.auth(VIEWER).id, on: true });
+
+  return table;
+}
+
+/** The viewer handed a table of `seats`, which only its host hands on. */
+function hosting(rig: Rig, seats = TABLE_OF_SIX): RigTable {
+  const table = tableWithTrophy(rig, seats, EVEN);
+
+  table.act(WIDEST, { type: 'transferHost', playerId: table.auth(VIEWER).id });
+
+  return table;
+}
+
+const MAKE_STU_HOST = '.dialog [data-action="make-host"][aria-label$=", Stu"]';
+const moreOf = (name: string) => `.dialog [data-action="more"][aria-label$=", ${name}"]`;
+const UNFOLDED = '.dialog .row-more [data-action="remove"]:visible';
+
+/** Opens the list of players and scrolls it until `control` is the last thing it shows: what the control unfolds is then out of sight under it. */
+async function playersWithAtTheFoot(page: Page, control: string): Promise<void> {
+  await openFromMenu(page, 'players');
+  await page.waitForSelector(control);
+  await page.evaluate(`(() => {
+    const control = document.querySelector(${JSON.stringify(control)});
+    const list = control.closest('.dialog-body');
+
+    list.scrollTop += control.getBoundingClientRect().bottom - list.getBoundingClientRect().bottom;
+  })()`);
+}
+
+const MORE_ON_THE_LAST_OF_NINE: Omit<OwnDialog, 'when'> = {
+  build: (rig) => hosting(rig, 9),
+  open: (page) => playersWithAtTheFoot(page, moreOf(NAMES[8]!)),
+  tap: moreOf(NAMES[8]!),
+  then: UNFOLDED,
+  under: 'remove',
+};
+
+const ADD_CHIPS_DIALOG: OwnDialog = {
+  when: 'Add chips, whose dialog lays the button that asks the host under the tap',
+  build: (rig) => betweenHands(rig),
+  tap: ADD_CHIPS,
+  then: '.dialog #rebuy-amount',
+  under: 'confirm-rebuy',
+};
+
+const OWN_DIALOGS: OwnDialog[] = [
+  ADD_CHIPS_DIALOG,
+  {
+    when: 'the chips asked for, whose dialog lays the button that takes the request back under the tap',
+    build: askedForChips,
+    tap: CHIPS_ASKED,
+    then: '.dialog [data-action="cancel-request"]',
+    under: 'cancel-request',
+  },
+  {
+    when: 'Cancel on the question before standing up, which uncovers the switch to sit out',
+    build: (rig) => betweenHands(rig),
+    open: async (page) => {
+      await openFromMenu(page, 'stand');
+      await page.waitForSelector('.dialog [data-action="confirm"]');
+    },
+    tap: '.dialog .buttons button:not([data-action])',
+    then: `${ADD_CHIPS}:visible`,
+    under: 'sit-out',
+  },
+  {
+    when: 'the backdrop of Add chips tapped over Invite, which closes the dialog and uncovers the button',
+    build: (rig) => betweenHands(rig),
+    open: async (page) => {
+      await page.locator(ADD_CHIPS).click();
+      await page.waitForSelector('.dialog #rebuy-amount');
+    },
+    tap: '.overlay',
+    over: '[data-action="invite"]',
+    then: `${ADD_CHIPS}:visible`,
+    under: 'invite',
+  },
+  {
+    when: 'End the night now, whose question lays the button that ends the night under the tap',
+    build: cohosting,
+    open: async (page) => {
+      await openFromMenu(page, 'lastHands');
+      await page.waitForSelector('.dialog [data-action="end-night"]');
+    },
+    tap: '.dialog [data-action="end-night"]',
+    then: '.dialog [data-action="confirm"]',
+    under: 'confirm',
+  },
+  {
+    // Lying down a dialog stands in the middle of the screen, and a question in the middle of the list it is asked from
+    when: 'Make host, whose question lays the button that hands the table over under the tap, on a 360 phone lying down',
+    build: hosting,
+    phone: LYING,
+    open: async (page) => {
+      await openFromMenu(page, 'players');
+      await page.locator(moreOf('Stu')).click();
+      await page.locator(MAKE_STU_HOST).scrollIntoViewIfNeeded();
+    },
+    tap: MAKE_STU_HOST,
+    then: '.dialog [data-action="confirm"]',
+    under: 'confirm',
+  },
+  {
+    // A sheet that is not yet as tall as it may be grows from its foot up, and takes "More" up with it
+    when: 'More on a row of three players, whose sheet grows and lays the button that removes the player where "More" lay',
+    build: (rig) => hosting(rig, 3),
+    open: (page) => openFromMenu(page, 'players'),
+    tap: moreOf(NAMES[2]!),
+    then: UNFOLDED,
+    under: 'remove',
+  },
+  {
+    when: 'More on the last row of nine, at the foot of what shows, which scrolls the list to show what it unfolds, the button that removes the player where "More" lay',
+    ...MORE_ON_THE_LAST_OF_NINE,
+  },
+  {
+    when: 'More on the last row of nine, at the foot of what shows, on a 360 phone lying down, where the row’s buttons stand at its end',
+    phone: LYING,
+    ...MORE_ON_THE_LAST_OF_NINE,
+  },
+];
+
+// The standing phones a dialog is a sheet on, from the foot of the screen up over the bar: what it lays under a tap on the bar is its own buttons
+const SHEET_PHONES: Size[] = [SMALL_STANDING, { name: '390 standing', ...SCREENS.tallPhone }];
+
+/**
+ * A dialog a player opens or closes is no surprise to them, and what it brings up or uncovers is live at
+ * once: all but what comes up under the tap that did it, where the second tap of two lands
+ * (`holdsUnderTap` in src/client/tapGuard.ts). The watch taps each control the page holds back the moment
+ * it does, which is that second tap, and nothing may come of it. `slow` keeps the page busy building the
+ * dialog, as a slow phone is (`buildsSlowly`).
+ */
+const secondTapOnADialog = (own: OwnDialog, says: string, slow = false): Check => [
+  says,
+  async (rig) => {
+    for (const size of own.phone ? [own.phone] : SHEET_PHONES) {
+      const table = own.build(rig);
+      const page = await table.open(VIEWER, 'smallPhone');
+
+      await page.setViewportSize(size);
+      await page.waitForSelector(`${ADD_CHIPS}, ${CHIPS_ASKED}`);
+      await settled(page);
+      await own.open?.(page);
+      await page.waitForSelector(own.tap);
+      await tapsLive(page);
+
+      const sent = opsSent(page);
+      const asked = table.view(VIEWER).requests;
+      const sittingOut = table.view(VIEWER).seats[0]!.sittingOut;
+      // A backdrop is over the whole page, and the finger over one control of it: only that one is under the tap
+      const behind = own.over ? await namedByTheWatch(page, own.over) : null;
+      const tapped = await namedByTheWatch(page, own.tap);
+      const [finger] = own.over ? await boxes(page, own.over) : [];
+
+      if (slow) {
+        await buildsSlowly(page, '.overlay');
+      }
+
+      await watchTheBar(page);
+      await page.locator(own.tap).tap(finger && { position: { x: (finger.left + finger.right) / 2, y: (finger.top + finger.bottom) / 2 } });
+      await page.waitForSelector(own.then);
+
+      const { found, held } = await watched(page);
+      const underTheTap = found.filter((one) => one.aimedAt === tapped && (behind === null || one.cameUp === behind));
+      const waited = held.filter((one) => one.is?.includes(`data-action=${own.under}`));
+
+      assert.ok(!slow || (await builds(page)).length > 0, `${size.name}: the page was not kept busy as it built the dialog: the check no longer shows what it is here for`);
+      assert.ok(underTheTap.length > 0, `${size.name}: nothing came up where the tapped control lay: the tap no longer shows what it is here for`);
+      assert.deepEqual(underTheTap.flatMap(tellingOf), [], `${size.name}: a second tap lands on what the first one brought up`);
+      assert.ok(waited.length > 0, `${size.name}: ${own.under} was not held back: ${JSON.stringify(held.map((one) => one.is ?? one.what))}`);
+      assert.deepEqual(letGoEarly(waited), [], `${size.name}: ${own.under} was let go before its time`);
+      assert.ok(await page.locator(own.then).isVisible(), `${size.name}: the second tap undid what the first one did`);
+      assert.deepEqual(sent.filter((op) => op === 'act'), [], `${size.name}: the table was sent something`);
+      assert.deepEqual(table.view(VIEWER).requests, asked, `${size.name}: what the viewer has asked the host for changed`);
+      assert.equal(table.view(VIEWER).seats[0]!.sittingOut, sittingOut, `${size.name}: the viewer was sat out, or back in`);
+      await page.close();
+    }
+  },
+];
+
+const secondTapPressesNothingOfADialog = OWN_DIALOGS.map((own) =>
+  secondTapOnADialog(own, `the second tap of two presses nothing that the first one’s dialog brought up or uncovered: ${own.when}${own.phone ? '' : ', on a 360 and a 390 phone'}`),
+);
+
 /** A tap of the player's own whose answer brings up a button that commits for good. */
 interface CommitsAfter {
   what: string;
@@ -1764,6 +2449,29 @@ const COMMITS_AFTER: CommitsAfter[] = [
  * for longer than a hold, the one wait of a length of time in these checks, and the button still waits
  * its whole time from when it is drawn.
  */
+/** Resolves once more time has passed on the page than a control that came up under a finger is held for. */
+export const pastAHold = (page: Page) => page.evaluate(`new Promise((done) => setTimeout(done, ${TAPS_SETTLE_MS + KEPT_PAST_A_HOLD_MS}))`);
+
+/**
+ * Taps `tap` with the page watched, and keeps the table's answer and its news from the page for longer
+ * than a hold: what the answer then brings up is held from when it comes, or not at all. `meanwhile`
+ * looks at the page while it waits.
+ */
+async function answeredPastAHold(page: Page, asks: Gated, tap: string, meanwhile?: () => Promise<void>): Promise<void> {
+  const answers = await Gate.on(page, asks);
+  const polls = await Gate.on(page, 'polls');
+
+  await watchTheBar(page);
+  await answers.close('answers');
+  await polls.close('requests');
+  await page.locator(tap).tap();
+  await answers.holding();
+  await meanwhile?.();
+  await pastAHold(page);
+  await answers.open();
+  await polls.open();
+}
+
 const commitsWaitFromWhenTheyAreDrawn: Check = [
   `a button whose tap cannot be taken back takes no tap for ${TAPS_SETTLE_MS} ms from when it is drawn, however long the answer that brought it took: ${COMMITS_AFTER.map((one) => one.what).join(', and ')}`,
   async (rig) => {
@@ -1775,17 +2483,7 @@ const commitsWaitFromWhenTheyAreDrawn: Check = [
       await page.waitForSelector(`${tap}:enabled`);
       await settled(page);
 
-      const answers = await Gate.on(page, asks);
-      const polls = await Gate.on(page, 'polls');
-
-      await watchTheBar(page);
-      await answers.close('answers');
-      await polls.close('requests');
-      await page.locator(tap).tap();
-      await answers.holding();
-      await page.evaluate(`new Promise((done) => setTimeout(done, ${TAPS_SETTLE_MS + KEPT_PAST_A_HOLD_MS}))`);
-      await answers.open();
-      await polls.open();
+      await answeredPastAHold(page, asks, tap);
       await page.waitForSelector(then);
 
       const { found, held, liveAtOnce } = await watched(page);
@@ -1799,6 +2497,99 @@ const commitsWaitFromWhenTheyAreDrawn: Check = [
     }
   },
 ];
+
+/** A dialog that stays while what its button sent is on its way, and that the table's answer closes. */
+interface ClosesOnItsAnswer {
+  when: string;
+  build(rig: Rig): RigTable;
+  /** Brings up the dialog and the button. */
+  open(page: Page): Promise<void>;
+  /** The button whose answer closes the dialog. */
+  tap: string;
+  /** The requests the tap makes, held at a gate. */
+  asks: 'hosting' | 'asking';
+  /** The one screen it is tapped on, when that is not each standing phone a dialog is a sheet on. */
+  phone?: Size;
+}
+
+const CLOSES_ON_ITS_ANSWER: ClosesOnItsAnswer[] = [
+  {
+    when: 'Add chips asked of the host, whose sheet lies over the bar',
+    build: (rig) => betweenHands(rig),
+    open: async (page) => {
+      await page.locator(ADD_CHIPS).click();
+      await page.waitForSelector('.dialog #rebuy-amount');
+    },
+    tap: '.dialog [data-action="confirm-rebuy"]',
+    asks: 'asking',
+  },
+  {
+    when: 'Resume the game in a host’s menu, which lies over the table and the bar',
+    build: hosting,
+    open: openTheMenu,
+    tap: '.menu [data-action="start"]',
+    asks: 'hosting',
+  },
+  {
+    // Lying down a dialog stands in the middle of the screen, over the seats and the felt
+    when: 'the question before standing up, answered, on a 360 phone lying down',
+    build: (rig) => betweenHands(rig),
+    phone: LYING,
+    open: async (page) => {
+      await openFromMenu(page, 'stand');
+      await page.waitForSelector('.dialog [data-action="confirm"]');
+    },
+    tap: '.dialog [data-action="confirm"]',
+    asks: 'asking',
+  },
+];
+
+/**
+ * A dialog that sends something stays up, its button switched off, until the table answers, and closes
+ * then: a second or two after the tap at the deployed server, under a finger that may be anywhere over it.
+ * A hold counted from the tap would be long over. So the close is the table's doing and not the
+ * viewer's (`answered` in src/client/render/dialogs/dialog.ts): everything it uncovers where a control
+ * of the dialog lay, its backdrop among them, waits its whole time from when it comes up. The answer is
+ * kept back for longer than a hold, as for `commitsWaitFromWhenTheyAreDrawn`.
+ */
+const whatAnAnswerUncoversWaits = CLOSES_ON_ITS_ANSWER.map((own): Check => [
+  `what a dialog uncovers as the table’s answer closes it takes no tap for ${TAPS_SETTLE_MS} ms from then, however long the answer took: ${own.when}${own.phone ? '' : ', on a 360 and a 390 phone'}`,
+  async (rig) => {
+    for (const size of own.phone ? [own.phone] : SHEET_PHONES) {
+      const table = own.build(rig);
+      const page = await table.open(VIEWER, 'smallPhone');
+
+      await page.setViewportSize(size);
+      await page.waitForSelector(`${ADD_CHIPS}, ${CHIPS_ASKED}`);
+      await settled(page);
+      await own.open(page);
+      await page.waitForSelector(own.tap);
+      await tapsLive(page);
+
+      const sent = opsSent(page);
+
+      await answeredPastAHold(page, own.asks, own.tap, async () => {
+        assert.deepEqual((await watched(page)).found, [], `${size.name}: something came up under the finger while the answer was on its way`);
+        assert.equal(await page.locator('.overlay .dialog').count(), 1, `${size.name}: the dialog went before the table had answered`);
+      });
+      await page.waitForSelector('.overlay .dialog', { state: 'detached' });
+
+      // The answer draws the dialog anew before it closes it, in one step with no tap between: only what is left on the page was uncovered
+      const { found, held } = await watched(page);
+      const left = await namedOutsideDialogs(page);
+      const uncovered = found.filter((came) => left.includes(came.cameUp));
+      const waited = held.filter((one) => uncovered.some((came) => came.cameUp === one.what));
+      const notHeld = uncovered.filter((came) => !waited.some((one) => one.what === came.cameUp)).map((came) => came.cameUp);
+
+      assert.ok(uncovered.length > 0, `${size.name}: nothing came up where a control of the dialog lay: the tap no longer shows what it is here for`);
+      assert.deepEqual(found.flatMap(tellingOf), [], `${size.name}: a tap lands on what the dialog uncovered`);
+      assert.deepEqual([...new Set(notHeld)], [], `${size.name}: uncovered where a control of the dialog lay, and not held back`);
+      assert.deepEqual(letGoEarly(waited), [], `${size.name}: something the dialog uncovered was let go before its time`);
+      assert.equal(sent.filter((op) => op === 'act').length, 1, `${size.name}: the table was sent something other than the one tap`);
+      await page.close();
+    }
+  },
+]);
 
 // Run in the page: taps where the first request's Approve lies, the moment the banners are next drawn anew
 const TAP_THE_FIRST_APPROVE_AS_THE_BANNERS_CHANGE = `(() => {
@@ -1859,15 +2650,17 @@ interface HeldAsItComes {
   held: string;
 }
 
+const RAISE_OVER_A_SWITCH: HeldAsItComes = {
+  what: 'Raise, which comes up where a switch lay beside a table lying down',
+  size: LYING,
+  build: (rig) => waitingBehindTheLongestCall(rig, TABLE_OF_SIX),
+  step: (table) => table.play(others({ type: 'fold' }), viewersTurn),
+  then: '.turn [data-action="call"]:enabled',
+  held: 'Raise',
+};
+
 const HELD_AS_THEY_COME: HeldAsItComes[] = [
-  {
-    what: 'Raise, which comes up where a switch lay beside a table lying down',
-    size: LYING,
-    build: (rig) => waitingBehindTheLongestCall(rig, TABLE_OF_SIX),
-    step: (table) => table.play(others({ type: 'fold' }), viewersTurn),
-    then: '.turn [data-action="call"]:enabled',
-    held: 'Raise',
-  },
+  RAISE_OVER_A_SWITCH,
   {
     what: 'the offer to show a card, which commits for good',
     size: SMALL_STANDING,
@@ -1912,7 +2705,7 @@ const BUSY_AS_IT_DRAWS = `(({ selector, busy }) => {
 /**
  * A hold lasts as long as it takes to see that the page has changed, so its time begins when the page is
  * free to show the change and to take a tap, not when the drawing began. A slow phone, or a machine
- * running these checks four at a time, takes a good part of a hold to lay out what a hand's end
+ * running these checks several at a time, takes a good part of a hold to lay out what a hand's end
  * brought: counted from before that, a hold is over almost as soon as its button can be tapped.
  */
 const aHoldRunsFromWhenThePageIsFree: Check = [
@@ -1937,6 +2730,152 @@ const aHoldRunsFromWhenThePageIsFree: Check = [
   },
 ];
 
+// How long a slow phone may take to build what a view brought, before the guard looks at it: longer than a hold
+const BUILDING_TAKES_MS = TAPS_SETTLE_MS + 50;
+
+/**
+ * Keeps the page busy for `BUILDING_TAKES_MS` inside every redraw of `part` from now on, or with `nth`
+ * inside that one alone, counted from 0: once the guard has noted what lay there and before it looks at
+ * what came. Each redraw is noted with when it began and when the page went on with it (`builds`).
+ */
+const buildsSlowly = (page: Page, part: string, nth?: number) =>
+  page.evaluate(`(({ part, nth }) => {
+    const emptied = Element.prototype.replaceChildren;
+
+    window.__builds = [];
+
+    Element.prototype.replaceChildren = function (...nodes) {
+      if (this.matches(part)) {
+        const began = performance.now();
+
+        for (const until = began + (nth === undefined || nth === window.__builds.length ? ${BUILDING_TAKES_MS} : 0); performance.now() < until; ) {}
+
+        window.__builds.push({ began, wentOn: performance.now() });
+      }
+
+      return emptied.apply(this, nodes);
+    };
+  })(${JSON.stringify({ part, nth })})`);
+
+/** The redraws noted since `buildsSlowly`, by the page's clock. */
+const builds = (page: Page) => page.evaluate('window.__builds') as Promise<{ began: number; wentOn: number }[]>;
+
+/**
+ * What a drawing replaces stays on the screen until the page has built the next and shown it, with a
+ * finger on its way to it all that while: the time building takes is no part of the time a finger has
+ * had. A machine running these checks several at a time took longer than a hold to build a bar in a wide
+ * font, and held nothing of what came up where the turn's buttons lay.
+ */
+const aSlowDrawingIsStillAimedAt: Check = [
+  `a button that comes up where another lay is held back, and takes no tap aimed at the other, though building its bar kept the page busy for ${BUILDING_TAKES_MS} ms, longer than a hold: ${RAISE_OVER_A_SWITCH.what}`,
+  async (rig) => {
+    const { table, page } = await waitingAt(RAISE_OVER_A_SWITCH, rig);
+
+    await buildsSlowly(page, '.controls-slot');
+    await watchTheBar(page);
+
+    RAISE_OVER_A_SWITCH.step(table);
+    await page.waitForSelector(RAISE_OVER_A_SWITCH.then);
+
+    const { found, held } = await watched(page);
+
+    assert.ok((await builds(page)).length > 0, 'the page was not kept busy as it built its bar: the check no longer shows what it is here for');
+    assert.deepEqual(found.flatMap(tellingOf), [], 'a tap lands on what it was not aimed at');
+    assert.ok(held.some((hold) => hold.what.includes(RAISE_OVER_A_SWITCH.held)), 'Raise was not held back');
+    await page.close();
+  },
+];
+
+/** A part of the page that is slow to build in one of two views, the first of them 0. */
+interface SlowIn {
+  part: string;
+  view: number;
+}
+
+/**
+ * The viewer's turn on a 360 phone, and then two views: their raise made away from this page, which puts
+ * words where the moves were, and everyone folding to it, which brings Replay up where Fold lay two views
+ * back. Says whether Replay was held back. With `slow` the second view comes right behind the first, and
+ * `behind` is how long after the page went on with the first's slow part the second's began, or null with
+ * nothing slow; without, it comes when the page has had more than a hold to show the first.
+ */
+async function replayWhereFoldLay(rig: Rig, slow?: SlowIn): Promise<{ held: boolean; behind: number | null }> {
+  const table = inTheBigBlind(rig, { rabbitHunting: true }, () => 60);
+  const page = await table.open(VIEWER, 'smallPhone');
+  const raise = () => table.act(VIEWER, { type: 'raise', to: 200 });
+
+  await page.waitForSelector('.turn [data-action="fold"]:enabled');
+  await settled(page);
+  await watchTheBar(page);
+
+  if (slow) {
+    const polls = await Gate.on(page, 'polls');
+
+    // The raise's view waits at the gate until the folds are played: the page's next poll, sent as it has drawn that view, is answered at once
+    await polls.close('answers');
+    raise();
+    await polls.holding();
+    everyoneFolds(table);
+    await buildsSlowly(page, slow.part, slow.view);
+    await polls.open();
+  } else {
+    raise();
+    await page.waitForSelector('.controls .waiting');
+    await pastAHold(page);
+    everyoneFolds(table);
+  }
+
+  await page.waitForSelector('.controls [data-action="replay-last"]');
+
+  const held = (await watched(page)).held.some((hold) => hold.what.includes('Replay'));
+  const [first, second] = slow ? await builds(page) : [];
+
+  assert.ok(!slow || (first && second), 'the page did not draw two views: the check no longer shows what it is here for');
+  await page.close();
+
+  return { held, behind: first && second ? second.began - first.wentOn : null };
+}
+
+const TWO_VIEWS = 'Replay where Fold lay, the viewer’s raise made away from this page and everyone folding to it in the next view, on a 360 phone';
+
+/**
+ * The same of what lay there two views back: the turn's bar is on the screen until the page has built the
+ * view that replaced it, however long that took, so a view right behind that one still has a finger on
+ * its way to the turn's buttons, and one that comes a hold later has none. The second view is the page's
+ * next poll: on a machine too busy to answer that inside a hold, the first of these shows nothing.
+ */
+const aViewBehindASlowOneIsStillAimedAt: Check = [
+  `a button that comes up where another lay two views back is held back when the view between kept the page busy for ${BUILDING_TAKES_MS} ms, longer than a hold, building its bar, and is live at once when the page has had a hold to show that view: ${TWO_VIEWS}`,
+  async (rig) => {
+    const rightBehind = await replayWhereFoldLay(rig, { part: '.controls-slot', view: 0 });
+    const aHoldLater = await replayWhereFoldLay(rig);
+
+    assert.ok(rightBehind.behind! >= TAPS_SETTLE_MS || rightBehind.held, 'Replay was not held back where Fold lay a moment before');
+    assert.ok(!aHoldLater.held, 'Replay was held back, though the turn’s bar had been off the screen for longer than a hold');
+  },
+];
+
+/**
+ * And of the time a view takes before its bar's turn comes: the table is drawn first, and takes a slow
+ * phone as long. A tap that comes down meanwhile waits for all of it, so a finger's time is counted to
+ * when the page began on the view.
+ */
+const aSlowTableAheadOfItsBarIsCounted: Check = [
+  `a button that comes up where another lay two views back is held back though the view that brings it kept the page busy for ${BUILDING_TAKES_MS} ms, longer than a hold, drawing the table before its bar: ${TWO_VIEWS}`,
+  async (rig) => {
+    const { held, behind } = await replayWhereFoldLay(rig, { part: '.stage', view: 1 });
+
+    assert.ok(behind! >= TAPS_SETTLE_MS || held, 'Replay was not held back where Fold lay a moment before');
+  },
+];
+
+/** The same of a dialog the player opens themselves: the second tap of two comes down while the page builds it, and lands on what was built. */
+const aSlowDialogIsStillUnderTheTap = secondTapOnADialog(
+  { ...ADD_CHIPS_DIALOG, phone: SMALL_STANDING },
+  `the second tap of two presses nothing of a dialog whose building kept the page busy for ${BUILDING_TAKES_MS} ms, longer than a hold: ${ADD_CHIPS_DIALOG.when}, on a 360 phone`,
+  true,
+);
+
 /**
  * A hold has one clock, started when its control first came up. A bar drawn again meanwhile, as it is
  * when a hand's end reaches a busy page in two views, hands the hold on to the new button with the rest
@@ -1956,7 +2895,7 @@ const aHoldRunsOutOnTime: Check = [
       // The viewer's own switch, thrown from their other device, draws the bar anew each time with every button where it was
       for (let nth = 0; nth < REDRAWS_IN_A_HOLD; nth += 1) {
         table.act(VIEWER, { type: 'setStraddle', kind: 'straddle', on: nth % 2 === 0 });
-        await page.waitForSelector(`.controls [data-action="straddle"][aria-checked="${nth % 2 === 0}"]`);
+        await page.waitForSelector(`${STRADDLES}:has-text("Straddle: ${nth % 2 === 0 ? 'on' : 'off'}")`);
       }
 
       const ones = (await watched(page)).held.filter((hold) => hold.what.includes(one.held));
@@ -2068,14 +3007,25 @@ const onlyWhatCameUpOverAnotherIsHeld: Check = [
       }
     }
 
-    // The viewer's own switch draws the bar again on their turn, every button where it was
-    const heldBefore = await Promise.all(pages.map(async ({ page }) => (await watched(page)).held.length));
+    // The viewer's own choice draws the bar again on their turn, every button where it was. All but in a font that
+    // has the row a hair from saying more: there "on" for "off" is the room it lacked, the row says the rest, its
+    // buttons move, and the ones that came up where another lay are held as any such button is
+    const before = await Promise.all(pages.map(({ page }) => watched(page)));
 
     table.act(VIEWER, { type: 'setStraddle', kind: 'straddle', on: true });
 
     for (const [nth, { page, where }] of pages.entries()) {
-      await page.waitForSelector('.controls [data-action="straddle"][aria-checked="true"]');
-      assert.equal((await watched(page)).held.length, heldBefore[nth], `${where}: a button was held back when the bar was drawn again with every button where it was`);
+      await page.waitForSelector(`${STRADDLES}:has-text("Straddle: on")`);
+
+      const now = await watched(page);
+      const overAnother = now.found.slice(before[nth]!.found.length).map((one) => one.cameUp);
+      const held = now.held.slice(before[nth]!.held.length).map((one) => one.what);
+
+      assert.deepEqual(
+        held.filter((what) => !overAnother.includes(what)),
+        [],
+        `${where}: a button was held back when the bar was drawn again with no other control where it had lain`,
+      );
     }
   },
 ];
@@ -2115,6 +3065,85 @@ const lookSeesWhatATapPassesThrough: Check = [
   },
 ];
 
+// Run in the page: gives the toast that is up more words, until it is a line taller than the chat's bar holds on this screen in this font
+const OUTGROW_THE_BAR = `(() => {
+  const toast = document.querySelector('.toast');
+  const bar = document.querySelector('.feed-bar');
+
+  for (let more = 0; more < 40 && toast.getBoundingClientRect().height <= bar.getBoundingClientRect().height + 1; more++) {
+    toast.textContent += ', and 🔥 Heater again';
+  }
+})()`;
+
+/**
+ * Where a toast lies, held to what it must not hide even when it runs longer than the page ever tells
+ * one: the top bar, with the menu button and the table's state, and the moves of a turn. Two lines of
+ * it, which is as long as the page tells one, hide nothing but the chat's bar: every look of the sweep
+ * with a toast up says so.
+ */
+const toastKeepsClear: Check = [
+  'a toast a line too long for the chat’s bar grows clear of the top bar and of the moves of a turn, on a 360 phone standing and lying with the chat shut and open and on the desktop, and is at the top of the screen, clear of a dialog, while one is up',
+  async (rig) => {
+    const table = waitingBehindTheLongestCall(rig, TABLE_OF_SIX);
+
+    table.play(others({ type: 'fold' }), viewersTurn);
+    const page = await table.open(VIEWER, 'smallPhone');
+
+    // Open, the chat's bar on a phone is right under the bar of the turn, and its lines may have no room under it. Beside the table the chat is always open
+    const phones = [SMALL_STANDING, LYING].flatMap((size) => [
+      { ...size, open: false },
+      { ...size, name: `${size.name} with the chat open`, open: true },
+    ]);
+
+    for (const size of [...phones, { name: 'the desktop', ...SCREENS.desktop, open: false }]) {
+      await page.setViewportSize(size);
+      await page.waitForSelector('.turn [data-action="call"]:enabled');
+
+      if (size.open) {
+        await page.click('.feed-toggle');
+        await page.waitForSelector('.feed.open');
+      }
+
+      await settled(page);
+      await page.evaluate(toastUp(true));
+      await page.evaluate(OUTGROW_THE_BAR);
+
+      const [toast] = await boxes(page, '.toast');
+      const [bar] = await boxes(page, '.feed-bar');
+
+      assert.ok(toast && bar, `${size.name}: no toast is up over a chat’s bar`);
+      assert.ok(toast.bottom - toast.top > bar.bottom - bar.top + 1, `${size.name}: the toast is no taller than the chat’s bar, so nothing is shown of where it grows`);
+      assert.ok(overlap(toast, bar), `${size.name}: the toast is not over the chat’s bar`);
+      assert.ok(toast.top >= 0 && toast.bottom <= size.height + 0.5 && toast.left >= 0 && toast.right <= size.width + 0.5, `${size.name}: the toast runs off the screen: ${JSON.stringify(toast)}`);
+
+      for (const kept of ['.topbar', '.turn']) {
+        for (const box of await boxes(page, kept)) {
+          assert.ok(!overlap(toast, box), `${size.name}: the toast lies on ${kept}: ${JSON.stringify({ toast, box })}`);
+        }
+      }
+
+      await page.evaluate(toastUp(false));
+
+      if (size.open) {
+        await page.click('.feed-toggle');
+        await page.waitForSelector('.feed:not(.open)');
+      }
+    }
+
+    await page.setViewportSize(SMALL_STANDING);
+    await page.click('[data-action="menu"]');
+    await page.waitForSelector('.overlay .dialog');
+    await page.evaluate(toastUp(true));
+
+    const [toast] = await boxes(page, '.toast');
+    const [dialog] = await boxes(page, '.overlay .dialog');
+
+    assert.ok(toast && dialog, 'no toast is up with a dialog');
+    assert.ok(toast.top < 1, `with a dialog up the toast is not at the top of the screen: ${JSON.stringify(toast)}`);
+    assert.ok(!overlap(toast, dialog), `the toast lies on the dialog: ${JSON.stringify({ toast, dialog })}`);
+  },
+];
+
 const STAGE_HEIGHT = `document.querySelector('.stage').getBoundingClientRect().height`;
 
 /** The bar that waits has more to say than the bar of a turn, and must not be the taller for it: the table would jump as the turn came. */
@@ -2144,6 +3173,258 @@ const barKeepsTheTurnsHeight = (picturesIn: string): Check => [
   },
 ];
 
+/** A table of six between hands, the first of them on record, where the viewer hosts nothing: what they ask for waits for the host. */
+const betweenHands = (rig: Rig, config: Partial<TableConfig> = {}) => tableWithTrophy(rig, TABLE_OF_SIX, EVEN, config);
+
+/** The viewer sat out until the big blind had come to their seat and gone by, and owes it. */
+function owingTheBigBlind(rig: Rig): RigTable {
+  const table = betweenHands(rig);
+  const owes = () => table.view(VIEWER).seats[0]!.owesBigBlind;
+
+  table.act(VIEWER, { type: 'sitOut' });
+
+  for (let hands = 0; hands < TABLE_OF_SIX && !owes(); hands += 1) {
+    table.dealNext();
+    playOut(table, passive);
+  }
+
+  assert.ok(owes(), 'the viewer owes no blind: the state no longer shows what it is here for');
+
+  return table;
+}
+
+/** The viewer put everything in against the widest name's aces and lost it: the result is up, and they have no chips. */
+function outOfChips(rig: Rig): RigTable {
+  const table = betweenHands(rig, { maxRuns: 1 });
+
+  table.deal({ button: 0, holes: { ...holesFor(TABLE_OF_SIX), 0: '7d 2h', 1: 'As Ah' }, board: 'Ad 5c 9c Jd 3d' });
+  table.play((view, name) => (name === VIEWER || name === WIDEST ? allInPicking(1)(view) : { type: 'fold' }), (view) => view.hand!.stage === 'done');
+  assert.equal(table.view(VIEWER).seats[0]!.stack, 0, 'the viewer has chips left: the state no longer shows what it is here for');
+
+  return table;
+}
+
+/** A bar of the viewer's: what is on it, and what its row of switches says in full, whatever of that a narrow screen cuts to its brief form. */
+interface BarState {
+  name: string;
+  build(rig: Rig): RigTable;
+  row: string[];
+  /** The buttons of its turn are up, which may take a second line of words at a larger size of text, and the bar that much more height. */
+  turn?: boolean;
+}
+
+/**
+ * The bars a seated player has while hands are to come, each with as much on it as its kind gets. The
+ * first is the bar of a turn at the standard size of text, the height every other is held to.
+ */
+const BAR_STATES: BarState[] = [
+  { name: 'the viewer’s turn', build: facingTheLongestCall, row: ['Sit out next hand', 'Straddle: off', 'Add chips'], turn: true },
+  { name: 'waiting with the moves to choose ahead and every note', build: (rig) => waitingWithEveryNote(rig, 9), row: ['Sit out next hand', 'Straddle: on', 'Add chips'] },
+  {
+    name: 'a hand won with no call, the cards to show beside the hand to see again',
+    build(rig) {
+      const table = raisedFromTheBigBlind(rig);
+
+      everyoneFolds(table);
+
+      return table;
+    },
+    row: ['Sit out next hand', 'Straddle: off', 'Add chips'],
+  },
+  {
+    name: 'the cards to show under every note, chips asked for and every choice behind its button on',
+    build: (rig) => shownWithEveryNote(rig, 9),
+    row: ['Sit out next hand', '2 straddles and chop: on', 'Asked the host for 99,999.99 more'],
+  },
+  {
+    name: 'sitting out',
+    build(rig) {
+      const table = betweenHands(rig, { allowChop: true });
+
+      table.act(VIEWER, { type: 'sitOut' });
+
+      return table;
+    },
+    row: ["I'm back", 'Straddle and chop: off', 'Add chips'],
+  },
+  { name: 'sitting out and owing a blind, with the two ways to settle it', build: owingTheBigBlind, row: ['Straddle: off', 'Add chips'] },
+  {
+    name: 'back at the table owing a blind, with the other way to settle it',
+    build(rig) {
+      const table = owingTheBigBlind(rig);
+
+      table.act(VIEWER, { type: 'sitIn' });
+
+      return table;
+    },
+    row: ['Sit out next hand', 'Straddle: off', 'Add chips'],
+  },
+  {
+    name: 'chips asked for at a table of every kind of straddle',
+    build(rig) {
+      const table = betweenHands(rig, { allowDoubleStraddle: true, allowButtonStraddle: true, allowMississippiStraddle: true });
+
+      table.act(VIEWER, { type: 'requestRebuy', amount: 1000 });
+
+      return table;
+    },
+    row: ['Sit out next hand', 'Straddles: off', 'Asked the host for 1,000 more chips'],
+  },
+  {
+    name: 'chips asked for with the buttons of the viewer’s turn up',
+    build(rig) {
+      const table = betweenHands(rig, { actionSeconds: 30 });
+
+      table.act(VIEWER, { type: 'requestRebuy', amount: 1000 });
+      table.deal({ button: 0, holes: holesFor(TABLE_OF_SIX) });
+      table.play(others({ type: 'call' }), viewersTurn);
+
+      return table;
+    },
+    row: ['Sit out next hand', 'Straddle: off', 'Asked the host for 1,000 more chips'],
+    turn: true,
+  },
+  { name: 'out of chips with the hand lost, and asked to add some', build: outOfChips, row: ['Sit out next hand', 'Straddle: off', 'Add chips'] },
+];
+
+export const TEXT_SIZES = ['standard', 'large', 'largest'];
+
+/** Sets the size of text on a page as Preferences does, and waits for the page to be laid out with it. */
+export async function textSize(page: Page, size: string): Promise<void> {
+  await page.evaluate(`document.querySelector('#app').setAttribute('data-text-size', ${JSON.stringify(size)})`);
+  await page.evaluate(NEXT_FRAME);
+  await page.evaluate(NEXT_FRAME);
+}
+
+// Run in the page: the table's height, and of each row of the bar that is held to one line, what a player would find wrong with it
+const BAR_ROWS = `(() => {
+  const says = (control) => control.innerText.trim().replace(/\\s+/g, ' ');
+  // In sight: under a phone's open chat the button to see the last hand again is left out, and its line with it when it holds nothing else
+  const shown = (element) => element.getClientRects().length > 0;
+  const rows = [...document.querySelectorAll('.controls .fit-row')].filter(shown).map((row) => {
+    const box = row.getBoundingClientRect();
+    const controls = [...row.children].filter(shown);
+    const boxes = controls.map((control) => control.getBoundingClientRect());
+
+    return {
+      switches: row.classList.contains('extras'),
+      height: box.height,
+      lines: new Set(boxes.map((one) => Math.round(one.top))).size,
+      scrolls: row.scrollWidth > row.clientWidth,
+      past: controls.filter((_control, nth) => boxes[nth].left < box.left - 1 || boxes[nth].right > box.right + 1 || boxes[nth].top < box.top - 1 || boxes[nth].bottom > box.bottom + 1).map(says),
+      cut: controls.filter((control) => control.scrollWidth > control.clientWidth + 1 || control.scrollHeight > control.clientHeight + 1).map(says),
+      // A label that is as short in full as in brief has nothing to cut
+      words: [...row.querySelectorAll('.fitted')]
+        .filter((label) => label.dataset.full !== label.dataset.brief)
+        .map((label) => (label.textContent === label.dataset.full ? 'full' : label.textContent === label.dataset.brief ? 'brief' : label.textContent)),
+      inFull: [...row.querySelectorAll('button')].map((button) => button.querySelector('.fitted')?.dataset.full ?? says(button)),
+    };
+  });
+
+  return { table: ${STAGE_HEIGHT}, rows };
+})()`;
+
+interface Bar {
+  table: number;
+  rows: BarRow[];
+}
+
+interface BarRow {
+  switches: boolean;
+  height: number;
+  lines: number;
+  scrolls: boolean;
+  past: string[];
+  cut: string[];
+  words: string[];
+  inFull: string[];
+}
+
+/**
+ * A second line of switches under a phone's table came out of the table's height, enough on a small
+ * phone to lay the table on its side, and the line came and went with the hand. The rows of the bar
+ * keep to one line each (rowFit.ts), and the table to one height.
+ */
+const barRowsKeepToOneLine = (picturesIn: string): Check => [
+  `the row of switches under the table is one line of one height, with nothing on it cut off, scrolled to or past its end, and the table is as tall as on the viewer’s turn, on a 360, a 375 and a 390 phone at every size of text, under an open chat too but for the table’s height, and on the desktop, where every label is said in full: ${BAR_STATES.map((state) => state.name).join('; ')}`,
+  async (rig) => {
+    const phones = [SCREENS.smallPhone, SCREENS.phone, SCREENS.tallPhone];
+    const turnsTable = new Map<number, number>();
+    let rowHeight: number | null = null;
+
+    for (const state of BAR_STATES) {
+      const table = state.build(rig);
+      const page = await table.open(VIEWER, 'smallPhone');
+      const desktop = await table.open(VIEWER, 'desktop');
+
+      await page.waitForSelector('.controls .extras');
+
+      // `held` is the height the table has to have kept
+      const look = async (where: string, held?: number): Promise<Bar> => {
+        const bar = (await page.evaluate(BAR_ROWS)) as Bar;
+        const wrong = bar.rows.flatMap((row) => [
+          ...(row.lines === 1 ? [] : [`a row takes ${row.lines} lines`]),
+          ...(row.scrolls ? ['a row has more on it than it shows'] : []),
+          ...row.past.map((said) => `“${said}” runs past its row`),
+          ...row.cut.map((said) => `“${said}” is cut off`),
+          ...(/^(brief,)*(full,)*$/.test(row.words.map((form) => `${form},`).join('')) ? [] : [`labels are cut short out of turn: ${row.words.join(', ')}`]),
+        ]);
+
+        if (held !== undefined && bar.table !== held) {
+          wrong.push(`the table is ${bar.table}px tall, and ${held}px on the viewer’s turn`);
+        }
+
+        if (wrong.length > 0) {
+          await page.screenshot({ path: `${picturesIn}defect-the-bar-on-one-line-${pictureName(`${state.name} ${where}`)}.png` });
+        }
+
+        assert.deepEqual(wrong, [], `${state.name}, ${where}`);
+
+        return bar;
+      };
+
+      for (const size of phones) {
+        await page.setViewportSize(size);
+
+        for (const text of TEXT_SIZES) {
+          const where = `${size.width} wide, ${text} text`;
+
+          await page.evaluate(`document.querySelector('#app').setAttribute('data-text-size', ${JSON.stringify(text)})`);
+          await settled(page);
+
+          // The height every bar is held to is the turn's own, at the size of text the bar was drawn for
+          const bar = await look(where, state.turn ? undefined : turnsTable.get(size.width));
+          const switches = bar.rows.find((row) => row.switches)!;
+
+          if (state.turn && text === 'standard') {
+            turnsTable.set(size.width, bar.table);
+          }
+
+          rowHeight ??= switches.height;
+          assert.equal(switches.height, rowHeight, `${state.name}, ${where}: the row of switches changed height`);
+          assert.deepEqual(switches.inFull, state.row, `${state.name}, ${where}: what the row of switches says, in full`);
+        }
+      }
+
+      // Under an open chat the bar keeps no height for a turn, and the table's height is the chat's to take: the rows keep to their lines
+      await page.setViewportSize(SCREENS.smallPhone);
+      await page.locator('.feed-toggle').click();
+      await page.waitForSelector('.feed.open');
+      await settled(page);
+      await look('360 wide, largest text, the chat open');
+
+      await desktop.waitForSelector('.controls .extras');
+      await settled(desktop);
+
+      const { rows } = (await desktop.evaluate(BAR_ROWS)) as Bar;
+
+      assert.deepEqual(rows.flatMap((row) => row.words.filter((form) => form !== 'full')), [], `${state.name}, on the desktop: a label is cut short with room for all of it`);
+      await page.context().close();
+      await desktop.context().close();
+    }
+  },
+];
+
 /** The checks of the sweep. Pictures of what a look finds, and of the state each known defect showed in, go into `picturesIn`, a folder ending in a slash. */
 export function layoutSweep(picturesIn: string): Check[] {
   const tables = Object.values<TableState>(TABLE_STATES).map((state): Check => [
@@ -2162,14 +3443,14 @@ export function layoutSweep(picturesIn: string): Check[] {
   ]);
 
   const screens = SCREEN_STATES.map((state): Check => [
-    `nothing a player reads is covered: ${state.shows}, on a 360 phone and the desktop`,
+    `nothing a player reads is covered: ${state.shows}, on a 360 phone and the desktop${state.alsoOn ? ` and ${SCREENS_SAID[state.alsoOn]}` : ''}`,
     async (rig) => {
       const sweep = new Sweep(picturesIn, state.shows.slice(0, 40));
 
       state.known?.(rig);
 
-      for (const screen of OTHER_SCREENS) {
-        await state.walk(rig, screen, (page, where) => sweep.lookThrough(page, `${where}, ${screen === 'desktop' ? 'desktop' : 'a 360 phone'}`));
+      for (const screen of [...OTHER_SCREENS, ...(state.alsoOn ? [state.alsoOn] : [])]) {
+        await state.walk(rig, screen, (page, where) => sweep.lookThrough(page, `${where}, ${SCREENS_SAID[screen]}`));
       }
 
       sweep.done();
@@ -2184,7 +3465,7 @@ export function layoutSweep(picturesIn: string): Check[] {
       const page = await table.open(VIEWER, 'smallPhone');
       let found: Finding[] = [];
 
-      await state.onPage?.(page);
+      await state.onPage?.(page, table);
       await page.setViewportSize(defect.size);
       await lookWith(page, defect.size, defect.with, async () => {
         found = (await unreadableOn(page, rig, table, state)).filter(defect.isIt);
@@ -2195,5 +3476,5 @@ export function layoutSweep(picturesIn: string): Check[] {
     },
   ]);
 
-  return [...defects, replayFromTheBar(picturesIn), historyGainsTheHand, barKeepsTheTurnsHeight(picturesIn), choicesKeepTheirPlaces, chatMakesWayForTheTurn(picturesIn), keyboardInTheBoxKeepsTheChat, lookSeesWhatATapPassesThrough, ...underTheFinger(), ...secondTapFindsNothingNew, commitsWaitFromWhenTheyAreDrawn, aRowThatMovesUpIsHeld, aHoldRunsFromWhenThePageIsFree, aHoldRunsOutOnTime, aPageInTheBackgroundLetsGo, onlyWhatCameUpOverAnotherIsHeld, marksFollowTheTableTurned, ...tables, ...screens];
+  return [...defects, replayFromTheBar(picturesIn), historyGainsTheHand, barKeepsTheTurnsHeight(picturesIn), barRowsKeepToOneLine(picturesIn), choicesKeepTheirPlaces, chatMakesWayForTheTurn(picturesIn), keyboardInTheBoxKeepsTheChat, lookSeesWhatATapPassesThrough, toastKeepsClear, ...underTheFinger(), ...secondTapFindsNothingNew, ...secondTapPressesNothingOfADialog, commitsWaitFromWhenTheyAreDrawn, ...whatAnAnswerUncoversWaits, aRowThatMovesUpIsHeld, aHoldRunsFromWhenThePageIsFree, aSlowDrawingIsStillAimedAt, aViewBehindASlowOneIsStillAimedAt, aSlowTableAheadOfItsBarIsCounted, aSlowDialogIsStillUnderTheTap, aHoldRunsOutOnTime, aPageInTheBackgroundLetsGo, onlyWhatCameUpOverAnotherIsHeld, marksFollowTheTableTurned, ...tables, ...screens];
 }

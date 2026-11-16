@@ -1,6 +1,7 @@
+import { SUBJECTS } from '../../../engine/subjects.ts';
 import type { TableView } from '../../../engine/view.ts';
-import { h } from '../../ui.ts';
-import { amountField, amountOf, inputOf, pickField } from '../forms.ts';
+import { h, sends } from '../../ui.ts';
+import { amountField, amountOf, boxNamed, inputOf, pickField } from '../forms.ts';
 import { hostOrCohost } from '../roles.ts';
 import { frame, submit } from './dialog.ts';
 import type { DialogHandlers, DialogKind } from './dialog.ts';
@@ -12,7 +13,12 @@ function transfer(view: TableView, handlers: DialogHandlers): HTMLElement {
     const form = event.target as HTMLFormElement;
     const amount = amountOf(form, 'transfer-amount', view.config);
 
-    submit(event, handlers, { type: 'transferChips', from: inputOf(form, 'transfer-from').value, to: inputOf(form, 'transfer-to').value, amount }, () => handlers.open({ kind: 'players' }));
+    submit(
+      event,
+      handlers,
+      { type: 'transferChips', from: inputOf(form, 'transfer-from').value, to: inputOf(form, 'transfer-to').value, amount },
+      boxNamed(inputOf(form, 'transfer-amount'), SUBJECTS.transferred),
+    );
   };
 
   return frame(
@@ -25,7 +31,7 @@ function transfer(view: TableView, handlers: DialogHandlers): HTMLElement {
       pickField('transfer-to', 'To', 'Who gets them', players),
       amountField('transfer-amount', 'Chips', null, view.config, 1),
       h('p.note', null, 'Neither player can be in the hand being played, so pause a running game first. Everyone sees it in the chat, and in the ledger the chips count as lost by one player and won by the other. To undo it, transfer the chips back.'),
-      h('button.btn.primary', { type: 'submit', 'data-action': 'confirm-transfer' }, 'Transfer chips'),
+      h('button.btn.primary', { type: 'submit', 'data-action': 'confirm-transfer' }, sends('Transfer chips', 'Transferring…')),
     ),
   );
 }

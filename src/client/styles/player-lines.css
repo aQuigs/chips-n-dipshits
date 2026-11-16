@@ -56,16 +56,6 @@
   color: var(--bad);
 }
 
-:is(.tonight-players, .standings-players) .fold {
-  color: var(--muted);
-  font-size: calc(18px * var(--text-scale));
-  line-height: 1;
-}
-
-:is(.tonight-players, .standings-players) details[open] .fold {
-  transform: rotate(180deg);
-}
-
 /* What a line unfolds to, and the night's leaders over the list, set the same way: each number under what it counts */
 .tonight-leaders,
 :is(.tonight-players, .standings-players) dl {

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { holds, shownAt, stillHeld, TAPS_SETTLE_MS } from '../src/client/tapGuard.ts';
+import { holds, holdsUnderTap, outOfSightAt, replacedAt, shownAt, stillHeld, TAPS_SETTLE_MS } from '../src/client/tapGuard.ts';
 import type { Box, Drawing, Hold, Spot } from '../src/client/tapGuard.ts';
 
 const box = (left: number, top: number, width = 100, height = 40): Box => ({ left, top, right: left + width, bottom: top + height });
@@ -59,14 +59,52 @@ test('a control with nothing to tell it by is the same only while it is the same
   );
 });
 
-test('what lay there a moment ago still counts when the part has been drawn again since, until the settle time from when it left is over', () => {
+test('what lay there a moment ago still counts when the part has been drawn again since, until the settle time from when it left the screen is over', () => {
   // Fold is tapped: the bar says the move is on its way, and then, the answer in, the switch moves up to where Fold was
   const turn: Drawing<string> = { left: 1000, spots: [spot('fold', box(0, 100))] };
-  const sent = (left: number): Drawing<string> => ({ left, spots: [] });
   const sitOut = spot('sit-out', box(0, 100));
+  const answeredAt = (at: number) => holds(replacedAt([turn], [], at), [sitOut], at);
 
-  assert.deepEqual(held(holds([turn, sent(1200)], [sitOut], 1200)), [[sitOut.control, null]]);
-  assert.deepEqual(holds([turn, sent(1000 + TAPS_SETTLE_MS)], [sitOut], 1000 + TAPS_SETTLE_MS), []);
+  assert.deepEqual(held(answeredAt(1200)), [[sitOut.control, null]]);
+  assert.deepEqual(answeredAt(1000 + TAPS_SETTLE_MS), []);
+});
+
+test('what a drawing replaced is aimed at for as long as the page is busy building the drawing, and for the settle time from when the page is free to show it', () => {
+  const raise = spot('raise', box(10, 110));
+  const nudged = spot('raise', box(16, 110));
+  // A slow phone takes ten times the settle time to build the turn's bar, with the waiting one on the screen until it has
+  const slow = 10 * TAPS_SETTLE_MS;
+  const built = 1000 + slow;
+  const waiting = replacedAt([], WAITING, 1000);
+
+  assert.deepEqual(held(holds(waiting, [raise], built)), [[raise.control, null]]);
+
+  // The page is free, and the next view nudges Raise: a finger may be on its way to the switch for the settle time from now
+  const shown = outOfSightAt(waiting, built);
+  const nudgedAt = (began: number, took = 0) => holds(replacedAt(shown, [raise], began), [nudged], began + took);
+
+  assert.deepEqual(held(nudgedAt(built + 20)), [[nudged.control, null]]);
+  assert.deepEqual(nudgedAt(built + TAPS_SETTLE_MS), []);
+  // A tap that comes down while that view is being built waits for it: the finger's time is counted to when the building began
+  assert.deepEqual(held(nudgedAt(built + 20, slow)), [[nudged.control, null]]);
+  // The switch left the screen once, however often the page is free after
+  assert.deepEqual(
+    outOfSightAt(shown, built + slow).map((drawing) => drawing.left),
+    [built],
+  );
+});
+
+test('what one part showed still counts when another part is drawn before the page is free, and both leave the screen together', () => {
+  // A request's banner goes and, in the same view, the bar comes up over where its button lay, which nobody has seen go
+  const approve = spot('approve', box(0, 60));
+  const raise = spot('raise', box(10, 70));
+  const both = replacedAt(replacedAt([], [approve], 1000), [], 1000);
+
+  assert.deepEqual(held(holds(both, [raise], 1400)), [[raise.control, null]]);
+  assert.deepEqual(
+    outOfSightAt(both, 1400).map((drawing) => drawing.left),
+    [1400, 1400],
+  );
 });
 
 test('a control that commits for good takes no tap when it first comes up, even over words', () => {
@@ -123,4 +161,30 @@ test('a hold already on the clock keeps its time when the page is next free, and
     [raise.control, 5200 + TAPS_SETTLE_MS],
   ]);
   assert.deepEqual(held(stillHeld(both, 5000 + TAPS_SETTLE_MS)), [[raise.control, null]]);
+});
+
+// A phone's bar as a player taps Add chips: the dialog that tap opens lays its button to send across the foot of the screen
+const ADD_CHIPS = spot('add chips', box(213, 550, 80, 37));
+const SEND = spot('send', box(17, 579, 326, 43));
+const tappedAt = (left: number): Drawing<string> => ({ left, spots: [ADD_CHIPS] });
+
+test('what a tap of the player’s own brings up where the tapped control lay takes no tap for the settle time, and the rest of it is live at once', () => {
+  const amount = spot('amount', box(17, 452, 264, 44));
+  const close = spot('close', box(303, 358, 40, 40));
+  const cameUp = holdsUnderTap(tappedAt(1000), [amount, close, SEND], 1002);
+
+  assert.deepEqual(held(cameUp), [[SEND.control, null]]);
+  assert.deepEqual(held(shownAt(cameUp, 1040)), [[SEND.control, 1040 + TAPS_SETTLE_MS]]);
+});
+
+test('the control that was tapped is the same control where it is drawn again, and is held from nobody', () => {
+  const again = spot('add chips', box(213, 550, 80, 37));
+
+  assert.deepEqual(holdsUnderTap(tappedAt(1000), [again, ADD_CHIPS], 1002), []);
+});
+
+test('a change that comes once no finger is on its way to the tapped control any more holds nothing', () => {
+  // A dialog that opens on the table's answer, a second or two after the tap that asked for it
+  assert.deepEqual(holdsUnderTap(tappedAt(1000), [SEND], 1000 + TAPS_SETTLE_MS), []);
+  assert.deepEqual(held(holdsUnderTap(tappedAt(1000), [SEND], 999 + TAPS_SETTLE_MS)), [[SEND.control, null]]);
 });

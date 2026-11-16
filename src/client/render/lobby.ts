@@ -182,8 +182,16 @@ export function lobbyEl(visitor: Visitor, themePicker: HTMLElement, left: TableL
     h('p.note', null, 'Who is up and who is down, over every night.'),
   );
 
-  // Ahead of everything else: whoever is here for a look, or by a slip of the thumb, has a seat waiting
-  const wayBack = left && h('div.way-back', null, h('button.btn.primary', { type: 'button', 'data-action': 'back-to-table', onclick: left.back }, `Back to ${left.name}`));
+  // Ahead of everything else: whoever is here for a look, or by a slip of the thumb, has a seat waiting.
+  // The line under it says what the name is of: a table left with the game's own name reads like the page's title
+  const wayBack =
+    left &&
+    h(
+      'div.way-back',
+      null,
+      h('button.btn.primary', { type: 'button', 'data-action': 'back-to-table', onclick: left.back }, `Back to ${left.name}`),
+      h('p.note', null, 'The table you left.'),
+    );
 
   return {
     element: h('main.lobby', null, brand(), wayBack, standings, h('div.panels', null, join, create), themeSection(themePicker)),

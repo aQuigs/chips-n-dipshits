@@ -213,7 +213,7 @@ export class App {
    */
   private linked: Session | null = null;
 
-  /** Bumped whenever the screen is changed, to retire a wait for a linked member that began before. */
+  /** Bumped whenever the screen is changed, to retire a wait that began before: for a linked member, or for a new table. */
   private leaves = 0;
   private toastTimer = 0;
 
@@ -567,12 +567,24 @@ export class App {
 
   /** Resolves to how it went. `'refused'` is the server turning down what it was asked for (code `invalid`), in words that say what. */
   private async createTable(as: Answer, config: Partial<TableConfig>): Promise<'made' | 'refused' | 'failed'> {
+    const asked = this.leaves;
     const response = await this.arrivals.ask({ op: 'create', ...as, config });
-    if (response?.ok && response.kind === 'joined') {
-      this.remember(response.view.id, response.auth);
-      this.enterTable({ tableId: response.view.id, auth: response.auth }, response.view);
+    const made = response?.ok && response.kind === 'joined' ? response : null;
+
+    if (made) {
+      this.remember(made.view.id, made.auth);
+    }
+
+    // Whoever left the form before the answer came, by the way back to a table or by a table's code, stays
+    // where they went: the new table keeps their seat, and nothing is said of a try they walked away from
+    if (asked !== this.leaves) {
+      return made ? 'made' : 'failed';
+    }
+
+    if (made) {
+      this.enterTable({ tableId: made.view.id, auth: made.auth }, made.view);
       this.openDialog({ kind: 'invite' });
-      this.noteWho(as, response.view);
+      this.noteWho(as, made.view);
       return 'made';
     }
 

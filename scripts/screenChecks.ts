@@ -10069,9 +10069,10 @@ const CHECKS: Check[] = [
     },
   ],
   [
-    'whoever leaves a table for the first screen finds the way back to it there, first on the page and by the table’s name, on every screen and whole under the longest name at the largest text; it leads to the seat they left, for someone watching too and after a look at another table; a second tap on the menu’s line does not press it; and it is gone once the server has said the seat or the table is',
+    'whoever leaves a table for the first screen finds the way back to it there, first on the page and by the table’s name, on every screen and whole under the longest name at the largest text; with a line under it saying what the name is of; it leads to the seat they left, for someone watching too and after a look at another table; a new table whose answer comes after it was taken moves nobody; a second tap on the menu’s line does not press it; and it is gone once the server has said the seat or the table is',
     async (rig) => {
       const WAY_BACK = '[data-action="back-to-table"]';
+      const SAID_UNDER = '.way-back .note';
       const LINE = '.menu [data-action="lobby"]';
       const LONGEST = 'WWWWWWW WWWWWWW WWWWWWW WWWWWWW WWWWWWWW';
       const twoAt = (name: string) => rig.table([{ name: 'Quigs', stack: 1000 }, { name: 'Stu', stack: 1000 }], { name });
@@ -10111,15 +10112,18 @@ const CHECKS: Check[] = [
 
         await leave(page, press);
         assert.equal(await text(page, WAY_BACK), 'Back to Friday Night');
+        assert.equal(await text(page, SAID_UNDER), 'The table you left.');
         assert.equal(await page.evaluate(`document.querySelector('main.lobby :is(button, input, select, summary, a[href])').dataset.action`), 'back-to-table', `${screen}: something of the first screen comes before the way back`);
 
         const [back] = await boxes(page, WAY_BACK);
+        const [said] = await textBoxes(page, SAID_UNDER);
         const rest = await boxes(page, '[data-action="standings"], .join-strip, .start-table');
 
-        assertOnScreen([back!], screen, `${screen}: the way back`);
+        assertOnScreen([back!, said!], screen, `${screen}: the way back`);
+        assert.ok(said!.top >= back!.bottom, `${screen}: the line about the way back is not under it`);
         assert.equal(rest.length, 3);
-        assert.ok(rest.every((part) => part.top >= back!.bottom), `${screen}: the way back is not above the rest of the first screen`);
-        assert.deepEqual(await squeezed(page, WAY_BACK), [], `${screen}: the way back is cut off`);
+        assert.ok(rest.every((part) => part.top >= said!.bottom), `${screen}: the way back is not above the rest of the first screen`);
+        assert.deepEqual(await squeezed(page, `${WAY_BACK}, ${SAID_UNDER}`), [], `${screen}: the way back is cut off`);
         await assertNoSidewaysScroll(page);
         assert.equal(new URL(page.url()).searchParams.get('table'), table.id, `${screen}: the address no longer names the table`);
         await shot(page, `way-back-${screen}`);
@@ -10143,8 +10147,8 @@ const CHECKS: Check[] = [
         assert.equal(await text(page, WAY_BACK), `Back to ${LONGEST}`);
         assert.deepEqual(await squeezed(page, WAY_BACK), [], 'the longest name is cut off');
         within(await textBoxes(page, WAY_BACK), await boxes(page, WAY_BACK), 'the words of the way back');
-        assertApart(await boxes(page, WAY_BACK), await boxes(page, '.brand, [data-action="standings"]'), 'the way back and what is around it');
-        assertOnScreen(await boxes(page, WAY_BACK), 'smallPhone', 'the way back under the longest name');
+        assertApart(await boxes(page, WAY_BACK), [...(await boxes(page, '.brand, [data-action="standings"]')), ...(await textBoxes(page, SAID_UNDER))], 'the way back and what is around it');
+        assertOnScreen(await boxes(page, `${WAY_BACK}, ${SAID_UNDER}`), 'smallPhone', 'the way back under the longest name');
         await assertNoSidewaysScroll(page);
         await shot(page, 'way-back-longest-name-largest-text-small-phone');
         await page.context().close();
@@ -10186,6 +10190,34 @@ const CHECKS: Check[] = [
         await press('button:has-text("Start my own table instead")');
         await page.waitForSelector('[data-action="create-table"]');
         assert.equal(await page.locator(WAY_BACK).count(), 0, 'the way back to a table that took the seat away is still offered');
+        await page.context().close();
+      }
+
+      // Create table pressed, and the way back taken before the answer: the table is made, and its answer takes its host nowhere
+      {
+        const table = twoAt('Friday Night');
+        const page = await table.open('Stu', 'desktop');
+        const seats = `Object.keys(localStorage).filter((key) => key.startsWith('cnd.seat.')).length`;
+
+        await leave(page, pressOn(page, 'desktop'));
+
+        const creates = await Gate.on(page, 'creates');
+
+        await creates.close('answers');
+        await page.fill('#host-name', 'Stu');
+        await page.click('[data-action="create-table"]');
+        await creates.holding();
+        await page.click(WAY_BACK);
+        await page.waitForSelector('.seat.me');
+        assert.equal(await page.evaluate(seats), 1);
+
+        // The new table's seat is kept, which is how the check knows the answer has been heard
+        await creates.open();
+        await page.waitForFunction(`${seats} === 2`);
+        assert.equal(await text(page, '.topbar .title b'), 'Friday Night', 'the answer to Create table took the host from the table they went back to');
+        assert.equal(await page.locator('.dialog').count(), 0, 'a dialog of the new table opened over the one they went back to');
+        assert.equal(new URL(page.url()).searchParams.get('table'), table.id);
+        assert.equal(await toastsTold(page), 0);
         await page.context().close();
       }
 

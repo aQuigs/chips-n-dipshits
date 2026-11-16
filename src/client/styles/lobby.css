@@ -38,7 +38,9 @@
  */
 .way-back {
   display: grid;
+  gap: 6px;
   width: min(100%, 360px);
+  text-align: center;
 }
 
 .way-back .btn {

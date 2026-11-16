@@ -1,5 +1,4 @@
 import { formatAmount } from '../engine/amounts.ts';
-import type { TableConfig } from '../engine/types.ts';
 import type { TableView } from '../engine/view.ts';
 
 export interface Balance {
@@ -57,12 +56,9 @@ export function settlement(view: TableView): Payment[] {
   return settleUp([...view.ledger].sort((a, b) => b.net - a.net));
 }
 
-/** A payment in the words of the Ledger's list. */
-export const paymentText = (payment: Payment, config: TableConfig): string => `${payment.from} pays ${payment.to} ${formatAmount(payment.amount, config)}`;
-
-/** The list as text for the group chat: the table's name, then a payment a line. */
+/** The list as text for the group chat: the table's name, then a payment a line in the words of the Ledger's list. */
 export function settleUpText(view: TableView): string {
-  return [`${view.config.name}: to settle up`, ...settlement(view).map((payment) => paymentText(payment, view.config))].join('\n');
+  return [`${view.config.name}: to settle up`, ...settlement(view).map((payment) => `${payment.from} pays ${payment.to} ${formatAmount(payment.amount, view.config)}`)].join('\n');
 }
 
 /** The payments the viewer is part of, said to them; none for someone who is square or never bought in. */

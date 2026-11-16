@@ -2,15 +2,15 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { enoughSeated } from '../src/client/render/night.ts';
-import { ownPayments, paymentText, settlement, settleUpText } from '../src/client/settle.ts';
-import { addMember, formatAmount } from '../src/engine/index.ts';
-import type { TableView } from '../src/engine/index.ts';
+import { ownPayments, settlement, settleUpText } from '../src/client/settle.ts';
+import { addMember } from '../src/engine/index.ts';
+import type { TableConfig, TableView } from '../src/engine/index.ts';
 import { TestTable } from './helpers.ts';
 
 const HOST = 0;
 
 /** Three players and one hand: Quigs takes 100 from Danny and the big blind from Marge. */
-function afterAHand(config: Record<string, unknown> = {}): TestTable {
+function afterAHand(config: Partial<TableConfig> = {}): TestTable {
   const table = new TestTable({ stacks: [1000, 1000, 1000], names: ['Quigs', 'Danny', 'Marge'], config: { smallBlind: 10, bigBlind: 20, ...config } });
 
   table.deal({ button: 0 });
@@ -72,10 +72,7 @@ test('the list is the same whoever looks, and each is told their own part of it'
 
 test('at a table of dollars and cents the sums are written as the table writes them, to the cent', () => {
   const view = afterAHand({ unit: 'cents' }).view(HOST);
-  const [first] = settlement(view);
 
-  assert.equal(paymentText(first!, view.config), `Danny pays Quigs ${formatAmount(100, view.config)}`);
-  assert.equal(formatAmount(100, view.config), '1.00');
   assert.deepEqual(settleUpText(view).split('\n').slice(1), ['Danny pays Quigs 1.00', 'Marge pays Quigs 0.20']);
   assert.deepEqual(leftOwing(view), [0, 0, 0]);
 });
@@ -95,10 +92,7 @@ test('a rebuy and chips still on the table are in the sums: the list squares the
     0,
     'the ledger itself does not add up',
   );
-  assert.deepEqual(
-    leftOwing(view).filter((net) => net !== 0),
-    [],
-  );
+  assert.deepEqual(leftOwing(view), [0, 0, 0]);
 });
 
 test('with nobody up or down there is nothing to pay', () => {

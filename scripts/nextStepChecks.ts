@@ -71,10 +71,9 @@ const inviteUntilTwoAreSeated = (picturesIn: string): Check => [
         assert.deepEqual(await squeezed(page, `.message > div, ${INVITE}`), [], `${where}: what the felt says or its button is cut off`);
         assert.deepEqual((await unreadable(page)).map(telling), [], `${where}: something of the table cannot be read`);
       }
-
-      await page.evaluate(`document.querySelector('#app').setAttribute('data-text-size', ${JSON.stringify(TEXT_SIZES[0])})`);
     }
 
+    await page.evaluate(`document.querySelector('#app').setAttribute('data-text-size', ${JSON.stringify(TEXT_SIZES[0])})`);
     await page.setViewportSize(SCREENS.smallPhone);
     await page.screenshot({ path: `${picturesIn}check-next-step-invite-players-smallPhone.png` });
 
@@ -169,7 +168,6 @@ const settleUpIsAtHand = (picturesIn: string): Check => [
       await page.waitForSelector(LEDGER);
       assert.deepEqual(await said(page, '.settle li'), PAYMENTS, `${who}: the Ledger's list`);
       await closed(page);
-      await page.waitForSelector(DIALOG, { state: 'detached' });
 
       // The bar: what is left to do, and the last hand again for whoever has a seat
       const bar = await said(page, '.controls .spare-line button');

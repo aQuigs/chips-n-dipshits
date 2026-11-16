@@ -603,10 +603,10 @@ function seatedControls(view: TableView, seat: SeatView, handlers: ControlHandle
  * What a night that is over leaves to do, for anyone at the table: who pays whom, when anyone does,
  * and the night's numbers. Each opens what the menu would, three taps sooner.
  */
-function nightOverButtons(view: TableView, handlers: ControlHandlers): HTMLElement[] {
+function nightOverButtons(view: TableView, handlers: ControlHandlers): (HTMLElement | null)[] {
   const open = (action: string, label: string, dialog: () => void): HTMLElement => h('button.chip-btn', { type: 'button', 'data-action': action, onclick: dialog }, label);
 
-  return [...(settlement(view).length > 0 ? [open('settle-up', 'Settle up', handlers.openLedger)] : []), open('tonight', 'Tonight', handlers.openTonight)];
+  return [settlement(view).length > 0 ? open('settle-up', 'Settle up', handlers.openLedger) : null, open('tonight', 'Tonight', handlers.openTonight)];
 }
 
 /**

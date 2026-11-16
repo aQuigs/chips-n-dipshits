@@ -156,6 +156,35 @@ export function rowActions(player: { id: string; name: string }, ...buttons: Chi
   return actions;
 }
 
+/** A link for the viewer to copy: the box it stands in and what that is headed, and the words of the button that copies it. */
+export interface LinkToCopy {
+  /** Names the box on the page. */
+  id: string;
+  label: string;
+  link: string;
+  /** What the button says, which names the link it copies: two links are never behind two buttons that say the same. */
+  copies: string;
+  /** Whether copying it is what the dialog is for, and its button the gold one. */
+  main: boolean;
+  /** What the link gives away to whoever has it, for a link that is not for sending on. */
+  givesAway?: string;
+}
+
+/**
+ * A link in a box, all of it selected at a tap, with the button that copies it under it. What it gives
+ * away stands over the box, where it is read before the link is taken, and is said with the box and
+ * the button to whoever reaches them by the Tab key, which passes over a line of text.
+ */
+export function linkToCopy({ id, label, link, copies, main, givesAway }: LinkToCopy, handlers: DialogHandlers): HTMLElement {
+  const warning = givesAway ? h('p.keep-to-yourself', { id: `${id}-warning` }, givesAway) : null;
+  const box = h('input', { type: 'text', id, readonly: true, value: link, 'aria-describedby': warning?.id, onfocus: () => box.select() });
+  const button = h(main ? 'button.btn.primary' : 'button.btn', { type: 'button', 'data-copy': id, 'aria-describedby': warning?.id }, copies);
+
+  copyOnClick(button, box, () => link, handlers);
+
+  return h('div.copy', null, warning, h('label.field', { for: id }, h('span', null, label), box), button);
+}
+
 /**
  * Makes `button` copy `text`, and say how that went. A page inside someone else's frame is often
  * refused the clipboard: there the text is put in `field` and selected, where copying the selection

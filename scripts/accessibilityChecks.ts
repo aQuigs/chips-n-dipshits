@@ -592,7 +592,7 @@ export const ACCESSIBILITY_CHECKS: Check[] = [
         await page.waitForSelector('.menu');
       }
 
-      assert.deepEqual(opened, ['Invite players', 'Players', 'Last hands', 'Table settings', 'Ledger', 'Tonight', 'Hand history', 'Standings', 'Show or muck', 'Mute players', 'Preferences', 'Who you are', 'Stand up?']);
+      assert.deepEqual(opened, ['Invite players', 'Players', 'Last hands', 'Table settings', 'Ledger', 'Tonight', 'Hand history', 'Standings', 'Show or muck', 'Mute players', 'Preferences', 'Who you are', 'Play on another device', 'Stand up?']);
       sweep.done(opened.length + 1);
     },
   ],

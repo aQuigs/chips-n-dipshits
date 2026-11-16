@@ -46,7 +46,7 @@ const PARTS = `[...document.querySelectorAll('.menu > section')].map((part) => [
 const parts = (page: Page) => page.evaluate(PARTS) as Promise<Part[]>;
 
 const SCORES: Part = ['Scores and history', ['Ledger', 'Tonight', 'Hand history', 'Standings']];
-const YOU_SEATED: Part = ['You', ['Show or muck: Muck losers · muck when folded to', 'Mute players', 'Preferences', 'Who you are: Not on the list yet']];
+const YOU_SEATED: Part = ['You', ['Show or muck: Muck losers · muck when folded to', 'Mute players', 'Preferences', 'Who you are: Not on the list yet', 'Play on another device']];
 const LEAVE_SEATED: Part = ['Leave', ['Stand up', 'Back to the lobby: Your seat stays yours']];
 
 const partsByWhereTheGameStands: Check = [
@@ -110,7 +110,7 @@ const partsByWhoLooks: Check = [
 
     const watcher = await table.open(WATCHER, 'tallPhone');
     await openTheMenu(watcher);
-    assert.deepEqual(await parts(watcher), [SCORES, ['You', ['Mute players', 'Preferences', 'Who you are: Not on the list yet']], ['Leave', ['Back to the lobby']]]);
+    assert.deepEqual(await parts(watcher), [SCORES, ['You', ['Mute players', 'Preferences', 'Who you are: Not on the list yet', 'Play on another device']], ['Leave', ['Back to the lobby']]]);
 
     table.act(HOST, { type: 'setCohost', playerId: table.auth(PLAYER).id, on: true });
     await player.waitForSelector('.menu [data-action="pause"]');

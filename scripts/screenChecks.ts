@@ -44,6 +44,7 @@ import { runChecks } from './checkRunner.ts';
 import { layoutSweep } from './layoutSweep.ts';
 import { confirmChecks } from './confirmChecks.ts';
 import { formChecks } from './formChecks.ts';
+import { inviteLinksChecks } from './inviteLinksChecks.ts';
 import { menuChecks } from './menuChecks.ts';
 import { nextStepChecks } from './nextStepChecks.ts';
 import { ONCE_CHECKS } from './onceChecks.ts';
@@ -13938,6 +13939,7 @@ const CHECKS: Check[] = [
   ...formChecks(OUT),
   ...barSmallChecks(OUT),
   ...ONCE_CHECKS,
+  ...inviteLinksChecks(OUT),
 ];
 
 await mkdir(OUT, { recursive: true });

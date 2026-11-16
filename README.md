@@ -50,7 +50,7 @@ No-limit hold'em for a group of friends, played in the browser. There is no serv
 - Keyboard shortcuts on a computer: F to fold, C to check or call, R to type a bet, 1 to 5 for the bet sizes, O, T or 3 to run it once, twice or three times. Each button shows its key, and Preferences lists them and turns them off; on a phone, where there are no keys, it leaves them out.
 - The same player every night. Creating or joining a table asks "Who are you?": the players the game knows, to pick yourself from, or "Someone new" with a name to type. The browser remembers the answer and next time says who it takes you for, with "Not me" beside it. A member who came in without saying, or wants to say otherwise, does it under Who you are in the menu.
 - Standings, from the first screen and in a table's menu: every known player's record over the nights on record. Whoever is up the most comes first, or sort by nights played, hands won or the biggest pot. Each line says how many nights, how many of them the player finished up and the share of their hands they won, and opens into their pots won, biggest pot, best hand shown, badges, how often the high hand of the night was theirs, and their nights one by one. Tables that play whole chips and tables that play dollars and cents have a list each.
-- A personal link to carry on from another device.
+- A personal link to carry on from another device, under Play on another device in the menu. Whoever opens it plays as you and sees your cards, so it is kept apart from the link Invite players copies for friends, which is the only one found there.
 
 What the game can and cannot do to get your attention:
 

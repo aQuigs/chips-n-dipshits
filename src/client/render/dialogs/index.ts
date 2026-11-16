@@ -10,6 +10,7 @@ import { inviteDialog } from './invite.ts';
 import { ledgerDialog } from './ledger.ts';
 import { lastHandsDialog } from './lastHands.ts';
 import { muteDialog } from './mute.ts';
+import { otherDeviceDialog } from './otherDevice.ts';
 import { keepPlaying, menuDialog, pauseGame, standUp, startGame, toLobby } from './menu.ts';
 import { playersDialog } from './players.ts';
 import { preferencesDialog } from './preferences.ts';
@@ -49,6 +50,7 @@ const REGISTERED = [
   muteDialog,
   preferencesDialog,
   whoDialog,
+  otherDeviceDialog,
   standUp,
   toLobby,
   inviteDialog,

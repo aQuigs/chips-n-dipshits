@@ -276,7 +276,7 @@ try {
   await phone.page.click('[data-action="close"]');
 
   // ---- Carrying on from another device by personal link ----
-  await host.page.click('[data-action="invite"]');
+  await openFromMenu(host.page, 'otherDevice');
   const memberLink = await host.page.inputValue('#member-link');
   await host.page.click('[data-action="close"]');
 

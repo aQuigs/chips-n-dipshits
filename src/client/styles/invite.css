@@ -1,11 +1,19 @@
+/* A link to copy: its box, and under it the button, which says what it copies and so needs the width */
 .copy {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
 }
 
-.copy .btn {
-  min-height: 44px;
+/* What a link gives away to whoever has it, over the link: a line of the dialog at the size of the rest, not small print */
+.keep-to-yourself {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-inline-start: 4px solid var(--bad);
+  border-radius: var(--radius);
+  background: var(--panel-raised);
+  font-size: calc(14px * var(--text-scale));
+  font-weight: 600;
+  line-height: 1.35;
 }
 
 .code {

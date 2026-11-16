@@ -981,6 +981,22 @@ const SCREEN_STATES: ScreenState[] = [
     },
   },
   {
+    shows: 'Invite players with the table’s link alone, and Play on another device with the viewer’s own link under what it gives away',
+    async walk(rig, screen, look) {
+      const table = tableWithTrophy(rig, 3, EVEN);
+      const page = await table.open(VIEWER, screen);
+
+      await page.locator('.topbar [data-action="invite"]').click();
+      await page.waitForSelector('.dialog #table-link');
+      await look(page, 'Invite players');
+      await page.locator('.dialog [data-action="close"]').click();
+
+      await openFromMenu(page, 'otherDevice');
+      await page.waitForSelector('.dialog #member-link');
+      await look(page, 'Play on another device');
+    },
+  },
+  {
     shows: 'Preferences, part by part, with every choice a device is offered',
     async walk(rig, screen, look) {
       const table = tableWithTrophy(rig, 3, EVEN);
@@ -3110,6 +3126,13 @@ const BAR_STATES: BarState[] = [
 ];
 
 export const TEXT_SIZES = ['standard', 'large', 'largest'];
+
+/** Sets the size of text on a page as Preferences does, and waits for the page to be laid out with it. */
+export async function textSize(page: Page, size: string): Promise<void> {
+  await page.evaluate(`document.querySelector('#app').setAttribute('data-text-size', ${JSON.stringify(size)})`);
+  await page.evaluate(NEXT_FRAME);
+  await page.evaluate(NEXT_FRAME);
+}
 
 // Run in the page: the table's height, and of each row of the bar that is held to one line, what a player would find wrong with it
 const BAR_ROWS = `(() => {

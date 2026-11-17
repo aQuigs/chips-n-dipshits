@@ -1,0 +1,144 @@
+# Puts main live once its tests have passed: steps 2 to 5 of "Put an update live" in the README, with nobody at the
+# keyboard. It runs only where the repository variable DEPLOY_ON_MERGE is "true", which is also the switch that holds
+# it off for a night. It takes three secrets from the environment "live", which only main may use: CLASPRC_JSON (a
+# clasp login, as in ~/.clasprc.json), CLASP_JSON (.clasp.json) and DEPLOYMENT_JSON (.deployment.json). The README
+# says how to set them.
+name: deploy
+on:
+  # After the shared CI workflow, by its name: a deploy follows the tests of main, and never a merge alone
+  workflow_run:
+    workflows: [web-ci]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Deploy even when the friends' address already serves this build (a change to the manifest alone looks like none)
+        type: boolean
+        default: false
+permissions:
+  contents: read
+  # To ask whether the tests passed on the commit about to go live
+  actions: read
+# An explicit bash adds -o pipefail
+defaults:
+  run:
+    shell: bash
+jobs:
+  deploy:
+    # Only the tests of a push count: web-ci also runs on pull requests, and one from a fork's own main passes the
+    # branch filter above
+    if: >-
+      vars.DEPLOY_ON_MERGE == 'true' && github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success'))
+    runs-on: ubuntu-latest
+    environment: live
+    # One deploy at a time, and none stopped half way. On the job, not the workflow: a run that the condition above
+    # turns away must not take the place of a deploy that is waiting its turn
+    concurrency:
+      group: deploy
+      cancel-in-progress: false
+    # A deploy waits up to six and a half minutes on Google before it gives an address up, and a run makes two
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Pick the Node version
+        run: |
+          if [ -f .nvmrc ]; then
+            echo "NODE_VERSION=$(cat .nvmrc)" >> "$GITHUB_ENV"
+          else
+            echo "NODE_VERSION=lts/*" >> "$GITHUB_ENV"
+          fi
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install the dependencies
+        run: npm ci
+
+      - name: Install the browser the check plays in
+        run: npx playwright install --with-deps chromium
+
+      - name: Link this checkout to the game
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+          CLASP_JSON: ${{ secrets.CLASP_JSON }}
+          DEPLOYMENT_JSON: ${{ secrets.DEPLOYMENT_JSON }}
+        run: |
+          for name in CLASPRC_JSON CLASP_JSON DEPLOYMENT_JSON; do
+            if [ -z "${!name}" ]; then
+              echo "::error::The environment \"live\" has no secret $name"
+              exit 1
+            fi
+          done
+
+          printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
+          printf '%s' "$CLASP_JSON" > .clasp.json
+          printf '%s' "$DEPLOYMENT_JSON" > .deployment.json
+
+          # This log is public. GitHub hides a secret only where it is printed whole, so each id and token inside
+          # the three files is named to it here. A web app made after this is hidden by scripts/hideWebAppIds.sh
+          jq -r '.. | strings | select(length >= 20)' "$HOME/.clasprc.json" .clasp.json .deployment.json | sed 's/^/::add-mask::/'
+
+      - name: See whether this is main's newest code, tested, and whether friends have it
+        id: gate
+        env:
+          FORCE: ${{ inputs.force }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          newest=$(git ls-remote origin refs/heads/main | cut -f1)
+
+          # A run started again by hand keeps the commit it first had, and deploying that would put older code over
+          # newer, which cannot open the tables the newer code has saved
+          if [ "$(git rev-parse HEAD)" != "$newest" ]; then
+            echo "::notice::main has moved on since this run's commit, so this run deploys nothing. The run after the newest commit's tests does."
+            exit 0
+          fi
+
+          # Asked here, not taken from what started this run: a run started by hand follows no tests at all
+          passed=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/web_ci.yaml/runs?head_sha=$newest&event=push&status=success" --jq '.total_count')
+
+          if [ "$passed" = "0" ]; then
+            # Someone who started this by hand asked for a deploy, and is told there was none. After tests, it is
+            # only that main moved on as they ended
+            if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+              echo "::error::The tests have not passed on main's newest commit, so nothing was deployed. Run this again when they have."
+              exit 1
+            fi
+
+            echo "::notice::The tests have not passed on main's newest commit yet, so this run deploys nothing. The run after they pass does."
+            exit 0
+          fi
+
+          # The check at the friends' address is played whether or not this run deploys: a run before this one may
+          # have given that address this code and failed before it was checked
+          echo "check=true" >> "$GITHUB_OUTPUT"
+
+          if [ "$FORCE" = "true" ]; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          else
+            node scripts/deployPending.ts >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Put it at the staging address
+        if: steps.gate.outputs.deploy == 'true'
+        run: scripts/hideWebAppIds.sh npm run deploy -- --staging
+
+      - name: Play the check game at the staging address
+        if: steps.gate.outputs.deploy == 'true'
+        run: scripts/hideWebAppIds.sh npm run check:live -- --staging
+
+      - name: Put it at the friends' address
+        if: steps.gate.outputs.deploy == 'true'
+        run: scripts/hideWebAppIds.sh npm run deploy
+
+      # It holds what the address serves to the build in dist/. In a run that deployed nothing, that build is the one
+      # the gate made when it asked
+      - name: Play the check game at the friends' address
+        if: steps.gate.outputs.check == 'true'
+        run: scripts/hideWebAppIds.sh npm run check:live

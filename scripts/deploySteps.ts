@@ -526,6 +526,41 @@ async function goLive(deps: DeployDeps, record: Deployment, live: ListedWebApp, 
   say(`\nLive at ${record.url}`);
 }
 
+/**
+ * Whether this checkout's code is still to go live: the friends' address is not answered by the build
+ * this code makes for it, and by that build alone. It is asked before a deploy nobody is watching, so
+ * that one of code already live spends none of the versions Google keeps of a script. It leaves `dist/`
+ * built for the friends' address and changes nothing else.
+ *
+ * It goes by the build's id, which is all an address tells of itself, and the id leaves out the
+ * manifest: a change to that file alone reads as nothing to deploy.
+ */
+export async function pending({ answers, checkout, say }: Pick<DeployDeps, 'answers' | 'say'> & { checkout: Pick<Checkout, 'readDeployment' | 'build'> }): Promise<boolean> {
+  const record = await checkout.readDeployment();
+
+  if (!record) {
+    throw new DeployRefused(`This checkout has no ${DEPLOYMENT_FILE}, so there is no address to ask what it serves. Nothing was deployed.`);
+  }
+
+  const built = await checkout.build(record.url);
+  const { builds, failed } = await askRound(answers, record.url);
+
+  if (builds.length === 1 && builds[0] === built.id) {
+    say(`Nothing to deploy: the friends' address ${record.url} is answered by ${named(built.id)}, which is this code.`);
+
+    return false;
+  }
+
+  // No answer and two builds answering are both the deploy's to judge, which looks again before it pushes anything
+  say(
+    builds.length === 0
+      ? `The friends' address ${record.url} gave no build to go by (${failed.join(', ')}), so this code, ${named(built.id)}, is taken as still to go live.`
+      : `The friends' address ${record.url} is answered by ${builds.map(named).join(' and ')}. This code is ${named(built.id)}, still to go live.`,
+  );
+
+  return true;
+}
+
 export async function deploy(mode: Mode, deps: DeployDeps): Promise<void> {
   const { checkout } = deps;
   const linked = checkout.linked();

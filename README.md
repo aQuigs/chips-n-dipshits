@@ -213,6 +213,8 @@ The Results tab is what the standings are read from: a row for each table and kn
 
 ## Put an update live
 
+Where the repository variable `DEPLOY_ON_MERGE` is `true`, a merge to `main` runs steps 2 to 5 below by itself: see "Deploying on a merge", further down.
+
 The checkout that deploys holds two files git ignores: `.clasp.json`, which links it to the game's script, and `.deployment.json`, which has the game's address on record and the staging one's. A git worktree starts without them, so the deploy there stops, says which checkout holds them, and makes nothing: run it in that checkout, or copy both files over. Copy both even into a worktree inside the main checkout: clasp looks for `.clasp.json` in the folders above, would go by the main checkout's and push the main checkout's build, and the deploy refuses to run that way.
 
 Write a flag after `--`, as in `npm run deploy -- --staging`. Without the `--`, npm keeps the flag for itself; the deploy and the check notice and refuse, rather than do what they do with no flag.
@@ -234,6 +236,17 @@ Each release takes two of the 200 versions Google keeps of a script: step 2 make
 A page that was open through step 4 says "The game was updated" the next time it hears from the server, with a Reload button, and until it is reloaded nothing it sends changes a table. The reload comes back to the same table and seat. A reload before `Live at` is printed can meet the old version again and ask for another.
 
 Run one deploy at a time. Two at once, from two checkouts, can leave an address serving the other's build; the check after each step compares what is served with what was built and fails when that has happened.
+
+Deploying on a merge. While the repository variable `DEPLOY_ON_MERGE` is `true`, the `deploy` workflow runs each time the tests have passed on `main`:
+
+- It deploys only the newest commit of `main`, when run by hand too. While the tests fail there nothing goes live: run them again, or merge the fix.
+- Code the friends' address already serves is not deployed again, so a merge of tests or documents costs no version. A change to `src/gas/appsscript.json` alone looks like no change: run the workflow by hand with `force`.
+- Nobody names the Sheet's version (step 1). The time the run started is the point to restore to.
+- A merge during a night makes every open page ask for a reload, a quarter of an hour or so after the merge. Hold the merge, or set the variable to `false` for the night: what was merged meanwhile goes live with the next merge, or when the workflow is run by hand.
+- It stops at the first step that fails. Whether or not it deploys, a run ends with the check game at the friends' address, so one that ends well says that address passed the check on the newest code, and each leaves its small table in the Sheet. A run that failed from step 4 on may have left the address on the new code with no check passed: run it again.
+- It needs an environment named `live`, limited to `main`, with three secrets: `CLASPRC_JSON`, a clasp login of the account that owns the script (`~/.clasprc.json`), and `CLASP_JSON` and `DEPLOYMENT_JSON`, the two files of the checkout that deploys. `gh secret set CLASP_JSON --env live < .clasp.json` sets one. Anyone can read the run's log, so every id is taken out of it.
+- The workflow never changes the secrets. When a staging web app is made anew, by hand or in a run, the next run stops and says the script has one it had no record of: run `npm run deploy -- --staging` in the checkout that deploys, which puts it on record, and set `DEPLOYMENT_JSON` again.
+- A deploy by hand while the workflow runs is two deploys at once.
 
 What the steps leave in the Sheet. The staging web app is the same script on the same Sheet, so the new code is at work on the real Sheet from step 3 on:
 

@@ -6,16 +6,18 @@
  * at its address too, and the list of web apps shows the script as it was some time ago.
  */
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import { QUIET_MS, SETTLE_DEADLINE_MS } from '../scripts/answering.ts';
 import type { Answer, Answers } from '../scripts/answering.ts';
-import { addressToCheck, deploymentFrom, DeployRefused, DeployUnsettled, exitOnRefusal, linkFilesElsewhere, readDeployment, stagingAsked, webAppUrlFor } from '../scripts/deployment.ts';
+import { addressToCheck, deploymentFrom, DeployRefused, DeployUnsettled, exitOnRefusal, linkFilesElsewhere, readDeployment, stagingAsked, WEB_APP_ID, webAppUrlFor } from '../scripts/deployment.ts';
 import type { Deployment, LinkFilesElsewhere } from '../scripts/deployment.ts';
-import { claspOver, deploy, LIST_DEADLINE_MS, modeOf, TITLE } from '../scripts/deploySteps.ts';
+import { claspOver, deploy, LIST_DEADLINE_MS, modeOf, pending, TITLE } from '../scripts/deploySteps.ts';
 import type { Built, Checkout, Clasp, ListedWebApp, Mode } from '../scripts/deploySteps.ts';
 
 const NEW_CODE = 'the code in the tree';
@@ -261,10 +263,12 @@ function setup() {
     saidAt.push(clock.ms);
   };
   const run = (mode: Mode = 'live') => deploy(mode, { clasp: script, answers: script, checkout, say, now: clock.now, pause: clock.pause });
+  /** The question a deploy nobody watches asks first. */
+  const ask = () => pending({ answers: script, checkout, say });
   /** When the first line with this in it was said. */
   const when = (pattern: RegExp) => saidAt[said.findIndex((line) => pattern.test(line))];
 
-  return { checkout, clock, script, said, run, when, told: () => said.join('\n') };
+  return { checkout, clock, script, said, run, ask, when, told: () => said.join('\n') };
 }
 
 /** A checkout linked to a script, with no record of where the game is. */
@@ -1176,6 +1180,57 @@ test('a check plays at the friends\' address, or at the staging one when asked, 
   assert.throws(() => addressToCheck(entry(LIVE), true),/no staging web app on record.*npm run deploy -- --staging/);
   assert.throws(() => addressToCheck(null, false), /Nothing has been deployed from this checkout/);
   assert.throws(() => addressToCheck(null, true), /Nothing has been deployed from this checkout/);
+});
+
+test('code the friends\' address already serves is not still to go live, and asking pushes nothing and makes no version', async () => {
+  const { script, checkout, ask, told } = deployed();
+
+  script.givenElsewhere(LIVE, built(LIVE_URL));
+  const versions = script.versionsMade();
+  const record = checkout.record;
+
+  assert.equal(await ask(), false);
+  assert.match(told(), new RegExp(`Nothing to deploy: the friends' address ${LIVE_URL} is answered by build ${idOf(built(LIVE_URL))}, which is this code`));
+  assert.deepEqual(script.calls, []);
+  assert.equal(script.versionsMade(), versions);
+  assert.equal(checkout.record, record);
+});
+
+test('code is still to go live when another build answers at the friends\' address, when two do, and when none can be heard', async () => {
+  const other = deployed();
+  assert.equal(await other.ask(), true);
+  assert.match(other.told(), new RegExp(`is answered by build ${idOf(OLD_CODE)}\\. This code is build ${idOf(built(LIVE_URL))}, still to go live`));
+  assert.deepEqual(other.script.calls, []);
+
+  // In the minute after an address was given this code, the code it had answers there too
+  const mixed = deployed();
+  mixed.script.mixMs = 60_000;
+  mixed.script.givenElsewhere(LIVE, built(LIVE_URL));
+  assert.equal(await mixed.ask(), true);
+  assert.match(mixed.told(), / and /);
+
+  const silent = deployed();
+  silent.script.silent = LIVE;
+  assert.equal(await silent.ask(), true);
+  assert.match(silent.told(), /gave no build to go by \(no answer\)/);
+});
+
+test('with no address on record there is nothing to ask, and it is refused rather than taken for something to deploy', async () => {
+  await assert.rejects(linked().ask(), refused(/has no \.deployment\.json, so there is no address to ask/));
+});
+
+test('a command run for a log anyone can read has every web app id taken out of what it prints, on either stream, and ends as it did', () => {
+  const hidden = (script: string) => spawnSync(fileURLToPath(new URL('../scripts/hideWebAppIds.sh', import.meta.url)), ['bash', '-c', script], { encoding: 'utf8' });
+  // The filter goes by a pattern of its own, in sed's words: an id here has every kind of character the tool's has
+  const made = 'AKfycb-made_in-This-run-9';
+  assert.match(made, WEB_APP_ID);
+
+  const said = hidden(`echo 'Staging at ${webAppUrlFor(made)}, beside ${LIVE}'; echo '"deploymentId": "${made}"' >&2; exit 3`);
+
+  assert.equal(said.stdout, 'Staging at https://script.google.com/macros/s/(a web app)/exec, beside (a web app)\n"deploymentId": "(a web app)"\n');
+  assert.equal(said.stderr, '');
+  assert.equal(said.status, 3);
+  assert.equal(hidden('echo done').status, 0);
 });
 
 test('a command that was refused ends with what it was told and a failed exit, and any other failure is left to be seen whole', async () => {

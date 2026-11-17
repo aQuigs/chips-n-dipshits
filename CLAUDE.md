@@ -9,7 +9,7 @@ Multiplayer no-limit hold'em whose backend is a Google Sheet with an Apps Script
 - `npm run test:e2e`: plays a full game in headless browsers, about six minutes. Run after any change to `src/client`, then look at the pictures it leaves in `screenshots/`.
 - `npm run test:stall`: the screen checks on a rig as slow as a busy machine, about twenty minutes. Not run by CI; see "How a screen check is written".
 - `npm run dev`: the game on localhost with tables in memory.
-- `npm run deploy`: puts the build at the address friends have. Outward-facing: only when asked. `-- --staging` puts it at a second web app of the same script instead, and `-- --new` is the only thing that ever sets up a game. `README.md` has the order.
+- `npm run deploy`: puts the build at the address friends have. Outward-facing: only when asked. `-- --staging` puts it at a second web app of the same script instead, and `-- --new` is the only thing that ever sets up a game. `README.md` has the order. Where the repo's `DEPLOY_ON_MERGE` variable is `true`, a merge to `main` is a deploy and so outward-facing too: once the tests pass there, `.github/workflows/deploy.yaml` puts live whatever `main` holds that friends do not have yet (`pending` in `scripts/deploySteps.ts` is how it tells), a sync-common merge included.
 - `npm run check:live`: plays a short game at the deployed address, or with `-- --staging` at the staging one. Run after every deploy; it adds a table to the real Sheet. Its steps are in `scripts/liveCheckSteps.ts`, and `npm run test:e2e` plays them on the stand-in too, which is where a change to the page that breaks them shows.
 
 ## How the code is written
